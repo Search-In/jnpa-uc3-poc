@@ -88,6 +88,7 @@ the ingest/AI services start calling live providers in later PoC stages.
 | ANPR ingest          | `jnpa/anpr-ingest:0.1.0` (built)        | `9108` → 9101 (metrics) | http://localhost:9108/metrics               |
 | Vahan simulator      | `jnpa/vahan-sim:0.1.0` (built)          | `8201`              | http://localhost:8201/healthz                   |
 | Vahan live (Surepass)| `jnpa/vahan-live:0.1.0` (built)         | `8202`              | http://localhost:8202/healthz                   |
+| Trucking-app sim     | `jnpa/trucking-app:0.1.0` (built)       | `8240`              | http://localhost:8240/devices                   |
 
 > **Kafka note:** containers on the `jnpa` network use `kafka:9092` (internal
 > listener). Host processes — including the bootstrap self-test — use
@@ -125,8 +126,12 @@ jnpa-uc3-poc/
 ├── ingest/vahan_live/        # Surepass-backed live adapter (FastAPI :8202)
 │   └── app.py mappers.py config.py  Dockerfile pyproject.toml
 ├── data/fixtures/            # known_plates.json (the 50 plates the demo queries)
+├── ingest/trucking_app/      # 20k-device GPS telemetry simulator (FastAPI :8240)
+│   ├── app.py                # control plane entrypoint (truck-sim)
+│   ├── Dockerfile  pyproject.toml  README.md
+│   └── trucking_app/         # config, gates, plates, routing, truck, fleet, sinks, simulator, metrics
 ├── ai/  gateway/  web/  mobile-pwa/  scenarios/   # later PoC stages
-└── tests/                    # test_bootstrap.py, test_anpr_ingest.py, test_vahan_sim.py
+└── tests/                    # test_bootstrap.py, test_anpr_ingest.py, test_vahan_sim.py, test_rfid_ingest.py, test_trucking_app.py
 ```
 
 ---
@@ -206,6 +211,36 @@ make vahan-verify   # one-shot smoke test of all of the above
 
 ---
 
+## Trucking-app telemetry simulator (`ingest/trucking_app/`)
+
+A 20,000-device (hot-scalable to 30,000+) GPS telemetry simulator for the
+trucking-app component (Appendix B5). Each device drives a realistic truck along
+NH-348 into one of the 4 JNPA gates and back, with a state machine
+(`EN_ROUTE_TO_PORT → AT_GATE_QUEUE → INSIDE_PORT → EN_ROUTE_HOME → IDLE`),
+OSRM routing (HERE + dead-reckoning fallbacks), a 55/25/0 km/h speed model with
+σ=4 km/h noise and Redis-driven queueing pressure, and GPS jitter (ε~N(0,6 m),
+1 % 50 m outliers). Plates are linked to the Vahan simulator's dataset.
+
+Each ping is published to MQTT `trucks/{device_id}/telemetry` (qos 0) **and**
+Kafka `truck.telemetry`, and batch-written to `jnpa.truck_telemetry` via asyncpg
+COPY every 30 s. Every 30 s an ETA-to-gate goes to `trucks/{device_id}/eta` and
+Kafka `truck.eta`. A FastAPI control plane on **8240** owns the fleet:
+
+```bash
+curl -s http://localhost:8240/devices | jq '.population'          # population stats
+mosquitto_sub -h localhost -t 'trucks/+/telemetry' -C 5           # live pings
+curl -s -XPOST http://localhost:8240/devices/scale \
+  -H 'content-type: application/json' -d '{"target":30000}' | jq . # hot-scale
+curl -s -XPOST http://localhost:8240/devices/TRK-000001/route \
+  -H 'content-type: application/json' -d '{"gate_id":"G-BMCT"}' | jq . # reroute (TFC-1)
+make truck-verify
+```
+
+The compose service `truck-sim` reserves 3 CPUs; the engine sustains
+~4,000 msg/s (20k × 5 s) via a single tick scheduler (no per-truck task),
+qos=0 position updates, uvloop, and batched COPY. See
+[ingest/trucking_app/README.md](ingest/trucking_app/README.md) for details.
+
 ## Make targets
 
 | Target                  | Action                                          |
@@ -222,6 +257,8 @@ make vahan-verify   # one-shot smoke test of all of the above
 | `make bootstrap-check`  | run the end-to-end self-test                    |
 | `make vahan-seed`       | regenerate `data/fixtures/known_plates.json`    |
 | `make vahan-verify`     | smoke-test the Vahan sim + live adapter         |
+| `make rfid-verify`      | verify RFID reads + a vehicle.confirmed fired   |
+| `make truck-verify`     | verify the trucking-app sim (population + pings) |
 
 ---
 

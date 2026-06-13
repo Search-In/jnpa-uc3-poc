@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trucking-app"
+version = "0.1.0"
+description = "20k-device GPS telemetry simulator for the trucking-app component of the JNPA UC-III Digital Twin PoC"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "JNPA Digital Twin Team" }]
+
+# jnpa-shared already pins confluent-kafka / asyncpg / redis / pydantic; these
+# are the direct surface this service adds (async MQTT, HTTP routing, FastAPI,
+# and the uvloop event loop for the 4,000 msg/s throughput target).
+dependencies = [
+    "aiomqtt==2.3.0",
+    "httpx==0.27.2",
+    "fastapi==0.115.5",
+    "uvicorn[standard]==0.32.1",
+    "uvloop==0.21.0",
+    "asyncpg==0.30.0",
+    "redis==5.2.1",
+    "confluent-kafka==2.6.0",
+    "pydantic==2.9.2",
+    "structlog==24.4.0",
+    "prometheus-client==0.21.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.4",
+    "pytest-asyncio==0.24.0",
+    "httpx==0.27.2",
+]
+
+[project.scripts]
+truck-sim = "app:run"
+
+[tool.setuptools]
+# The reusable library lives in the trucking_app package; the FastAPI control
+# plane is a top-level `app` module in this folder, matching the spec's
+# ingest/trucking_app/ layout (mirrors the ingest/rfid entrypoint pattern).
+packages = ["trucking_app"]
+py-modules = ["app"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

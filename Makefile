@@ -33,7 +33,7 @@ endif
 
 .DEFAULT_GOAL := help
 
-.PHONY: help venv up down logs ps psql redis-cli test bootstrap-check install-shared vahan-seed vahan-verify rfid-verify
+.PHONY: help venv up down logs ps psql redis-cli test bootstrap-check install-shared vahan-seed vahan-verify rfid-verify truck-verify
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -64,11 +64,13 @@ venv: ## Create .venv and install shared + vahan + rfid services (host-side, for
 	.venv/bin/python -m pip install -e "shared[dev]"
 	.venv/bin/python -m pip install -e "ingest/vahan_sim[dev]" -e "ingest/vahan_live[dev]"
 	.venv/bin/python -m pip install -e "ingest/rfid[dev]"
+	.venv/bin/python -m pip install -e "ingest/trucking_app[dev]"
 
-install-shared: ## pip install -e the shared + vahan + rfid packages into the active interpreter
+install-shared: ## pip install -e the shared + vahan + rfid + trucking packages into the active interpreter
 	$(PY) -m pip install -e "shared[dev]"
 	$(PY) -m pip install -e "ingest/vahan_sim[dev]" -e "ingest/vahan_live[dev]"
 	$(PY) -m pip install -e "ingest/rfid[dev]"
+	$(PY) -m pip install -e "ingest/trucking_app[dev]"
 
 test: ## Run pytest -x in shared/ and tests/
 	$(PY) -m pytest -x shared tests
@@ -95,3 +97,12 @@ rfid-verify: ## Verify RFID reads landed + a vehicle.confirmed fired (stack must
 	@echo "== waiting (<=30s) for a vehicle.confirmed in the correlator log ==" \
 		&& ($(COMPOSE) logs --since 2m rfid-correlator 2>/dev/null | grep -m1 vehicle.confirmed \
 			|| echo "  none yet — inject a matching ANPR read or wait for one") || true
+
+truck-verify: ## Verify the trucking-app sim: population + a few live MQTT pings (stack must be up)
+	@echo "== population ==" && curl -s http://localhost:8240/devices | $(PY) -m json.tool || true
+	@echo "== 5 live telemetry pings (trucks/+/telemetry) ==" \
+		&& (timeout 15 $(COMPOSE) exec -T mosquitto mosquitto_sub -t 'trucks/+/telemetry' -C 5 \
+			|| echo "  none yet — give the sim a few seconds to warm up") || true
+	@echo "== rows in jnpa.truck_telemetry ==" \
+		&& $(COMPOSE) exec -T postgres psql -U postgres -d postgres \
+		-c "select count(*) from jnpa.truck_telemetry;" || true

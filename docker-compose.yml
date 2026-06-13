@@ -419,6 +419,63 @@ services:
     networks:
       - jnpa
 
+  # --------------------------------------------------------------------------
+  # Trucking-app GPS telemetry simulator (UC-III Sub-Criterion 1D).
+  # 20,000 devices (hot-scalable to 30,000+) driving realistic telemetry along
+  # NH-348 into the 4 JNPA gates and back. FastAPI control plane on host 8240.
+  #   MQTT   trucks/{device_id}/telemetry (qos0) + trucks/{device_id}/eta (qos1)
+  #   Kafka  truck.telemetry + truck.eta
+  #   Timescale  jnpa.truck_telemetry (batched COPY every 30s)
+  # Build context is the repo root so the Dockerfile can COPY the shared lib.
+  # Source is bind-mounted so code edits take effect on `up` without a rebuild.
+  # CPU reservation of 3.0 (per spec) so it holds 4,000 msg/s on a 4-core laptop.
+  # --------------------------------------------------------------------------
+  truck-sim:
+    build:
+      context: .
+      dockerfile: ingest/trucking_app/Dockerfile
+    image: jnpa/trucking-app:0.1.0
+    container_name: jnpa-truck-sim
+    restart: unless-stopped
+    depends_on:
+      mosquitto:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      PYTHONPATH: /app/ingest/trucking_app
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      KAFKA_BROKERS: kafka:9092
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      # asyncpg libpq DSN (no SQLAlchemy "+asyncpg" prefix).
+      POSTGRES_DSN_LIBPQ: ${TRUCK_POSTGRES_DSN:-postgresql://postgres:jnpa_pw@postgres:5432/postgres}
+      TRUCK_NUM_DEVICES: ${TRUCK_NUM_DEVICES:-20000}
+      TRUCK_MAX_DEVICES: ${TRUCK_MAX_DEVICES:-30000}
+      TRUCK_INTERVAL_S: ${TRUCK_INTERVAL_S:-5}
+      TRUCK_INTERVAL_GATE_S: ${TRUCK_INTERVAL_GATE_S:-2}
+      TRUCK_ETA_INTERVAL_S: ${TRUCK_ETA_INTERVAL_S:-30}
+      TRUCK_DB_FLUSH_S: ${TRUCK_DB_FLUSH_S:-30}
+      OSRM_BASE_URL: ${OSRM_BASE_URL:-https://router.project-osrm.org/route/v1/driving/}
+      HERE_API_KEY: ${HERE_API_KEY:-}
+      PORT: "8240"
+      LOG_LEVEL: ${TRUCK_LOG_LEVEL:-INFO}
+      TZ: Etc/UTC
+    ports:
+      - "8240:8240"
+    volumes:
+      - ./ingest/trucking_app:/app/ingest/trucking_app:ro
+    networks:
+      - jnpa
+    deploy:
+      resources:
+        reservations:
+          cpus: "3.0"
+
   rfid-correlator:
     build:
       context: .

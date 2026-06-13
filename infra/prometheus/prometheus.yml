@@ -1,0 +1,26 @@
+# Prometheus scrape config for the JNPA UC-III PoC.
+# Service exporters (gateway, ingest, ai) will register here as they come
+# online in later PoC stages. For now it scrapes Prometheus itself.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    project: jnpa-uc3-poc
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: anpr-ingest
+    static_configs:
+      - targets: ["anpr-ingest:9101"]
+
+  # Placeholders for later PoC services (uncomment as they expose /metrics):
+  # - job_name: gateway
+  #   static_configs:
+  #     - targets: ["gateway:8000"]
+  # - job_name: anpr-ai
+  #   static_configs:
+  #     - targets: ["anpr-ai:8000"]

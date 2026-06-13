@@ -1,0 +1,35 @@
+# Local environment (never commit real keys)
+.env.local
+*.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Data / artefacts
+*.log
+minio-data/
+pgdata/
+
+# Clip data: ignore downloaded/synthesized media, but keep the placeholder
+# layout (the 0-byte .mp4 placeholders + README) under version control.
+data/clips/*.mp4
+data/clips/*.mov
+data/clips/*.mkv
+!data/clips/.gitkeep
+data/**/*.bin

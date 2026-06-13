@@ -1,0 +1,15 @@
+# Grafana dashboard provider for the JNPA UC-III PoC.
+# Dashboards dropped into the path below are auto-loaded. Dashboards are
+# added in later PoC stages; the folder is intentionally empty for now.
+apiVersion: 1
+
+providers:
+  - name: jnpa-uc3
+    orgId: 1
+    folder: JNPA UC-III
+    type: file
+    disableDeletion: false
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: true

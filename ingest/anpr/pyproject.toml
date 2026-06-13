@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "anpr-ingest"
+version = "0.1.0"
+description = "ANPR ingestion service for the JNPA UC-III Digital Twin PoC"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "JNPA Digital Twin Team" }]
+
+# Pins follow Corrigendum 3 Appendix C §2.3 stack guidance. ultralytics pulls a
+# CPU torch wheel by default (no GPU required for the PoC).
+dependencies = [
+    "opencv-python-headless==4.10.*",
+    "ultralytics==8.3.*",
+    "confluent-kafka==2.5.*",
+    "pydantic==2.*",
+    # Kept compatible with the CPU torch wheel (built against numpy 2.x); the
+    # lower bound preserves the originally-specced 1.26 floor.
+    "numpy>=1.26,<3",
+    "pillow>=10,<13",
+    "structlog==24.*",
+    "prometheus-client==0.21.*",
+    "httpx==0.27.*",
+]
+
+[project.optional-dependencies]
+# RTSP/WebRTC ingestion for real cameras (not exercised by the MP4-replay PoC).
+rtc = ["aiortc==1.9.*"]
+dev = [
+    "pytest==8.3.*",
+    "pytest-asyncio==0.24.*",
+]
+
+[project.scripts]
+anpr-ingest = "anpr_ingest.main:run"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jnpa-shared"
+version = "0.1.0"
+description = "Shared config, schemas, and IO helpers for the JNPA UC-III Digital Twin PoC"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "JNPA Digital Twin Team" }]
+
+# All runtime deps are pinned. Nothing in any service may use a package that
+# is not pinned here or in a service-local requirements.txt.
+dependencies = [
+    "pydantic==2.9.2",
+    "pydantic-settings==2.6.1",
+    "confluent-kafka==2.6.0",
+    "sqlalchemy==2.0.36",
+    "greenlet==3.1.1",      # required by SQLAlchemy's async engine
+    "asyncpg==0.30.0",
+    "redis==5.2.1",
+    "paho-mqtt==2.1.0",
+    "structlog==24.4.0",
+    "python-dotenv==1.0.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.4",
+    "pytest-asyncio==0.24.0",
+]
+
+[tool.setuptools]
+packages = ["jnpa_shared"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

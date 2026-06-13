@@ -1,0 +1,25 @@
+# Grafana datasource provisioning for the JNPA UC-III PoC.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+
+  - name: TimescaleDB
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    database: postgres
+    user: postgres
+    # Set via env in a real deployment; PoC uses the seeded password.
+    secureJsonData:
+      password: jnpa_pw
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1500
+      timescaledb: true
+    editable: true

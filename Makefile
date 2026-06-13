@@ -33,7 +33,7 @@ endif
 
 .DEFAULT_GOAL := help
 
-.PHONY: help venv up down logs ps psql redis-cli test bootstrap-check install-shared vahan-seed vahan-verify rfid-verify truck-verify anpr-verify anpr-bench congestion-train congestion-verify anomaly-train anomaly-verify gateway-verify dev-web web-build web-verify web-e2e scenarios-verify tfc1 tfc2 tfc3 vapid-keys dev-pwa pwa-build pwa-verify pwa-e2e
+.PHONY: help venv up down logs ps psql redis-cli test bootstrap-check install-shared vahan-seed vahan-verify rfid-verify truck-verify anpr-verify anpr-bench congestion-train congestion-verify anomaly-train anomaly-verify gateway-verify dev-web web-build web-verify web-e2e scenarios-verify tfc1 tfc2 tfc3 vapid-keys dev-pwa pwa-build pwa-verify pwa-e2e preflight e2e demo demo-record evidence demo-reset
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -244,3 +244,24 @@ pwa-verify: ## Smoke-test the PWA surface + push channel (stack must be up)
 
 pwa-e2e: ## Run the PWA Playwright e2e suite (stack must be up)
 	cd mobile-pwa && npm install && npx playwright install --with-deps chromium && npm run test:e2e
+
+# ============================================================================
+# Integration, demo & evaluator evidence pack (Prompt 12)
+# ============================================================================
+preflight: ## Hard-coded demo sanity checks (refuse to launch if a prereq is missing)
+	$(PY) -m scripts.preflight
+
+e2e: ## End-to-end smoke test — exit 0 means every assertion passed (stack must be up)
+	$(PY) tests/e2e/test_full_pipeline.py
+
+demo: ## Walk the operator through the on-screen demo (interactive; stack must be up)
+	$(PY) scripts/demo_drive.py
+
+demo-record: ## Run the demo + capture screenshots + build the evidence pack (stack must be up)
+	$(PY) scripts/demo_drive.py --record
+
+evidence: ## (Re)build ./evidence (metrics.json + Jaeger traces + POC_SUMMARY.md)
+	$(PY) scripts/build_evidence.py
+
+demo-reset: ## Return the stack to a clean baseline (wipes ephemeral data, keeps trained models)
+	$(PY) scripts/demo_reset.py

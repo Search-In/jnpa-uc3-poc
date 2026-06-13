@@ -1,0 +1,6 @@
+# Generated demo evidence (Prompt 12). The directory + .gitkeep are tracked;
+# the artifacts (regenerated per evaluator visit) are not.
+metrics.json
+POC_SUMMARY.md
+trace_*.json
+screenshots/*.png

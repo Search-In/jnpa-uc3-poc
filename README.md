@@ -377,6 +377,87 @@ the demo never hard-depends on a key. See `mobile-pwa/README.md` for detail.
 
 ---
 
+## Demo & evaluator evidence pack (Prompt 12)
+
+The final integration layer: an end-to-end smoke test, an operator-guided demo
+driver, and an evidence pack the bid team drops into the Technical Bid PoC
+annexure.
+
+### Target KPIs
+
+| KPI                              | Target  | Evidence                |
+| -------------------------------- | ------- | ----------------------- |
+| ANPR exact-match (clean)         | >= 95%  | `ai/anpr /eval`         |
+| ANPR exact-match (dust/fog)      | >= 92%  | `ai/anpr /eval`         |
+| Congestion onset F1              | >= 0.85 | `ai/congestion /metrics`|
+| Wrong-way detection precision    | >= 0.95 | `ai/anomaly test`       |
+| End-to-end alert latency p95     | <= 6 s  | `e2e test`              |
+| Trucking-app device count        | 20,000  | `ingest/trucking_app GET`|
+| Trucking-app scalable to         | 30,000+ | `scale endpoint test`   |
+| Decision-path log retention      | 1000    | `gateway /api/debug`    |
+
+Each row is measured, not asserted: `scripts/build_evidence.py` pulls every
+number from its source of truth into `evidence/metrics.json` and renders the
+table (target vs measured vs status) into `evidence/POC_SUMMARY.md`.
+
+### Verification command (run before any evaluator visit)
+
+```bash
+make up && sleep 60 && python scripts/demo_drive.py --record
+open ./evidence/POC_SUMMARY.md
+```
+
+`demo_drive.py --record` first runs the **hard-coded sanity checks** (it refuses
+to launch unless `GOOGLE_MAPS_API_KEY` *or* `HERE_API_KEY` is set,
+`OPENWEATHER_API_KEY` is set, and `data/clips/` holds at least one ANPR clip —
+otherwise it prints a README-linked error and exits non-zero). It then walks the
+operator through the on-screen demo, auto-posts the TFC-1/2/3 triggers at the
+right moment, captures a timestamp-stamped Playwright screenshot per step into
+`evidence/screenshots/`, and builds the evidence pack.
+
+### End-to-end smoke test
+
+```bash
+make up && sleep 60 && python tests/e2e/test_full_pipeline.py   # or: make e2e
+```
+
+**Exit code 0 means every assertion passed.** It waits for steady state, then
+verifies, in order: (a) ANPR ingestion emits ≥ 5 events/s, (b) the Vahan chain
+serves a known plate via `LIVE_FALLBACK`, (c) the RFID+ANPR correlator emits
+`vehicle.confirmed`, (d) congestion `/metrics` F1 ≥ 0.85, (e) ANPR `/eval`
+reports `OCR_TARGET_MET = true`, and (f) each of TFC-1/2/3 runs and resets
+cleanly. Under `pytest` each is its own test, skipped (not failed) when the
+stack is down, so `make test` stays green without a running stack.
+
+### Evidence pack (`./evidence/`)
+
+- `metrics.json` — `ocr_clean_accuracy`, `ocr_dust_accuracy`,
+  `ocr_night_accuracy`, `congestion_f1`, `anomaly_precision`, `anomaly_recall`,
+  `e2e_latency_p50`, `e2e_latency_p95`, `throughput_msgs_per_sec` (+ provenance).
+- `screenshots/` — one timestamp-stamped PNG per demo step (from `demo_drive`).
+- `trace_*.json` — the Jaeger trace for each scenario (`ingest → AI → alert →
+  action`), fetched from the Jaeger query API by `handle_id`.
+- `POC_SUMMARY.md` — the one-page annexure summary (KPI table + supporting
+  figures + fallback chains + scenario traces + reproduce steps).
+
+The directory and its `.gitkeep` are tracked; the generated artifacts are
+git-ignored (regenerated per evaluator visit).
+
+### Reset after the walk-through
+
+```bash
+make demo-reset
+```
+
+Returns the stack to a clean baseline: resets any running scenarios, truncates
+the ephemeral Timescale event tables, drops provisional (cure-window) vehicles,
+and clears the ephemeral Redis keys — **but keeps trained models** (the MinIO
+`models` bucket and the `congestion-artifacts` / `anomaly-artifacts` volumes),
+so the next `make up` serves instantly without retraining. For a full teardown
+(which *does* drop the model volumes) use `make down`.
+
+---
+
 ## Make targets
 
 | Target                  | Action                                          |
@@ -400,6 +481,12 @@ the demo never hard-depends on a key. See `mobile-pwa/README.md` for detail.
 | `make pwa-build`        | build the PWA bundle (`mobile-pwa/dist`)        |
 | `make pwa-verify`       | smoke-test `/pwa` + the push channel            |
 | `make pwa-e2e`          | Playwright: pair → re-route banner < 5 s        |
+| `make preflight`        | hard-coded demo sanity checks (keys + clips)    |
+| `make e2e`              | end-to-end smoke test (exit 0 == all passed)    |
+| `make demo`             | interactive on-screen demo walk-through         |
+| `make demo-record`      | demo + screenshots + evidence pack              |
+| `make evidence`         | (re)build `./evidence` (metrics + traces + summary) |
+| `make demo-reset`       | clean baseline (wipe ephemeral, keep models)    |
 
 ---
 

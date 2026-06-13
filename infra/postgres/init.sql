@@ -270,3 +270,40 @@ WHERE provisional = true
   AND provisional_until IS NOT NULL
   AND provisional_until > now()
 ORDER BY provisional_until ASC;
+
+-- ===========================================================================
+-- Geo-fence zones (UC-III Sub-Criterion 4 — Geo-fencing Manager).
+-- The dashboard's terra-draw editor PUTs no-parking / restricted polygons here;
+-- the behavioural anomaly service (ai/anomaly) reads them live to decide
+-- ILLEGAL_PARKING. Polygons are stored as GeoJSON-style ring coordinates
+-- ([[lon,lat], ...]) in `polygon`. `escalation` holds the editable
+-- 5/15/30-minute escalation thresholds (minutes) for the zone.
+-- ===========================================================================
+CREATE TABLE IF NOT EXISTS jnpa.geofence_zones (
+    id          text PRIMARY KEY,
+    name        text NOT NULL,
+    kind        text NOT NULL DEFAULT 'no_parking'
+                CHECK (kind IN ('no_parking', 'restricted')),
+    polygon     jsonb NOT NULL,                 -- [[lon,lat], ...] outer ring
+    escalation  jsonb NOT NULL DEFAULT '{"warn_min":5,"notice_min":15,"challan_min":30}'::jsonb,
+    enabled     boolean NOT NULL DEFAULT true,
+    updated_at  timestamptz NOT NULL DEFAULT now()
+);
+
+-- Seed the six corridor no-parking zones (mirror jnpa_shared.corridor.NO_PARK_ZONES).
+-- Half-extents ~0.0005 deg lat; lon widened by 1/cos(18.9 deg) ~= 1.0573 so the
+-- footprint is roughly square on the ground. Rings are [lon,lat] (GeoJSON order).
+INSERT INTO jnpa.geofence_zones (id, name, kind, polygon) VALUES
+    ('NPZ-GATE-NSICT', 'NSICT Gate-1 apron', 'no_parking',
+     '[[72.948671,18.9484],[72.949729,18.9484],[72.949729,18.9494],[72.948671,18.9494],[72.948671,18.9484]]'::jsonb),
+    ('NPZ-GATE-JNPCT', 'JNPCT gate throat', 'no_parking',
+     '[[72.949971,18.9507],[72.951029,18.9507],[72.951029,18.9517],[72.949971,18.9517],[72.949971,18.9507]]'::jsonb),
+    ('NPZ-YJUNCTION', 'NH-348 Y-junction', 'no_parking',
+     '[[72.969971,18.9210],[72.971029,18.9210],[72.971029,18.9220],[72.969971,18.9220],[72.969971,18.9210]]'::jsonb),
+    ('NPZ-FLYOVER-RAMP', 'KM-6 flyover ramp', 'no_parking',
+     '[[72.989471,18.8845],[72.990529,18.8845],[72.990529,18.8855],[72.989471,18.8855],[72.989471,18.8845]]'::jsonb),
+    ('NPZ-WEIGHBRIDGE', 'KM-12 weighbridge approach', 'restricted',
+     '[[73.029471,18.8395],[73.030529,18.8395],[73.030529,18.8405],[73.029471,18.8405],[73.029471,18.8395]]'::jsonb),
+    ('NPZ-KARAL-JUNCTION', 'Karal Phata junction', 'no_parking',
+     '[[73.079471,18.7795],[73.080529,18.7795],[73.080529,18.7805],[73.079471,18.7805],[73.079471,18.7795]]'::jsonb)
+ON CONFLICT (id) DO NOTHING;

@@ -25,6 +25,12 @@ COPY gateway/ /app/gateway/
 
 RUN pip install -e /app/gateway
 
+# Install the Chromium browser Playwright drives for server-side PDF rendering
+# (/api/reports/police?format=pdf). `--with-deps` pulls the OS libraries Chromium
+# needs on the slim base. If this layer is ever trimmed for size the report route
+# degrades to printable HTML rather than failing.
+RUN python -m playwright install --with-deps chromium
+
 # Import guard: fail the build loudly if anything is broken.
 RUN python -c "import gateway.main, gateway.fallback, gateway.cache; print('gateway import OK')"
 

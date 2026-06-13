@@ -111,6 +111,43 @@ async def devices(n: int = Query(default=20000, ge=0, description="reference onl
     return stats
 
 
+@app.get("/devices/list")
+async def devices_list(
+    state: Optional[str] = Query(default=None, description="filter to one TruckState"),
+    limit: int = Query(default=200, ge=1, le=2000),
+) -> dict:
+    """A sampled list of live device snapshots for the dashboard.
+
+    The full fleet is 20k+ trucks, far more than a dashboard map needs. This
+    returns up to ``limit`` snapshots (optionally filtered to one ``state`` —
+    e.g. ``AT_GATE_QUEUE`` for the Driver-Advisory queue) with the same shape as
+    ``GET /devices/{id}``. Iteration order over the dict is stable for a given
+    population, so the sample is deterministic between calls.
+    """
+    fleet = _require_fleet()
+    want = state.upper() if state else None
+    out = []
+    for device_id, truck in fleet.trucks.items():
+        if want is not None and truck.state.value != want:
+            continue
+        event = truck.telemetry()
+        out.append({
+            "device_id": device_id,
+            "plate": truck.profile.plate,
+            "gate_id": truck.profile.gate_id,
+            "state": truck.state.value,
+            "position": {"lat": event.lat, "lon": event.lon},
+            "speed_kmh": event.speed_kmh,
+            "heading": event.heading,
+            "remaining_km": round(truck.remaining_km, 3),
+            "eta_s": truck.eta_s,
+            "segment_id": truck.current_segment_id,
+        })
+        if len(out) >= limit:
+            break
+    return {"count": len(out), "filter_state": want, "devices": out}
+
+
 @app.post("/devices/scale")
 async def scale(req: ScaleRequest) -> dict:
     """Hot-scale the population toward ``target`` (bounded by max_devices)."""

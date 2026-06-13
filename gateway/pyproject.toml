@@ -20,6 +20,9 @@ dependencies = [
     "websockets==13.*",
     "aiomqtt==2.*",
     "python-multipart==0.0.*",
+    # Server-side PDF rendering for /api/reports/police?format=pdf. The Chromium
+    # browser binary is installed in the Dockerfile (`playwright install`).
+    "playwright==1.47.*",
 ]
 
 [project.optional-dependencies]

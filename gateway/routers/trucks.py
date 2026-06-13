@@ -18,7 +18,7 @@ import time
 from typing import Dict, Optional
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from ..fallback import SourceState, TruckPath
 from ..logging import get_logger
@@ -66,6 +66,64 @@ async def _secondary_ulip(state: GatewayState, device_id: str) -> Optional[dict]
     if resp.status_code == 200:
         return resp.json()
     return None
+
+
+@router.get("")
+@router.get("/")
+async def list_trucks(
+    state: str | None = Query(default=None, description="filter to one TruckState"),
+    limit: int = Query(default=200, ge=1, le=2000),
+    gw: GatewayState = Depends(get_state),
+) -> dict:
+    """Sampled list of live trucks for the dashboard (proxies truck-sim).
+
+    ``state=AT_GATE_QUEUE`` powers the Driver-Advisory queue. Each device carries
+    ``eta_s`` and ``remaining_km`` so the dashboard can render ETA-to-gate
+    without a second round-trip.
+    """
+    url = gw.cfg.truck_api_url.rstrip("/") + "/devices/list"
+    params: Dict[str, str] = {"limit": str(limit)}
+    if state:
+        params["state"] = state
+    try:
+        resp = await gw.http.get(url, params=params)
+        if resp.status_code == 200:
+            REQUESTS.labels("trucks", "ok").inc()
+            return resp.json()
+        log.info("trucks_list_miss", status=resp.status_code)
+    except httpx.HTTPError as exc:
+        log.warning("trucks_list_unreachable", url=url, error=str(exc))
+    REQUESTS.labels("trucks", "degraded").inc()
+    return {"count": 0, "filter_state": state, "devices": [], "degraded": True}
+
+
+@router.post("/{device_id}/route")
+async def reroute_truck(
+    device_id: str,
+    body: Dict[str, object] = Body(default_factory=dict),
+    gw: GatewayState = Depends(get_state),
+) -> dict:
+    """Force a new route for a truck (Driver-Advisory "Push Re-route", TFC-3).
+
+    Body forwards straight to the truck-sim: ``{gate_id}`` or ``{lat, lon}`` plus
+    an optional ``force_state``. We record the override as a decision so it shows
+    up in the demo evidence trail.
+    """
+    url = gw.cfg.truck_api_url.rstrip("/") + f"/devices/{device_id}/route"
+    try:
+        resp = await gw.http.post(url, json=body)
+    except httpx.HTTPError as exc:
+        log.warning("trucks_reroute_unreachable", url=url, error=str(exc))
+        raise HTTPException(status_code=502, detail={"error": "truck_sim_unreachable"})
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.json())
+    data = resp.json()
+    await gw.record_decision(
+        api="trucks", key=device_id, decision_path="REROUTE", source="truck-sim",
+        source_state=SourceState.LIVE, detail={"reroute": body},
+    )
+    REQUESTS.labels("trucks", "ok").inc()
+    return data
 
 
 @router.get("/{device_id}")

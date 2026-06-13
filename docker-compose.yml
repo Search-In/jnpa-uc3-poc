@@ -824,3 +824,29 @@ services:
       - ./gateway:/app/gateway:ro
     networks:
       - jnpa
+
+  # --------------------------------------------------------------------------
+  # Control-room dashboard (UC-III Sub-Criterion 4).
+  # React + Vite SPA built into an nginx image; nginx serves the static bundle
+  # on host :3000 and reverse-proxies /api (REST + WebSocket) to the gateway so
+  # the browser talks to a single origin. The Mapbox token is a build arg (free
+  # tier OK); when blank the map falls back to the Bhuvan (ISRO) WMS basemap.
+  #   open http://localhost:3000/live
+  # --------------------------------------------------------------------------
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        VITE_MAPBOX_TOKEN: ${MAPBOX_TOKEN:-}
+        VITE_BHUVAN_WMS: ${VITE_BHUVAN_WMS:-https://bhuvan-vec1.nrsc.gov.in/bhuvan/wms}
+    image: jnpa/web:0.1.0
+    container_name: jnpa-web
+    restart: unless-stopped
+    depends_on:
+      gateway:
+        condition: service_started
+    ports:
+      - "3000:3000"
+    networks:
+      - jnpa

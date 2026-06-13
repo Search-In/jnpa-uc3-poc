@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+  /* Visible focus ring everywhere for keyboard users (WCAG 2.4.7). */
+  :focus-visible {
+    outline: 2px solid hsl(199 89% 48%);
+    outline-offset: 2px;
+  }
+}
+
+/* MapLibre attribution/controls need to sit above our overlays. */
+.maplibregl-ctrl-attrib {
+  font-size: 10px;
+}
+.maplibregl-canvas {
+  outline: none;
+}

@@ -33,7 +33,7 @@ endif
 
 .DEFAULT_GOAL := help
 
-.PHONY: help venv up down logs ps psql redis-cli test bootstrap-check install-shared vahan-seed vahan-verify rfid-verify truck-verify anpr-verify anpr-bench congestion-train congestion-verify anomaly-train anomaly-verify gateway-verify
+.PHONY: help venv up down logs ps psql redis-cli test bootstrap-check install-shared vahan-seed vahan-verify rfid-verify truck-verify anpr-verify anpr-bench congestion-train congestion-verify anomaly-train anomaly-verify gateway-verify dev-web web-build web-verify web-e2e
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -165,3 +165,26 @@ gateway-verify: ## Smoke-test the API gateway: orchestrated RC lookup + decision
 	@echo "== provisional vehicles still in cure window ==" \
 		&& $(COMPOSE) exec -T postgres psql -U postgres -d postgres \
 		-c "select plate, provisional_until from jnpa.vehicle_master where provisional = true and provisional_until > now();" || true
+
+dev-web: ## Run the dashboard dev server on :5173 (Vite, proxies /api -> :8000)
+	cd web && npm install && npm run dev
+
+web-build: ## Build the production dashboard bundle (web/dist)
+	cd web && npm install && npm run build
+
+web-verify: ## Smoke-test the dashboard's gateway surface (stack must be up)
+	@echo "== /api/gates ==" && curl -s http://localhost:8000/api/gates | $(PY) -m json.tool || true
+	@echo "== /api/corridor (segment_count) ==" \
+		&& curl -s http://localhost:8000/api/corridor \
+		| $(PY) -c "import sys,json; d=json.load(sys.stdin); print('segments=%d length_km=%s' % (d['segment_count'], d['length_km']))" || true
+	@echo "== /api/zones (count) ==" \
+		&& curl -s http://localhost:8000/api/zones \
+		| $(PY) -c "import sys,json; d=json.load(sys.stdin); print('source=%s zones=%d' % (d['source'], len(d['zones'])))" || true
+	@echo "== /api/reports/police?format=json (count) ==" \
+		&& curl -s 'http://localhost:8000/api/reports/police?format=json' \
+		| $(PY) -c "import sys,json; print('incidents=%d' % json.load(sys.stdin)['count'])" || true
+	@echo "== dashboard root (nginx :3000) ==" \
+		&& curl -s -o /dev/null -w 'HTTP %{http_code}\n' http://localhost:3000/live || true
+
+web-e2e: ## Run the Playwright e2e suite against the running dashboard
+	cd web && npm install && npx playwright install --with-deps chromium && npm run test:e2e

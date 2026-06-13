@@ -38,7 +38,9 @@ from .routers import (
     anpr,
     checkin,
     debug,
+    geo,
     kpi,
+    reports,
     scenarios,
     traffic,
     trucks,
@@ -111,6 +113,8 @@ app.include_router(ulip.router)
 app.include_router(alerts.router)
 app.include_router(scenarios.router)
 app.include_router(kpi.router)
+app.include_router(geo.router)
+app.include_router(reports.router)
 app.include_router(debug.router)
 app.include_router(ws.router)
 app.include_router(checkin.router)
@@ -135,7 +139,9 @@ async def root() -> dict:
         "version": "0.1.0",
         "apis": ["/api/anpr", "/api/vahan", "/api/traffic", "/api/trucks",
                  "/api/ulip", "/api/alerts", "/api/scenarios", "/api/kpi",
-                 "/api/debug/decisions", "/api/ws", "/checkin"],
+                 "/api/gates", "/api/corridor", "/api/zones",
+                 "/api/reports/police", "/api/debug/decisions", "/api/ws",
+                 "/checkin"],
     }
 
 

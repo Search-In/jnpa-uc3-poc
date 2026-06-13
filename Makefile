@@ -33,7 +33,7 @@ endif
 
 .DEFAULT_GOAL := help
 
-.PHONY: help venv up down logs ps psql redis-cli test bootstrap-check install-shared
+.PHONY: help venv up down logs ps psql redis-cli test bootstrap-check install-shared vahan-seed vahan-verify
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -58,16 +58,30 @@ psql: ## Open psql inside the postgres container
 redis-cli: ## Open redis-cli inside the redis container
 	$(COMPOSE) exec redis redis-cli
 
-venv: ## Create .venv and install the shared package + dev deps (host-side)
+venv: ## Create .venv and install shared + vahan services (host-side, for tests)
 	python3 -m venv .venv
 	.venv/bin/python -m pip install --upgrade pip
 	.venv/bin/python -m pip install -e "shared[dev]"
+	.venv/bin/python -m pip install -e "ingest/vahan_sim[dev]" -e "ingest/vahan_live[dev]"
 
-install-shared: ## pip install -e the shared package into the active interpreter
+install-shared: ## pip install -e the shared + vahan packages into the active interpreter
 	$(PY) -m pip install -e "shared[dev]"
+	$(PY) -m pip install -e "ingest/vahan_sim[dev]" -e "ingest/vahan_live[dev]"
 
 test: ## Run pytest -x in shared/ and tests/
 	$(PY) -m pytest -x shared tests
 
 bootstrap-check: ## Run the end-to-end bootstrap self-test
 	$(PY) scripts/bootstrap_check.py
+
+vahan-seed: ## Regenerate data/fixtures/known_plates.json (25k plates, 50-plate fixture)
+	PYTHONPATH=ingest:shared $(PY) -m vahan_sim.seed --out data/fixtures/known_plates.json
+
+vahan-verify: ## Smoke-test the Vahan simulator + live adapter (stack must be up)
+	@echo "== sim RC ==" && curl -s http://localhost:8201/vahan/rc/MH04AB1234 | $(PY) -m json.tool || true
+	@echo "== sim health ==" && curl -s http://localhost:8201/healthz | $(PY) -m json.tool || true
+	@echo "== live (expect 503 without token) ==" \
+		&& curl -s -o /dev/null -w 'HTTP %{http_code}\n' http://localhost:8202/vahan/rc/MH04AB1234 || true
+	@echo "== vehicle_master count ==" \
+		&& $(COMPOSE) exec -T postgres psql -U postgres -d postgres \
+		-c "select count(*) from jnpa.vehicle_master;" || true

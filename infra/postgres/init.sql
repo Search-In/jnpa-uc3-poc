@@ -38,7 +38,34 @@ CREATE TABLE jnpa.vehicle_master (
     puc_valid_to      date,
     fastag_status     text,
     provisional       boolean DEFAULT false,
-    provisional_until timestamptz
+    provisional_until timestamptz,
+    -- Canonical Parivahan RC fields written back by the Vahan service
+    -- (ingest/vahan_sim, ingest/vahan_live) on every successful /vahan/rc/*.
+    owner_name_masked text,
+    vehicle_class     text,
+    fuel_type         text,
+    insurance_valid_to date,
+    registration_date  date,
+    state             text,
+    rto_code          text,
+    blacklist_status  text DEFAULT 'CLEAR',
+    updated_at        timestamptz DEFAULT now()
+);
+
+-- --------------------------------------------------------------------------
+-- Service registry. Each ingest/lookup service upserts its own row on
+-- startup; the fallback orchestrator (Prompt 4) reads this to decide between
+-- the simulator and the live (Surepass) adapter.
+-- --------------------------------------------------------------------------
+CREATE TABLE jnpa.services (
+    name          text NOT NULL,         -- logical service, e.g. 'vahan'
+    kind          text NOT NULL,         -- 'sim' | 'live'
+    base_url      text NOT NULL,         -- reachable on the jnpa network
+    healthy       boolean DEFAULT true,
+    enabled       boolean DEFAULT true,
+    registered_at timestamptz DEFAULT now(),
+    meta          jsonb DEFAULT '{}'::jsonb,
+    PRIMARY KEY (name, kind)
 );
 
 -- --------------------------------------------------------------------------

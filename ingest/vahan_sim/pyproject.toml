@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vahan-sim"
+version = "0.1.0"
+description = "Vahan/Sarathi/FASTag schema-faithful simulator for the JNPA UC-III Digital Twin PoC"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "JNPA Digital Twin Team" }]
+
+dependencies = [
+    "fastapi==0.115.*",
+    "uvicorn[standard]==0.32.*",
+    "prometheus-client==0.21.*",
+    "pydantic==2.*",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.*",
+    "pytest-asyncio==0.24.*",
+    "httpx==0.27.*",
+]
+
+[project.scripts]
+vahan-sim = "vahan_sim.app:run"
+vahan-sim-seed = "vahan_sim.seed:main"
+
+[tool.setuptools]
+# The package directory IS this folder (ingest/vahan_sim), imported as
+# `vahan_sim` with `ingest/` on PYTHONPATH (mirrors the compose bind mount).
+packages = ["vahan_sim"]
+package-dir = { "vahan_sim" = "." }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

@@ -17,6 +17,14 @@ scrape_configs:
     static_configs:
       - targets: ["anpr-ingest:9101"]
 
+  # Vahan simulator exposes Prometheus metrics on its own app port (8201).
+  # The exposition is mounted as an ASGI sub-app, so its canonical path is
+  # /metrics/ (a bare /metrics 307-redirects there).
+  - job_name: vahan-sim
+    metrics_path: /metrics/
+    static_configs:
+      - targets: ["vahan-sim:8201"]
+
   # Placeholders for later PoC services (uncomment as they expose /metrics):
   # - job_name: gateway
   #   static_configs:

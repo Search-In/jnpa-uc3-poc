@@ -86,6 +86,8 @@ the ingest/AI services start calling live providers in later PoC stages.
 | Prometheus           | `prom/prometheus:latest`                | `9090`              | http://localhost:9090                           |
 | Grafana              | `grafana/grafana:latest`                | `3000`              | http://localhost:3000 (admin/admin)             |
 | ANPR ingest          | `jnpa/anpr-ingest:0.1.0` (built)        | `9108` → 9101 (metrics) | http://localhost:9108/metrics               |
+| Vahan simulator      | `jnpa/vahan-sim:0.1.0` (built)          | `8201`              | http://localhost:8201/healthz                   |
+| Vahan live (Surepass)| `jnpa/vahan-live:0.1.0` (built)         | `8202`              | http://localhost:8202/healthz                   |
 
 > **Kafka note:** containers on the `jnpa` network use `kafka:9092` (internal
 > listener). Host processes — including the bootstrap self-test — use
@@ -118,8 +120,13 @@ jnpa-uc3-poc/
 ├── ingest/anpr/              # ANPR ingestion service (replay -> YOLOv8n -> Kafka)
 │   ├── Dockerfile  pyproject.toml
 │   └── src/anpr_ingest/      # config, replay, detect, emit, weather, metrics, main
+├── ingest/vahan_sim/         # Vahan/Sarathi/FASTag simulator (FastAPI :8201)
+│   └── app.py seed.py config.py metrics.py  Dockerfile pyproject.toml
+├── ingest/vahan_live/        # Surepass-backed live adapter (FastAPI :8202)
+│   └── app.py mappers.py config.py  Dockerfile pyproject.toml
+├── data/fixtures/            # known_plates.json (the 50 plates the demo queries)
 ├── ai/  gateway/  web/  mobile-pwa/  scenarios/   # later PoC stages
-└── tests/                    # test_bootstrap.py, test_anpr_ingest.py
+└── tests/                    # test_bootstrap.py, test_anpr_ingest.py, test_vahan_sim.py
 ```
 
 ---
@@ -161,6 +168,44 @@ docker exec -it jnpa-kafka kafka-console-consumer \
 
 ---
 
+## Vahan / Sarathi / FASTag (`ingest/vahan_sim/` + `ingest/vahan_live/`)
+
+The bid commits to integrating the Parivahan **Vahan** (RC), **Sarathi** (DL)
+and **FASTag** (NETC) APIs; JNPA facilitates production credentials post-award.
+For the PoC the same schema is served two ways so the rest of the system is
+API-correct either way:
+
+- **`vahan-sim`** (port **8201**) — a deterministic local simulator. Generates
+  25,000 regex-valid Indian plates (MH-04/MH-43/MH-06/GJ-01/KA-01/TN-22/KL-07
+  + a BH-series slice) with realistic anomaly rates (8% expired-fitness, 3%
+  blacklisted, 5% FASTag-LOW, 1% FASTag-BLACKLISTED) and ~`100ms±50ms`
+  artificial latency mimicking Parivahan.
+- **`vahan-live`** (port **8202**) — proxies the same surface to Surepass.
+  Returns `503 {"error":"live_disabled"}` unless `SUREPASS_API_TOKEN` is set;
+  it never falls back to the simulator (that is the orchestrator's job).
+
+Both expose `GET /vahan/rc/{plate}`, `GET /sarathi/dl/{dl_number}`,
+`GET /fastag/balance/{plate}`, `POST /admin/seed`, `GET /healthz`; schemas live
+once in `jnpa_shared.schemas`. Both register themselves in `jnpa.services`
+(`name='vahan'`, `kind='sim'|'live'`) on startup for the fallback orchestrator
+(Prompt 4), and every successful `/vahan/rc/*` upserts a verified row into
+`jnpa.vehicle_master` (`provisional=false`) — the row the dashboard reads.
+
+The 50 plates the demo (Prompt 9) queries are written to
+`data/fixtures/known_plates.json` (25 benign, 25 with ≥1 issue). Regenerate
+standalone with `make vahan-seed`.
+
+**Verify** (after `make up`):
+
+```bash
+curl -s http://localhost:8201/vahan/rc/MH04AB1234 | jq .
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8202/vahan/rc/MH04AB1234   # 503 (no token)
+make psql   # then: select count(*) from jnpa.vehicle_master;
+make vahan-verify   # one-shot smoke test of all of the above
+```
+
+---
+
 ## Make targets
 
 | Target                  | Action                                          |
@@ -175,6 +220,8 @@ docker exec -it jnpa-kafka kafka-console-consumer \
 | `make install-shared`   | `pip install -e shared`                         |
 | `make test`             | `pytest -x shared tests`                        |
 | `make bootstrap-check`  | run the end-to-end self-test                    |
+| `make vahan-seed`       | regenerate `data/fixtures/known_plates.json`    |
+| `make vahan-verify`     | smoke-test the Vahan sim + live adapter         |
 
 ---
 

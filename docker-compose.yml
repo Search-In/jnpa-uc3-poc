@@ -270,3 +270,75 @@ services:
       - ./ingest/anpr/src:/app/ingest/anpr/src:ro
     networks:
       - jnpa
+
+  # --------------------------------------------------------------------------
+  # Vahan / Sarathi / FASTag simulator — schema-faithful local stand-in for the
+  # Parivahan APIs (RC / DL / NETC). FastAPI on host 8201. Generates a
+  # deterministic 25k-plate dataset, writes the demo fixture, registers itself
+  # in jnpa.services, and upserts verified RCs into jnpa.vehicle_master.
+  # Build context is the repo root so the Dockerfile can COPY the shared lib.
+  # --------------------------------------------------------------------------
+  vahan-sim:
+    build:
+      context: .
+      dockerfile: ingest/vahan_sim/Dockerfile
+    image: jnpa/vahan-sim:0.1.0
+    container_name: jnpa-vahan-sim
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PYTHONPATH: /app/ingest
+      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      VAHAN_BASE_URL: http://vahan-sim:8201
+      VAHAN_SERVICE_NAME: vahan
+      VAHAN_SERVICE_KIND: sim
+      VAHAN_TOTAL_PLATES: ${VAHAN_TOTAL_PLATES:-25000}
+      VAHAN_FIXTURE_PATH: /data/fixtures/known_plates.json
+      VAHAN_LATENCY_MEAN_MS: ${VAHAN_LATENCY_MEAN_MS:-100}
+      VAHAN_LATENCY_JITTER_MS: ${VAHAN_LATENCY_JITTER_MS:-50}
+      PORT: "8201"
+      LOG_LEVEL: ${VAHAN_LOG_LEVEL:-INFO}
+      TZ: Etc/UTC
+    ports:
+      - "8201:8201"
+    volumes:
+      # Source bind-mount (live edits without rebuild) + writable fixtures dir.
+      - ./ingest/vahan_sim:/app/ingest/vahan_sim:ro
+      - ./data/fixtures:/data/fixtures
+    networks:
+      - jnpa
+
+  # --------------------------------------------------------------------------
+  # Vahan live adapter — proxies the same surface to Surepass's commercial KYC
+  # API. FastAPI on host 8202. Returns 503 {"error":"live_disabled"} unless
+  # SUREPASS_API_TOKEN is set; never falls back to the simulator (that is the
+  # orchestrator's job, Prompt 4).
+  # --------------------------------------------------------------------------
+  vahan-live:
+    build:
+      context: .
+      dockerfile: ingest/vahan_live/Dockerfile
+    image: jnpa/vahan-live:0.1.0
+    container_name: jnpa-vahan-live
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PYTHONPATH: /app/ingest
+      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      VAHAN_BASE_URL: http://vahan-live:8202
+      VAHAN_SERVICE_NAME: vahan
+      VAHAN_SERVICE_KIND: live
+      SUREPASS_API_TOKEN: ${SUREPASS_API_TOKEN:-}
+      PORT: "8202"
+      LOG_LEVEL: ${VAHAN_LOG_LEVEL:-INFO}
+      TZ: Etc/UTC
+    ports:
+      - "8202:8202"
+    volumes:
+      - ./ingest/vahan_live:/app/ingest/vahan_live:ro
+    networks:
+      - jnpa

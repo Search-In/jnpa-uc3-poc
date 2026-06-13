@@ -1,0 +1,560 @@
+{
+  "seed": "jnpa-uc3-vahan-sim-v1",
+  "reference_date": "2026-06-13",
+  "total_generated": 25002,
+  "count": 50,
+  "benign": 25,
+  "with_issues": 25,
+  "plates": [
+    {
+      "plate": "21BH0008BV",
+      "rc_number": "21BH0008BV",
+      "dl_number": "MH8273189077257",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2028-01-03",
+      "fitness_expired": false,
+      "issues": []
+    },
+    {
+      "plate": "KA01AA1451",
+      "rc_number": "KA01AA1451",
+      "dl_number": "KA5474688253617",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2028-07-09",
+      "fitness_expired": false,
+      "issues": []
+    },
+    {
+      "plate": "KL07AA4885",
+      "rc_number": "KL07AA4885",
+      "dl_number": "KL1286096467565",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2028-01-02",
+      "fitness_expired": false,
+      "issues": []
+    },
+    {
+      "plate": "MH04AA0201",
+      "rc_number": "MH04AA0201",
+      "dl_number": "MH9036513594489",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2028-11-05",
+      "fitness_expired": false,
+      "issues": []
+    },
+    {
+      "plate": "MH06AA2924",
+      "rc_number": "MH06AA2924",
+      "dl_number": "MH7969636309031",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2028-07-03",
+      "fitness_expired": false,
+      "issues": []
+    },
+    {
+      "plate": "MH43AA0488",
+      "rc_number": "MH43AA0488",
+      "dl_number": "MH5143075186995",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2027-03-01",
+      "fitness_expired": false,
+      "issues": []
+    },
+    {
+      "plate": "21BH0274SL",
+      "rc_number": "21BH0274SL",
+      "dl_number": "KA2922861084589",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2027-07-15",
+      "fitness_expired": false,
+      "issues": []
+    },
+    {
+      "plate": "GJ01AA1281",
+      "rc_number": "GJ01AA1281",
+      "dl_number": "GJ8346545575646",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2027-08-26",
+      "fitness_expired": false,
+      "issues": []
+    },
+    {
+      "plate": "KA01AA4751",
+      "rc_number": "KA01AA4751",
+      "dl_number": "KA1176472568292",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2027-11-11",
+      "fitness_expired": false,
+      "issues": []
+    },
+    {
+      "plate": "KL07AA6752",
+      "rc_number": "KL07AA6752",
+      "dl_number": "KL5138734457665",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2028-09-23",
+      "fitness_expired": false,
+      "issues": []
+    },
+    {
+      "plate": "MH04AA0390",
+      "rc_number": "MH04AA0390",
+      "dl_number": "MH8839133422576",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2026-10-19",
+      "fitness_expired": false,
+      "issues": []
+    },
+    {
+      "plate": "TN22AA5926",
+      "rc_number": "TN22AA5926",
+      "dl_number": "TN3374555652127",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2028-06-23",
+      "fitness_expired": false,
+      "issues": []
+    },
+    {
+      "plate": "21BH0287JW",
+      "rc_number": "21BH0287JW",
+      "dl_number": "KL7570855441964",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2027-08-19",
+      "fitness_expired": false,
+      "issues": []
+    },
+    {
+      "plate": "GJ01AA2077",
+      "rc_number": "GJ01AA2077",
+      "dl_number": "GJ6001261303731",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2027-07-26",
+      "fitness_expired": false,
+      "issues": []
+    },
+    {
+      "plate": "KL07AA7380",
+      "rc_number": "KL07AA7380",
+      "dl_number": "KL0300035433727",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2027-09-09",
+      "fitness_expired": false,
+      "issues": []
+    },
+    {
+      "plate": "MH04AA1280",
+      "rc_number": "MH04AA1280",
+      "dl_number": "MH8017540862900",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2026-12-16",
+      "fitness_expired": false,
+      "issues": []
+    },
+    {
+      "plate": "MH06AA7450",
+      "rc_number": "MH06AA7450",
+      "dl_number": "MH2589377658322",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2028-03-20",
+      "fitness_expired": false,
+      "issues": []
+    },
+    {
+      "plate": "MH43AB0643",
+      "rc_number": "MH43AB0643",
+      "dl_number": "MH7331742961204",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2028-05-03",
+      "fitness_expired": false,
+      "issues": []
+    },
+    {
+      "plate": "21BH0340MR",
+      "rc_number": "21BH0340MR",
+      "dl_number": "TN5500516889050",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2026-09-02",
+      "fitness_expired": false,
+      "issues": []
+    },
+    {
+      "plate": "GJ01AA6126",
+      "rc_number": "GJ01AA6126",
+      "dl_number": "GJ1565582254443",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2027-02-23",
+      "fitness_expired": false,
+      "issues": []
+    },
+    {
+      "plate": "KA01AA7903",
+      "rc_number": "KA01AA7903",
+      "dl_number": "KA0737826136987",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2027-12-14",
+      "fitness_expired": false,
+      "issues": []
+    },
+    {
+      "plate": "KL07AB0218",
+      "rc_number": "KL07AB0218",
+      "dl_number": "KL1687494782880",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2027-06-12",
+      "fitness_expired": false,
+      "issues": []
+    },
+    {
+      "plate": "MH04AA1445",
+      "rc_number": "MH04AA1445",
+      "dl_number": "MH3457105211588",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2026-08-25",
+      "fitness_expired": false,
+      "issues": []
+    },
+    {
+      "plate": "MH06AA7652",
+      "rc_number": "MH06AA7652",
+      "dl_number": "MH6437715949810",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2026-11-17",
+      "fitness_expired": false,
+      "issues": []
+    },
+    {
+      "plate": "MH43AB2860",
+      "rc_number": "MH43AB2860",
+      "dl_number": "MH5787971290976",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2028-03-31",
+      "fitness_expired": false,
+      "issues": []
+    },
+    {
+      "plate": "GJ01AA0027",
+      "rc_number": "GJ01AA0027",
+      "dl_number": "GJ4680649459427",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2025-12-04",
+      "fitness_expired": true,
+      "issues": [
+        "expired_fitness"
+      ]
+    },
+    {
+      "plate": "TN22AA0984",
+      "rc_number": "TN22AA0984",
+      "dl_number": "TN1515846294676",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "LOW_BALANCE",
+      "fitness_valid_to": "2026-10-14",
+      "fitness_expired": false,
+      "issues": [
+        "fastag_low_balance"
+      ]
+    },
+    {
+      "plate": "MH06AA5728",
+      "rc_number": "MH06AA5728",
+      "dl_number": "MH0973071354889",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "BLACKLISTED",
+      "fitness_valid_to": "2028-11-01",
+      "fitness_expired": false,
+      "issues": [
+        "fastag_blacklisted"
+      ]
+    },
+    {
+      "plate": "MH43AB0263",
+      "rc_number": "MH43AB0263",
+      "dl_number": "MH7746180232383",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2025-09-09",
+      "fitness_expired": true,
+      "issues": [
+        "expired_fitness"
+      ]
+    },
+    {
+      "plate": "KA01AA7221",
+      "rc_number": "KA01AA7221",
+      "dl_number": "KA2505958800385",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "LOW_BALANCE",
+      "fitness_valid_to": "2027-03-29",
+      "fitness_expired": false,
+      "issues": [
+        "fastag_low_balance"
+      ]
+    },
+    {
+      "plate": "TN22AA7697",
+      "rc_number": "TN22AA7697",
+      "dl_number": "TN5832841409453",
+      "expected_blacklist": "BLACKLISTED",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2028-04-04",
+      "fitness_expired": false,
+      "issues": [
+        "blacklisted"
+      ]
+    },
+    {
+      "plate": "TN22AA9842",
+      "rc_number": "TN22AA9842",
+      "dl_number": "TN6422270657544",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2026-04-13",
+      "fitness_expired": true,
+      "issues": [
+        "expired_fitness"
+      ]
+    },
+    {
+      "plate": "KA01AA9579",
+      "rc_number": "KA01AA9579",
+      "dl_number": "KA0045053752602",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2025-07-26",
+      "fitness_expired": true,
+      "issues": [
+        "expired_fitness"
+      ]
+    },
+    {
+      "plate": "MH43AB3839",
+      "rc_number": "MH43AB3839",
+      "dl_number": "MH8592567714961",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2025-05-20",
+      "fitness_expired": true,
+      "issues": [
+        "expired_fitness"
+      ]
+    },
+    {
+      "plate": "KA01AB5800",
+      "rc_number": "KA01AB5800",
+      "dl_number": "KA3452395685140",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2025-07-02",
+      "fitness_expired": true,
+      "issues": [
+        "expired_fitness"
+      ]
+    },
+    {
+      "plate": "KL07AB1572",
+      "rc_number": "KL07AB1572",
+      "dl_number": "KL7039402484638",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2025-11-16",
+      "fitness_expired": true,
+      "issues": [
+        "expired_fitness"
+      ]
+    },
+    {
+      "plate": "MH06AB0450",
+      "rc_number": "MH06AB0450",
+      "dl_number": "MH3624825767861",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2025-12-18",
+      "fitness_expired": true,
+      "issues": [
+        "expired_fitness"
+      ]
+    },
+    {
+      "plate": "MH04AB2767",
+      "rc_number": "MH04AB2767",
+      "dl_number": "MH4907157813478",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2025-10-11",
+      "fitness_expired": true,
+      "issues": [
+        "expired_fitness"
+      ]
+    },
+    {
+      "plate": "KL07AB7956",
+      "rc_number": "KL07AB7956",
+      "dl_number": "KL2755177120923",
+      "expected_blacklist": "BLACKLISTED",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2028-05-16",
+      "fitness_expired": false,
+      "issues": [
+        "blacklisted"
+      ]
+    },
+    {
+      "plate": "TN22AB5394",
+      "rc_number": "TN22AB5394",
+      "dl_number": "TN4913307675832",
+      "expected_blacklist": "BLACKLISTED",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2026-10-08",
+      "fitness_expired": false,
+      "issues": [
+        "blacklisted"
+      ]
+    },
+    {
+      "plate": "MH06AB7181",
+      "rc_number": "MH06AB7181",
+      "dl_number": "MH7283795732463",
+      "expected_blacklist": "BLACKLISTED",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2028-05-28",
+      "fitness_expired": false,
+      "issues": [
+        "blacklisted"
+      ]
+    },
+    {
+      "plate": "MH43AD5776",
+      "rc_number": "MH43AD5776",
+      "dl_number": "MH0401396730712",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "LOW_BALANCE",
+      "fitness_valid_to": "2027-07-28",
+      "fitness_expired": false,
+      "issues": [
+        "fastag_low_balance"
+      ]
+    },
+    {
+      "plate": "GJ01AC3368",
+      "rc_number": "GJ01AC3368",
+      "dl_number": "GJ1122792648946",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "LOW_BALANCE",
+      "fitness_valid_to": "2027-07-20",
+      "fitness_expired": false,
+      "issues": [
+        "fastag_low_balance"
+      ]
+    },
+    {
+      "plate": "KA01AC8471",
+      "rc_number": "KA01AC8471",
+      "dl_number": "KA4698954385929",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2026-04-08",
+      "fitness_expired": true,
+      "issues": [
+        "expired_fitness"
+      ]
+    },
+    {
+      "plate": "MH43AE1697",
+      "rc_number": "MH43AE1697",
+      "dl_number": "MH4249625318766",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2026-06-07",
+      "fitness_expired": true,
+      "issues": [
+        "expired_fitness"
+      ]
+    },
+    {
+      "plate": "KL07AC2884",
+      "rc_number": "KL07AC2884",
+      "dl_number": "KL4195762969378",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2025-07-27",
+      "fitness_expired": true,
+      "issues": [
+        "expired_fitness"
+      ]
+    },
+    {
+      "plate": "21BH1507LA",
+      "rc_number": "21BH1507LA",
+      "dl_number": "KL0839685642139",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "LOW_BALANCE",
+      "fitness_valid_to": "2026-09-15",
+      "fitness_expired": false,
+      "issues": [
+        "fastag_low_balance"
+      ]
+    },
+    {
+      "plate": "KA01AD0118",
+      "rc_number": "KA01AD0118",
+      "dl_number": "KA3961333651026",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "LOW_BALANCE",
+      "fitness_valid_to": "2027-02-26",
+      "fitness_expired": false,
+      "issues": [
+        "fastag_low_balance"
+      ]
+    },
+    {
+      "plate": "21BH1513BW",
+      "rc_number": "21BH1513BW",
+      "dl_number": "MH7612625632944",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "BLACKLISTED",
+      "fitness_valid_to": "2028-07-14",
+      "fitness_expired": false,
+      "issues": [
+        "fastag_blacklisted"
+      ]
+    },
+    {
+      "plate": "KA01AD5909",
+      "rc_number": "KA01AD5909",
+      "dl_number": "KA2155412935626",
+      "expected_blacklist": "CLEAR",
+      "expected_fastag_status": "ACTIVE",
+      "fitness_valid_to": "2025-07-22",
+      "fitness_expired": true,
+      "issues": [
+        "expired_fitness"
+      ]
+    }
+  ]
+}

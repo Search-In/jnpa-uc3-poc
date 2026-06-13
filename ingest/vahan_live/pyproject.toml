@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vahan-live"
+version = "0.1.0"
+description = "Live Surepass-backed Vahan/Sarathi/FASTag adapter for the JNPA UC-III Digital Twin PoC"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "JNPA Digital Twin Team" }]
+
+dependencies = [
+    "fastapi==0.115.*",
+    "uvicorn[standard]==0.32.*",
+    "httpx==0.27.*",
+    "pydantic==2.*",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.*",
+    "pytest-asyncio==0.24.*",
+]
+
+[project.scripts]
+vahan-live = "vahan_live.app:run"
+
+[tool.setuptools]
+packages = ["vahan_live"]
+package-dir = { "vahan_live" = "." }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

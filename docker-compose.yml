@@ -750,3 +750,77 @@ services:
           anomaly-train || echo "[anomaly] AE training skipped/failed; serving rules-only";
         fi
         exec anomaly-api
+
+  # --------------------------------------------------------------------------
+  # API gateway + fallback orchestrator (UC-III Sub-Criterion 3).
+  # The single public-facing service (host 8000) the dashboard + trucking-app
+  # PWA talk to. Encodes the three fallback chains:
+  #   ANPR    LIVE -> CACHED -> SYNTHETIC                (per-camera)
+  #   Vahan   LIVE_PRIMARY -> LIVE_FALLBACK -> CACHED -> PROVISIONAL
+  #   Trucks  PRIMARY -> SECONDARY(ULIP) -> TERTIARY(/checkin)
+  # Every successful upstream response is cached in Redis (jnpa:cache:{api}:{key})
+  # and every decision is logged with decision_path + kept in a 1000-entry ring
+  # buffer (GET /api/debug/decisions). WebSocket /api/ws fans out alerts, traffic
+  # snapshots, sampled truck positions, and fallback decisions.
+  #   GET  /api/vahan/rc/{plate}     orchestrated RC lookup
+  #   GET  /api/kpi/sources          System-Health table
+  #   GET  /api/debug/decisions      last 1000 fallback decisions (demo evidence)
+  #   GET  /checkin                  TERTIARY manual check-in form
+  # Build context is the repo root so the Dockerfile can COPY the shared lib.
+  # Source is bind-mounted (PYTHONPATH=/app) so edits take effect on `up`.
+  # --------------------------------------------------------------------------
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    image: jnpa/gateway:0.1.0
+    container_name: jnpa-gateway
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+    environment:
+      PYTHONPATH: /app
+      PORT: "8000"
+      # Upstream services (jnpa network names).
+      GATEWAY_ANPR_URL: ${GATEWAY_ANPR_URL:-http://anpr:8301}
+      GATEWAY_VAHAN_SIM_URL: ${GATEWAY_VAHAN_SIM_URL:-http://vahan-sim:8201}
+      GATEWAY_VAHAN_LIVE_URL: ${GATEWAY_VAHAN_LIVE_URL:-http://vahan-live:8202}
+      GATEWAY_TRUCK_URL: ${GATEWAY_TRUCK_URL:-http://truck-sim:8240}
+      GATEWAY_CONGESTION_URL: ${GATEWAY_CONGESTION_URL:-http://congestion:8311}
+      GATEWAY_ANOMALY_URL: ${GATEWAY_ANOMALY_URL:-http://anomaly:8321}
+      GATEWAY_SCENARIOS_URL: ${GATEWAY_SCENARIOS_URL:-http://scenarios:8400}
+      # ULIP relay — empty -> mock relay used for the SECONDARY truck rung.
+      GATEWAY_ULIP_URL: ${GATEWAY_ULIP_URL:-}
+      ULIP_API_KEY: ${ULIP_API_KEY:-}
+      # Surepass token drives the LIVE_PRIMARY vahan rung (empty -> LIVE_FALLBACK).
+      SUREPASS_API_TOKEN: ${SUREPASS_API_TOKEN:-}
+      # Infra.
+      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      KAFKA_BROKERS: kafka:9092
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      # Fallback / cache knobs (spec defaults).
+      GATEWAY_UPSTREAM_TIMEOUT_S: ${GATEWAY_UPSTREAM_TIMEOUT_S:-2.0}
+      GATEWAY_ANPR_LAG_S: ${GATEWAY_ANPR_LAG_S:-2.0}
+      GATEWAY_CACHE_TTL_VAHAN_S: ${GATEWAY_CACHE_TTL_VAHAN_S:-43200}
+      GATEWAY_CACHE_TTL_ANPR_S: ${GATEWAY_CACHE_TTL_ANPR_S:-60}
+      GATEWAY_PROVISIONAL_WINDOW_H: ${GATEWAY_PROVISIONAL_WINDOW_H:-24}
+      GATEWAY_GATE_BOOM_DELAY_S: ${GATEWAY_GATE_BOOM_DELAY_S:-5}
+      GATEWAY_DECISION_RING_SIZE: ${GATEWAY_DECISION_RING_SIZE:-1000}
+      GATEWAY_TRUCK_SAMPLE: ${GATEWAY_TRUCK_SAMPLE:-50}
+      LOG_LEVEL: ${GATEWAY_LOG_LEVEL:-INFO}
+      TZ: Etc/UTC
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./gateway:/app/gateway:ro
+    networks:
+      - jnpa

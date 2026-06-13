@@ -1,0 +1,116 @@
+"""Shared gateway application state.
+
+A single ``GatewayState`` is built in the FastAPI lifespan and stashed on
+``app.state.gw``. Routers reach it via the ``get_state`` dependency. It owns:
+
+* the typed ``GatewayConfig``
+* a pooled ``httpx.AsyncClient`` for upstream proxying
+* the ``DecisionRing`` (last 1000 decisions) + ``SourceRegistry`` (health table)
+* the ``WsHub`` for the /api/ws fan-out
+
+``record_decision`` is the one funnel every orchestrated path calls: it stamps
+the decision, logs it structured with ``decision_path=``, bumps Prometheus,
+pushes it on the ring buffer, updates source health, and — when a fallback rung
+below the primary fired — broadcasts a ``type=decision`` frame to WS clients.
+"""
+from __future__ import annotations
+
+from typing import Any, Dict, Optional
+
+import httpx
+from fastapi import Request
+
+from .config import GatewayConfig
+from .fallback import (
+    DecisionPath,
+    DecisionRing,
+    SourceHealth,
+    SourceRegistry,
+    SourceState,
+)
+from .logging import get_logger
+from .metrics import DECISIONS, SOURCE_STATE
+from .ws import WsHub
+
+log = get_logger("gateway.state")
+
+
+class GatewayState:
+    def __init__(self, cfg: GatewayConfig) -> None:
+        self.cfg = cfg
+        self.http = httpx.AsyncClient(timeout=cfg.upstream_timeout_s)
+        self.decisions = DecisionRing(maxlen=cfg.decision_ring_size)
+        self.sources = SourceRegistry()
+        self.ws = WsHub()
+
+    async def aclose(self) -> None:
+        await self.http.aclose()
+
+    # ---------------------------------------------------------------- decisions
+    async def record_decision(
+        self,
+        *,
+        api: str,
+        decision_path: str,
+        key: Optional[str] = None,
+        latency_ms: Optional[float] = None,
+        detail: Optional[Dict[str, Any]] = None,
+        source: Optional[str] = None,
+        source_state: Optional[SourceState] = None,
+        ok: bool = True,
+    ) -> DecisionPath:
+        """Funnel every orchestrated decision through here (audit + telemetry)."""
+        decision = DecisionPath(
+            api=api,
+            key=key,
+            decision_path=decision_path,
+            latency_ms=latency_ms,
+            detail=detail or {},
+        )
+        self.decisions.add(decision)
+        DECISIONS.labels(api, decision_path).inc()
+
+        # Update per-source health (defaults: source == api, state inferred).
+        src = source or api
+        state = source_state or (
+            SourceState.LIVE if not decision.is_fallback else SourceState.DEGRADED
+        )
+        self.sources.observe(
+            src, state=state, latency_ms=latency_ms,
+            decision_path=decision_path, ok=ok,
+        )
+        SOURCE_STATE.labels(src).set(self.sources.gauge_value(src))
+
+        log.info(
+            "decision",
+            api=api,
+            key=key,
+            decision_path=decision_path,
+            latency_ms=round(latency_ms, 1) if latency_ms is not None else None,
+            fallback=decision.is_fallback,
+            **(detail or {}),
+        )
+
+        # Surface the fallback to live dashboards (spec: type=decision on WS,
+        # only when fallback fires).
+        if decision.is_fallback:
+            await self.ws.broadcast("decision", decision.model_dump(mode="json"))
+        return decision
+
+    def observe_source(
+        self, source: str, *, state: SourceState, latency_ms: Optional[float] = None,
+        decision_path: Optional[str] = None, ok: bool = True,
+    ) -> None:
+        self.sources.observe(
+            source, state=state, latency_ms=latency_ms,
+            decision_path=decision_path, ok=ok,
+        )
+        SOURCE_STATE.labels(source).set(self.sources.gauge_value(source))
+
+
+def get_state(request: Request) -> GatewayState:
+    """FastAPI dependency: pull the GatewayState off app.state."""
+    return request.app.state.gw
+
+
+__all__ = ["GatewayState", "get_state"]

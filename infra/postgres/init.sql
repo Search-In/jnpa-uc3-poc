@@ -184,3 +184,89 @@ INSERT INTO jnpa.vehicle_master
 VALUES
     ('MH04AB1234', 'HGV', 'sha256:seed-owner-a', '2027-03-31', '2026-09-30', 'active', false),
     ('MH43CD5678', 'HGV', 'sha256:seed-owner-b', '2026-08-15', '2026-07-01', 'low_balance', false);
+
+-- ===========================================================================
+-- Materialised KPI views (Sub-Criterion 3).
+-- The API gateway's /api/kpi/{view} surface reads these. They are defined as
+-- plain (lazy) views over the hypertables + operational tables so they work on
+-- a single-broker / single-node PoC without continuous-aggregate policies; the
+-- gateway tolerates any that are missing (older volumes) by returning [].
+-- ===========================================================================
+
+-- Per-gate vehicle throughput, last 24h, bucketed hourly. Cameras are mapped to
+-- their gate; corridor cameras (gate_id NULL) bucket under 'CORRIDOR'.
+CREATE OR REPLACE VIEW jnpa.kpi_gate_throughput AS
+SELECT
+    time_bucket('1 hour', a.ts)            AS bucket,
+    COALESCE(c.gate_id, 'CORRIDOR')        AS gate_id,
+    count(*)                               AS reads,
+    count(DISTINCT a.plate)                AS unique_plates
+FROM jnpa.anpr_reads a
+LEFT JOIN jnpa.cameras c ON c.id = a.camera_id
+WHERE a.ts > now() - interval '24 hours'
+GROUP BY 1, 2
+ORDER BY 1 DESC, 2;
+
+-- Median gate dwell proxy: time trucks spend in the AT_GATE_QUEUE speed band
+-- (<= 3 km/h) per gate-adjacent telemetry, last 6h. Uses the nearest-by-plate
+-- vehicle_master gate is not tracked here, so we report the corridor-wide
+-- stationary share as a congestion proxy.
+CREATE OR REPLACE VIEW jnpa.kpi_gate_dwell AS
+SELECT
+    time_bucket('15 minutes', ts)          AS bucket,
+    count(*) FILTER (WHERE speed_kmh <= 3) AS stationary_pings,
+    count(*)                               AS total_pings,
+    round(100.0 * count(*) FILTER (WHERE speed_kmh <= 3)
+          / NULLIF(count(*), 0), 1)        AS stationary_pct
+FROM jnpa.truck_telemetry
+WHERE ts > now() - interval '6 hours'
+GROUP BY 1
+ORDER BY 1 DESC;
+
+-- Hourly ANPR volume + degraded-read share (camera-feed fallback health).
+CREATE OR REPLACE VIEW jnpa.kpi_anpr_hourly AS
+SELECT
+    time_bucket('1 hour', ts)                       AS bucket,
+    count(*)                                        AS reads,
+    count(*) FILTER (WHERE degraded)                AS degraded_reads,
+    round(avg(conf)::numeric, 3)                    AS avg_conf
+FROM jnpa.anpr_reads
+WHERE ts > now() - interval '24 hours'
+GROUP BY 1
+ORDER BY 1 DESC;
+
+-- Latest speed + jam factor per corridor segment (map overlay / congestion KPI).
+CREATE OR REPLACE VIEW jnpa.kpi_corridor_speed AS
+SELECT DISTINCT ON (segment_id)
+    segment_id,
+    ts,
+    speed_kmh,
+    jam_factor,
+    source
+FROM jnpa.traffic_snapshots
+ORDER BY segment_id, ts DESC;
+
+-- Alert volume by kind + severity, last 24h (control-room summary).
+CREATE OR REPLACE VIEW jnpa.kpi_alerts_by_kind AS
+SELECT
+    kind,
+    severity,
+    count(*)               AS total,
+    count(*) FILTER (WHERE NOT ack) AS open
+FROM jnpa.alerts
+WHERE ts > now() - interval '24 hours'
+GROUP BY 1, 2
+ORDER BY 3 DESC;
+
+-- Vehicles currently inside their provisional 24h cure window (Sub-Criterion 3).
+CREATE OR REPLACE VIEW jnpa.kpi_provisional_open AS
+SELECT
+    plate,
+    provisional_until,
+    round(EXTRACT(EPOCH FROM (provisional_until - now())) / 3600.0, 2) AS hours_remaining,
+    updated_at
+FROM jnpa.vehicle_master
+WHERE provisional = true
+  AND provisional_until IS NOT NULL
+  AND provisional_until > now()
+ORDER BY provisional_until ASC;

@@ -33,7 +33,7 @@ endif
 
 .DEFAULT_GOAL := help
 
-.PHONY: help venv up down logs ps psql redis-cli test bootstrap-check install-shared vahan-seed vahan-verify rfid-verify truck-verify anpr-verify anpr-bench congestion-train congestion-verify anomaly-train anomaly-verify
+.PHONY: help venv up down logs ps psql redis-cli test bootstrap-check install-shared vahan-seed vahan-verify rfid-verify truck-verify anpr-verify anpr-bench congestion-train congestion-verify anomaly-train anomaly-verify gateway-verify
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -68,6 +68,7 @@ venv: ## Create .venv and install shared + vahan + rfid services (host-side, for
 	.venv/bin/python -m pip install -e "ai/anpr[dev]"
 	.venv/bin/python -m pip install -e "ai/congestion[dev]"
 	.venv/bin/python -m pip install -e "ai/anomaly[dev]"
+	.venv/bin/python -m pip install -e "gateway[dev]"
 
 install-shared: ## pip install -e the shared + vahan + rfid + trucking packages into the active interpreter
 	$(PY) -m pip install -e "shared[dev]"
@@ -77,6 +78,7 @@ install-shared: ## pip install -e the shared + vahan + rfid + trucking packages 
 	$(PY) -m pip install -e "ai/anpr[dev]"
 	$(PY) -m pip install -e "ai/congestion[dev]"
 	$(PY) -m pip install -e "ai/anomaly[dev]"
+	$(PY) -m pip install -e "gateway[dev]"
 
 test: ## Run pytest -x in shared/ and tests/
 	$(PY) -m pytest -x shared tests
@@ -150,3 +152,16 @@ anomaly-verify: ## Smoke-test the anomaly detector: /alerts/recent length + /hea
 	@echo "== alerts by kind (jnpa.alerts) ==" \
 		&& $(COMPOSE) exec -T postgres psql -U postgres -d postgres \
 		-c "select kind, severity, count(*) from jnpa.alerts group by 1,2 order by 3 desc;" || true
+
+gateway-verify: ## Smoke-test the API gateway: orchestrated RC lookup + decision evidence (stack must be up)
+	@echo "== /healthz ==" && curl -s http://localhost:8000/healthz | $(PY) -m json.tool || true
+	@echo "== /api/vahan/rc/MH04AB1234 (orchestrated) ==" \
+		&& curl -s http://localhost:8000/api/vahan/rc/MH04AB1234 | $(PY) -m json.tool || true
+	@echo "== last decision (/api/debug/decisions [0]) ==" \
+		&& curl -s http://localhost:8000/api/debug/decisions \
+		| $(PY) -c "import sys,json; d=json.load(sys.stdin); print(json.dumps(d[0],indent=2) if d else 'no decisions yet')" || true
+	@echo "== System-Health sources (/api/kpi/sources) ==" \
+		&& curl -s http://localhost:8000/api/kpi/sources | $(PY) -m json.tool || true
+	@echo "== provisional vehicles still in cure window ==" \
+		&& $(COMPOSE) exec -T postgres psql -U postgres -d postgres \
+		-c "select plate, provisional_until from jnpa.vehicle_master where provisional = true and provisional_until > now();" || true

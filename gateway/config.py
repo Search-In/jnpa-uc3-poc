@@ -1,0 +1,124 @@
+"""Service configuration for the API gateway.
+
+Reads from the process environment (compose / .env.local), falling back to PoC
+defaults so the gateway runs out of the box. Mirrors the convention used by the
+other services (``SimConfig.from_env()`` etc.).
+"""
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from typing import List
+
+from jnpa_shared.config import get_settings
+
+
+def _as_float(value: str | None, default: float) -> float:
+    try:
+        return float(value) if value is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_int(value: str | None, default: int) -> int:
+    try:
+        return int(value) if value is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_bool(value: str | None, default: bool) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+@dataclass
+class GatewayConfig:
+    # --- HTTP ---
+    host: str = "0.0.0.0"
+    port: int = 8000
+
+    # --- Upstream services (reachable on the jnpa network) ---
+    anpr_ai_url: str = "http://anpr:8301"
+    vahan_sim_url: str = "http://vahan-sim:8201"
+    vahan_live_url: str = "http://vahan-live:8202"
+    truck_api_url: str = "http://truck-sim:8240"
+    congestion_url: str = "http://congestion:8311"
+    anomaly_url: str = "http://anomaly:8321"
+    scenarios_url: str = "http://scenarios:8400"
+    ulip_url: str = ""  # ULIP relay; empty -> mock relay used (SECONDARY)
+
+    # --- Infra ---
+    postgres_dsn: str = ""
+    redis_url: str = ""
+    kafka_brokers: str = ""
+    mqtt_host: str = "mosquitto"
+    mqtt_port: int = 1883
+
+    # --- Credentials that drive fallback decisions ---
+    surepass_api_token: str = ""
+    ulip_api_key: str = ""
+
+    # --- Upstream call budget ---
+    upstream_timeout_s: float = 2.0          # >2 s lag => not LIVE for ANPR
+    anpr_lag_threshold_s: float = 2.0
+
+    # --- Cache TTLs (seconds) ---
+    cache_ttl_vahan_s: int = 12 * 3600       # 12 h (spec)
+    cache_ttl_anpr_s: int = 60               # last 60 s of frames (spec)
+    cache_ttl_traffic_s: int = 90
+    cache_ttl_default_s: int = 300
+
+    # --- Provisional vehicle flow ---
+    provisional_window_h: int = 24           # 24-hour cure window (spec)
+
+    # --- Elevated-scrutiny gate boom delay (trucking-app TERTIARY) ---
+    gate_boom_delay_s: int = 5
+
+    # --- Decision ring buffer ---
+    decision_ring_size: int = 1000
+
+    # --- WebSocket sampling ---
+    truck_position_sample: int = 50          # 1-in-50 truck positions on /api/ws
+
+    # --- Observability ---
+    log_level: str = "INFO"
+
+    @classmethod
+    def from_env(cls) -> "GatewayConfig":
+        shared = get_settings()
+        return cls(
+            host=os.environ.get("HOST", "0.0.0.0"),
+            port=_as_int(os.environ.get("PORT"), 8000),
+            anpr_ai_url=os.environ.get("GATEWAY_ANPR_URL", "http://anpr:8301"),
+            vahan_sim_url=os.environ.get("GATEWAY_VAHAN_SIM_URL", "http://vahan-sim:8201"),
+            vahan_live_url=os.environ.get("GATEWAY_VAHAN_LIVE_URL", "http://vahan-live:8202"),
+            truck_api_url=os.environ.get("GATEWAY_TRUCK_URL", "http://truck-sim:8240"),
+            congestion_url=os.environ.get("GATEWAY_CONGESTION_URL", "http://congestion:8311"),
+            anomaly_url=os.environ.get("GATEWAY_ANOMALY_URL", "http://anomaly:8321"),
+            scenarios_url=os.environ.get("GATEWAY_SCENARIOS_URL", "http://scenarios:8400"),
+            ulip_url=os.environ.get("GATEWAY_ULIP_URL", ""),
+            postgres_dsn=os.environ.get("POSTGRES_DSN", shared.postgres_dsn),
+            redis_url=os.environ.get("REDIS_URL", shared.redis_url),
+            kafka_brokers=os.environ.get("KAFKA_BROKERS", shared.kafka_brokers),
+            mqtt_host=os.environ.get("MQTT_HOST", shared.mqtt_host),
+            mqtt_port=_as_int(os.environ.get("MQTT_PORT"), shared.mqtt_port),
+            surepass_api_token=os.environ.get("SUREPASS_API_TOKEN", shared.surepass_api_token),
+            ulip_api_key=os.environ.get("ULIP_API_KEY", shared.ulip_api_key),
+            upstream_timeout_s=_as_float(os.environ.get("GATEWAY_UPSTREAM_TIMEOUT_S"), 2.0),
+            anpr_lag_threshold_s=_as_float(os.environ.get("GATEWAY_ANPR_LAG_S"), 2.0),
+            cache_ttl_vahan_s=_as_int(os.environ.get("GATEWAY_CACHE_TTL_VAHAN_S"), 12 * 3600),
+            cache_ttl_anpr_s=_as_int(os.environ.get("GATEWAY_CACHE_TTL_ANPR_S"), 60),
+            cache_ttl_traffic_s=_as_int(os.environ.get("GATEWAY_CACHE_TTL_TRAFFIC_S"), 90),
+            provisional_window_h=_as_int(os.environ.get("GATEWAY_PROVISIONAL_WINDOW_H"), 24),
+            gate_boom_delay_s=_as_int(os.environ.get("GATEWAY_GATE_BOOM_DELAY_S"), 5),
+            decision_ring_size=_as_int(os.environ.get("GATEWAY_DECISION_RING_SIZE"), 1000),
+            truck_position_sample=_as_int(os.environ.get("GATEWAY_TRUCK_SAMPLE"), 50),
+            log_level=os.environ.get("LOG_LEVEL", "INFO"),
+        )
+
+    @property
+    def surepass_enabled(self) -> bool:
+        """True if a live Surepass token is configured (drives LIVE_PRIMARY)."""
+        return bool(self.surepass_api_token.strip())

@@ -33,7 +33,7 @@ endif
 
 .DEFAULT_GOAL := help
 
-.PHONY: help venv up down logs ps psql redis-cli test bootstrap-check install-shared vahan-seed vahan-verify rfid-verify truck-verify anpr-verify anpr-bench congestion-train congestion-verify
+.PHONY: help venv up down logs ps psql redis-cli test bootstrap-check install-shared vahan-seed vahan-verify rfid-verify truck-verify anpr-verify anpr-bench congestion-train congestion-verify anomaly-train anomaly-verify
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -67,6 +67,7 @@ venv: ## Create .venv and install shared + vahan + rfid services (host-side, for
 	.venv/bin/python -m pip install -e "ingest/trucking_app[dev]"
 	.venv/bin/python -m pip install -e "ai/anpr[dev]"
 	.venv/bin/python -m pip install -e "ai/congestion[dev]"
+	.venv/bin/python -m pip install -e "ai/anomaly[dev]"
 
 install-shared: ## pip install -e the shared + vahan + rfid + trucking packages into the active interpreter
 	$(PY) -m pip install -e "shared[dev]"
@@ -75,6 +76,7 @@ install-shared: ## pip install -e the shared + vahan + rfid + trucking packages 
 	$(PY) -m pip install -e "ingest/trucking_app[dev]"
 	$(PY) -m pip install -e "ai/anpr[dev]"
 	$(PY) -m pip install -e "ai/congestion[dev]"
+	$(PY) -m pip install -e "ai/anomaly[dev]"
 
 test: ## Run pytest -x in shared/ and tests/
 	$(PY) -m pytest -x shared tests
@@ -135,3 +137,16 @@ congestion-verify: ## Smoke-test the congestion service: /predict length + F1 fr
 	@echo "== /metrics (congestion_onset_f1 + target) ==" \
 		&& curl -s http://localhost:8311/metrics \
 		| $(PY) -c "import sys,json; d=json.load(sys.stdin); print(json.dumps(d,indent=2)); print('congestion_onset_f1=%s' % d.get('congestion_onset_f1')); print('TARGET_MET=%s' % str(d.get('TARGET_MET')).lower())" || true
+
+anomaly-train: ## Train the trajectory autoencoder in-process (needs torch) -> artifacts + metrics.json
+	PYTHONPATH=ai:shared $(PY) -m anomaly.train
+
+anomaly-verify: ## Smoke-test the anomaly detector: /alerts/recent length + /health (stack must be up)
+	@echo "== /health ==" \
+		&& curl -s http://localhost:8321/health | $(PY) -m json.tool || true
+	@echo "== /alerts/recent?since=PT1H (count) ==" \
+		&& curl -s 'http://localhost:8321/alerts/recent?since=PT1H' \
+		| $(PY) -c "import sys,json; print('alerts=%d' % len(json.load(sys.stdin)))" || true
+	@echo "== alerts by kind (jnpa.alerts) ==" \
+		&& $(COMPOSE) exec -T postgres psql -U postgres -d postgres \
+		-c "select kind, severity, count(*) from jnpa.alerts group by 1,2 order by 3 desc;" || true

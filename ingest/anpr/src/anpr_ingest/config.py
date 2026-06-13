@@ -74,6 +74,15 @@ class AnprConfig:
     kafka_brokers: str = "kafka:9092"
     topic: str = "anpr.reads"
 
+    # --- Shared frame bus (Redis Streams) ---
+    # Mirror sampled jpeg frames onto "frames.{camera_id}" so ai/anomaly (and
+    # later ai/anpr) can consume the same feed. Trimmed to the last N entries to
+    # bound Redis memory. Disabled (publish_frames=false) -> no bus writes.
+    publish_frames: bool = True
+    redis_url: str = "redis://redis:6379/0"
+    frame_bus_maxlen: int = 600
+    frame_jpeg_quality: int = 70
+
     # --- Observability ---
     metrics_port: int = 9101
     log_level: str = "INFO"
@@ -101,6 +110,10 @@ class AnprConfig:
             port_lon=_as_float(os.environ.get("PORT_LON"), shared.port_lon),
             kafka_brokers=os.environ.get("KAFKA_BROKERS", shared.kafka_brokers),
             topic=os.environ.get("ANPR_TOPIC", "anpr.reads"),
+            publish_frames=_as_bool(os.environ.get("PUBLISH_FRAMES"), True),
+            redis_url=os.environ.get("REDIS_URL", shared.redis_url),
+            frame_bus_maxlen=_as_int(os.environ.get("FRAME_BUS_MAXLEN"), 600),
+            frame_jpeg_quality=_as_int(os.environ.get("FRAME_JPEG_QUALITY"), 70),
             metrics_port=_as_int(os.environ.get("METRICS_PORT"), 9101),
             log_level=os.environ.get("LOG_LEVEL", "INFO"),
         )

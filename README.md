@@ -90,6 +90,8 @@ the ingest/AI services start calling live providers in later PoC stages.
 | Vahan simulator      | `jnpa/vahan-sim:0.1.0` (built)          | `8201`              | http://localhost:8201/healthz                   |
 | Vahan live (Surepass)| `jnpa/vahan-live:0.1.0` (built)         | `8202`              | http://localhost:8202/healthz                   |
 | Trucking-app sim     | `jnpa/trucking-app:0.1.0` (built)       | `8240`              | http://localhost:8240/devices                   |
+| Congestion forecaster| `jnpa/congestion-ai:0.1.0` (built)      | `8311`              | http://localhost:8311/healthz                   |
+| Anomaly detector     | `jnpa/anomaly-ai:0.1.0` (built)         | `8321`              | http://localhost:8321/health                    |
 
 > **Kafka note:** containers on the `jnpa` network use `kafka:9092` (internal
 > listener). Host processes — including the bootstrap self-test — use
@@ -138,8 +140,17 @@ jnpa-uc3-poc/
 │   │                         #   pipeline, evaluator, metrics, finetune, storage, app
 │   ├── eval/bench.py         # held-out benchmark -> metrics.json + OCR_TARGET_MET
 │   └── resources/            # indian_plate_chars.txt, state_codes.txt, sample_plate.jpg
+├── ai/congestion/            # GraphSAGE+LSTM congestion forecaster (FastAPI :8311)
+│   ├── Dockerfile  pyproject.toml  README.md
+│   └── model.py graph.py features.py synthetic.py train.py infer.py sources/
+├── ai/anomaly/               # behavioural anomaly detector (FastAPI :8321)
+│   ├── Dockerfile  pyproject.toml  README.md
+│   ├── engine.py app.py workers.py sink.py evidence.py storage.py route_lookup.py
+│   ├── rules/                # wrongway, abandoned, parking, route_deviation
+│   ├── autoencoder/          # 1D-conv trajectory AE (model.py, features.py)
+│   └── track/bytetrack.py    # ByteTrack (supervision) + YOLOv8 over the frame bus
 ├── gateway/  web/  mobile-pwa/  scenarios/   # later PoC stages
-└── tests/                    # test_bootstrap.py, test_anpr_ingest.py, test_anpr_ai.py, test_vahan_sim.py, test_rfid_ingest.py, test_trucking_app.py
+└── tests/                    # test_bootstrap.py, test_anpr_ingest.py, test_anpr_ai.py, test_vahan_sim.py, test_rfid_ingest.py, test_trucking_app.py, test_congestion.py, test_anomaly.py
 ```
 
 ---
@@ -289,6 +300,48 @@ The compose service `truck-sim` reserves 3 CPUs; the engine sustains
 ~4,000 msg/s (20k × 5 s) via a single tick scheduler (no per-truck task),
 qos=0 position updates, uvloop, and batched COPY. See
 [ingest/trucking_app/README.md](ingest/trucking_app/README.md) for details.
+
+---
+
+## Behavioural anomaly detector (`ai/anomaly/`, port 8321)
+
+Sub-Criterion 2C. A hybrid of **ByteTrack** (vehicle tracking), a **rule engine**
+(wrong-way, abandoned, illegal-parking, route-deviation), and a **1D-conv
+trajectory autoencoder** that catches behaviours the rules can't enumerate
+(e.g. slow looping). Every alert is written to `jnpa.alerts` and the Kafka
+`alerts` topic, with the offending frame saved to MinIO as
+`evidence/{alert_id}.jpg` and its URL attached to `alert.payload`.
+
+It ingests tracks from two sources (both producing the same `Track` type):
+
+- **ByteTrack over the shared frame bus** — `ingest/anpr` mirrors sampled jpeg
+  frames to Redis Streams `frames.{camera_id}` (5 fps, trimmed to the last 600);
+  the tracker tails those and runs YOLOv8 → `sv.ByteTrack`.
+- **Trucking-app telemetry** — tails Kafka `truck.telemetry`, maintains a
+  per-device GPS track, and compares it to the assigned route from
+  `GET /devices/{id}/route` for the route-deviation rule.
+
+ByteTrack needs `supervision`/`ultralytics`/`torch`; if absent the service runs
+rules + AE on the telemetry path and logs the tracker inactive (same graceful
+degradation as the other AI services).
+
+```bash
+curl -s 'http://localhost:8321/alerts/recent?since=PT1H' | jq 'length'   # bid verify
+curl -s -XPOST http://localhost:8321/train_ae -d '{"days":7}' -H 'content-type: application/json' | jq .
+make anomaly-verify
+```
+
+The six no-parking polygons (`jnpa_shared.corridor.NO_PARK_ZONES`) and the
+illegal-parking escalation (WARNING @5 min → CRITICAL @15 min →
+REPORT_TO_POLICE @30 min) are documented in
+[ai/anomaly/README.md](ai/anomaly/README.md).
+
+### Shared camera frame bus
+
+A lightweight Redis Streams bus (`jnpa_shared.frame_bus`) carries jpeg-encoded
+frames on `frames.{camera_id}`, written by `ingest/anpr` at 5 fps (configurable
+via `ANPR_PUBLISH_FRAMES` / `ANPR_FRAME_BUS_MAXLEN`) and trimmed to the last 600
+entries to bound memory. Both `ai/anomaly` and (later) `ai/anpr` consume from it.
 
 ## Make targets
 

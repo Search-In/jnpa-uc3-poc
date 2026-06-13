@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 # Ordered (lat, lon) waypoints, port end first. ~24 points, ~1 km apart, so a
 # pair of consecutive points is ~1–2 km and a segment (a span of points) lands
@@ -181,6 +181,102 @@ def total_length_km() -> float:
     )
 
 
+# ===========================================================================
+# No-parking zones (UC-III behavioural anomaly detection — Sub-Criterion 2C)
+# ===========================================================================
+# Six named polygons along the NH-348 corridor where stopping/standing is
+# prohibited (gate aprons, junction throats, a flyover ramp, a weighbridge
+# approach). A track that goes stationary inside one of these for >300 s is an
+# ILLEGAL_PARKING; a stationary track *outside* every zone in a non-parking area
+# is ABANDONED (see ai/anomaly/rules). Polygons are small hand-traced (lat, lon)
+# rings around real corridor features, ordered so consecutive vertices form the
+# boundary. They are intentionally compact (tens of metres) to stay PoC-faithful.
+
+
+@dataclass(frozen=True)
+class Zone:
+    """A named no-parking polygon: an ordered ring of (lat, lon) vertices."""
+
+    id: str
+    name: str
+    polygon: Tuple[Tuple[float, float], ...]
+
+    @property
+    def centroid(self) -> Tuple[float, float]:
+        lats = [p[0] for p in self.polygon]
+        lons = [p[1] for p in self.polygon]
+        return (sum(lats) / len(lats), sum(lons) / len(lons))
+
+
+def _box(center: Tuple[float, float], half_lat: float, half_lon: float) -> Tuple[Tuple[float, float], ...]:
+    """A small axis-aligned rectangle ring around ``center`` (degrees half-extent).
+
+    ~0.0005 deg lat ~= 55 m; lon scaled by cos(lat) so the box is roughly square
+    on the ground. Returned counter-clockwise, first vertex repeated implicitly
+    by the even-odd test (which closes the ring).
+    """
+    lat, lon = center
+    return (
+        (lat - half_lat, lon - half_lon),
+        (lat - half_lat, lon + half_lon),
+        (lat + half_lat, lon + half_lon),
+        (lat + half_lat, lon - half_lon),
+    )
+
+
+# Half-extents (degrees) for the generated rectangular zones. ~55 m N-S; the
+# E-W extent is widened by 1/cos(lat) so the footprint is ~square on the ground.
+_ZONE_HALF_LAT = 0.0005
+_ZONE_HALF_LON = 0.0005 / math.cos(math.radians(18.9))
+
+NO_PARK_ZONES: List[Zone] = [
+    Zone("NPZ-GATE-NSICT", "NSICT Gate-1 apron",
+         _box((18.9489, 72.9492), _ZONE_HALF_LAT, _ZONE_HALF_LON)),
+    Zone("NPZ-GATE-JNPCT", "JNPCT gate throat",
+         _box((18.9512, 72.9505), _ZONE_HALF_LAT, _ZONE_HALF_LON)),
+    Zone("NPZ-YJUNCTION", "NH-348 Y-junction",
+         _box((18.9215, 72.9705), _ZONE_HALF_LAT, _ZONE_HALF_LON)),
+    Zone("NPZ-FLYOVER-RAMP", "KM-6 flyover ramp",
+         _box((18.8850, 72.9900), _ZONE_HALF_LAT, _ZONE_HALF_LON)),
+    Zone("NPZ-WEIGHBRIDGE", "KM-12 weighbridge approach",
+         _box((18.8400, 73.0300), _ZONE_HALF_LAT, _ZONE_HALF_LON)),
+    Zone("NPZ-KARAL-JUNCTION", "Karal Phata junction",
+         _box((18.7800, 73.0800), _ZONE_HALF_LAT, _ZONE_HALF_LON)),
+]
+
+
+def point_in_polygon(lat: float, lon: float, polygon: Sequence[Tuple[float, float]]) -> bool:
+    """Even-odd ray-casting point-in-polygon test on a (lat, lon) ring.
+
+    The ring is treated as closed (last vertex connects back to the first).
+    Adequate at corridor scale where the equirectangular distortion over a
+    tens-of-metres polygon is negligible.
+    """
+    inside = False
+    n = len(polygon)
+    if n < 3:
+        return False
+    j = n - 1
+    for i in range(n):
+        yi, xi = polygon[i][0], polygon[i][1]
+        yj, xj = polygon[j][0], polygon[j][1]
+        # Does a ray cast east from (lat, lon) cross edge (j -> i)?
+        if (yi > lat) != (yj > lat):
+            x_cross = (xj - xi) * (lat - yi) / (yj - yi) + xi
+            if lon < x_cross:
+                inside = not inside
+        j = i
+    return inside
+
+
+def zone_for_point(lat: float, lon: float) -> Optional[Zone]:
+    """Return the first NO_PARK_ZONES polygon containing (lat, lon), else None."""
+    for zone in NO_PARK_ZONES:
+        if point_in_polygon(lat, lon, zone.polygon):
+            return zone
+    return None
+
+
 if __name__ == "__main__":  # pragma: no cover - manual inspection
     print(f"waypoints      : {len(WAYPOINTS)}")
     print(f"segments       : {len(segments)}")
@@ -189,3 +285,10 @@ if __name__ == "__main__":  # pragma: no cover - manual inspection
         print(f"  {s.id}: {s.length_km:>5.2f} km  {s.start} -> {s.end}")
     test = nearest_segment(18.86, 73.01)
     print(f"nearest to (18.86, 73.01): {test.id if test else None}")
+    print(f"no-park zones  : {len(NO_PARK_ZONES)}")
+    for z in NO_PARK_ZONES:
+        c = z.centroid
+        print(f"  {z.id}: {z.name} @ ({c[0]:.4f}, {c[1]:.4f})")
+    z0 = NO_PARK_ZONES[0].centroid
+    print(f"centroid of {NO_PARK_ZONES[0].id} in-zone: "
+          f"{zone_for_point(z0[0], z0[1]) is not None}")

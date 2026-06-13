@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "anomaly-ai"
+version = "0.1.0"
+description = "Behavioural anomaly detector (ByteTrack + rules + trajectory autoencoder) for the JNPA UC-III Digital Twin PoC"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "JNPA Digital Twin Team" }]
+
+# CPU-only by default. torch + the ByteTrack stack (supervision/ultralytics) are
+# heavy and installed from the PyTorch CPU wheel index in the Dockerfile. The
+# rule engine + telemetry path + the AE (once trained) run without ByteTrack, so
+# the base deps here stay light and the service degrades gracefully if the
+# tracking extra is absent (see [project.optional-dependencies].track).
+dependencies = [
+    "fastapi==0.115.*",
+    "uvicorn[standard]==0.30.*",
+    "pydantic==2.*",
+    "numpy>=1.26,<3",
+    "httpx==0.27.*",
+    "opencv-python-headless==4.10.*",
+    "psycopg[binary]==3.2.*",
+    "confluent-kafka==2.*",
+    "redis==5.*",
+    "minio==7.2.*",
+    "prometheus-client==0.21.*",
+    "structlog==24.*",
+]
+
+[project.optional-dependencies]
+# torch is installed in the Dockerfile from the CPU wheel index; listed here for
+# host-side `pip install -e ai/anomaly[torch]` convenience (needed for the AE).
+torch = ["torch>=2.0"]
+# ByteTrack via the official supervision wrapper + a YOLOv8 detector.
+track = [
+    "torch>=2.0",
+    "supervision==0.22.*",
+    "ultralytics==8.3.*",
+]
+dev = [
+    "pytest==8.3.*",
+    "torch>=2.0",
+]
+
+[project.scripts]
+anomaly-train = "anomaly.train:main"
+anomaly-api = "anomaly.app:run"
+
+# The deliverables live flat under ai/anomaly/ (engine.py, rules/, autoencoder/,
+# track/, …) per the bid spec, and import as the package `anomaly`. Map that
+# package name to this directory so `pip install -e ai/anomaly` and the
+# container's PYTHONPATH=/app/ai both expose `import anomaly.*` identically.
+[tool.setuptools]
+packages = ["anomaly", "anomaly.rules", "anomaly.autoencoder", "anomaly.track"]
+
+[tool.setuptools.package-dir]
+anomaly = "."
+"anomaly.rules" = "rules"
+"anomaly.autoencoder" = "autoencoder"
+"anomaly.track" = "track"

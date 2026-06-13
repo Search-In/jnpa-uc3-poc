@@ -33,6 +33,14 @@ scrape_configs:
     static_configs:
       - targets: ["truck-sim:8240"]
 
+  # Behavioural anomaly detector (UC-III 2C) exposes Prometheus metrics on its
+  # app port (8321). The exposition is mounted as an ASGI sub-app, so its
+  # canonical path is /metrics/ (a bare /metrics 307-redirects there).
+  - job_name: anomaly
+    metrics_path: /metrics/
+    static_configs:
+      - targets: ["anomaly:8321"]
+
   # Placeholders for later PoC services (uncomment as they expose /metrics):
   # - job_name: gateway
   #   static_configs:

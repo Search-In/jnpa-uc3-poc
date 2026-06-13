@@ -19,6 +19,7 @@ volumes:
   prometheus-data:
   grafana-data:
   congestion-artifacts:
+  anomaly-artifacts:
 
 services:
   # --------------------------------------------------------------------------
@@ -242,12 +243,20 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       # Make the bind-mounted source win over the site-packages copy.
       PYTHONPATH: /app/ingest/anpr/src
       KAFKA_BROKERS: kafka:9092
       ANPR_TOPIC: anpr.reads
       CLIPS_DIR: /data/clips
+      # Shared frame bus (Redis Streams) — mirror sampled jpeg frames so
+      # ai/anomaly can consume the same feed. Trimmed to the last N entries.
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      PUBLISH_FRAMES: ${ANPR_PUBLISH_FRAMES:-true}
+      FRAME_BUS_MAXLEN: ${ANPR_FRAME_BUS_MAXLEN:-600}
+      FRAME_JPEG_QUALITY: ${ANPR_FRAME_JPEG_QUALITY:-70}
       DRY_RUN: ${ANPR_DRY_RUN:-true}
       TARGET_FPS: ${ANPR_TARGET_FPS:-5}
       SNAPSHOT_INTERVAL_S: "1"
@@ -649,3 +658,95 @@ services:
           congestion-train || echo "[congestion] training under target; serving best model anyway";
         fi
         exec congestion-api
+
+  # --------------------------------------------------------------------------
+  # Behavioural anomaly detector (UC-III Sub-Criterion 2C).
+  # Hybrid: ByteTrack (supervision wrapper + YOLOv8) + a rule engine (wrong-way,
+  # abandoned, illegal-parking, route-deviation) + a 1D-conv trajectory
+  # autoencoder. FastAPI on host 8321.
+  #   GET  /alerts/recent?since=PT1H -> list[Alert]
+  #   POST /train_ae                 -> train the AE on the last N days of tracks
+  #   GET  /health, GET /metrics
+  # Consumes the shared Redis frame bus (frames.{camera_id}, written by
+  # ingest/anpr) for ByteTrack, and the Kafka truck.telemetry topic for the GPS
+  # rule path. Alerts -> jnpa.alerts + Kafka "alerts"; the offending frame is
+  # saved to MinIO evidence/{alert_id}.jpg and its URL attached to the alert.
+  # CPU-only; degrades to rules+telemetry if the ByteTrack/torch stack is absent.
+  # Source is bind-mounted (PYTHONPATH=/app/ai) so edits take effect on `up`.
+  # On first boot it warms the AE (train if no weights local/MinIO), then serves.
+  # --------------------------------------------------------------------------
+  anomaly:
+    build:
+      context: .
+      dockerfile: ai/anomaly/Dockerfile
+    image: jnpa/anomaly-ai:0.1.0
+    container_name: jnpa-anomaly
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      PYTHONPATH: /app/ai
+      PORT: "8321"
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      KAFKA_BROKERS: kafka:9092
+      ANOMALY_ALERTS_TOPIC: ${ANOMALY_ALERTS_TOPIC:-alerts}
+      # psycopg libpq DSN (no SQLAlchemy "+asyncpg" prefix).
+      ANOMALY_POSTGRES_DSN: ${ANOMALY_POSTGRES_DSN:-postgresql://postgres:jnpa_pw@postgres:5432/postgres}
+      # Trucking-app control plane for the assigned-route lookup (route-deviation).
+      ANOMALY_TRUCK_API_URL: ${ANOMALY_TRUCK_API_URL:-http://truck-sim:8240}
+      # Rule thresholds (spec defaults; override per deployment).
+      ANOMALY_WRONGWAY_DEG: ${ANOMALY_WRONGWAY_DEG:-120}
+      ANOMALY_WRONGWAY_HOLD_S: ${ANOMALY_WRONGWAY_HOLD_S:-2}
+      ANOMALY_ABANDONED_S: ${ANOMALY_ABANDONED_S:-120}
+      ANOMALY_PARKING_S: ${ANOMALY_PARKING_S:-300}
+      ANOMALY_ROUTE_COSINE: ${ANOMALY_ROUTE_COSINE:-0.4}
+      ANOMALY_ROUTE_OFFROUTE_M: ${ANOMALY_ROUTE_OFFROUTE_M:-800}
+      ANOMALY_ROUTE_HOLD_S: ${ANOMALY_ROUTE_HOLD_S:-90}
+      ANOMALY_AE_THRESHOLD_PCT: ${ANOMALY_AE_THRESHOLD_PCT:-99}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      ANOMALY_MODEL_BUCKET: ${ANOMALY_MODEL_BUCKET:-models}
+      ANOMALY_EVIDENCE_BUCKET: ${ANOMALY_EVIDENCE_BUCKET:-evidence}
+      # Public base for evidence URLs (host-reachable MinIO S3 port by default).
+      ANOMALY_EVIDENCE_URL_BASE: ${ANOMALY_EVIDENCE_URL_BASE:-http://localhost:9000/evidence}
+      ANOMALY_WEIGHTS_DIR: /artifacts
+      LOG_LEVEL: ${ANOMALY_LOG_LEVEL:-INFO}
+      TZ: Etc/UTC
+    ports:
+      - "8321:8321"
+    volumes:
+      - ./ai/anomaly:/app/ai/anomaly:ro
+      - anomaly-artifacts:/artifacts
+    networks:
+      - jnpa
+    # Warm the AE on first boot (train if no weights are present locally or in
+    # MinIO), then serve. A restart re-serves the existing model instantly.
+    command:
+      - sh
+      - -c
+      - |
+        python - <<'PY'
+        from anomaly.config import AnomalyConfig
+        from anomaly import storage
+        from pathlib import Path
+        import sys
+        cfg = AnomalyConfig.from_env()
+        storage.sync_weights(cfg)
+        sys.exit(0 if Path(cfg.weights_path).is_file() else 7)
+        PY
+        have_weights=$?
+        if [ "$have_weights" -eq 0 ]; then
+          echo "[anomaly] AE weights present — skipping training";
+        else
+          echo "[anomaly] no AE weights — training on synthetic+telemetry corpus…";
+          anomaly-train || echo "[anomaly] AE training skipped/failed; serving rules-only";
+        fi
+        exec anomaly-api

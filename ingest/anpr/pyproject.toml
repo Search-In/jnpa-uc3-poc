@@ -25,6 +25,8 @@ dependencies = [
     "structlog==24.*",
     "prometheus-client==0.21.*",
     "httpx==0.27.*",
+    # Shared frame bus (Redis Streams) — mirrors sampled jpeg frames for ai/anomaly.
+    "redis==5.*",
 ]
 
 [project.optional-dependencies]

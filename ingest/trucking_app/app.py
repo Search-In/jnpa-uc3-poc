@@ -6,6 +6,7 @@ drives them, and exposes the control surface from the spec:
     GET  /devices?n=20000              current population stats
     POST /devices/scale {target:30000} hot-scale population
     POST /devices/{device_id}/route    override route (TFC-1 gate closure, Prompt 8)
+    GET  /devices/{device_id}/route    assigned route polyline (route-deviation, Prompt 7)
     GET  /devices/{device_id}          one device's live snapshot
     GET  /healthz                      liveness
     GET  /metrics                      Prometheus exposition (mounted)
@@ -144,6 +145,29 @@ async def device(device_id: str) -> dict:
         "remaining_km": round(truck.remaining_km, 3),
         "eta_s": truck.eta_s,
         "segment_id": truck.current_segment_id,
+    }
+
+
+@app.get("/devices/{device_id}/route")
+async def device_route(device_id: str) -> dict:
+    """Return a device's currently-assigned route polyline.
+
+    The behavioural anomaly detector (ai/anomaly, Prompt 7) reads this to compare
+    a truck's actual GPS path against its assigned route for the ROUTE_DEVIATION
+    rule. ``points`` is an ordered ``[[lat, lon], ...]`` list (empty while the
+    fleet has not yet bound a route to a parked/queued truck)."""
+    fleet = _require_fleet()
+    truck = fleet.trucks.get(device_id)
+    if truck is None:
+        raise HTTPException(status_code=404, detail={"error": "unknown_device", "device_id": device_id})
+    return {
+        "device_id": device_id,
+        "plate": truck.profile.plate,
+        "gate_id": truck.profile.gate_id,
+        "state": truck.state.value,
+        "points": [[lat, lon] for (lat, lon) in truck.route_points],
+        "route_km": round(truck.route_length_km, 3),
+        "dist_along_km": round(truck.dist_along_km, 3),
     }
 
 

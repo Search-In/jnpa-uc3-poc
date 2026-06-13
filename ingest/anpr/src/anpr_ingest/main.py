@@ -15,10 +15,12 @@ from __future__ import annotations
 import asyncio
 import signal
 import time
-from typing import Dict
+from typing import Dict, Optional
 
+import cv2
 import httpx
 
+from jnpa_shared.frame_bus import FrameBusProducer
 from jnpa_shared.logging import configure_logging, get_logger
 
 from .config import AnprConfig
@@ -27,11 +29,31 @@ from .emit import Emitter
 from .metrics import (
     ACTIVE_FEEDS,
     FRAMES_PROCESSED,
+    FRAMES_PUBLISHED,
     snapshot as metrics_snapshot,
     start_metrics_server,
 )
 from .replay import Replayer
 from .weather import WeatherTagger
+
+
+def _publish_frame(
+    bus: Optional[FrameBusProducer], cfg: AnprConfig, camera_id: str, frame, ts
+) -> None:
+    """JPEG-encode and mirror one frame onto the shared Redis frame bus.
+
+    Runs inside a worker thread (alongside detection) so the encode stays off the
+    event loop. Best-effort: any failure is swallowed by the producer.
+    """
+    if bus is None:
+        return
+    ok, buf = cv2.imencode(
+        ".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), cfg.frame_jpeg_quality]
+    )
+    if not ok:
+        return
+    if bus.publish(camera_id, buf.tobytes(), ts) is not None:
+        FRAMES_PUBLISHED.labels(camera_id=camera_id).inc()
 
 
 async def _frame_loop(
@@ -40,6 +62,7 @@ async def _frame_loop(
     detector: VehicleDetector,
     emitter: Emitter,
     weather: WeatherTagger,
+    frame_bus: Optional[FrameBusProducer],
     stop: asyncio.Event,
     log,
 ) -> None:
@@ -63,6 +86,13 @@ async def _frame_loop(
             if not do_snapshot:
                 continue
             last_snapshot[camera_id] = now
+
+            # Mirror the sampled frame onto the shared bus for ai/anomaly et al.
+            # (jpeg encode runs in the worker thread, off the event loop).
+            if frame_bus is not None:
+                await asyncio.to_thread(
+                    _publish_frame, frame_bus, cfg, camera_id, frame, ts
+                )
 
             # Detection is CPU-bound; run it off the event loop.
             candidates = await asyncio.to_thread(detector.detect, camera_id, frame)
@@ -128,6 +158,13 @@ async def main_async() -> None:
     detector = VehicleDetector(cfg)
     emitter = Emitter(cfg)
     weather = WeatherTagger(cfg)
+    frame_bus = (
+        FrameBusProducer(url=cfg.redis_url, maxlen=cfg.frame_bus_maxlen)
+        if cfg.publish_frames
+        else None
+    )
+    if frame_bus is not None:
+        log.info("frame_bus_enabled", redis=cfg.redis_url, maxlen=cfg.frame_bus_maxlen)
 
     stop = asyncio.Event()
 
@@ -145,8 +182,9 @@ async def main_async() -> None:
 
     tasks = [
         asyncio.create_task(weather.run(stop), name="weather"),
-        asyncio.create_task(_frame_loop(cfg, replayer, detector, emitter, weather, stop, log),
-                            name="frames"),
+        asyncio.create_task(
+            _frame_loop(cfg, replayer, detector, emitter, weather, frame_bus, stop, log),
+            name="frames"),
         asyncio.create_task(_no_feed_loop(cfg, replayer, emitter, stop, log), name="no_feed"),
         asyncio.create_task(_stats_loop(stop, log, cfg.no_feed_interval_s), name="stats"),
     ]
@@ -159,6 +197,8 @@ async def main_async() -> None:
         await asyncio.gather(*tasks, return_exceptions=True)
         emitter.flush()
         replayer.close()
+        if frame_bus is not None:
+            frame_bus.close()
         log.info("anpr_ingest_stopped")
 
 

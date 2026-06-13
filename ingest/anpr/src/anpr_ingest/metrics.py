@@ -31,6 +31,11 @@ NO_FEED_EVENTS = Counter(
     "no_feed_events_total",
     "Total no_feed health events emitted (zero clips available).",
 )
+FRAMES_PUBLISHED = Counter(
+    "frames_published_total",
+    "Total jpeg frames mirrored to the shared Redis frame bus.",
+    ["camera_id"],
+)
 ACTIVE_FEEDS = Gauge(
     "active_feeds",
     "Number of clip feeds currently being replayed.",

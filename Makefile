@@ -33,7 +33,7 @@ endif
 
 .DEFAULT_GOAL := help
 
-.PHONY: help venv up down logs ps psql redis-cli test bootstrap-check install-shared vahan-seed vahan-verify rfid-verify truck-verify anpr-verify anpr-bench
+.PHONY: help venv up down logs ps psql redis-cli test bootstrap-check install-shared vahan-seed vahan-verify rfid-verify truck-verify anpr-verify anpr-bench congestion-train congestion-verify
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -66,6 +66,7 @@ venv: ## Create .venv and install shared + vahan + rfid services (host-side, for
 	.venv/bin/python -m pip install -e "ingest/rfid[dev]"
 	.venv/bin/python -m pip install -e "ingest/trucking_app[dev]"
 	.venv/bin/python -m pip install -e "ai/anpr[dev]"
+	.venv/bin/python -m pip install -e "ai/congestion[dev]"
 
 install-shared: ## pip install -e the shared + vahan + rfid + trucking packages into the active interpreter
 	$(PY) -m pip install -e "shared[dev]"
@@ -73,6 +74,7 @@ install-shared: ## pip install -e the shared + vahan + rfid + trucking packages 
 	$(PY) -m pip install -e "ingest/rfid[dev]"
 	$(PY) -m pip install -e "ingest/trucking_app[dev]"
 	$(PY) -m pip install -e "ai/anpr[dev]"
+	$(PY) -m pip install -e "ai/congestion[dev]"
 
 test: ## Run pytest -x in shared/ and tests/
 	$(PY) -m pytest -x shared tests
@@ -119,3 +121,17 @@ anpr-verify: ## Smoke-test the ANPR+OCR service: /infer on the sample + /eval (s
 
 anpr-bench: ## Run the ANPR/OCR benchmark in-process (no stack needed) -> metrics.json
 	PYTHONPATH=ai/anpr/src:shared $(PY) ai/anpr/eval/bench.py
+
+congestion-train: ## Train the congestion forecaster in-process (no stack needed) -> artifacts + metrics.json
+	PYTHONPATH=ai:shared $(PY) -m congestion.train
+
+congestion-verify: ## Smoke-test the congestion service: /predict length + F1 from /metrics (stack must be up)
+	@echo "== /predict (per-segment probabilities) ==" \
+		&& curl -s -XPOST http://localhost:8311/predict -d '{"horizon_min":15}' \
+		-H 'content-type: application/json' | $(PY) -m json.tool || true
+	@echo "== segment count ==" \
+		&& curl -s -XPOST http://localhost:8311/predict -d '{"horizon_min":15}' \
+		-H 'content-type: application/json' | $(PY) -c "import sys,json; print('segments=%d' % len(json.load(sys.stdin)))" || true
+	@echo "== /metrics (congestion_onset_f1 + target) ==" \
+		&& curl -s http://localhost:8311/metrics \
+		| $(PY) -c "import sys,json; d=json.load(sys.stdin); print(json.dumps(d,indent=2)); print('congestion_onset_f1=%s' % d.get('congestion_onset_f1')); print('TARGET_MET=%s' % str(d.get('TARGET_MET')).lower())" || true

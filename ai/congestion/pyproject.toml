@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "congestion-ai"
+version = "0.1.0"
+description = "Traffic congestion forecaster (GraphSAGE + LSTM) for the JNPA UC-III Digital Twin PoC"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "JNPA Digital Twin Team" }]
+
+# CPU-only by default. torch is installed separately in the Dockerfile from the
+# PyTorch CPU wheel index (so we don't drag in multi-GB CUDA builds). The model
+# is implemented with a from-scratch GraphSAGE so torch-geometric is optional
+# (the `pyg` extra) — the PoC runs without it.
+dependencies = [
+    "fastapi==0.115.*",
+    "uvicorn[standard]==0.30.*",
+    "pydantic==2.*",
+    "numpy>=1.26,<3",
+    "httpx==0.27.*",
+    "psycopg[binary]==3.2.*",
+    "confluent-kafka==2.*",
+    "redis==5.*",
+    "minio==7.2.*",
+    "prometheus-client==0.21.*",
+    "structlog==24.*",
+]
+
+[project.optional-dependencies]
+# torch is installed in the Dockerfile from the CPU wheel index; listed here for
+# host-side `pip install -e ai/congestion[torch]` convenience.
+torch = ["torch>=2.0"]
+# Optional PyTorch-Geometric (Data graph object); the model does not require it.
+pyg = ["torch-geometric>=2.5"]
+dev = [
+    "pytest==8.3.*",
+    "torch>=2.0",
+]
+
+[project.scripts]
+congestion-train = "congestion.train:main"
+congestion-api = "congestion.infer:run"
+
+# The deliverables live flat under ai/congestion/ (model.py, graph.py, …) per the
+# bid spec, and import as the package `congestion`. Map that package name to this
+# directory so `pip install -e ai/congestion` and the container's
+# PYTHONPATH=/app/ai both expose `import congestion.*` identically.
+[tool.setuptools]
+packages = ["congestion", "congestion.sources"]
+
+[tool.setuptools.package-dir]
+congestion = "."
+"congestion.sources" = "sources"

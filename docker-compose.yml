@@ -18,6 +18,7 @@ volumes:
   minio-data:
   prometheus-data:
   grafana-data:
+  congestion-artifacts:
 
 services:
   # --------------------------------------------------------------------------
@@ -553,3 +554,98 @@ services:
       - ./ingest/rfid:/app/ingest/rfid:ro
     networks:
       - jnpa
+
+  # --------------------------------------------------------------------------
+  # Traffic congestion forecaster (UC-III Sub-Criterion 2B).
+  # GraphSAGE encoder over the NH-348 corridor graph -> 2-layer LSTM predicting
+  # P(congested in next 15 min) per segment. FastAPI on host 8311.
+  #   POST /predict  {horizon_min:15}  -> {segment_id: prob}
+  #   GET  /metrics                    -> training metrics summary (F1/P/R/AUC)
+  #   POST /backfill {hours:24}        -> rebuild features + store snapshots
+  # On first boot it trains on a 14-day synthetic bootstrap (commute-aware) plus
+  # any real jnpa.traffic_snapshots, persists weights+metrics to MinIO bucket
+  # "models" under congestion/, then serves. A background scheduler publishes
+  # per-segment predictions to Kafka topic "traffic.predictions" once a minute.
+  # CPU-only; the GraphSAGE conv is from-scratch so no torch-geometric needed.
+  # Source is bind-mounted (PYTHONPATH=/app/ai) so edits take effect on `up`.
+  # The entrypoint trains only if no weights exist locally or in MinIO, so a
+  # restart re-serves the existing model instantly instead of retraining.
+  # --------------------------------------------------------------------------
+  congestion:
+    build:
+      context: .
+      dockerfile: ai/congestion/Dockerfile
+    image: jnpa/congestion-ai:0.1.0
+    container_name: jnpa-congestion
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      PYTHONPATH: /app/ai
+      PORT: "8311"
+      # External traffic adapters (blank -> deterministic synthetic readings so
+      # the cascade + scheduler run offline; set keys to go live).
+      GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:-}
+      HERE_API_KEY: ${HERE_API_KEY:-}
+      TOMTOM_API_KEY: ${TOMTOM_API_KEY:-}
+      # Training / target knobs.
+      CONGESTION_HISTORY_DAYS: ${CONGESTION_HISTORY_DAYS:-14}
+      CONGESTION_EPOCHS: ${CONGESTION_EPOCHS:-50}
+      CONGESTION_TARGET_F1: ${CONGESTION_TARGET_F1:-0.85}
+      CONGESTION_TARGET_PRECISION: ${CONGESTION_TARGET_PRECISION:-0.80}
+      CONGESTION_TARGET_RECALL: ${CONGESTION_TARGET_RECALL:-0.80}
+      CONGESTION_PREDICTIONS_TOPIC: ${CONGESTION_PREDICTIONS_TOPIC:-traffic.predictions}
+      CONGESTION_PUBLISH_INTERVAL_S: ${CONGESTION_PUBLISH_INTERVAL_S:-60}
+      # asyncpg/psycopg libpq DSN (no SQLAlchemy "+asyncpg" prefix).
+      CONGESTION_POSTGRES_DSN: ${CONGESTION_POSTGRES_DSN:-postgresql://postgres:jnpa_pw@postgres:5432/postgres}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      KAFKA_BROKERS: kafka:9092
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      CONGESTION_MODEL_BUCKET: ${CONGESTION_MODEL_BUCKET:-models}
+      # Persist artifacts on a named volume so a rebuilt container reuses them.
+      CONGESTION_WEIGHTS_DIR: /artifacts
+      LOG_LEVEL: ${CONGESTION_LOG_LEVEL:-INFO}
+      TZ: Etc/UTC
+    ports:
+      - "8311:8311"
+    volumes:
+      - ./ai/congestion:/app/ai/congestion:ro
+      - congestion-artifacts:/artifacts
+    networks:
+      - jnpa
+    # Train only if no weights are present (local or MinIO), then always serve.
+    command:
+      - sh
+      - -c
+      - |
+        # Seed the writable artifacts volume from the committed model (if the
+        # volume is empty) so a fresh `make up` serves instantly without the
+        # ~15-min first-boot training. Then MinIO sync fills any gaps.
+        if [ ! -f /artifacts/congestion_gnn_lstm.pt ] && [ -f /app/ai/congestion/artifacts/congestion_gnn_lstm.pt ]; then
+          echo "[congestion] seeding artifacts volume from committed model";
+          cp /app/ai/congestion/artifacts/* /artifacts/ 2>/dev/null || true;
+        fi
+        python - <<'PY'
+        from congestion.config import CongestionConfig
+        from congestion import storage
+        from pathlib import Path
+        import sys
+        cfg = CongestionConfig.from_env()
+        storage.sync_weights(cfg)
+        sys.exit(0 if Path(cfg.weights_path).is_file() else 7)
+        PY
+        have_weights=$?
+        if [ "$have_weights" -eq 0 ]; then
+          echo "[congestion] weights present — skipping training";
+        else
+          echo "[congestion] no weights found — training…";
+          congestion-train || echo "[congestion] training under target; serving best model anyway";
+        fi
+        exec congestion-api

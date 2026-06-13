@@ -21,6 +21,7 @@ and loads them if present; otherwise the AE stays inactive until /train_ae runs.
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -30,6 +31,7 @@ from fastapi import FastAPI, Query
 from pydantic import BaseModel
 
 from jnpa_shared.logging import configure_logging, get_logger
+from jnpa_shared import tracing
 
 from .autoencoder.model import TrajectoryAutoencoder
 from .config import AnomalyConfig
@@ -48,6 +50,12 @@ from .workers import FrameTrackerWorker, TelemetryWorker
 cfg = AnomalyConfig.from_env()
 configure_logging(cfg.log_level)
 log = get_logger("anomaly.app")
+
+# OpenTelemetry -> Jaeger. The telemetry worker's Kafka consume extracts the
+# producer's trace context (jnpa_shared.kafka_io), so a synthetic wrong-way ping
+# injected by a scenario continues the same trace into the WRONG_WAY alert.
+tracing.init_tracing(os.environ.get("OTEL_SERVICE_NAME", "anomaly"))
+tracing.instrument_httpx()
 
 # Shared singletons populated in the lifespan.
 _engine: Optional[AnomalyEngine] = None
@@ -146,6 +154,7 @@ def storage_sync() -> None:
 
 
 app = FastAPI(title="JNPA Behavioural Anomaly Detector", version="0.1.0", lifespan=_lifespan)
+tracing.instrument_fastapi(app)
 app.mount("/metrics", metrics_asgi_app())
 
 

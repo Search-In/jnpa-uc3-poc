@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jnpa-scenarios"
+version = "0.1.0"
+description = "What-if scenarios (TFC-1/2/3) + reactive-workflow runner for the JNPA UC-III PoC (Sub-Criterion 5)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "JNPA Digital Twin Team" }]
+
+dependencies = [
+    "fastapi==0.115.*",
+    "uvicorn[standard]==0.32.*",
+    "httpx==0.27.*",
+    "pydantic==2.*",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.*",
+    "pytest-asyncio==0.24.*",
+]
+
+[project.scripts]
+scenarios-runner = "scenarios.runner:run"
+
+# External discovery mirror of scenarios/__init__.py REGISTRY. The runner uses
+# the in-package REGISTRY for speed; these entry-points expose the same scenarios
+# to any out-of-process discovery (importlib.metadata.entry_points).
+[project.entry-points."jnpa.scenarios"]
+tfc1 = "scenarios.tfc1"
+tfc2 = "scenarios.tfc2"
+tfc3 = "scenarios.tfc3"
+
+[tool.setuptools]
+packages = ["scenarios"]
+package-dir = { "scenarios" = "." }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

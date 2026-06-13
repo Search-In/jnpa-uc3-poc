@@ -23,6 +23,8 @@ export default function App() {
             <Route path="/reports" element={<PoliceReports />} />
             <Route path="/health" element={<SystemHealth />} />
             <Route path="/what-if" element={<WhatIfConsole />} />
+            {/* /whatif alias (verification cmd: open http://localhost:3000/whatif) */}
+            <Route path="/whatif" element={<WhatIfConsole />} />
             <Route path="*" element={<Navigate to="/live" replace />} />
           </Routes>
         </main>

@@ -62,14 +62,50 @@ def produce(
     key: Optional[str] = None,
     flush: bool = True,
 ) -> None:
-    """Produce one JSON message; optionally flush synchronously."""
+    """Produce one JSON message; optionally flush synchronously.
+
+    The current OpenTelemetry trace context (if any) is injected into the Kafka
+    message headers as W3C ``traceparent``/``tracestate`` so a downstream
+    consumer can continue the same trace (cross-service propagation). This is a
+    no-op when tracing is inactive.
+    """
+    headers = _trace_headers()
     producer.produce(
         topic=topic,
         key=key.encode("utf-8") if key else None,
         value=encode_value(value),
+        headers=headers or None,
     )
     if flush:
         producer.flush(10)
+
+
+def _trace_headers() -> list:
+    """W3C trace-context as confluent-kafka headers [(str, bytes), ...]."""
+    try:
+        from . import tracing
+
+        carrier = tracing.inject_context({})
+        return [(k, v.encode("utf-8")) for k, v in carrier.items()]
+    except Exception:  # noqa: BLE001 - never let tracing break a produce
+        return []
+
+
+def headers_to_dict(msg) -> dict:
+    """Decode a consumed message's Kafka headers into a {str: str} dict.
+
+    Returns {} if the message has no headers. Consumers pass this to
+    ``tracing.extract_context`` to parent the handling span on the producer's
+    trace.
+    """
+    try:
+        raw = msg.headers() or []
+    except Exception:  # noqa: BLE001
+        return {}
+    out: dict = {}
+    for k, v in raw:
+        out[k] = v.decode("utf-8") if isinstance(v, (bytes, bytearray)) else str(v)
+    return out
 
 
 def get_consumer(group: str, extra_config: Optional[dict] = None) -> Consumer:
@@ -123,7 +159,11 @@ def consume(
                 # Surface the error to the caller's logs but keep going.
                 raise RuntimeError(f"kafka consume error: {msg.error()}")
             idle = 0
-            handler(decode_value(msg.value()))
+            from . import tracing
+
+            with tracing.extract_context(headers_to_dict(msg), f"kafka.consume {topic}",
+                                         {"messaging.system": "kafka", "messaging.destination": topic}):
+                handler(decode_value(msg.value()))
             handled += 1
             if max_messages is not None and handled >= max_messages:
                 break
@@ -141,4 +181,5 @@ __all__ = [
     "consume",
     "encode_value",
     "decode_value",
+    "headers_to_dict",
 ]

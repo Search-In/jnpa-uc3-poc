@@ -54,6 +54,9 @@ class TruckProfile:
     plate: str
     gate_id: str        # target JNPA gate (round-robin assigned)
     origin: LatLon      # home / yard, within 100 km of the gate
+    # Set when a what-if scenario injected this truck (e.g. "TFC-1:<handle>").
+    # Lets "Reset to baseline" remove exactly the trucks a scenario created.
+    scenario_tag: Optional[str] = None
 
 
 @dataclass

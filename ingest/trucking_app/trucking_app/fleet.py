@@ -137,6 +137,71 @@ class Fleet:
         log.info("fleet_scaled", from_=cur, to=len(self.trucks), target=target)
         return len(self.trucks)
 
+    # -- scenario injection -------------------------------------------------
+    def inject_synthetic(
+        self,
+        *,
+        count: int,
+        tag: str,
+        gate_id: Optional[str] = None,
+        state: str = "EN_ROUTE_TO_PORT",
+    ) -> List[str]:
+        """Create ``count`` scenario-tagged trucks (what-if scenarios, Prompt 10).
+
+        Tagged with ``tag`` so ``remove_tagged(tag)`` can delete exactly these on
+        "Reset to baseline". Returns the new device ids. Bounded by max_devices.
+        Idempotent per call only by construction (each call mints fresh indices);
+        scenarios pass a stable tag so reset is total regardless of call count.
+        """
+        try:
+            want_state = TruckState(state)
+        except ValueError:
+            want_state = TruckState.EN_ROUTE_TO_PORT
+        rng = random.Random(self.cfg.seed)
+        room = max(0, self.cfg.max_devices - len(self.trucks))
+        n = min(count, room)
+        new_ids: List[str] = []
+        for k in range(n):
+            i = self._next_index + k
+            gid = gate_id or self.cfg.gate_ids[i % len(self.cfg.gate_ids)]
+            profile = TruckProfile(
+                device_id=f"SYN-{tag}-{i + 1:06d}",
+                plate=plates.plate_for_index(i),
+                gate_id=gid,
+                origin=gates.random_origin(rng, gid, self.cfg.origin_radius_km),
+                scenario_tag=tag,
+            )
+            truck = Truck(
+                profile=profile, cfg=self.cfg,
+                rng=random.Random(self.cfg.seed * 1_000_003 + i),
+            )
+            truck.state = want_state
+            if want_state == TruckState.AT_GATE_QUEUE:
+                truck.position = gates.GATE_COORDS[gid]
+                truck.dwell_left_s = truck._jittered(self.cfg.gate_queue_dwell_s)
+            else:
+                truck.position = profile.origin
+            self.trucks[profile.device_id] = truck
+            self._order.append(profile.device_id)
+            new_ids.append(profile.device_id)
+        self._next_index += n
+        self._refresh_population_metrics()
+        log.info("synthetic_injected", tag=tag, count=len(new_ids), gate_id=gate_id, state=state)
+        return new_ids
+
+    def remove_tagged(self, tag: str) -> int:
+        """Remove every scenario-tagged truck for ``tag``. Returns the count."""
+        victims = [
+            did for did, t in self.trucks.items()
+            if t.profile.scenario_tag == tag
+        ]
+        for did in victims:
+            self.trucks.pop(did, None)
+        self._order = [d for d in self._order if d in self.trucks]
+        self._refresh_population_metrics()
+        log.info("synthetic_removed", tag=tag, count=len(victims))
+        return len(victims)
+
     # -- routing ------------------------------------------------------------
     async def ensure_route(self, truck: Truck) -> None:
         """Bind a route to a truck that needs one (driving with no polyline)."""

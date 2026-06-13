@@ -1,81 +1,187 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useScenario, SCENARIO_LABELS, type ScenarioId } from "@/hooks/ScenarioContext";
+import { useSocket } from "@/hooks/SocketContext";
+import type { ScenarioStep } from "@/lib/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { FlaskConical } from "lucide-react";
+import { Spinner } from "@/components/ui/misc";
+import { fmtTimeIST } from "@/lib/utils";
+import { FlaskConical, Play, RotateCcw, ArrowRight, ExternalLink } from "lucide-react";
 
-// Scaffold only — Prompt 10 wires this to the scenario driver (/api/scenarios)
-// to drive TFC-1/2/3 and replay what-if simulations. For now it lets an operator
-// flip the header's active-scenario banner and lists any scenarios the backend
-// already knows about, so the surface and routing exist for Prompt 10 to fill.
-const SCENARIOS: { id: ScenarioId; blurb: string }[] = [
-  { id: "TFC-1", blurb: "Close a gate and watch trucks re-route to the next-best terminal." },
-  { id: "TFC-2", blurb: "Inject a congestion surge on the corridor and observe forecaster onset." },
-  { id: "TFC-3", blurb: "Drop in-cab GPS for a cohort; SECONDARY/TERTIARY fallback + advisory re-routes." },
+// What-If Console (Sub-Criterion 5). Trigger TFC-1/2/3, watch the step-by-step
+// storyline paint live from /api/ws (type=scenario_step), and reset to baseline.
+const SCENARIOS: {
+  id: ScenarioId;
+  runner: string; // runner name (tfc1/tfc2/tfc3)
+  blurb: string;
+  params: Record<string, any>;
+}[] = [
+  { id: "TFC-1", runner: "tfc1", blurb: "Close G-NSICT; forecaster predicts spillover; trucks auto-re-route; TAS slots rescheduled.", params: { gate_id: "G-NSICT", duration_minutes: 120 } },
+  { id: "TFC-2", runner: "tfc2", blurb: "Inject a wrong-way track at Karal Phata; anomaly fires; e-Challan issued with evidence.", params: { camera_id: "C-KARAL-EXIT" } },
+  { id: "TFC-3", runner: "tfc3", blurb: "UC-II DPD release spike (2.5×) → corridor demand surge; forecaster build-up; gate-slot reissue.", params: { dpd_release_spike: 2.5 } },
 ];
 
 export default function WhatIfConsole() {
-  const { scenario, setScenario } = useScenario();
-  const known = useQuery({ queryKey: ["scenarios"], queryFn: api.scenarios });
+  const { scenario, setScenario, reset: resetBanner } = useScenario();
+  const { scenarioSteps } = useSocket();
+  const [activeHandle, setActiveHandle] = useState<string | null>(null);
+  const [activeRunner, setActiveRunner] = useState<string | null>(null);
+
+  const run = useMutation({
+    mutationFn: (s: (typeof SCENARIOS)[number]) => api.runScenario(s.runner, s.params),
+  });
+  const resetRun = useMutation({
+    mutationFn: () => api.resetScenario(activeRunner!, activeHandle ?? undefined),
+  });
+
+  // Backfill the timeline from the DB for the active handle (covers steps that
+  // fired before this screen mounted), merged with live WS steps.
+  const timelineQ = useQuery({
+    queryKey: ["timeline", activeHandle],
+    queryFn: () => api.scenarioTimeline(activeHandle!),
+    enabled: !!activeHandle,
+    refetchInterval: 4000,
+  });
+
+  const steps: ScenarioStep[] = useMemo(() => {
+    const live = activeHandle ? scenarioSteps[activeHandle] ?? [] : [];
+    const fetched = (timelineQ.data?.steps ?? []) as ScenarioStep[];
+    const byNo = new Map<number, ScenarioStep>();
+    for (const s of fetched) byNo.set(s.step_no, { ...s, handle_id: activeHandle!, scenario: activeRunner! });
+    for (const s of live) byNo.set(s.step_no, s);
+    return [...byNo.values()].sort((a, b) => a.step_no - b.step_no);
+  }, [scenarioSteps, activeHandle, activeRunner, timelineQ.data]);
+
+  const traceId = timelineQ.data?.trace_id;
+
+  async function trigger(s: (typeof SCENARIOS)[number]) {
+    setScenario(s.id);
+    setActiveRunner(s.runner);
+    const res = await run.mutateAsync(s);
+    setActiveHandle(res.handle_id);
+  }
+
+  async function onReset() {
+    if (activeRunner) await resetRun.mutateAsync();
+    resetBanner();
+  }
 
   return (
-    <div className="h-full overflow-y-auto p-4">
-      <div className="mb-4 flex items-center gap-2">
-        <FlaskConical className="h-5 w-5 text-primary" />
-        <div>
-          <h1 className="text-lg font-semibold">What-If Console</h1>
-          <p className="text-sm text-muted-foreground">
-            Scaffold · Prompt 10 wires these to the scenario driver. Selecting one updates the header banner.
-          </p>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-        {SCENARIOS.map((s) => (
-          <Card key={s.id} className={scenario === s.id ? "border-primary" : ""}>
-            <CardHeader className="flex-row items-center justify-between">
-              <CardTitle>{SCENARIO_LABELS[s.id]}</CardTitle>
-              {scenario === s.id && <Badge colour="#56B4E9">active</Badge>}
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <p className="text-xs text-muted-foreground">{s.blurb}</p>
-              <Button
-                size="sm"
-                variant={scenario === s.id ? "default" : "outline"}
-                onClick={() => setScenario(scenario === s.id ? "none" : s.id)}
-              >
-                {scenario === s.id ? "Stop" : "Arm scenario"}
-              </Button>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
-      <Card className="mt-5">
-        <CardHeader>
-          <CardTitle>Scenarios known to the backend</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {known.isLoading ? (
-            <p className="text-sm text-muted-foreground">loading…</p>
-          ) : (known.data?.scenarios?.length ?? 0) === 0 ? (
+    <div className="flex h-full flex-col">
+      <div className="flex items-center justify-between border-b border-border p-4">
+        <div className="flex items-center gap-2">
+          <FlaskConical className="h-5 w-5 text-primary" />
+          <div>
+            <h1 className="text-lg font-semibold">What-If Console</h1>
             <p className="text-sm text-muted-foreground">
-              None recorded yet. The scenario driver (Prompt 10) will populate <span className="font-mono">/api/scenarios</span>.
+              Trigger a scenario, watch the reactive chain, reset to baseline.
             </p>
-          ) : (
-            <ul className="space-y-1 text-sm">
-              {known.data!.scenarios.map((sc) => (
-                <li key={sc.id} className="flex justify-between border-b border-border/50 py-1">
-                  <span>{sc.name}</span>
-                  <span className="font-mono text-xs text-muted-foreground">{sc.id}</span>
-                </li>
-              ))}
-            </ul>
+          </div>
+        </div>
+        <Button variant="outline" size="sm" onClick={onReset} disabled={resetRun.isPending || !activeRunner}>
+          {resetRun.isPending ? <Spinner /> : <RotateCcw className="h-3.5 w-3.5" />}
+          Reset to baseline
+        </Button>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 p-4 md:grid-cols-3">
+        {SCENARIOS.map((s) => {
+          const active = scenario === s.id && !!activeHandle;
+          return (
+            <Card key={s.id} className={active ? "border-primary" : ""}>
+              <CardHeader className="flex-row items-center justify-between">
+                <CardTitle>{SCENARIO_LABELS[s.id]}</CardTitle>
+                {active && <Badge colour="#56B4E9">running</Badge>}
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <p className="text-xs text-muted-foreground">{s.blurb}</p>
+                <pre className="rounded bg-muted p-2 text-[11px]">{JSON.stringify(s.params)}</pre>
+                <Button
+                  size="sm"
+                  onClick={() => trigger(s)}
+                  disabled={run.isPending}
+                >
+                  {run.isPending && run.variables?.id === s.id ? <Spinner /> : <Play className="h-3.5 w-3.5" />}
+                  Run {s.id}
+                </Button>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
+
+      {/* Storyline */}
+      <div className="min-h-0 flex-1 overflow-y-auto border-t border-border p-4">
+        <div className="mb-2 flex items-center justify-between">
+          <h2 className="text-sm font-semibold">
+            Reactive timeline {activeRunner ? `· ${activeRunner.toUpperCase()}` : ""}
+          </h2>
+          {traceId && (
+            <a
+              href="http://localhost:16686"
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 text-xs text-severity-info hover:underline"
+              title={traceId}
+            >
+              <ExternalLink className="h-3.5 w-3.5" /> Open trace in Jaeger
+            </a>
           )}
-        </CardContent>
-      </Card>
+        </div>
+
+        {!activeHandle ? (
+          <p className="text-sm text-muted-foreground">Run a scenario to see its step-by-step storyline.</p>
+        ) : steps.length === 0 ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Spinner /> waiting for steps…
+          </div>
+        ) : (
+          <ol className="relative space-y-3 pl-6">
+            {steps.map((s) => (
+              <li key={s.step_no} className="relative">
+                <span
+                  className="absolute -left-[18px] top-1.5 h-3 w-3 rounded-full border-2 border-background"
+                  style={{ backgroundColor: stepColour(s.status) }}
+                  aria-hidden
+                />
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold tabular-nums text-muted-foreground">#{s.step_no}</span>
+                  <span className="text-sm font-medium">{s.title}</span>
+                  <Badge colour={stepColour(s.status)}>{s.status}</Badge>
+                  <span className="ml-auto text-[10px] text-muted-foreground">{fmtTimeIST(s.ts)}</span>
+                </div>
+                {s.trigger && (
+                  <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">↳ {s.trigger}</div>
+                )}
+                <CrossTwinArrow step={s} />
+              </li>
+            ))}
+          </ol>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function stepColour(status: string): string {
+  if (status === "failed") return "#D55E00";
+  if (status === "degraded") return "#E69F00";
+  if (status === "info") return "#56B4E9";
+  return "#009E73";
+}
+
+// TFC-3 step 5 carries an explicit cross-twin arrow annotation.
+function CrossTwinArrow({ step }: { step: ScenarioStep }) {
+  const arrow = step.detail?.arrow as { from: string; to: string } | undefined;
+  if (!arrow) return null;
+  return (
+    <div className="mt-1 inline-flex items-center gap-2 rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-xs">
+      <span className="font-medium">{arrow.from}</span>
+      <ArrowRight className="h-3.5 w-3.5 text-primary" />
+      <span className="font-medium">{arrow.to}</span>
     </div>
   );
 }

@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Any, Dict
 
 import httpx
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 
 from ..logging import get_logger
 from ..metrics import REQUESTS
@@ -50,6 +50,40 @@ async def list_scenarios(state: GatewayState = Depends(get_state)) -> dict:
     rows = await _db_scenarios(state)
     REQUESTS.labels("scenarios", "ok").inc()
     return {"source": "db", "scenarios": rows}
+
+
+@router.post("/{name}/run")
+async def run_scenario(name: str, params: Dict[str, Any] = Body(default_factory=dict),
+                       state: GatewayState = Depends(get_state)) -> dict:
+    """Proxy a scenario run to the scenarios-runner (What-If Console trigger)."""
+    ok, data = await _proxy(state, "POST", f"/scenarios/{name}/run", params or {})
+    if not ok:
+        raise HTTPException(status_code=502,
+                            detail={"error": "scenarios_runner_unreachable", "name": name})
+    REQUESTS.labels("scenarios", "ok").inc()
+    return data
+
+
+@router.post("/{name}/reset")
+async def reset_scenario(name: str, body: Dict[str, Any] = Body(default_factory=dict),
+                         state: GatewayState = Depends(get_state)) -> dict:
+    ok, data = await _proxy(state, "POST", f"/scenarios/{name}/reset", body or {})
+    if not ok:
+        raise HTTPException(status_code=502,
+                            detail={"error": "scenarios_runner_unreachable", "name": name})
+    REQUESTS.labels("scenarios", "ok").inc()
+    return data
+
+
+@router.get("/handle/{handle_id}/timeline")
+async def scenario_timeline(handle_id: str, state: GatewayState = Depends(get_state)) -> dict:
+    """Proxy the event-by-event timeline for a run (survives a page reload)."""
+    ok, data = await _proxy(state, "GET", f"/scenarios/{handle_id}/timeline")
+    if not ok:
+        raise HTTPException(status_code=404,
+                            detail={"error": "timeline_unavailable", "handle_id": handle_id})
+    REQUESTS.labels("scenarios", "ok").inc()
+    return data
 
 
 async def _db_scenarios(state: GatewayState) -> list:

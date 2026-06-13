@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -34,7 +35,7 @@ from fastapi import FastAPI
 from prometheus_client import Counter, Gauge, Histogram, make_asgi_app
 from pydantic import BaseModel
 
-from jnpa_shared import kafka_io
+from jnpa_shared import kafka_io, tracing
 from jnpa_shared.logging import configure_logging, get_logger
 
 from . import storage
@@ -46,6 +47,10 @@ from .synthetic import HistoryRow, SyntheticHistory
 
 cfg = CongestionConfig.from_env()
 configure_logging(cfg.log_level)
+# OpenTelemetry -> Jaeger. The per-minute prediction publisher's Kafka produce
+# carries trace context; /predict spans continue an inbound trace from the
+# gateway so a scenario's "forecaster detects build-up" step nests in Jaeger.
+tracing.init_tracing(os.environ.get("OTEL_SERVICE_NAME", "congestion"))
 log = get_logger("congestion.infer")
 
 # --- Prometheus -------------------------------------------------------------
@@ -228,6 +233,7 @@ async def _lifespan(_app: FastAPI):
 # NOT the Prometheus exposition. Prometheus scrape data is served at /prometheus
 # (prometheus.yml can target that path for this job).
 app = FastAPI(title="JNPA Congestion Forecaster", version="0.1.0", lifespan=_lifespan)
+tracing.instrument_fastapi(app)
 app.mount("/prometheus", make_asgi_app())
 
 

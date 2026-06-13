@@ -31,6 +31,15 @@ dev = [
     "pytest==8.3.4",
     "pytest-asyncio==0.24.0",
 ]
+# OpenTelemetry cross-service tracing -> Jaeger (OTLP/gRPC). Optional so the
+# core wheel stays light and host test venvs need not install it; service
+# images install shared[otel]. jnpa_shared.tracing degrades to no-ops without it.
+otel = [
+    "opentelemetry-sdk==1.27.0",
+    "opentelemetry-exporter-otlp-proto-grpc==1.27.0",
+    "opentelemetry-instrumentation-fastapi==0.48b0",
+    "opentelemetry-instrumentation-httpx==0.48b0",
+]
 
 [tool.setuptools]
 packages = ["jnpa_shared"]

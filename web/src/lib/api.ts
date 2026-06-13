@@ -85,8 +85,22 @@ export const api = {
     return `/api/reports/police?${q.toString()}`;
   },
 
-  // --- scenarios ---
+  // --- scenarios (What-If Console) ---
   scenarios: () => http<{ source: string; scenarios: import("./types").Scenario[] }>("/api/scenarios"),
+  runScenario: (name: string, params: Record<string, any>) =>
+    http<{ handle_id: string; name: string; status: string; trace_id?: string }>(
+      `/api/scenarios/${name}/run`,
+      { method: "POST", body: JSON.stringify(params) }
+    ),
+  resetScenario: (name: string, handleId?: string) =>
+    http<{ ok: boolean; handle_id?: string }>(`/api/scenarios/${name}/reset`, {
+      method: "POST",
+      body: JSON.stringify(handleId ? { handle_id: handleId } : {}),
+    }),
+  scenarioTimeline: (handleId: string) =>
+    http<{ handle_id: string; name?: string; status?: string; trace_id?: string; steps: import("./types").ScenarioStep[] }>(
+      `/api/scenarios/handle/${handleId}/timeline`
+    ),
 
   health: () => http<{ status: string; ws_clients: number }>("/healthz"),
 };

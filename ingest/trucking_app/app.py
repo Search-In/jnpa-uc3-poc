@@ -23,6 +23,7 @@ from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from jnpa_shared.logging import configure_logging, get_logger
+from jnpa_shared import tracing
 
 from trucking_app import gates
 from trucking_app.config import TruckConfig
@@ -33,6 +34,13 @@ from trucking_app.simulator import Simulator
 cfg = TruckConfig.from_env()
 configure_logging(cfg.log_level)
 log = get_logger("trucking_app")
+
+# OpenTelemetry -> Jaeger. The telemetry publisher's Kafka produce injects trace
+# context so the anomaly service can continue the trace; a scenario re-route via
+# this control plane shows up as a child span of the scenario trace.
+import os as _os  # noqa: E402
+
+tracing.init_tracing(_os.environ.get("OTEL_SERVICE_NAME", "truck-sim"))
 
 # Populated in the lifespan; the endpoints read these.
 _fleet: Optional[Fleet] = None
@@ -61,6 +69,7 @@ app = FastAPI(
     version="0.1.0",
     lifespan=_lifespan,
 )
+tracing.instrument_fastapi(app)
 app.mount("/metrics", metrics_asgi_app())
 
 
@@ -75,6 +84,13 @@ def _require_fleet() -> Fleet:
 # ===========================================================================
 class ScaleRequest(BaseModel):
     target: int = Field(ge=0, description="desired device population")
+
+
+class InjectRequest(BaseModel):
+    count: int = Field(ge=1, le=20000, description="number of synthetic trucks")
+    tag: str = Field(description="scenario tag, e.g. 'TFC-1:<handle>' (reset key)")
+    gate_id: Optional[str] = Field(default=None, description="target gate for all injected trucks")
+    state: str = Field(default="EN_ROUTE_TO_PORT", description="initial TruckState")
 
 
 class RouteOverride(BaseModel):
@@ -146,6 +162,34 @@ async def devices_list(
         if len(out) >= limit:
             break
     return {"count": len(out), "filter_state": want, "devices": out}
+
+
+@app.post("/devices/inject")
+async def inject(req: InjectRequest) -> dict:
+    """Inject scenario-tagged synthetic trucks (what-if scenarios, Prompt 10).
+
+    Tagged trucks are removable in one call via ``DELETE /devices/tagged/{tag}``,
+    which "Reset to baseline" uses to undo the scenario.
+    """
+    fleet = _require_fleet()
+    if req.gate_id is not None and req.gate_id not in gates.GATE_COORDS:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "unknown_gate", "gate_id": req.gate_id, "known": list(gates.GATE_COORDS)},
+        )
+    new_ids = fleet.inject_synthetic(
+        count=req.count, tag=req.tag, gate_id=req.gate_id, state=req.state
+    )
+    return {"injected": len(new_ids), "tag": req.tag, "device_ids": new_ids,
+            "population": len(fleet.trucks)}
+
+
+@app.delete("/devices/tagged/{tag}")
+async def remove_tagged(tag: str) -> dict:
+    """Remove all synthetic trucks for a scenario tag (idempotent)."""
+    fleet = _require_fleet()
+    removed = fleet.remove_tagged(tag)
+    return {"removed": removed, "tag": tag, "population": len(fleet.trucks)}
 
 
 @app.post("/devices/scale")

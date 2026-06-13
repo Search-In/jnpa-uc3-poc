@@ -23,7 +23,7 @@ WORKDIR /app
 # Shared library first (its own pinned deps). Build context is the repo root
 # (see docker-compose build.context).
 COPY shared/ /app/shared/
-RUN pip install --upgrade pip && pip install /app/shared
+RUN pip install --upgrade pip && pip install "/app/shared[otel]"
 
 # CPU-only torch from the PyTorch wheel index (keeps the image lean).
 RUN pip install --ignore-installed sympy \

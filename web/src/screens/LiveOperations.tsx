@@ -177,6 +177,9 @@ function MapLegend() {
 
 function AlertEvidenceDialog({ alert, onClose }: { alert: Alert | null; onClose: () => void }) {
   const evidence = alert?.payload?.evidence_url as string | undefined;
+  const mp4 = alert?.payload?.evidence_mp4_url as string | undefined;
+  const echallanId = alert?.payload?.echallan_id as string | undefined;
+  const echallanPdf = alert?.payload?.echallan_pdf_url as string | undefined;
   return (
     <Dialog open={!!alert} onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
@@ -195,7 +198,21 @@ function AlertEvidenceDialog({ alert, onClose }: { alert: Alert | null; onClose:
                 <Field k="Gate" v={alert.gate_id ?? "—"} />
                 <Field k="Zone" v={(alert.payload?.zone_id as string) ?? "—"} />
               </div>
-              {evidence ? (
+
+              {/* TFC-2: play the last-10s evidence clip when present. */}
+              {mp4 ? (
+                <video
+                  src={mp4}
+                  controls
+                  autoPlay
+                  muted
+                  loop
+                  className="w-full rounded-md border border-border bg-black"
+                  data-testid="evidence-video"
+                >
+                  Your browser does not support the video tag.
+                </video>
+              ) : evidence ? (
                 <img
                   src={evidence}
                   alt="incident evidence from MinIO"
@@ -207,6 +224,20 @@ function AlertEvidenceDialog({ alert, onClose }: { alert: Alert | null; onClose:
                   No photographic evidence attached.
                 </div>
               )}
+
+              {echallanId && (
+                <div className="flex items-center justify-between rounded-md border border-severity-warning/50 bg-severity-warning/10 px-3 py-2 text-xs">
+                  <span>
+                    e-Challan <span className="font-mono font-semibold">{echallanId}</span>
+                  </span>
+                  {echallanPdf && (
+                    <a href={echallanPdf} target="_blank" rel="noreferrer" className="text-severity-info hover:underline">
+                      open PDF
+                    </a>
+                  )}
+                </div>
+              )}
+
               {alert.payload && (
                 <pre className="max-h-40 overflow-auto rounded-md bg-muted p-2 text-[11px]">
                   {JSON.stringify(alert.payload, null, 2)}

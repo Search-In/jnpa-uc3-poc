@@ -209,16 +209,38 @@ services:
     restart: unless-stopped
     depends_on:
       - prometheus
+    # Host 3000 is reserved for the control-room dashboard (web). Grafana is
+    # published on 3001 to avoid the clash; in-container it still serves 3000.
     ports:
-      - "3000:3000"
+      - "3001:3000"
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: admin
       GF_USERS_DEFAULT_THEME: dark
+      GF_SERVER_HTTP_PORT: "3000"
       TZ: Etc/UTC
     volumes:
       - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
       - grafana-data:/var/lib/grafana
+    networks:
+      - jnpa
+
+  # --------------------------------------------------------------------------
+  # Jaeger (all-in-one) — distributed tracing backend. Services export OTLP/gRPC
+  # to :4317; the UI is on host :16686. A what-if scenario emits one trace
+  # spanning ingest -> AI -> alert -> action so an evaluator can see the full
+  # causal chain. See jnpa_shared.tracing + OTEL_* env on every service.
+  # --------------------------------------------------------------------------
+  jaeger:
+    image: jaegertracing/all-in-one:1.59
+    container_name: jnpa-jaeger
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+      TZ: Etc/UTC
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "4317:4317"     # OTLP gRPC receiver
     networks:
       - jnpa
 
@@ -520,6 +542,10 @@ services:
       HERE_API_KEY: ${HERE_API_KEY:-}
       PORT: "8240"
       LOG_LEVEL: ${TRUCK_LOG_LEVEL:-INFO}
+      # OpenTelemetry -> Jaeger (cross-service tracing).
+      OTEL_SERVICE_NAME: truck-sim
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4317}
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-false}
       TZ: Etc/UTC
     ports:
       - "8240:8240"
@@ -621,6 +647,9 @@ services:
       # Persist artifacts on a named volume so a rebuilt container reuses them.
       CONGESTION_WEIGHTS_DIR: /artifacts
       LOG_LEVEL: ${CONGESTION_LOG_LEVEL:-INFO}
+      OTEL_SERVICE_NAME: congestion
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4317}
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-false}
       TZ: Etc/UTC
     ports:
       - "8311:8311"
@@ -719,6 +748,9 @@ services:
       ANOMALY_EVIDENCE_URL_BASE: ${ANOMALY_EVIDENCE_URL_BASE:-http://localhost:9000/evidence}
       ANOMALY_WEIGHTS_DIR: /artifacts
       LOG_LEVEL: ${ANOMALY_LOG_LEVEL:-INFO}
+      OTEL_SERVICE_NAME: anomaly
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4317}
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-false}
       TZ: Etc/UTC
     ports:
       - "8321:8321"
@@ -817,11 +849,66 @@ services:
       GATEWAY_DECISION_RING_SIZE: ${GATEWAY_DECISION_RING_SIZE:-1000}
       GATEWAY_TRUCK_SAMPLE: ${GATEWAY_TRUCK_SAMPLE:-50}
       LOG_LEVEL: ${GATEWAY_LOG_LEVEL:-INFO}
+      OTEL_SERVICE_NAME: gateway
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4317}
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-false}
       TZ: Etc/UTC
     ports:
       - "8000:8000"
     volumes:
       - ./gateway:/app/gateway:ro
+    networks:
+      - jnpa
+
+  # --------------------------------------------------------------------------
+  # What-if scenarios runner (UC-III Sub-Criterion 5) — host 8400.
+  # Drives TFC-1 (gate closure), TFC-2 (wrong-way + e-Challan), TFC-3 (cargo
+  # surge cross-twin). Each scenario orchestrates the gateway / trucking-app /
+  # congestion / anomaly services, emits a step-by-step timeline (persisted +
+  # pushed to /api/ws as type=scenario_step), and an OpenTelemetry trace to
+  # Jaeger spanning ingest -> AI -> alert -> action.
+  #   POST /scenarios/{name}/run      run the chain -> {handle_id}
+  #   POST /scenarios/{name}/reset    reset to baseline
+  #   GET  /scenarios/{handle_id}/timeline  event-by-event log
+  # --------------------------------------------------------------------------
+  scenarios:
+    build:
+      context: .
+      dockerfile: scenarios/Dockerfile
+    image: jnpa/scenarios:0.1.0
+    container_name: jnpa-scenarios
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      gateway:
+        condition: service_started
+      truck-sim:
+        condition: service_started
+      congestion:
+        condition: service_started
+    environment:
+      PYTHONPATH: /app
+      PORT: "8400"
+      SCENARIOS_GATEWAY_URL: ${SCENARIOS_GATEWAY_URL:-http://gateway:8000}
+      SCENARIOS_TRUCK_URL: ${SCENARIOS_TRUCK_URL:-http://truck-sim:8240}
+      SCENARIOS_CONGESTION_URL: ${SCENARIOS_CONGESTION_URL:-http://congestion:8311}
+      SCENARIOS_ANOMALY_URL: ${SCENARIOS_ANOMALY_URL:-http://anomaly:8321}
+      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      KAFKA_BROKERS: kafka:9092
+      SCENARIOS_FORECAST_ATTEMPTS: ${SCENARIOS_FORECAST_ATTEMPTS:-6}
+      LOG_LEVEL: ${SCENARIOS_LOG_LEVEL:-INFO}
+      OTEL_SERVICE_NAME: scenarios-runner
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4317}
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-false}
+      TZ: Etc/UTC
+    ports:
+      - "8400:8400"
+    volumes:
+      - ./scenarios:/app/scenarios:ro
     networks:
       - jnpa
 

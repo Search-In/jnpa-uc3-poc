@@ -17,7 +17,7 @@ WORKDIR /app
 # Install the shared library first (its own pinned deps), then the service.
 # Build context is the repo root (see docker-compose build.context).
 COPY shared/ /app/shared/
-RUN pip install --upgrade pip && pip install /app/shared
+RUN pip install --upgrade pip && pip install "/app/shared[otel]"
 
 COPY gateway/pyproject.toml /app/gateway/pyproject.toml
 COPY gateway/README.md /app/gateway/README.md

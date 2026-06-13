@@ -108,10 +108,23 @@ export interface Scenario {
   params?: Record<string, any>;
 }
 
-// WebSocket frame shapes (gateway/routers/ws.py).
+export interface ScenarioStep {
+  handle_id: string;
+  scenario: string; // tfc1 | tfc2 | tfc3
+  step_no: number;
+  title: string;
+  status: "ok" | "degraded" | "failed" | "info" | string;
+  trigger?: string | null;
+  ts: string;
+  detail?: Record<string, any>;
+  trace_id?: string | null;
+}
+
+// WebSocket frame shapes (gateway/routers/ws.py + scenario_ext.py).
 export type WsFrame =
   | { type: "hello"; payload: { service: string; channels: string[] } }
   | { type: "alert"; payload: Alert }
   | { type: "traffic"; payload: TrafficSnapshot }
   | { type: "truck_position"; payload: { device_id: string; plate?: string; lat: number; lon: number; speed_kmh?: number } }
-  | { type: "decision"; payload: Decision };
+  | { type: "decision"; payload: Decision }
+  | { type: "scenario_step"; payload: ScenarioStep };

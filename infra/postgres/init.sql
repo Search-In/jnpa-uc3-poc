@@ -14,10 +14,13 @@ SET search_path TO jnpa, public;
 -- Reference / master tables
 -- --------------------------------------------------------------------------
 CREATE TABLE jnpa.gates (
-    id   text PRIMARY KEY,
-    name text,
-    lat  double precision,
-    lon  double precision
+    id        text PRIMARY KEY,
+    name      text,
+    lat       double precision,
+    lon       double precision,
+    -- Set by the TFC-1 gate-closure scenario; NULL means open. "Reset to
+    -- baseline" clears it back to NULL.
+    closed_at timestamptz
 );
 
 CREATE TABLE jnpa.cameras (
@@ -134,6 +137,34 @@ CREATE TABLE jnpa.scenarios (
     ended_at   timestamptz,
     params     jsonb
 );
+
+-- Per-run scenario handles (Sub-Criterion 5). One row per /scenarios/{name}/run
+-- so a run is replayable: ``params`` keeps the trigger params + a ``steps[]``
+-- array (each step records its trigger source for the reactive-workflow audit).
+CREATE TABLE IF NOT EXISTS jnpa.scenario_handles (
+    handle_id  text PRIMARY KEY,
+    name       text NOT NULL,            -- tfc1 | tfc2 | tfc3
+    status     text NOT NULL DEFAULT 'RUNNING',  -- RUNNING | DONE | RESET | FAILED
+    params     jsonb NOT NULL DEFAULT '{}'::jsonb,
+    trace_id   text,                     -- W3C traceparent for Jaeger deep-link
+    started_at timestamptz NOT NULL DEFAULT now(),
+    ended_at   timestamptz
+);
+
+-- Event-by-event scenario timeline (the storyline the dashboard paints). Every
+-- downstream action a scenario causes is appended here AND pushed to /api/ws as
+-- type=scenario_step, so the timeline survives a page reload (replay).
+CREATE TABLE IF NOT EXISTS jnpa.scenario_steps (
+    id          bigserial PRIMARY KEY,
+    handle_id   text NOT NULL REFERENCES jnpa.scenario_handles(handle_id) ON DELETE CASCADE,
+    step_no     int NOT NULL,
+    ts          timestamptz NOT NULL DEFAULT now(),
+    title       text NOT NULL,
+    status      text NOT NULL DEFAULT 'ok',   -- ok | degraded | failed | info
+    trigger     text,                          -- the trigger source (audit)
+    detail      jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_scenario_steps_handle ON jnpa.scenario_steps (handle_id, step_no);
 
 -- Helpful secondary indexes for the read paths the gateway uses.
 CREATE INDEX IF NOT EXISTS idx_anpr_plate_ts ON jnpa.anpr_reads (plate, ts DESC);

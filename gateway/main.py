@@ -28,6 +28,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from jnpa_shared.schemas import TOPIC_ALERTS, TOPIC_TRAFFIC
+from jnpa_shared import tracing
 
 from .config import GatewayConfig
 from .logging import configure_logging, get_logger
@@ -41,6 +42,7 @@ from .routers import (
     geo,
     kpi,
     reports,
+    scenario_ext,
     scenarios,
     traffic,
     trucks,
@@ -53,6 +55,12 @@ from .state import GatewayState
 cfg = GatewayConfig.from_env()
 configure_logging(cfg.log_level)
 log = get_logger("gateway")
+
+# OpenTelemetry: export spans to Jaeger (no-op if otel deps / endpoint absent).
+# instrument_httpx() makes the gateway's outbound proxy calls continue the trace
+# so the causal chain (dashboard -> gateway -> upstream AI/sim) nests in Jaeger.
+tracing.init_tracing(__import__("os").environ.get("OTEL_SERVICE_NAME", "gateway"))
+tracing.instrument_httpx()
 
 
 @asynccontextmanager
@@ -93,6 +101,7 @@ app = FastAPI(
     version="0.1.0",
     lifespan=_lifespan,
 )
+tracing.instrument_fastapi(app)
 
 # The dashboard + PWA are browser clients on other origins; allow them.
 app.add_middleware(
@@ -115,6 +124,7 @@ app.include_router(scenarios.router)
 app.include_router(kpi.router)
 app.include_router(geo.router)
 app.include_router(reports.router)
+app.include_router(scenario_ext.router)
 app.include_router(debug.router)
 app.include_router(ws.router)
 app.include_router(checkin.router)

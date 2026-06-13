@@ -33,7 +33,7 @@ endif
 
 .DEFAULT_GOAL := help
 
-.PHONY: help venv up down logs ps psql redis-cli test bootstrap-check install-shared vahan-seed vahan-verify rfid-verify truck-verify anpr-verify anpr-bench congestion-train congestion-verify anomaly-train anomaly-verify gateway-verify dev-web web-build web-verify web-e2e
+.PHONY: help venv up down logs ps psql redis-cli test bootstrap-check install-shared vahan-seed vahan-verify rfid-verify truck-verify anpr-verify anpr-bench congestion-train congestion-verify anomaly-train anomaly-verify gateway-verify dev-web web-build web-verify web-e2e scenarios-verify tfc1 tfc2 tfc3
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -79,6 +79,7 @@ install-shared: ## pip install -e the shared + vahan + rfid + trucking packages 
 	$(PY) -m pip install -e "ai/congestion[dev]"
 	$(PY) -m pip install -e "ai/anomaly[dev]"
 	$(PY) -m pip install -e "gateway[dev]"
+	$(PY) -m pip install -e "scenarios[dev]"
 
 test: ## Run pytest -x in shared/ and tests/
 	$(PY) -m pytest -x shared tests
@@ -188,3 +189,33 @@ web-verify: ## Smoke-test the dashboard's gateway surface (stack must be up)
 
 web-e2e: ## Run the Playwright e2e suite against the running dashboard
 	cd web && npm install && npx playwright install --with-deps chromium && npm run test:e2e
+
+tfc1: ## Run the TFC-1 gate-closure scenario (stack must be up)
+	@curl -s -XPOST http://localhost:8400/scenarios/tfc1/run \
+		-d '{"gate_id":"G-NSICT","duration_minutes":120}' -H 'content-type: application/json' \
+		| $(PY) -m json.tool || true
+
+tfc2: ## Run the TFC-2 wrong-way scenario (stack must be up)
+	@curl -s -XPOST http://localhost:8400/scenarios/tfc2/run \
+		-d '{"camera_id":"C-KARAL-EXIT"}' -H 'content-type: application/json' \
+		| $(PY) -m json.tool || true
+
+tfc3: ## Run the TFC-3 cargo-surge cross-twin scenario (stack must be up)
+	@curl -s -XPOST http://localhost:8400/scenarios/tfc3/run \
+		-d '{"dpd_release_spike":2.5}' -H 'content-type: application/json' \
+		| $(PY) -m json.tool || true
+
+scenarios-verify: ## Smoke-test the scenarios runner end-to-end (stack must be up)
+	@echo "== /healthz ==" && curl -s http://localhost:8400/healthz | $(PY) -m json.tool || true
+	@echo "== run tfc1 ==" \
+		&& HID=$$(curl -s -XPOST http://localhost:8400/scenarios/tfc1/run \
+			-d '{"gate_id":"G-NSICT","duration_minutes":120}' -H 'content-type: application/json' \
+			| $(PY) -c "import sys,json; print(json.load(sys.stdin)['handle_id'])") \
+		&& echo "handle=$$HID" \
+		&& echo "== timeline ==" \
+		&& curl -s http://localhost:8400/scenarios/$$HID/timeline \
+			| $(PY) -c "import sys,json; d=json.load(sys.stdin); print('steps=%d status=%s' % (d['count'], d.get('status'))); [print(' ', s['step_no'], s['status'], s['title']) for s in d['steps']]" \
+		&& echo "== reset ==" \
+		&& curl -s -XPOST http://localhost:8400/scenarios/tfc1/reset -d "{\"handle_id\":\"$$HID\"}" \
+			-H 'content-type: application/json' | $(PY) -m json.tool || true
+	@echo "== Jaeger UI: http://localhost:16686  ·  What-If: http://localhost:3000/whatif =="

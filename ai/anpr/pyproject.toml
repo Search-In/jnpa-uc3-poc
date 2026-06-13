@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "anpr-ai"
+version = "0.1.0"
+description = "ANPR + OCR inference service for the JNPA UC-III Digital Twin PoC"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "JNPA Digital Twin Team" }]
+
+# Pins follow the bid stack: YOLOv8 (ultralytics) plate detector + PaddleOCR
+# (PP-OCRv4). paddlepaddle/paddleocr are heavy and GPU-oriented; they are
+# optional at runtime (the service degrades to a classical detector + template
+# OCR on CPU-only hosts) and pinned in the `ocr` extra installed by the
+# Dockerfile.
+dependencies = [
+    "fastapi==0.115.*",
+    "uvicorn[standard]==0.30.*",
+    "python-multipart==0.0.*",
+    "opencv-python-headless==4.10.*",
+    "numpy>=1.26,<3",
+    "pillow>=10,<13",
+    "pydantic==2.*",
+    "prometheus-client==0.21.*",
+    "minio==7.2.*",
+    "structlog==24.*",
+]
+
+[project.optional-dependencies]
+# Heavy ML stack — installed in the container (and on GPU boxes for finetune.py).
+ocr = [
+    "ultralytics==8.3.*",
+    "paddleocr==2.8.*",
+    "paddlepaddle==2.6.*",
+]
+dev = [
+    "pytest==8.3.*",
+    "httpx==0.27.*",
+]
+
+[project.scripts]
+anpr-ai = "anpr.app:run"
+anpr-finetune = "anpr.finetune:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -55,11 +55,16 @@ class Emitter:
             return False
 
     async def _recognise(self, cand: PlateCandidate, client: httpx.AsyncClient) -> tuple[str, float]:
-        """Call the AI ANPR service for a plate string + confidence."""
+        """Call the AI ANPR + OCR service (ai/anpr ``POST /infer``) for a plate
+        string + confidence. The crop is sent as a multipart JPEG image; the
+        service returns ``{plate, conf, bbox, valid, ...}``."""
         try:
+            jpeg = cand.crop_jpeg_bytes()
+            if not jpeg:
+                return "UNKNOWN", 0.0
             resp = await client.post(
                 self.cfg.ai_anpr_url,
-                json={"camera_id": cand.camera_id, "image_b64": cand.crop_b64_jpeg()},
+                files={"image": ("plate.jpg", jpeg, "image/jpeg")},
                 timeout=self.cfg.ai_timeout_s,
             )
             resp.raise_for_status()

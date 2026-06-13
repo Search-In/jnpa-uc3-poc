@@ -253,7 +253,7 @@ services:
       NO_FEED_INTERVAL_S: "5"
       METRICS_PORT: "9101"
       LOG_LEVEL: ${ANPR_LOG_LEVEL:-INFO}
-      AI_ANPR_URL: ${ANPR_AI_URL:-http://anpr-ai:8000/anpr}
+      AI_ANPR_URL: ${ANPR_AI_URL:-http://anpr:8301/infer}
       OPENWEATHER_API_KEY: ${OPENWEATHER_API_KEY:-}
       PORT_LAT: ${PORT_LAT:-18.9489}
       PORT_LON: ${PORT_LON:-72.9492}
@@ -268,6 +268,52 @@ services:
       # a container pins them.) PYTHONPATH below makes this src win over the
       # site-packages copy baked at build time.
       - ./ingest/anpr/src:/app/ingest/anpr/src:ro
+    networks:
+      - jnpa
+
+  # --------------------------------------------------------------------------
+  # ANPR + OCR inference service (UC-III Sub-Criterion 2A).
+  # YOLOv8 plate detector -> PaddleOCR (PP-OCRv4, Indian fine-tune) ->
+  # post-processor (regex + state-code whitelist + confusion fixer). FastAPI on
+  # host 8301. Persists/loads YOLO weights to/from the MinIO "models" bucket.
+  #   POST /infer        multipart image -> {plate, conf, bbox}
+  #   POST /infer_batch  JSON base64 list -> results
+  #   GET  /eval         held-out benchmark -> metrics + OCR_TARGET_MET
+  # Build context is the repo root so the Dockerfile can COPY the shared lib.
+  # Source is bind-mounted so code edits take effect on `up` without a rebuild.
+  # CPU-only; degrades to a classical detector + template OCR if paddle/weights
+  # are unavailable (the /eval `engine` field reports which path ran).
+  # --------------------------------------------------------------------------
+  anpr:
+    build:
+      context: .
+      dockerfile: ai/anpr/Dockerfile
+    image: jnpa/anpr-ai:0.1.0
+    container_name: jnpa-anpr
+    restart: unless-stopped
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      PYTHONPATH: /app/ai/anpr/src
+      PORT: "8301"
+      ANPR_DETECT_CONF: ${ANPR_DETECT_CONF:-0.25}
+      ANPR_USE_GPU: "false"
+      ANPR_EVAL_SIZE: ${ANPR_EVAL_SIZE:-200}
+      ANPR_EVAL_TARGET_PCT: ${ANPR_EVAL_TARGET_PCT:-95.0}
+      ANPR_YOLO_SHA256: ${ANPR_YOLO_SHA256:-}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      ANPR_MODEL_BUCKET: ${ANPR_MODEL_BUCKET:-models}
+      LOG_LEVEL: ${ANPR_LOG_LEVEL:-INFO}
+      TZ: Etc/UTC
+    ports:
+      - "8301:8301"
+    volumes:
+      - ./ai/anpr/src:/app/ai/anpr/src:ro
+      - ./ai/anpr/resources:/app/ai/anpr/resources
+      - ./data/fixtures:/app/data/fixtures:ro
     networks:
       - jnpa
 

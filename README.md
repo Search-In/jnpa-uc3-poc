@@ -86,6 +86,7 @@ the ingest/AI services start calling live providers in later PoC stages.
 | Prometheus           | `prom/prometheus:latest`                | `9090`              | http://localhost:9090                           |
 | Grafana              | `grafana/grafana:latest`                | `3000`              | http://localhost:3000 (admin/admin)             |
 | ANPR ingest          | `jnpa/anpr-ingest:0.1.0` (built)        | `9108` → 9101 (metrics) | http://localhost:9108/metrics               |
+| ANPR + OCR inference | `jnpa/anpr-ai:0.1.0` (built)            | `8301`              | http://localhost:8301/healthz                   |
 | Vahan simulator      | `jnpa/vahan-sim:0.1.0` (built)          | `8201`              | http://localhost:8201/healthz                   |
 | Vahan live (Surepass)| `jnpa/vahan-live:0.1.0` (built)         | `8202`              | http://localhost:8202/healthz                   |
 | Trucking-app sim     | `jnpa/trucking-app:0.1.0` (built)       | `8240`              | http://localhost:8240/devices                   |
@@ -116,6 +117,7 @@ jnpa-uc3-poc/
 ├── scripts/
 │   ├── bootstrap_check.py
 │   ├── download_anpr_samples.sh   # fetch CC clips or synthesize 30s MP4s
+│   ├── download_anpr_weights.sh   # fetch YOLO plate weights (degrades if offline)
 │   └── _synth_clip.py
 ├── data/clips/               # bind-mounted into anpr-ingest (.mp4 clips)
 ├── ingest/anpr/              # ANPR ingestion service (replay -> YOLOv8n -> Kafka)
@@ -130,8 +132,14 @@ jnpa-uc3-poc/
 │   ├── app.py                # control plane entrypoint (truck-sim)
 │   ├── Dockerfile  pyproject.toml  README.md
 │   └── trucking_app/         # config, gates, plates, routing, truck, fleet, sinks, simulator, metrics
-├── ai/  gateway/  web/  mobile-pwa/  scenarios/   # later PoC stages
-└── tests/                    # test_bootstrap.py, test_anpr_ingest.py, test_vahan_sim.py, test_rfid_ingest.py, test_trucking_app.py
+├── ai/anpr/                  # ANPR + OCR inference service (FastAPI :8301)
+│   ├── Dockerfile  pyproject.toml  README.md
+│   ├── src/anpr/             # detect, ocr, postprocess, degradation, plategen,
+│   │                         #   pipeline, evaluator, metrics, finetune, storage, app
+│   ├── eval/bench.py         # held-out benchmark -> metrics.json + OCR_TARGET_MET
+│   └── resources/            # indian_plate_chars.txt, state_codes.txt, sample_plate.jpg
+├── gateway/  web/  mobile-pwa/  scenarios/   # later PoC stages
+└── tests/                    # test_bootstrap.py, test_anpr_ingest.py, test_anpr_ai.py, test_vahan_sim.py, test_rfid_ingest.py, test_trucking_app.py
 ```
 
 ---
@@ -170,6 +178,47 @@ docker compose logs -f anpr-ingest | grep -m1 plates_emitted_total
 docker exec -it jnpa-kafka kafka-console-consumer \
   --bootstrap-server localhost:9092 --topic anpr.reads --from-beginning --max-messages 5
 ```
+
+---
+
+## ANPR + OCR inference service (`ai/anpr/`, port 8301)
+
+Sub-Criterion 2A. The bid commits to **≥ 95 % OCR accuracy** under port
+conditions (dust, fog, night). Pipeline: **YOLOv8 plate detector → PaddleOCR
+(PP-OCRv4, Indian fine-tune) → post-processor** (Indian plate regex + BH-series
++ state-code whitelist + confusion-fixer `{O→0, I→1, S→5, B→8, Z→2}` applied
+only on digit positions). `ingest/anpr` POSTs each plate crop to
+`http://anpr:8301/infer` when `DRY_RUN=false`.
+
+```
+POST /infer        multipart image     -> {plate, conf, bbox, valid, ...}
+POST /infer_batch  JSON {images:[b64]} -> {count, results:[...]}
+GET  /eval         held-out benchmark  -> metrics + OCR_TARGET_MET
+GET  /healthz  GET /metrics
+```
+
+The container ships paddle + ultralytics, so the real stack runs and meets the
+target. On a bare CPU host without them the service **degrades** to a classical
+detector + a deterministic template OCR (so `/infer` and `/eval` still answer);
+`/eval` reports an `engine` field (`paddle+yolo` | `fallback`) and a `degraded`
+flag so the number is never misread.
+
+```bash
+# One-time: fetch YOLO plate weights (degrades gracefully if offline):
+scripts/download_anpr_weights.sh
+# Verify (after make up):
+curl -s -F "image=@./ai/anpr/resources/sample_plate.jpg" http://localhost:8301/infer | jq .
+curl -s http://localhost:8301/eval | jq .          # OCR_TARGET_MET=true on the real stack
+make anpr-verify                                   # both of the above
+make anpr-bench                                    # in-process benchmark -> metrics.json
+```
+
+The held-out benchmark (`ai/anpr/eval/bench.py`) scores three slices — clean
+(char acc ≥ 97 %, exact ≥ 95 %), dust+haze (exact ≥ 92 %), night low-light
+(exact ≥ 90 %) — against the 15 % tail of the shared Vahan plate fixture, and
+prints `OCR_TARGET_MET=true|false` (combined weighted accuracy ≥ 95.0 %).
+One-time PP-OCRv4 fine-tuning lives in `src/anpr/finetune.py` (~25 min on a T4;
+CPU ships a pre-baked adapter / stock PP-OCRv4). See `ai/anpr/README.md`.
 
 ---
 

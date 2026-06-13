@@ -59,7 +59,9 @@ class AnprConfig:
     # candidate. Keeps synthetic/empty footage flowing through the pipeline for
     # the PoC; set false for production where only real detections should emit.
     emit_on_empty: bool = True
-    ai_anpr_url: str = "http://anpr-ai:8000/anpr"  # built in Prompt 3.1
+    # AI ANPR + OCR inference service (ai/anpr, Sub-Criterion 2A). The ingest
+    # service POSTs each plate crop here as multipart when DRY_RUN=false.
+    ai_anpr_url: str = "http://anpr:8301/infer"
     ai_timeout_s: float = 2.0
 
     # --- Weather ---
@@ -91,7 +93,7 @@ class AnprConfig:
             yolo_weights=os.environ.get("YOLO_WEIGHTS", "yolov8n.pt"),
             detect_conf=_as_float(os.environ.get("DETECT_CONF"), 0.25),
             emit_on_empty=_as_bool(os.environ.get("EMIT_ON_EMPTY"), True),
-            ai_anpr_url=os.environ.get("AI_ANPR_URL", "http://anpr-ai:8000/anpr"),
+            ai_anpr_url=os.environ.get("AI_ANPR_URL", "http://anpr:8301/infer"),
             ai_timeout_s=_as_float(os.environ.get("AI_TIMEOUT_S"), 2.0),
             weather_interval_s=_as_float(os.environ.get("WEATHER_INTERVAL_S"), 600.0),
             openweather_api_key=os.environ.get("OPENWEATHER_API_KEY", shared.openweather_api_key),

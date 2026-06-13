@@ -46,11 +46,13 @@ class PlateCandidate:
     box: Tuple[int, int, int, int]  # x1,y1,x2,y2 of the vehicle in the frame
     degraded: bool = False
 
-    def crop_b64_jpeg(self) -> str:
+    def crop_jpeg_bytes(self) -> bytes:
         ok, buf = cv2.imencode(".jpg", self.crop)
-        if not ok:
-            return ""
-        return base64.b64encode(buf.tobytes()).decode("ascii")
+        return buf.tobytes() if ok else b""
+
+    def crop_b64_jpeg(self) -> str:
+        raw = self.crop_jpeg_bytes()
+        return base64.b64encode(raw).decode("ascii") if raw else ""
 
 
 class VehicleDetector:

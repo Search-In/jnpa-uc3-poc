@@ -33,7 +33,7 @@ endif
 
 .DEFAULT_GOAL := help
 
-.PHONY: help venv up down logs ps psql redis-cli test bootstrap-check install-shared vahan-seed vahan-verify rfid-verify truck-verify
+.PHONY: help venv up down logs ps psql redis-cli test bootstrap-check install-shared vahan-seed vahan-verify rfid-verify truck-verify anpr-verify anpr-bench
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -65,12 +65,14 @@ venv: ## Create .venv and install shared + vahan + rfid services (host-side, for
 	.venv/bin/python -m pip install -e "ingest/vahan_sim[dev]" -e "ingest/vahan_live[dev]"
 	.venv/bin/python -m pip install -e "ingest/rfid[dev]"
 	.venv/bin/python -m pip install -e "ingest/trucking_app[dev]"
+	.venv/bin/python -m pip install -e "ai/anpr[dev]"
 
 install-shared: ## pip install -e the shared + vahan + rfid + trucking packages into the active interpreter
 	$(PY) -m pip install -e "shared[dev]"
 	$(PY) -m pip install -e "ingest/vahan_sim[dev]" -e "ingest/vahan_live[dev]"
 	$(PY) -m pip install -e "ingest/rfid[dev]"
 	$(PY) -m pip install -e "ingest/trucking_app[dev]"
+	$(PY) -m pip install -e "ai/anpr[dev]"
 
 test: ## Run pytest -x in shared/ and tests/
 	$(PY) -m pytest -x shared tests
@@ -106,3 +108,14 @@ truck-verify: ## Verify the trucking-app sim: population + a few live MQTT pings
 	@echo "== rows in jnpa.truck_telemetry ==" \
 		&& $(COMPOSE) exec -T postgres psql -U postgres -d postgres \
 		-c "select count(*) from jnpa.truck_telemetry;" || true
+
+anpr-verify: ## Smoke-test the ANPR+OCR service: /infer on the sample + /eval (stack must be up)
+	@echo "== /infer (sample plate) ==" \
+		&& curl -s -F "image=@./ai/anpr/resources/sample_plate.jpg" \
+		http://localhost:8301/infer | $(PY) -m json.tool || true
+	@echo "== /eval (OCR_TARGET_MET + per-slice metrics) ==" \
+		&& curl -s http://localhost:8301/eval \
+		| $(PY) -c "import sys,json; d=json.load(sys.stdin); print(json.dumps(d,indent=2)); print('OCR_TARGET_MET=%s' % str(d['OCR_TARGET_MET']).lower())" || true
+
+anpr-bench: ## Run the ANPR/OCR benchmark in-process (no stack needed) -> metrics.json
+	PYTHONPATH=ai/anpr/src:shared $(PY) ai/anpr/eval/bench.py

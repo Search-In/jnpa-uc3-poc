@@ -33,3 +33,10 @@ data/clips/*.mov
 data/clips/*.mkv
 !data/clips/.gitkeep
 data/**/*.bin
+
+# ANPR model artefacts: large/generated, fetched by scripts or MinIO at runtime.
+# Keep the small text resources (char dict, state codes) + the sample image.
+ai/anpr/resources/*.pt
+ai/anpr/resources/rec_indian/
+ai/anpr/resources/datasets/
+ai/anpr/eval/metrics.json

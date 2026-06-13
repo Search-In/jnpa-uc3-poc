@@ -848,6 +848,11 @@ services:
       GATEWAY_GATE_BOOM_DELAY_S: ${GATEWAY_GATE_BOOM_DELAY_S:-5}
       GATEWAY_DECISION_RING_SIZE: ${GATEWAY_DECISION_RING_SIZE:-1000}
       GATEWAY_TRUCK_SAMPLE: ${GATEWAY_TRUCK_SAMPLE:-50}
+      # WebPush (trucking-app PWA re-route notifications). Generate with
+      # `make vapid-keys`; empty -> push disabled, PWA uses WS/polling fallback.
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:ops@jnpa-uc3.example}
       LOG_LEVEL: ${GATEWAY_LOG_LEVEL:-INFO}
       OTEL_SERVICE_NAME: gateway
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4317}
@@ -920,10 +925,14 @@ services:
   # tier OK); when blank the map falls back to the Bhuvan (ISRO) WMS basemap.
   #   open http://localhost:3000/live
   # --------------------------------------------------------------------------
+  # Serves the control-room dashboard at / and the trucking-app PWA (Prompt 11)
+  # at /pwa from one nginx (build context is the repo root so the image can build
+  # both web/ and mobile-pwa/). The PWA's re-route push reaches the gateway via
+  # the same /api reverse-proxy the dashboard uses.
   web:
     build:
-      context: ./web
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: web/Dockerfile
       args:
         VITE_MAPBOX_TOKEN: ${MAPBOX_TOKEN:-}
         VITE_BHUVAN_WMS: ${VITE_BHUVAN_WMS:-https://bhuvan-vec1.nrsc.gov.in/bhuvan/wms}

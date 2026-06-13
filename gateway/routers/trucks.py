@@ -15,6 +15,7 @@ The gateway keeps the most recent /checkin submissions in a small in-memory map
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 from typing import Dict, Optional
 
 import httpx
@@ -25,6 +26,7 @@ from ..logging import get_logger
 from ..metrics import REQUESTS, UPSTREAM_LATENCY
 from ..provisional import build_elevated_scrutiny_alert, persist_alert
 from ..state import GatewayState, get_state
+from . import push
 
 log = get_logger("gateway.trucks")
 
@@ -33,6 +35,14 @@ router = APIRouter(prefix="/api/trucks", tags=["trucks"])
 # Most-recent /checkin submission per device (TERTIARY source). In-memory ring;
 # the dashboard reads it back through /api/trucks/{id}. Demo-scale.
 CHECKINS: Dict[str, dict] = {}
+
+# Most-recent re-route advisory dispatched per device — the PWA's polling
+# fallback reads this back via GET /api/trucks/{id}/route/latest. Demo-scale.
+LAST_REROUTE: Dict[str, dict] = {}
+
+
+def _utcnow_iso() -> str:
+    return datetime.now(tz=timezone.utc).isoformat()
 
 
 async def _primary(state: GatewayState, device_id: str) -> Optional[dict]:
@@ -108,6 +118,15 @@ async def reroute_truck(
     Body forwards straight to the truck-sim: ``{gate_id}`` or ``{lat, lon}`` plus
     an optional ``force_state``. We record the override as a decision so it shows
     up in the demo evidence trail.
+
+    The re-route is then pushed to the driver's PWA on two channels so it always
+    lands within the 5 s SLA:
+
+      * a ``type=reroute`` WebSocket frame (the PWA's realtime worker filters it
+        by ``device_id``) — the live, in-app path; the polling fallback reads the
+        same advisory back via ``GET /api/trucks/{id}/route/latest``;
+      * a WebPush notification (best-effort; only when VAPID is configured and the
+        device has a subscription), so a backgrounded PWA still buzzes.
     """
     url = gw.cfg.truck_api_url.rstrip("/") + f"/devices/{device_id}/route"
     try:
@@ -122,8 +141,61 @@ async def reroute_truck(
         api="trucks", key=device_id, decision_path="REROUTE", source="truck-sim",
         source_state=SourceState.LIVE, detail={"reroute": body},
     )
+
+    # Build the driver-facing re-route advisory and dispatch it on both channels.
+    advisory = {
+        "type": "reroute",
+        "device_id": device_id,
+        "ts": _utcnow_iso(),
+        "gate_id": body.get("gate_id"),
+        "dest": data.get("dest"),
+        "route_km": data.get("route_km"),
+        "reason": body.get("reason", "Traffic / gate advisory — new gate assigned"),
+        "title": "Re-route advisory",
+        "body": f"Proceed to {body.get('gate_id') or 'new destination'}.",
+        "requires_ack": True,
+    }
+    LAST_REROUTE[device_id] = advisory
+    await gw.ws.broadcast("reroute", advisory)
+    push_delivered = await push.deliver(gw, device_id, advisory)
+
     REQUESTS.labels("trucks", "ok").inc()
-    return data
+    return {**data, "advisory": advisory, "push_delivered": push_delivered}
+
+
+@router.get("/{device_id}/route/latest")
+async def latest_reroute(device_id: str) -> dict:
+    """Polling fallback for the PWA when WebSocket / WebPush are unavailable.
+
+    Returns the most recent re-route advisory dispatched to ``device_id`` (or
+    ``{advisory: null}`` if none). The PWA polls this while its socket is down so
+    the re-route banner still appears within the SLA.
+    """
+    return {"device_id": device_id, "advisory": LAST_REROUTE.get(device_id)}
+
+
+@router.post("/{device_id}/route/ack")
+async def ack_reroute(
+    device_id: str,
+    body: Dict[str, object] = Body(default_factory=dict),
+    gw: GatewayState = Depends(get_state),
+) -> dict:
+    """Driver accepted/declined a re-route (PWA "Accept" sends ``state=ACK``).
+
+    Recorded as a decision so the demo evidence trail shows the round-trip
+    (push -> driver -> ACK) and broadcast so the control-room dashboard can mark
+    the advisory acknowledged.
+    """
+    state_val = str(body.get("state", "ACK")).upper()
+    await gw.record_decision(
+        api="trucks", key=device_id, decision_path="REROUTE_ACK", source="truck-app",
+        source_state=SourceState.LIVE, detail={"state": state_val},
+    )
+    ack = {"type": "reroute_ack", "device_id": device_id, "state": state_val,
+           "ts": _utcnow_iso()}
+    await gw.ws.broadcast("reroute_ack", ack)
+    REQUESTS.labels("trucks", "ok").inc()
+    return {"acked": True, "device_id": device_id, "state": state_val}
 
 
 @router.get("/{device_id}")

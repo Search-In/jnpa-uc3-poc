@@ -33,7 +33,7 @@ endif
 
 .DEFAULT_GOAL := help
 
-.PHONY: help venv up down logs ps psql redis-cli test bootstrap-check install-shared vahan-seed vahan-verify rfid-verify truck-verify anpr-verify anpr-bench congestion-train congestion-verify anomaly-train anomaly-verify gateway-verify dev-web web-build web-verify web-e2e scenarios-verify tfc1 tfc2 tfc3
+.PHONY: help venv up down logs ps psql redis-cli test bootstrap-check install-shared vahan-seed vahan-verify rfid-verify truck-verify anpr-verify anpr-bench congestion-train congestion-verify anomaly-train anomaly-verify gateway-verify dev-web web-build web-verify web-e2e scenarios-verify tfc1 tfc2 tfc3 vapid-keys dev-pwa pwa-build pwa-verify pwa-e2e
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -219,3 +219,28 @@ scenarios-verify: ## Smoke-test the scenarios runner end-to-end (stack must be u
 		&& curl -s -XPOST http://localhost:8400/scenarios/tfc1/reset -d "{\"handle_id\":\"$$HID\"}" \
 			-H 'content-type: application/json' | $(PY) -m json.tool || true
 	@echo "== Jaeger UI: http://localhost:16686  ·  What-If: http://localhost:3000/whatif =="
+
+# ============================================================================
+# Trucking-App PWA (Prompt 11) — driver-side ETA / re-route advisory
+# ============================================================================
+vapid-keys: ## Generate VAPID keypair for WebPush and append to .env.local
+	@$(PY) scripts/gen_vapid_keys.py
+
+dev-pwa: ## Run the PWA dev server on :3002 (Vite, proxies /api -> :8000)
+	cd mobile-pwa && npm install && npm run dev
+
+pwa-build: ## Build the production PWA bundle (mobile-pwa/dist)
+	cd mobile-pwa && npm install && npm run build
+
+pwa-verify: ## Smoke-test the PWA surface + push channel (stack must be up)
+	@echo "== PWA served at /pwa (nginx :3000) ==" \
+		&& curl -s -o /dev/null -w 'HTTP %{http_code}\n' http://localhost:3000/pwa/ || true
+	@echo "== /api/push/status ==" \
+		&& curl -s http://localhost:8000/api/push/status | $(PY) -m json.tool || true
+	@echo "== /api/push/vapid-public-key ==" \
+		&& curl -s http://localhost:8000/api/push/vapid-public-key \
+		| $(PY) -c "import sys,json; d=json.load(sys.stdin); print('configured=%s' % d['configured'])" || true
+	@echo "== Open the PWA: http://localhost:3000/pwa  (web variant: ?device=DEV-000001) =="
+
+pwa-e2e: ## Run the PWA Playwright e2e suite (stack must be up)
+	cd mobile-pwa && npm install && npx playwright install --with-deps chromium && npm run test:e2e

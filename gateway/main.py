@@ -41,6 +41,7 @@ from .routers import (
     debug,
     geo,
     kpi,
+    push,
     reports,
     scenario_ext,
     scenarios,
@@ -122,6 +123,7 @@ app.include_router(ulip.router)
 app.include_router(alerts.router)
 app.include_router(scenarios.router)
 app.include_router(kpi.router)
+app.include_router(push.router)
 app.include_router(geo.router)
 app.include_router(reports.router)
 app.include_router(scenario_ext.router)
@@ -149,7 +151,7 @@ async def root() -> dict:
         "version": "0.1.0",
         "apis": ["/api/anpr", "/api/vahan", "/api/traffic", "/api/trucks",
                  "/api/ulip", "/api/alerts", "/api/scenarios", "/api/kpi",
-                 "/api/gates", "/api/corridor", "/api/zones",
+                 "/api/gates", "/api/corridor", "/api/zones", "/api/push",
                  "/api/reports/police", "/api/debug/decisions", "/api/ws",
                  "/checkin"],
     }

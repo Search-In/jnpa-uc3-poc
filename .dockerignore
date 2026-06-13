@@ -1,0 +1,42 @@
+# Root .dockerignore — applies to builds whose context is the repo root.
+# Currently that is the `web` image (web/Dockerfile), which builds both the
+# dashboard (web/) and the trucking-app PWA (mobile-pwa/). Keep the context lean
+# so the daemon doesn't ship the venv / node_modules / data clips.
+
+# Python / virtualenv
+.venv/
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/*.egg-info/
+
+# Node build artefacts (deps are reinstalled inside the image)
+**/node_modules/
+web/dist/
+mobile-pwa/dist/
+mobile-pwa/dev-dist/
+
+# VCS / local
+.git/
+.gitignore
+*.log
+.DS_Store
+
+# Heavy data / media not needed to build the frontends
+data/
+infra/
+ingest/
+ai/
+gateway/
+scenarios/
+shared/
+scripts/
+tests/
+
+# Local env files (never bake secrets into an image)
+.env
+.env.local
+
+# Playwright outputs
+**/playwright-report/
+**/test-results/

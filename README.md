@@ -92,6 +92,8 @@ the ingest/AI services start calling live providers in later PoC stages.
 | Trucking-app sim     | `jnpa/trucking-app:0.1.0` (built)       | `8240`              | http://localhost:8240/devices                   |
 | Congestion forecaster| `jnpa/congestion-ai:0.1.0` (built)      | `8311`              | http://localhost:8311/healthz                   |
 | Anomaly detector     | `jnpa/anomaly-ai:0.1.0` (built)         | `8321`              | http://localhost:8321/health                    |
+| API gateway          | `jnpa/gateway:0.1.0` (built)            | `8000`              | http://localhost:8000/healthz                   |
+| Control-room + PWA   | `jnpa/web:0.1.0` (built)                | `3000`              | http://localhost:3000 · PWA at http://localhost:3000/pwa |
 
 > **Kafka note:** containers on the `jnpa` network use `kafka:9092` (internal
 > listener). Host processes — including the bootstrap self-test — use
@@ -343,6 +345,38 @@ frames on `frames.{camera_id}`, written by `ingest/anpr` at 5 fps (configurable
 via `ANPR_PUBLISH_FRAMES` / `ANPR_FRAME_BUS_MAXLEN`) and trimmed to the last 600
 entries to bound memory. Both `ai/anomaly` and (later) `ai/anpr` consume from it.
 
+## Trucking-App PWA (`mobile-pwa/`, served at `:3000/pwa`)
+
+Prompt 11. The driver-facing **ETA / re-route advisory** app — the channel that
+pushes re-routes during **TFC-1** / **TFC-3**. Vite + React 18 + TS, installable
+(`vite-plugin-pwa`). Bundled into the `web` image and served at
+`http://localhost:3000/pwa`; an evaluator without a phone opens
+`…/pwa?device=DEV-000001` to pair instantly and receive the re-route push live.
+
+Screens: **Trip** (target gate, ETA, speed, traffic-ahead mini-map, "Slot at
+Gate" widget from TAS-mock), **Re-route** (full-screen Accept → `state=ACK`),
+**Inbox** (advisories/alerts/challans, 24 h IndexedDB cache), **Profile/Vehicle**
+(VahanRecord via the gateway).
+
+A re-route (`POST /api/trucks/{id}/route`) reaches the driver on three channels
+for the 5 s SLA: a `type=reroute` WebSocket frame (filtered by `device_id` in a
+dedicated worker), a **WebPush** notification (`pywebpush`; needs VAPID keys —
+`make vapid-keys`), and an in-app polling fallback (`…/route/latest`).
+
+```bash
+make vapid-keys     # generate + store the WebPush VAPID keypair (optional)
+make dev-pwa        # Vite dev server on :3002 (proxies /api -> gateway)
+make pwa-build      # production bundle (base /pwa/)
+make pwa-verify     # smoke-test /pwa + the push channel (stack up)
+make pwa-e2e        # Playwright: pair, trigger a re-route, banner < 5 s
+open http://localhost:3000/pwa     # verification command
+```
+
+With no VAPID keys, push is disabled and the PWA uses the WS + polling channels —
+the demo never hard-depends on a key. See `mobile-pwa/README.md` for detail.
+
+---
+
 ## Make targets
 
 | Target                  | Action                                          |
@@ -361,6 +395,11 @@ entries to bound memory. Both `ai/anomaly` and (later) `ai/anpr` consume from it
 | `make vahan-verify`     | smoke-test the Vahan sim + live adapter         |
 | `make rfid-verify`      | verify RFID reads + a vehicle.confirmed fired   |
 | `make truck-verify`     | verify the trucking-app sim (population + pings) |
+| `make vapid-keys`       | generate the PWA WebPush VAPID keypair          |
+| `make dev-pwa`          | run the trucking-app PWA dev server (:3002)     |
+| `make pwa-build`        | build the PWA bundle (`mobile-pwa/dist`)        |
+| `make pwa-verify`       | smoke-test `/pwa` + the push channel            |
+| `make pwa-e2e`          | Playwright: pair → re-route banner < 5 s        |
 
 ---
 

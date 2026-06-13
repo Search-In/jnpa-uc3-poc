@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rfid-ingest"
+version = "0.1.0"
+description = "RFID reader emulator, MQTT consumer, and ANPR correlator for the JNPA UC-III Digital Twin PoC"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "JNPA Digital Twin Team" }]
+
+# jnpa-shared already pins paho-mqtt / confluent-kafka / asyncpg; these are the
+# direct surface this service uses. Versions kept in step with shared/pyproject.
+dependencies = [
+    "paho-mqtt==2.1.0",
+    "confluent-kafka==2.6.0",
+    "asyncpg==0.30.0",
+    "pydantic==2.9.2",
+    "structlog==24.4.0",
+    "prometheus-client==0.21.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.4",
+    "pytest-asyncio==0.24.0",
+]
+
+[project.scripts]
+rfid-emulator = "emulator:run"
+rfid-consumer = "consumer:run"
+rfid-correlator = "correlator:run"
+
+[tool.setuptools]
+# The reusable library lives in the rfid_ingest package; the three entrypoints
+# (emulator/consumer/correlator) are top-level modules in this folder, matching
+# the spec's ingest/rfid/{emulator,consumer,correlator}.py layout.
+packages = ["rfid_ingest"]
+py-modules = ["emulator", "consumer", "correlator"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

@@ -33,7 +33,7 @@ endif
 
 .DEFAULT_GOAL := help
 
-.PHONY: help venv up down logs ps psql redis-cli test bootstrap-check install-shared vahan-seed vahan-verify
+.PHONY: help venv up down logs ps psql redis-cli test bootstrap-check install-shared vahan-seed vahan-verify rfid-verify
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -58,15 +58,17 @@ psql: ## Open psql inside the postgres container
 redis-cli: ## Open redis-cli inside the redis container
 	$(COMPOSE) exec redis redis-cli
 
-venv: ## Create .venv and install shared + vahan services (host-side, for tests)
+venv: ## Create .venv and install shared + vahan + rfid services (host-side, for tests)
 	python3 -m venv .venv
 	.venv/bin/python -m pip install --upgrade pip
 	.venv/bin/python -m pip install -e "shared[dev]"
 	.venv/bin/python -m pip install -e "ingest/vahan_sim[dev]" -e "ingest/vahan_live[dev]"
+	.venv/bin/python -m pip install -e "ingest/rfid[dev]"
 
-install-shared: ## pip install -e the shared + vahan packages into the active interpreter
+install-shared: ## pip install -e the shared + vahan + rfid packages into the active interpreter
 	$(PY) -m pip install -e "shared[dev]"
 	$(PY) -m pip install -e "ingest/vahan_sim[dev]" -e "ingest/vahan_live[dev]"
+	$(PY) -m pip install -e "ingest/rfid[dev]"
 
 test: ## Run pytest -x in shared/ and tests/
 	$(PY) -m pytest -x shared tests
@@ -85,3 +87,11 @@ vahan-verify: ## Smoke-test the Vahan simulator + live adapter (stack must be up
 	@echo "== vehicle_master count ==" \
 		&& $(COMPOSE) exec -T postgres psql -U postgres -d postgres \
 		-c "select count(*) from jnpa.vehicle_master;" || true
+
+rfid-verify: ## Verify RFID reads landed + a vehicle.confirmed fired (stack must be up)
+	@echo "== busiest readers (rfid_reads) ==" \
+		&& $(COMPOSE) exec -T postgres psql -U postgres -d postgres \
+		-c "select reader_id, count(*) from jnpa.rfid_reads group by 1 order by 2 desc limit 5;" || true
+	@echo "== waiting (<=30s) for a vehicle.confirmed in the correlator log ==" \
+		&& ($(COMPOSE) logs --since 2m rfid-correlator 2>/dev/null | grep -m1 vehicle.confirmed \
+			|| echo "  none yet — inject a matching ANPR read or wait for one") || true

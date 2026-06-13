@@ -342,3 +342,111 @@ services:
       - ./ingest/vahan_live:/app/ingest/vahan_live:ro
     networks:
       - jnpa
+
+  # --------------------------------------------------------------------------
+  # RFID emulator / consumer / correlator (UC-III Sub-Criterion 1C).
+  # One image (jnpa/rfid-ingest), three services picked via `command:`.
+  # Build context is the repo root so the Dockerfile can COPY the shared lib.
+  # Source is bind-mounted so code edits take effect on `up` without a rebuild.
+  #
+  #   rfid-emulator   -> 25 readers publishing to MQTT rfid/readers/{id}
+  #   rfid-consumer   -> MQTT rfid/readers/+ -> jnpa.rfid_reads + Kafka rfid.reads
+  #   rfid-correlator -> join rfid.reads x anpr.reads -> Kafka vehicle.confirmed
+  #
+  # Metrics: container 9102, published on distinct host ports (9112/9113/9114;
+  # host 9102 onward are free — ANPR uses 9108).
+  # --------------------------------------------------------------------------
+  rfid-emulator:
+    build:
+      context: .
+      dockerfile: ingest/rfid/Dockerfile
+    image: jnpa/rfid-ingest:0.1.0
+    container_name: jnpa-rfid-emulator
+    restart: unless-stopped
+    depends_on:
+      - mosquitto
+    command: ["rfid-emulator"]
+    environment:
+      PYTHONPATH: /app/ingest/rfid
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      KAFKA_BROKERS: kafka:9092
+      RFID_GATE_READERS: ${RFID_GATE_READERS:-10}
+      RFID_CORRIDOR_READERS: ${RFID_CORRIDOR_READERS:-15}
+      RFID_TAG_POOL_SIZE: ${RFID_TAG_POOL_SIZE:-12000}
+      RFID_BASE_RATE: ${RFID_BASE_RATE:-0.15}
+      RFID_PEAK_MULTIPLIER: ${RFID_PEAK_MULTIPLIER:-3.0}
+      METRICS_PORT: "9102"
+      LOG_LEVEL: ${RFID_LOG_LEVEL:-INFO}
+      TZ: Etc/UTC
+    ports:
+      - "9112:9102"
+    volumes:
+      - ./ingest/rfid:/app/ingest/rfid:ro
+    networks:
+      - jnpa
+
+  rfid-consumer:
+    build:
+      context: .
+      dockerfile: ingest/rfid/Dockerfile
+    image: jnpa/rfid-ingest:0.1.0
+    container_name: jnpa-rfid-consumer
+    restart: unless-stopped
+    depends_on:
+      mosquitto:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    command: ["rfid-consumer"]
+    environment:
+      PYTHONPATH: /app/ingest/rfid
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      KAFKA_BROKERS: kafka:9092
+      RFID_TOPIC: rfid.reads
+      # asyncpg libpq DSN (no SQLAlchemy "+asyncpg" prefix).
+      POSTGRES_DSN_LIBPQ: ${RFID_POSTGRES_DSN:-postgresql://postgres:jnpa_pw@postgres:5432/postgres}
+      METRICS_PORT: "9102"
+      LOG_LEVEL: ${RFID_LOG_LEVEL:-INFO}
+      TZ: Etc/UTC
+    ports:
+      - "9113:9102"
+    volumes:
+      - ./ingest/rfid:/app/ingest/rfid:ro
+    networks:
+      - jnpa
+
+  rfid-correlator:
+    build:
+      context: .
+      dockerfile: ingest/rfid/Dockerfile
+    image: jnpa/rfid-ingest:0.1.0
+    container_name: jnpa-rfid-correlator
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    command: ["rfid-correlator"]
+    environment:
+      PYTHONPATH: /app/ingest/rfid
+      KAFKA_BROKERS: kafka:9092
+      RFID_TOPIC: rfid.reads
+      ANPR_TOPIC: anpr.reads
+      CONFIRMED_TOPIC: vehicle.confirmed
+      RFID_CORRELATION_WINDOW_S: ${RFID_CORRELATION_WINDOW_S:-5.0}
+      RFID_CONFIRM_CONFIDENCE: ${RFID_CONFIRM_CONFIDENCE:-0.97}
+      POSTGRES_DSN_LIBPQ: ${RFID_POSTGRES_DSN:-postgresql://postgres:jnpa_pw@postgres:5432/postgres}
+      METRICS_PORT: "9102"
+      LOG_LEVEL: ${RFID_LOG_LEVEL:-INFO}
+      TZ: Etc/UTC
+    ports:
+      - "9114:9102"
+    volumes:
+      - ./ingest/rfid:/app/ingest/rfid:ro
+    networks:
+      - jnpa

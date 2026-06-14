@@ -51,9 +51,12 @@ COPY ingest/anpr/src/ /app/ingest/anpr/src/
 RUN pip install -e /app/ingest/anpr
 
 # ultralytics declares a dep on the GUI OpenCV build, which shadows the headless
-# one and pulls libGL. Drop it (ignore "not installed") and pin headless.
-RUN pip uninstall -y opencv-python 2>/dev/null; \
-    pip install --no-deps "opencv-python-headless==4.10.*"
+# one and pulls libGL. Purge EVERY opencv variant (their files overlap in cv2/,
+# so a partial uninstall leaves cv2 missing/broken) then reinstall the headless
+# build cleanly WITH its deps so `import cv2` works.
+RUN pip uninstall -y opencv-python opencv-contrib-python \
+        opencv-python-headless opencv-contrib-python-headless 2>/dev/null; \
+    pip install --force-reinstall "opencv-python-headless==4.10.*"
 
 # Build-time ABI guard: cv2 + torch + numpy must import together, and the
 # service package must import. Fails the build loudly if any is broken.

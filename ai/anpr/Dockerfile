@@ -53,9 +53,12 @@ COPY ai/anpr/resources/ /app/ai/anpr/resources/
 RUN pip install -e "/app/ai/anpr[ocr]"
 
 # ultralytics + paddleocr both declare the GUI OpenCV build, which shadows the
-# headless one and pulls libGL. Drop it and pin headless.
-RUN pip uninstall -y opencv-python opencv-contrib-python 2>/dev/null; \
-    pip install --no-deps "opencv-python-headless==4.10.*"
+# headless one and pulls libGL. Purge EVERY opencv variant (their files overlap
+# in cv2/, so a partial uninstall leaves a broken cv2 module) then reinstall the
+# headless build cleanly with its deps so cv2 imports correctly.
+RUN pip uninstall -y opencv-python opencv-contrib-python \
+        opencv-python-headless opencv-contrib-python-headless 2>/dev/null; \
+    pip install --force-reinstall "opencv-python-headless==4.10.*"
 
 # Build-time guard: the core (always-on) stack must import. The heavy OCR stack
 # (paddle) is allowed to be absent at build time on some arch/wheel combos — the

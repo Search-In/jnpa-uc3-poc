@@ -38,12 +38,12 @@ export function ThroughputChart() {
           <XAxis
             dataKey="bucket"
             tickFormatter={(v) => fmtTimeIST(v).slice(0, 5)}
-            tick={{ fontSize: 9, fill: "#8aa" }}
+            tick={{ fontSize: 9, fill: "#64748b" }}
             interval="preserveStartEnd"
           />
-          <YAxis tick={{ fontSize: 9, fill: "#8aa" }} width={28} />
+          <YAxis tick={{ fontSize: 9, fill: "#64748b" }} width={28} />
           <Tooltip
-            contentStyle={{ background: "#0b1220", border: "1px solid #2a3344", fontSize: 11 }}
+            contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", color: "#1f2937", fontSize: 11 }}
             labelFormatter={(v) => fmtTimeIST(String(v))}
             formatter={(v) => [`${v} reads`, "throughput"]}
           />

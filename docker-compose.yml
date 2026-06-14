@@ -670,17 +670,12 @@ services:
           echo "[congestion] seeding artifacts volume from committed model";
           cp /app/ai/congestion/artifacts/* /artifacts/ 2>/dev/null || true;
         fi
-        python - <<'PY'
-        from congestion.config import CongestionConfig
-        from congestion import storage
-        from pathlib import Path
-        import sys
-        cfg = CongestionConfig.from_env()
-        storage.sync_weights(cfg)
-        sys.exit(0 if Path(cfg.weights_path).is_file() else 7)
-        PY
-        have_weights=$?
-        if [ "$have_weights" -eq 0 ]; then
+        # Best-effort MinIO sync to pull newer weights if any (never fatal).
+        python -c "from congestion.config import CongestionConfig; from congestion import storage; storage.sync_weights(CongestionConfig.from_env())" || true
+        # Train ONLY when no usable weights exist on disk. (The previous heredoc
+        # exit-code capture broke under dash — "[: Illegal number" — and forced a
+        # ~30-min retrain on every boot even though a valid model was present.)
+        if [ -f /artifacts/congestion_gnn_lstm.pt ]; then
           echo "[congestion] weights present — skipping training";
         else
           echo "[congestion] no weights found — training…";

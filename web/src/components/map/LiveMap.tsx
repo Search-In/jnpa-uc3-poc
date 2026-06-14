@@ -38,6 +38,7 @@ export function LiveMap({ corridor, gates, snapshots, zones, onReady, onGateClic
   const mapRef = useRef<MlMap | null>(null);
   const tracks = useRef<Map<string, TruckTrack>>(new Map());
   const loaded = useRef(false);
+  const resizeObs = useRef<ResizeObserver | null>(null);
 
   // ---- init map once ----
   useEffect(() => {
@@ -52,8 +53,18 @@ export function LiveMap({ corridor, gates, snapshots, zones, onReady, onGateClic
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
     mapRef.current = map;
 
+    // The map often initialises before the flex layout has given the container
+    // its final size, so MapLibre computes a 0-height viewport and paints no
+    // tiles (style loads — hence attribution — but the canvas stays blank).
+    // Observe the container and resize the map whenever its box changes.
+    const ro = new ResizeObserver(() => mapRef.current?.resize());
+    ro.observe(ref.current);
+    resizeObs.current = ro;
+
     map.on("load", () => {
       loaded.current = true;
+      // Force one resize after load in case the observer fired before init.
+      map.resize();
 
       // Empty GeoJSON sources we update reactively below.
       const empty = { type: "FeatureCollection", features: [] } as GeoJSON.FeatureCollection;
@@ -123,8 +134,8 @@ export function LiveMap({ corridor, gates, snapshots, zones, onReady, onGateClic
         source: "trucks",
         paint: {
           "circle-radius": 4,
-          "circle-color": "#56B4E9",
-          "circle-stroke-color": "#0b1220",
+          "circle-color": "#0072B2",
+          "circle-stroke-color": "#ffffff",
           "circle-stroke-width": 1,
         },
       });
@@ -151,7 +162,7 @@ export function LiveMap({ corridor, gates, snapshots, zones, onReady, onGateClic
           "text-offset": [0, 1.4],
           "text-anchor": "top",
         },
-        paint: { "text-color": "#e8eef5", "text-halo-color": "#0b1220", "text-halo-width": 1.5 },
+        paint: { "text-color": "#1f2937", "text-halo-color": "#ffffff", "text-halo-width": 1.6 },
       });
 
       map.on("click", "gates", (e) => {
@@ -168,6 +179,8 @@ export function LiveMap({ corridor, gates, snapshots, zones, onReady, onGateClic
     });
 
     return () => {
+      resizeObs.current?.disconnect();
+      resizeObs.current = null;
       map.remove();
       mapRef.current = null;
       loaded.current = false;

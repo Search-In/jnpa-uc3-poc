@@ -1,22 +1,23 @@
 import type { Config } from "tailwindcss";
 
 // Colour-blind-safe (Okabe–Ito) severity palette, exposed as Tailwind colours so
-// every component pulls from one source. All foreground/background pairs below
-// meet WCAG AA contrast (>= 4.5:1) against the slate-950 control-room canvas.
+// every component pulls from one source. The base UI tokens below are a LIGHT
+// theme; all foreground/background pairs meet WCAG AA contrast (>= 4.5:1)
+// against the light canvas. The severity/flow ramps are theme-agnostic.
 export default {
   darkMode: ["class"],
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
       colors: {
-        border: "hsl(215 28% 22%)",
-        input: "hsl(215 28% 22%)",
-        ring: "hsl(199 89% 48%)",
-        background: "hsl(222 47% 8%)",
-        foreground: "hsl(210 40% 96%)",
-        muted: { DEFAULT: "hsl(217 33% 17%)", foreground: "hsl(215 20% 65%)" },
-        card: { DEFAULT: "hsl(222 47% 11%)", foreground: "hsl(210 40% 96%)" },
-        primary: { DEFAULT: "hsl(199 89% 48%)", foreground: "hsl(222 47% 8%)" },
+        border: "hsl(215 20% 88%)",
+        input: "hsl(215 20% 88%)",
+        ring: "hsl(199 89% 42%)",
+        background: "hsl(210 40% 98%)",
+        foreground: "hsl(222 47% 14%)",
+        muted: { DEFAULT: "hsl(214 32% 93%)", foreground: "hsl(215 16% 42%)" },
+        card: { DEFAULT: "hsl(0 0% 100%)", foreground: "hsl(222 47% 14%)" },
+        primary: { DEFAULT: "hsl(199 89% 42%)", foreground: "hsl(0 0% 100%)" },
         // Okabe–Ito severity ramp (colour-blind safe).
         severity: {
           info: "#56B4E9", // sky blue

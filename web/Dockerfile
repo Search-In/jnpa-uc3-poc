@@ -31,6 +31,9 @@ COPY web/nginx/default.conf /etc/nginx/conf.d/default.conf
 COPY --from=build-web /app/dist /usr/share/nginx/html
 COPY --from=build-pwa /app/dist /usr/share/nginx/html/pwa
 EXPOSE 3000
+# nginx serves on :3000 (HTTP 200) but this image's BusyBox wget exits non-zero
+# on `-qO-`, so the old check flagged a healthy container unhealthy. Use curl,
+# which is present in this image and honours --fail for a true status check.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=5 \
-    CMD wget -qO- http://localhost:3000/ >/dev/null 2>&1 || exit 1
+    CMD curl -fsS http://localhost:3000/ >/dev/null 2>&1 || exit 1
 CMD ["nginx", "-g", "daemon off;"]

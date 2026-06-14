@@ -1,7 +1,8 @@
-# Root .dockerignore — applies to builds whose context is the repo root.
-# Currently that is the `web` image (web/Dockerfile), which builds both the
-# dashboard (web/) and the trucking-app PWA (mobile-pwa/). Keep the context lean
-# so the daemon doesn't ship the venv / node_modules / data clips.
+# Root .dockerignore — applies to every image built with `context: .`
+# (all Python services + the web image). Keep the context lean by excluding
+# build artefacts and local junk, but DO NOT exclude source directories
+# (ingest/, ai/, gateway/, scenarios/, shared/ …) — the service Dockerfiles
+# COPY from them, so ignoring them breaks the build.
 
 # Python / virtualenv
 .venv/
@@ -22,16 +23,9 @@ mobile-pwa/dev-dist/
 *.log
 .DS_Store
 
-# Heavy data / media not needed to build the frontends
-data/
-infra/
-ingest/
-ai/
-gateway/
-scenarios/
-shared/
-scripts/
-tests/
+# Heavy data / media not needed by any build
+data/clips/
+data/fixtures/
 
 # Local env files (never bake secrets into an image)
 .env

@@ -1,58 +1,55 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import type { Map as MlMap } from "maplibre-gl";
-import { api } from "@/lib/api";
+import type MapView from "@arcgis/core/views/MapView";
+import { getAdapter } from "@/data";
 import { useSocket } from "@/hooks/SocketContext";
 import type { Alert, Gate, TrafficSnapshot } from "@/lib/types";
-import { LiveMap } from "@/components/map/LiveMap";
+import { ArcgisMap } from "@/components/map/ArcgisMap";
 import { Card, CardContent } from "@/components/ui/card";
 import { ThroughputChart } from "@/components/ThroughputChart";
+import { KpiStrip } from "@/components/panels/KpiStrip";
+import { CarbonTile } from "@/components/panels/CarbonTile";
+import { EmptyContainerBoard } from "@/components/panels/EmptyContainerBoard";
+import { ParkingBoard } from "@/components/panels/ParkingBoard";
+import { AutoLeoPanel } from "@/components/panels/AutoLeoPanel";
+import { DecisionPathBadge } from "@/components/DecisionPathBadge";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/misc";
 import { severityColour } from "@/lib/palette";
+import { MAP_TOKENS, STATUS } from "@/lib/tokens";
 import { fmtTimeIST, relativeAge } from "@/lib/utils";
 
 export default function LiveOperations() {
-  const { alerts: liveAlerts, subscribe } = useSocket();
-  const pushRef = useRef<((id: string, lon: number, lat: number) => void) | null>(null);
-  const mapRef = useRef<MlMap | null>(null);
+  const { alerts: liveAlerts } = useSocket();
+  const [view, setView] = useState<MapView | null>(null);
   const [selected, setSelected] = useState<Alert | null>(null);
 
-  const corridorQ = useQuery({ queryKey: ["corridor"], queryFn: api.corridor, staleTime: Infinity });
-  const gatesQ = useQuery({ queryKey: ["gates"], queryFn: api.gates });
-  const snapsQ = useQuery({ queryKey: ["snapshots"], queryFn: api.trafficSnapshots });
-  const zonesQ = useQuery({ queryKey: ["zones"], queryFn: api.zones });
+  // All data now flows through the typed adapter (never the gateway directly).
+  // Adapter methods return UNWRAPPED data (Gate[], TrafficSnapshot[], …).
+  const corridorQ = useQuery({ queryKey: ["corridor"], queryFn: () => getAdapter().corridor(), staleTime: Infinity });
+  const gatesQ = useQuery({ queryKey: ["gates"], queryFn: () => getAdapter().gates() });
+  const snapsQ = useQuery({ queryKey: ["snapshots"], queryFn: () => getAdapter().trafficSnapshots() });
+  const zonesQ = useQuery({ queryKey: ["zones"], queryFn: () => getAdapter().zones() });
+  const trucksQ = useQuery({ queryKey: ["trucks", "live-map"], queryFn: () => getAdapter().trucks(undefined, 500) });
   const queuedQ = useQuery({
     queryKey: ["trucks", "AT_GATE_QUEUE"],
-    queryFn: () => api.trucks("AT_GATE_QUEUE", 500),
+    queryFn: () => getAdapter().trucks("AT_GATE_QUEUE", 500),
   });
-  // Seed the alert list from REST so the panel isn't empty before the first WS push.
-  const alertsSeed = useQuery({ queryKey: ["alerts-seed"], queryFn: () => api.alerts({ limit: 20 }) });
+  const parkingQ = useQuery({ queryKey: ["parking-availability"], queryFn: () => getAdapter().parkingAvailability() });
+  // Seed the alert list from the adapter so the panel isn't empty before the first WS push.
+  const alertsSeed = useQuery({ queryKey: ["alerts-seed"], queryFn: () => getAdapter().alerts({ limit: 20 }) });
+  // Prediction carries a decision_path → surfaced as a LIVE/SYNTHETIC badge.
+  const predictQ = useQuery({ queryKey: ["traffic-predict"], queryFn: () => getAdapter().trafficPredict() });
 
-  // Feed WS truck positions into the map.
-  useEffect(() => {
-    const unsubscribe = subscribe((frame) => {
-      if (frame.type === "truck_position" && pushRef.current) {
-        const p = frame.payload;
-        if (typeof p.lon === "number" && typeof p.lat === "number") {
-          pushRef.current(p.device_id, p.lon, p.lat);
-        }
-      }
-    });
-    return () => {
-      unsubscribe();
-    };
-  }, [subscribe]);
-
-  const gates: Gate[] = gatesQ.data?.gates ?? [];
-  const snapshots: TrafficSnapshot[] = snapsQ.data?.snapshots ?? [];
-  const seeded = alertsSeed.data?.alerts ?? [];
-  // Merge WS-live alerts with the REST seed, de-duped by id, newest first.
+  const gates: Gate[] = gatesQ.data ?? [];
+  const snapshots: TrafficSnapshot[] = snapsQ.data ?? [];
+  const seeded = alertsSeed.data ?? [];
+  // Merge WS-live alerts with the adapter seed, de-duped by id, newest first.
   const merged = dedupe([...liveAlerts, ...seeded]).slice(0, 10);
 
   const queueByGate = new Map<string, number>();
-  for (const t of queuedQ.data?.devices ?? []) {
+  for (const t of queuedQ.data ?? []) {
     if (t.gate_id) queueByGate.set(t.gate_id, (queueByGate.get(t.gate_id) ?? 0) + 1);
   }
 
@@ -60,14 +57,25 @@ export default function LiveOperations() {
     setSelected(a);
     const lat = a.payload?.lat as number | undefined;
     const lon = a.payload?.lon as number | undefined;
-    if (mapRef.current && typeof lat === "number" && typeof lon === "number") {
-      mapRef.current.flyTo({ center: [lon, lat], zoom: 14, duration: 800 });
+    if (view && typeof lat === "number" && typeof lon === "number") {
+      void view.goTo({ center: [lon, lat], zoom: 14 });
     }
   }
 
   return (
-    <div className="flex h-full flex-col">
-      {/* KPI row */}
+    <div className="flex h-full flex-col overflow-y-auto">
+      {/* KPI strip from the adapter (label/value/target/Δ%/sparkline). */}
+      <div className="border-b border-border p-3">
+        <div className="mb-2 flex items-center gap-2">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Corridor KPIs
+          </h2>
+          <DecisionPathBadge path={predictQ.data?.decision_path} />
+        </div>
+        <KpiStrip />
+      </div>
+
+      {/* Gate throughput + queue tiles. */}
       <div className="grid grid-cols-2 gap-3 border-b border-border p-3 md:grid-cols-5">
         {gates.map((g) => (
           <Card key={g.id}>
@@ -91,7 +99,7 @@ export default function LiveOperations() {
         <Card className="col-span-2 md:col-span-1">
           <CardContent className="flex h-full flex-col py-2">
             <span className="mb-1 text-[11px] font-medium text-muted-foreground">
-              Throughput · last 24 h
+              Throughput · trend
             </span>
             <div className="min-h-[64px] flex-1">
               <ThroughputChart />
@@ -106,17 +114,16 @@ export default function LiveOperations() {
       </div>
 
       {/* Map + alerts side panel */}
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-[420px] flex-1">
         <div className="relative min-w-0 flex-1">
-          <LiveMap
+          <ArcgisMap
             corridor={corridorQ.data}
             gates={gates}
+            zones={zonesQ.data}
             snapshots={snapshots}
-            zones={zonesQ.data?.zones}
-            onReady={(push, map) => {
-              pushRef.current = push;
-              mapRef.current = map;
-            }}
+            trucks={trucksQ.data}
+            parkingFacilities={parkingQ.data}
+            onViewReady={setView}
           />
           <MapLegend />
         </div>
@@ -151,6 +158,16 @@ export default function LiveOperations() {
         </aside>
       </div>
 
+      {/* Appendix-C capability tiles (DTCCC view). */}
+      <div className="grid grid-cols-1 gap-3 border-t border-border p-3 lg:grid-cols-3">
+        <CarbonTile />
+        <ParkingBoard />
+        <EmptyContainerBoard />
+      </div>
+      <div className="grid grid-cols-1 gap-3 border-t border-border p-3 lg:grid-cols-2">
+        <AutoLeoPanel />
+      </div>
+
       <AlertEvidenceDialog alert={selected} onClose={() => setSelected(null)} />
     </div>
   );
@@ -158,10 +175,10 @@ export default function LiveOperations() {
 
 function MapLegend() {
   const items = [
-    { c: "#009E73", l: "free flow / on-target" },
-    { c: "#E69F00", l: "moderate" },
-    { c: "#D55E00", l: "congested / over-cap" },
-    { c: "#56B4E9", l: "trucks (1:50)" },
+    { c: STATUS.ok, l: "free flow / on-target" },
+    { c: STATUS.warning, l: "moderate" },
+    { c: STATUS.critical, l: "congested / over-cap" },
+    { c: MAP_TOKENS.truckFill, l: "trucks (1:50)" },
   ];
   return (
     <div className="absolute bottom-3 left-3 rounded-md border border-border bg-card/85 p-2 text-[11px] backdrop-blur">

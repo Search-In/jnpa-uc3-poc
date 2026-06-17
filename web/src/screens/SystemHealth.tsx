@@ -1,11 +1,14 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { getAdapter } from "@/data";
 import type { CameraHealth, Decision, SourceHealth } from "@/lib/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { StatusDot, Spinner } from "@/components/ui/misc";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { IdentityPanel } from "@/components/panels/IdentityPanel";
+import { AssumptionsPanel } from "@/components/AssumptionsPanel";
+import { DecisionPathBadge, decisionPathColour } from "@/components/DecisionPathBadge";
 import { sourceStateColour } from "@/lib/palette";
 import { relativeAge, fmtDateTimeIST } from "@/lib/utils";
 
@@ -28,12 +31,12 @@ const EXPECTED: { label: string; match: (s: string) => boolean; api?: string }[]
 ];
 
 export default function SystemHealth() {
-  const sourcesQ = useQuery({ queryKey: ["sources"], queryFn: api.sources, refetchInterval: 5000 });
-  const camerasQ = useQuery({ queryKey: ["cameras"], queryFn: api.cameras, refetchInterval: 5000 });
+  const sourcesQ = useQuery({ queryKey: ["sources"], queryFn: () => getAdapter().sources(), refetchInterval: 5000 });
+  const camerasQ = useQuery({ queryKey: ["cameras"], queryFn: () => getAdapter().cameras(), refetchInterval: 5000 });
   const [drawer, setDrawer] = useState<{ title: string; api?: string; source?: string } | null>(null);
 
-  const sources = sourcesQ.data?.sources ?? [];
-  const cameras = camerasQ.data?.cameras ?? [];
+  const sources = sourcesQ.data ?? [];
+  const cameras = camerasQ.data ?? [];
 
   const byLabel = useMemo(() => {
     return EXPECTED.map((e) => {
@@ -46,7 +49,10 @@ export default function SystemHealth() {
 
   return (
     <div className="h-full overflow-y-auto p-4">
-      <h1 className="mb-3 text-lg font-semibold">System Health</h1>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h1 className="text-lg font-semibold">System Health</h1>
+        <AssumptionsPanel />
+      </div>
 
       {sourcesQ.isLoading ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -77,6 +83,10 @@ export default function SystemHealth() {
               </div>
             </CardContent>
           </Card>
+
+          <div className="mt-5 grid grid-cols-1 gap-3 lg:grid-cols-2">
+            <IdentityPanel />
+          </div>
         </>
       )}
 
@@ -118,15 +128,14 @@ function SourceChip({ label, row, onClick }: { label: string; row?: SourceHealth
 }
 
 function CameraChip({ cam, onClick }: { cam: CameraHealth; onClick: () => void }) {
-  const colour =
-    cam.decision_path === "LIVE" ? "#009E73" : cam.decision_path === "CACHED" ? "#E69F00" : "#D55E00";
   return (
     <button
       onClick={onClick}
       className="flex items-center justify-between rounded-md border border-border bg-background px-2.5 py-2 text-left hover:border-primary/60"
     >
       <span className="truncate text-xs">{cam.camera_id.replace("CAM-", "")}</span>
-      <Badge colour={colour}>{cam.decision_path}</Badge>
+      {/* decision_path shows the LIVE/CACHED/SYNTHETIC fallback on screen (Task 6). */}
+      <DecisionPathBadge path={cam.decision_path} />
     </button>
   );
 }
@@ -140,7 +149,7 @@ function LogDrawer({
 }) {
   const q = useQuery({
     queryKey: ["decisions", drawer?.api],
-    queryFn: () => api.decisions(drawer?.api, 200),
+    queryFn: () => getAdapter().decisions(drawer?.api, 200),
     enabled: !!drawer,
     refetchInterval: drawer ? 4000 : false,
   });
@@ -168,7 +177,7 @@ function LogDrawer({
                   {rows.slice(0, 100).map((d, i) => (
                     <li key={i} className="rounded-md border border-border/60 bg-background px-3 py-2 text-xs">
                       <div className="flex items-center justify-between">
-                        <Badge colour={d.decision_path?.includes("LIVE") || d.decision_path === "PRIMARY" ? "#009E73" : "#E69F00"}>
+                        <Badge colour={decisionPathColour(d.decision_path)}>
                           {d.decision_path}
                         </Badge>
                         <span className="text-muted-foreground">{fmtDateTimeIST(d.ts)}</span>

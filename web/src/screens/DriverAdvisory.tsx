@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { getAdapter } from "@/data";
 import type { TruckDevice } from "@/lib/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -18,11 +18,11 @@ export default function DriverAdvisory() {
   const qc = useQueryClient();
   const queued = useQuery({
     queryKey: ["trucks", "AT_GATE_QUEUE", "advisory"],
-    queryFn: () => api.trucks("AT_GATE_QUEUE", 500),
+    queryFn: () => getAdapter().trucks("AT_GATE_QUEUE", 500),
     refetchInterval: 6000,
   });
 
-  const devices = queued.data?.devices ?? [];
+  const devices = queued.data ?? [];
 
   // Queue depth per gate -> the recommendation steers toward the shortest queue.
   const depth = new Map<string, number>();
@@ -96,7 +96,7 @@ function QueueRow({
 }) {
   const [done, setDone] = useState(false);
   const reroute = useMutation({
-    mutationFn: () => api.reroute(truck.device_id, { gate_id: recommend, force_state: "EN_ROUTE_TO_PORT" }),
+    mutationFn: () => getAdapter().reroute(truck.device_id, { gate_id: recommend, force_state: "EN_ROUTE_TO_PORT" }),
     onSuccess: () => {
       setDone(true);
       qc.invalidateQueries({ queryKey: ["trucks"] });

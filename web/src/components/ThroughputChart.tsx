@@ -7,23 +7,21 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { api } from "@/lib/api";
-import { fmtTimeIST } from "@/lib/utils";
+import { getAdapter } from "@/data";
+import { STATUS } from "@/lib/tokens";
 
-// Compact gate-throughput trend (recharts) from the materialised KPI view
-// jnpa.kpi_gate_throughput. Buckets are hourly; we sum reads across gates per
-// bucket to show corridor-wide throughput over the last 24 h.
+// Compact gate-throughput trend (recharts) sourced from the typed adapter's KPI
+// strip. The `gate_throughput` KPI carries an 8-point trend (oldest → newest,
+// baseline → current) which we plot as a corridor-wide throughput sparkline.
 export function ThroughputChart() {
-  const q = useQuery({ queryKey: ["kpi"], queryFn: api.kpi, refetchInterval: 30_000 });
-  const rows = (q.data?.views?.throughput ?? []) as { bucket: string; reads: number }[];
+  const q = useQuery({
+    queryKey: ["kpi", "throughput-trend"],
+    queryFn: () => getAdapter().kpiStrip(),
+    refetchInterval: 30_000,
+  });
 
-  // Aggregate reads per bucket (the view is one row per (bucket, gate)).
-  const byBucket = new Map<string, number>();
-  for (const r of rows) byBucket.set(r.bucket, (byBucket.get(r.bucket) ?? 0) + Number(r.reads || 0));
-  const data = [...byBucket.entries()]
-    .map(([bucket, reads]) => ({ bucket, reads }))
-    .sort((a, b) => a.bucket.localeCompare(b.bucket))
-    .slice(-24);
+  const kpi = (q.data ?? []).find((k) => k.key === "gate_throughput");
+  const data = (kpi?.trend ?? []).map((reads, i) => ({ i, reads }));
 
   return (
     <div className="h-full w-full">
@@ -31,23 +29,24 @@ export function ThroughputChart() {
         <AreaChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: -18 }}>
           <defs>
             <linearGradient id="tp" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#56B4E9" stopOpacity={0.6} />
-              <stop offset="100%" stopColor="#56B4E9" stopOpacity={0} />
+              <stop offset="0%" stopColor={STATUS.info} stopOpacity={0.6} />
+              <stop offset="100%" stopColor={STATUS.info} stopOpacity={0} />
             </linearGradient>
           </defs>
-          <XAxis
-            dataKey="bucket"
-            tickFormatter={(v) => fmtTimeIST(v).slice(0, 5)}
-            tick={{ fontSize: 9, fill: "#64748b" }}
-            interval="preserveStartEnd"
-          />
-          <YAxis tick={{ fontSize: 9, fill: "#64748b" }} width={28} />
+          <XAxis dataKey="i" hide />
+          <YAxis tick={{ fontSize: 9, fill: STATUS.unknown }} width={28} />
           <Tooltip
-            contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", color: "#1f2937", fontSize: 11 }}
-            labelFormatter={(v) => fmtTimeIST(String(v))}
-            formatter={(v) => [`${v} reads`, "throughput"]}
+            contentStyle={{ fontSize: 11 }}
+            formatter={(v) => [`${v} ${kpi?.unit ?? "vph"}`, "throughput"]}
           />
-          <Area type="monotone" dataKey="reads" stroke="#56B4E9" fill="url(#tp)" strokeWidth={2} />
+          <Area
+            type="monotone"
+            dataKey="reads"
+            stroke={STATUS.info}
+            fill="url(#tp)"
+            strokeWidth={2}
+            isAnimationActive={false}
+          />
         </AreaChart>
       </ResponsiveContainer>
     </div>

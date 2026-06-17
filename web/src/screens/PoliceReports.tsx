@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { getAdapter } from "@/data";
 import type { PoliceIncident } from "@/lib/types";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -37,10 +37,10 @@ export default function PoliceReports() {
 
   const q = useQuery({
     queryKey: ["police", filters],
-    queryFn: () => api.policeReport(filters),
+    queryFn: () => getAdapter().policeReport(filters),
     refetchInterval: 10_000,
   });
-  const incidents = q.data?.incidents ?? [];
+  const incidents = q.data ?? [];
 
   return (
     <div className="flex h-full flex-col">
@@ -51,7 +51,7 @@ export default function PoliceReports() {
             WRONG_WAY · ILLEGAL_PARKING · OVERSPEEDING · ROUTE_DEVIATION
           </p>
         </div>
-        <a href={api.policePdfUrl(filters)} target="_blank" rel="noreferrer">
+        <a href={getAdapter().policePdfUrl(filters)} target="_blank" rel="noreferrer">
           <Button>
             <FileDown className="h-4 w-4" /> Export PDF
           </Button>
@@ -203,7 +203,7 @@ function IncidentDialog({ incident, onClose }: { incident: PoliceIncident | null
                 </pre>
               </div>
               <a
-                href={api.policePdfUrl({ kind: incident.kind })}
+                href={getAdapter().policePdfUrl({ kind: incident.kind })}
                 target="_blank"
                 rel="noreferrer"
                 className="inline-flex items-center gap-1 text-severity-info hover:underline"

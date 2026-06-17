@@ -1,0 +1,92 @@
+{
+  "app": {
+    "title": "JNPA Trucking",
+    "subtitle": "JNPA UC-III · Driver Advisory"
+  },
+  "tabs": {
+    "trip": "Trip",
+    "reroute": "Re-route",
+    "inbox": "Inbox",
+    "vehicle": "Vehicle"
+  },
+  "screens": {
+    "trip": "Trip",
+    "reroute": "Re-route",
+    "inbox": "Inbox",
+    "vehicle": "Vehicle"
+  },
+  "common": {
+    "language": "Language",
+    "live": "Live",
+    "connecting": "Connecting",
+    "offline": "Offline",
+    "loading": "Loading…",
+    "eta": "ETA",
+    "gate": "Gate",
+    "speed": "Speed",
+    "remaining": "Remaining",
+    "plate": "Plate",
+    "state": "State",
+    "noData": "—"
+  },
+  "reroute": {
+    "title": "Re-route advisory",
+    "defaultReason": "The control room has assigned you a new gate.",
+    "proceedTo": "Proceed to",
+    "newDestination": "New destination",
+    "kmRerouted": "{{km}} km re-routed",
+    "accept": "Accept · Slot at Gate",
+    "sendingAck": "Sending ACK…",
+    "decline": "Not now",
+    "empty": "No active re-route. You'll get a full-screen prompt here the moment the control room pushes a new gate."
+  },
+  "trip": {
+    "etaToGate": "ETA to gate",
+    "speed": "Speed",
+    "remaining": "Remaining",
+    "slotAtGate": "Slot at Gate",
+    "slotRescheduled": "Slot rescheduled",
+    "noWindow": "No allocated window yet",
+    "targetGate": "Target gate",
+    "trafficAhead": "Traffic ahead",
+    "youMarker": "You",
+    "targetMarker": "Target gate",
+    "loadingTrip": "Loading trip…",
+    "awaitingFix": "Awaiting first GPS fix…",
+    "positionUnavailable": "Position unavailable",
+    "elevatedScrutiny": "Elevated scrutiny"
+  },
+  "inbox": {
+    "empty": "No advisories, alerts or challans in the last 24 hours.",
+    "challan": "Challan / enforcement notice"
+  },
+  "profile": {
+    "driverDevice": "Driver / Device",
+    "deviceId": "Device ID",
+    "pairingCode": "Pairing code",
+    "vehicleVahan": "Vehicle (Vahan)",
+    "resolvingRc": "Resolving RC via gateway…",
+    "owner": "Owner",
+    "makerModel": "Maker / model",
+    "class": "Class",
+    "fuel": "Fuel",
+    "rcStatus": "RC status",
+    "insuranceUpto": "Insurance upto",
+    "fitnessUpto": "Fitness upto",
+    "provisionalNote": "Admitted provisionally — present documents within the 24 h cure window.",
+    "noVahan": "No Vahan record available for this vehicle.",
+    "notifications": "Notifications",
+    "enablePush": "Enable re-route push",
+    "enabling": "Enabling…",
+    "pushEnabled": "Push enabled ✓",
+    "pushNote": "Re-routes also arrive live over the in-app feed.",
+    "session": "Session",
+    "unpair": "Unpair this device"
+  },
+  "pairing": {
+    "tagline": "Pair your in-cab unit to receive gate slots & live re-routes.",
+    "enterCode": "Or enter the 6-digit pairing code",
+    "pairDevice": "Pair device",
+    "useDemo": "Use demo device (DEV-000001)"
+  }
+}

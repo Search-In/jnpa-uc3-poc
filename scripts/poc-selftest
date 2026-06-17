@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Thin wrapper for the JNPA UC-III PoC self-test (Deliverable 4).
+# Asserts each D.2 sub-criterion is demonstrable + a pass/fail line per
+# Appendix-C requirement item. Runs without the docker stack.
+#
+#   scripts/poc-selftest            human-readable report
+#   scripts/poc-selftest --json     machine-readable summary
+set -euo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Prefer the repo venv's python if present, else the system python.
+PY="python3"
+if [ -x "$HERE/.venv/bin/python" ]; then PY="$HERE/.venv/bin/python"; fi
+cd "$HERE"
+exec "$PY" -m scripts.poc_selftest "$@"

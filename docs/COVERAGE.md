@@ -56,7 +56,7 @@ Every KPI returns `{ value, target, deltaPct, trend[] }` against a configurable 
 | Clause | Present | Notes |
 |---|---|---|
 | §8.5.1 data sources (ANPR/OCR ≥95%; Vahan/Sarathi/FastTag sim; RFID; Trucking 20k→30k) | **Y / see note** | All sources wired. OCR ≥95% requires model weights loaded; runs in deterministic fallback on a CPU-only PoC host (state surfaced honestly in `/eval`). |
-| §8.5.2 models (CNN+CRNN; GNN+LSTM **F1≥0.85**; ByteTrack+rule+AE; ETA) | **Y** | Congestion F1 = 0.8411 (`ai/congestion/artifacts/metrics.json`). |
+| §8.5.2 models (CNN+CRNN; GNN+LSTM **F1≥0.85**; ByteTrack+rule+AE; ETA) | **Y / see note** | All three model architectures present. Congestion F1 = **0.8411** (`ai/congestion/artifacts/metrics.json`) — marginally **under** the 0.85 target; flagged as a WARN by `scripts/poc-selftest` (B.1), closeable by a retrain/retune, not an architecture gap. |
 | §8.5.3 fallbacks (camera live→cached→synthetic; Vahan→cached→PROVISIONAL 24h; Trucking GPS→ULIP→web check-in) | **Y** | `gateway/fallback.py`; all three chains. |
 | §8.5.4 dashboard (40-km corridor heatmap; geofence escalation; **police reports**) | **Y** | `web/src/screens/PoliceReports.tsx`; PDF export. |
 | §8.5.5 scenarios (TFC-1/2/3 incl. cross-twin) | **Y** | `scenarios/tfc1.py`, `tfc2.py`, `tfc3.py`, `uc2_bridge.py`. |

@@ -1,0 +1,125 @@
+# ============================================================================
+# JNPA UC3 — AWS single-EC2 demo overlay.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.aws.yml up -d --build
+#
+# Differences from local development:
+#   • Exposes the `web` container (Vite/nginx) on port 80.
+#   • Hides all host-side ports of database, messaging, and API containers
+#     using !reset so they only communicate inside the private jnpa bridge network.
+#   • Applies `restart: unless-stopped` to all 28 services for reboot survival.
+# ============================================================================
+
+services:
+  web:
+    ports:
+      - "80:3000"
+    restart: unless-stopped
+
+  postgres:
+    ports: !reset []
+    restart: unless-stopped
+
+  redis:
+    ports: !reset []
+    restart: unless-stopped
+
+  zookeeper:
+    restart: unless-stopped
+
+  kafka:
+    ports: !reset []
+    restart: unless-stopped
+
+  kafka-ui:
+    ports: !reset []
+    restart: unless-stopped
+
+  mosquitto:
+    ports: !reset []
+    restart: unless-stopped
+
+  minio:
+    ports: !reset []
+    restart: unless-stopped
+
+  prometheus:
+    ports: !reset []
+    restart: unless-stopped
+
+  grafana:
+    ports: !reset []
+    restart: unless-stopped
+
+  jaeger:
+    ports: !reset []
+    restart: unless-stopped
+
+  anpr-ingest:
+    ports: !reset []
+    restart: unless-stopped
+
+  anpr:
+    ports: !reset []
+    restart: unless-stopped
+
+  vahan-sim:
+    ports: !reset []
+    restart: unless-stopped
+
+  vahan-live:
+    ports: !reset []
+    restart: unless-stopped
+
+  rfid-emulator:
+    ports: !reset []
+    restart: unless-stopped
+
+  rfid-consumer:
+    ports: !reset []
+    restart: unless-stopped
+
+  rfid-correlator:
+    ports: !reset []
+    restart: unless-stopped
+
+  truck-sim:
+    ports: !reset []
+    restart: unless-stopped
+
+  congestion:
+    ports: !reset []
+    restart: unless-stopped
+
+  anomaly:
+    ports: !reset []
+    restart: unless-stopped
+
+  gateway:
+    ports: !reset []
+    restart: unless-stopped
+
+  empty-container:
+    ports: !reset []
+    restart: unless-stopped
+
+  carbon:
+    ports: !reset []
+    restart: unless-stopped
+
+  gate-data:
+    ports: !reset []
+    restart: unless-stopped
+
+  identity:
+    ports: !reset []
+    restart: unless-stopped
+
+  parking:
+    ports: !reset []
+    restart: unless-stopped
+
+  scenarios:
+    ports: !reset []
+    restart: unless-stopped

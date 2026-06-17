@@ -65,30 +65,30 @@ export const FLOW = {
 } as const;
 
 // ---------------------------------------------------------------------------
-// Calcite-aligned DARK shell surface tokens. These mirror the Calcite dark
+// Calcite-aligned LIGHT shell surface tokens. These mirror the Calcite light
 // design-token CSS custom properties so any plain DOM we render inside the
 // Calcite shell (map overlays, legends, custom panels) matches the chrome.
-// Keeping them here means a future theme switch is a one-file change.
+// Keeping them here means a theme switch is a one-file change.
 // ---------------------------------------------------------------------------
 export const SHELL = {
-  // Backgrounds (Calcite dark "foreground" ramp).
-  appBackground: "#1e1e1e", // calcite-color-background
-  foreground1: "#2b2b2b", // calcite-color-foreground-1 (panels/cards)
-  foreground2: "#353535", // calcite-color-foreground-2 (hover)
-  foreground3: "#404040", // calcite-color-foreground-3 (press)
+  // Backgrounds (Calcite light "foreground" ramp).
+  appBackground: "#f4f7fb", // calcite-color-background
+  foreground1: "#ffffff", // calcite-color-foreground-1 (panels/cards)
+  foreground2: "#f3f3f3", // calcite-color-foreground-2 (hover)
+  foreground3: "#eaeaea", // calcite-color-foreground-3 (press)
   // Text.
-  text1: "#ffffff", // calcite-color-text-1
-  text2: "#d4d4d4", // calcite-color-text-2
-  text3: "#acacac", // calcite-color-text-3
-  textInverse: "#151515",
+  text1: "#151515", // calcite-color-text-1
+  text2: "#4a4a4a", // calcite-color-text-2
+  text3: "#6a6a6a", // calcite-color-text-3
+  textInverse: "#ffffff",
   // Lines / borders.
-  border1: "#4a4a4a", // calcite-color-border-1
-  border2: "#404040",
-  border3: "#353535",
+  border1: "#cacaca", // calcite-color-border-1
+  border2: "#d4d4d4",
+  border3: "#dfdfdf",
   // Brand.
-  brand: "#00a0ff", // calcite-color-brand (dark)
-  brandHover: "#009aff",
-  brandPress: "#0087e0",
+  brand: "#007ac2", // calcite-color-brand (light)
+  brandHover: "#00619b",
+  brandPress: "#004874",
 } as const;
 
 // ---------------------------------------------------------------------------

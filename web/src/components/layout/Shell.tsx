@@ -83,7 +83,7 @@ export function Shell({ children, onResetBaseline, resetDisabled }: ShellProps) 
   const currentLang = (i18n.resolvedLanguage ?? "en") as LangCode;
 
   return (
-    <CalciteShell className="calcite-mode-dark" style={{ height: "100%" }}>
+    <CalciteShell className="calcite-mode-light" style={{ height: "100%" }}>
       {/* ---- Header ---- */}
       <CalciteNavigation slot="header">
         <CalciteNavigationLogo

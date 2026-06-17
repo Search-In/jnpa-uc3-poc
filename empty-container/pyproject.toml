@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "empty-container"
+version = "0.1.0"
+description = "Empty-container supply-demand optimiser for the JNPA UC-III Digital Twin PoC"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "JNPA Digital Twin Team" }]
+
+dependencies = [
+    "fastapi==0.115.*",
+    "uvicorn[standard]==0.32.*",
+    "prometheus-client==0.21.*",
+    "pydantic==2.*",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.*",
+    "pytest-asyncio==0.24.*",
+    "httpx==0.27.*",
+]
+
+[project.scripts]
+empty-container = "empty_container.app:run"
+empty-container-seed = "empty_container.seed:main"
+
+[tool.setuptools]
+# The package directory IS this folder (empty-container), imported as
+# `empty_container` with `empty-container/` on PYTHONPATH (mirrors the compose
+# bind mount). Same flat layout as ingest/vahan_sim.
+packages = ["empty_container"]
+package-dir = { "empty_container" = "." }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

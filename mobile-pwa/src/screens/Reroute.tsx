@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { useRealtime } from "@/hooks/RealtimeContext";
 import { gateShort } from "@/lib/format";
@@ -10,17 +11,13 @@ import { Empty } from "@/components/ui";
 // DECLINE. Either way the banner clears so the driver isn't blocked.
 
 export default function Reroute() {
+  const { t } = useTranslation();
   const { pendingReroute, ackReroute } = useRealtime();
   const navigate = useNavigate();
   const [busy, setBusy] = useState<"ACK" | "DECLINE" | null>(null);
 
   if (!pendingReroute) {
-    return (
-      <Empty>
-        No active re-route. You&apos;ll get a full-screen prompt here the moment the
-        control room pushes a new gate.
-      </Empty>
-    );
+    return <Empty>{t("reroute.empty")}</Empty>;
   }
 
   const r = pendingReroute;
@@ -34,16 +31,18 @@ export default function Reroute() {
   return (
     <div className="reroute-screen" data-testid="reroute-screen" role="alertdialog" aria-live="assertive">
       <div className="pulse">↻</div>
-      <h2>Re-route advisory</h2>
-      <p className="lead">{r.reason || "The control room has assigned you a new gate."}</p>
+      <h2>{t("reroute.title")}</h2>
+      <p className="lead">{r.reason || t("reroute.defaultReason")}</p>
 
       <div className="dest">
         <div className="muted" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: 0.6 }}>
-          Proceed to
+          {t("reroute.proceedTo")}
         </div>
-        <div className="g">{gateShort(r.gate_id) || "New destination"}</div>
+        <div className="g">{gateShort(r.gate_id) || t("reroute.newDestination")}</div>
         {r.route_km != null ? (
-          <div className="muted" style={{ fontSize: 13 }}>{r.route_km.toFixed(1)} km re-routed</div>
+          <div className="muted" style={{ fontSize: 13 }}>
+            {t("reroute.kmRerouted", { km: r.route_km.toFixed(1) })}
+          </div>
         ) : null}
       </div>
 
@@ -54,10 +53,10 @@ export default function Reroute() {
           disabled={busy !== null}
           onClick={() => act("ACK")}
         >
-          {busy === "ACK" ? "Sending ACK…" : "Accept · Slot at Gate"}
+          {busy === "ACK" ? t("reroute.sendingAck") : t("reroute.accept")}
         </button>
         <button className="btn ghost" disabled={busy !== null} onClick={() => act("DECLINE")}>
-          {busy === "DECLINE" ? "…" : "Not now"}
+          {busy === "DECLINE" ? "…" : t("reroute.decline")}
         </button>
       </div>
     </div>

@@ -120,6 +120,83 @@ export interface ScenarioStep {
   trace_id?: string | null;
 }
 
+// --- KPI engine contract (mirrors shared/jnpa_shared/kpi.py KpiResult) ---
+export interface KpiResult {
+  key: string;
+  label: string;
+  unit: string;
+  value: number;
+  target: number;
+  baseline: number;
+  deltaPct: number;
+  direction: "lower_is_better" | "higher_is_better";
+  onTarget: boolean;
+  trend: number[];
+}
+
+// --- Appendix-C capability wire types (gateway routers) ---
+
+// Empty-container (/api/empty)
+export interface EmptyAllocation {
+  demand_id: string;
+  supply_depot: string;
+  container_type: string;
+  cargo_type: string;
+  distance_km: number;
+  est_trt_min: number;
+  confidence?: number;
+}
+
+// Carbon (/api/carbon)
+export interface CarbonRollup {
+  total_kg: number;
+  vehicle_count: number;
+  by_class: Record<string, number>;
+  by_source: { moving: number; idle: number };
+}
+
+// Gate-data / Auto-LEO (/api/gate-data)
+export interface AutoLeoResult {
+  container_no: string;
+  vehicle_plate?: string | null;
+  leo_ready: boolean;
+  checks: Record<string, any>;
+  customs_flags: string[];
+}
+
+// Identity / face-recognition (/api/identity)
+export interface IdentityVerifyResult {
+  driver_id: string;
+  matched: boolean;
+  score: number;
+  decision: "VERIFIED" | "PROVISIONAL" | "REJECTED" | string;
+  provisional_until?: string;
+  cure_window_h?: number;
+  reason?: string;
+}
+
+// Parking (/api/parking)
+export interface ParkingFacility {
+  facility_id: string;
+  name: string;
+  gate_id?: string | null;
+  lat: number;
+  lon: number;
+  capacity: number;
+  occupied: number;
+  available: number;
+  utilisation_pct: number;
+  status: "AVAILABLE" | "FILLING" | "FULL" | string;
+}
+
+export interface ParkingSummary {
+  total_capacity: number;
+  total_occupied: number;
+  total_available: number;
+  facilities: number;
+  full_count: number;
+}
+
 // WebSocket frame shapes (gateway/routers/ws.py + scenario_ext.py).
 export type WsFrame =
   | { type: "hello"; payload: { service: string; channels: string[] } }

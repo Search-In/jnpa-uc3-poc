@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   HashRouter,
   Navigate,
@@ -20,12 +21,13 @@ import Profile from "@/screens/Profile";
 // rules needed) and deep-links from the service worker (#/reroute) just work.
 
 function TabBar() {
+  const { t } = useTranslation();
   const { unread, pendingReroute } = useRealtime();
   const tabs = [
-    { to: "/trip", label: "Trip", icon: "🛣" },
-    { to: "/reroute", label: "Re-route", icon: "↻", alert: !!pendingReroute },
-    { to: "/inbox", label: "Inbox", icon: "✉", badge: unread },
-    { to: "/profile", label: "Vehicle", icon: "🚛" },
+    { to: "/trip", label: t("tabs.trip"), icon: "🛣" },
+    { to: "/reroute", label: t("tabs.reroute"), icon: "↻", alert: !!pendingReroute },
+    { to: "/inbox", label: t("tabs.inbox"), icon: "✉", badge: unread },
+    { to: "/profile", label: t("tabs.vehicle"), icon: "🚛" },
   ];
   return (
     <nav className="tabbar">
@@ -41,20 +43,21 @@ function TabBar() {
 }
 
 function TopBar() {
+  const { t } = useTranslation();
   const { status } = useRealtime();
   const loc = useLocation();
-  const title =
-    { "/trip": "Trip", "/reroute": "Re-route", "/inbox": "Inbox", "/profile": "Vehicle" }[
+  const titleKey =
+    { "/trip": "screens.trip", "/reroute": "screens.reroute", "/inbox": "screens.inbox", "/profile": "screens.vehicle" }[
       loc.pathname
-    ] || "Trip";
+    ] || "screens.trip";
   return (
     <header className="topbar">
       <div>
-        <h1>{title}</h1>
-        <div className="sub">JNPA UC-III · Driver Advisory</div>
+        <h1>{t(titleKey)}</h1>
+        <div className="sub">{t("app.subtitle")}</div>
       </div>
       <span style={{ fontSize: 11, color: status === "open" ? "var(--green)" : "var(--muted)" }}>
-        {status === "open" ? "● live" : "○ " + status}
+        {status === "open" ? "● " + t("common.live").toLowerCase() : "○ " + status}
       </span>
     </header>
   );

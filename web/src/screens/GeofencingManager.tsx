@@ -3,7 +3,7 @@ import maplibregl, { Map as MlMap } from "maplibre-gl";
 import { TerraDraw, TerraDrawPolygonMode, TerraDrawSelectMode } from "terra-draw";
 import { TerraDrawMapLibreGLAdapter } from "terra-draw-maplibre-gl-adapter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { getAdapter } from "@/data";
 import type { Zone } from "@/lib/types";
 import { mapStyle, JNPA_CENTER, JNPA_ZOOM } from "@/lib/basemap";
 import { Button } from "@/components/ui/button";
@@ -25,10 +25,10 @@ export default function GeofencingManager() {
   const [zones, setZones] = useState<Zone[]>([]);
   const [dirty, setDirty] = useState(false);
 
-  const zonesQ = useQuery({ queryKey: ["zones"], queryFn: api.zones, staleTime: 30_000 });
+  const zonesQ = useQuery({ queryKey: ["zones"], queryFn: () => getAdapter().zones(), staleTime: 30_000 });
 
   const save = useMutation({
-    mutationFn: () => api.putZones(zones),
+    mutationFn: () => getAdapter().putZones(zones),
     onSuccess: () => {
       setDirty(false);
       qc.invalidateQueries({ queryKey: ["zones"] });
@@ -88,7 +88,7 @@ export default function GeofencingManager() {
   useEffect(() => {
     const draw = drawRef.current;
     if (!zonesQ.data || !draw) return;
-    const loaded = zonesQ.data.zones;
+    const loaded = zonesQ.data;
     setZones(loaded);
     try {
       draw.clear();

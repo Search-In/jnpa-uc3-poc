@@ -10,10 +10,17 @@
     "preview": "vite preview --host 0.0.0.0 --port 3000",
     "typecheck": "tsc -b --noEmit",
     "lint": "eslint . --ext ts,tsx",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install --with-deps chromium"
   },
   "dependencies": {
+    "@arcgis/core": "^4.31.6",
+    "@arcgis/map-components": "^4.31.8",
+    "@arcgis/map-components-react": "^4.31.8",
+    "@esri/calcite-components": "^3.0.3",
+    "@esri/calcite-components-react": "^3.0.3",
     "@radix-ui/react-dialog": "^1.1.2",
     "@radix-ui/react-select": "^2.1.2",
     "@radix-ui/react-slot": "^1.1.0",
@@ -21,10 +28,13 @@
     "@tanstack/react-query": "^5.59.0",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
+    "i18next": "^23.16.4",
+    "i18next-browser-languagedetector": "^8.0.0",
     "lucide-react": "^0.451.0",
     "maplibre-gl": "^4.7.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-i18next": "^15.1.0",
     "react-router-dom": "^6.27.0",
     "recharts": "^2.13.0",
     "tailwind-merge": "^2.5.4",
@@ -46,6 +56,7 @@
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.13",
     "typescript": "^5.6.2",
-    "vite": "^5.4.8"
+    "vite": "^5.4.8",
+    "vitest": "^2.1.4"
   }
 }

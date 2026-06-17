@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { getAdapter } from "@/data";
 import { useScenario, SCENARIO_LABELS, type ScenarioId } from "@/hooks/ScenarioContext";
 import { useSocket } from "@/hooks/SocketContext";
 import type { ScenarioStep } from "@/lib/types";
@@ -31,17 +31,17 @@ export default function WhatIfConsole() {
   const [activeRunner, setActiveRunner] = useState<string | null>(null);
 
   const run = useMutation({
-    mutationFn: (s: (typeof SCENARIOS)[number]) => api.runScenario(s.runner, s.params),
+    mutationFn: (s: (typeof SCENARIOS)[number]) => getAdapter().runScenario(s.runner, s.params),
   });
   const resetRun = useMutation({
-    mutationFn: () => api.resetScenario(activeRunner!, activeHandle ?? undefined),
+    mutationFn: () => getAdapter().resetScenario(activeRunner!, activeHandle ?? undefined),
   });
 
   // Backfill the timeline from the DB for the active handle (covers steps that
   // fired before this screen mounted), merged with live WS steps.
   const timelineQ = useQuery({
     queryKey: ["timeline", activeHandle],
-    queryFn: () => api.scenarioTimeline(activeHandle!),
+    queryFn: () => getAdapter().scenarioTimeline(activeHandle!),
     enabled: !!activeHandle,
     refetchInterval: 4000,
   });
@@ -55,7 +55,9 @@ export default function WhatIfConsole() {
     return [...byNo.values()].sort((a, b) => a.step_no - b.step_no);
   }, [scenarioSteps, activeHandle, activeRunner, timelineQ.data]);
 
-  const traceId = timelineQ.data?.trace_id;
+  // The adapter's timeline returns { handle_id, steps }; the trace id rides on
+  // the steps (each ScenarioStep carries trace_id).
+  const traceId = steps.find((s) => s.trace_id)?.trace_id ?? undefined;
 
   async function trigger(s: (typeof SCENARIOS)[number]) {
     setScenario(s.id);

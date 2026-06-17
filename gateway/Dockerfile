@@ -25,6 +25,19 @@ COPY gateway/ /app/gateway/
 
 RUN pip install -e /app/gateway
 
+# Appendix-C capability packages. The gateway proxies these services but also
+# imports their deterministic logic in-process as the SYNTHETIC fallback (so the
+# dashboard renders Empty-Container / Carbon / Auto-LEO / Identity / Parking even
+# when a service is down). Installing them editable makes the hyphenated dirs
+# importable as empty_container / carbon / gate_data / identity / parking.
+COPY empty-container/ /app/empty-container/
+COPY carbon/ /app/carbon/
+COPY gate-data/ /app/gate-data/
+COPY identity/ /app/identity/
+COPY parking/ /app/parking/
+RUN pip install -e /app/empty-container -e /app/carbon -e /app/gate-data \
+        -e /app/identity -e /app/parking
+
 # Guarantee starlette is intact: the original build landed a half-written
 # starlette (Version: None -> `import starlette.exceptions` fails) which only
 # surfaced at runtime, not at the build import-guard. Force a clean reinstall of
@@ -49,7 +62,8 @@ RUN python -m playwright install chromium || true
 # Import guard: fail the build loudly if anything is broken. Import the ASGI
 # stack explicitly so a half-written starlette is caught at build, not runtime.
 RUN python -c "import starlette.exceptions, fastapi; from starlette.exceptions import HTTPException; print('asgi stack OK', fastapi.__version__)" \
-    && python -c "import gateway.main, gateway.fallback, gateway.cache; print('gateway import OK')"
+    && python -c "import gateway.main, gateway.fallback, gateway.cache; print('gateway import OK')" \
+    && python -c "import empty_container.optimizer, carbon.calculator, gate_data.leo, identity.embeddings, parking.facilities; print('capability fallbacks OK')"
 
 EXPOSE 8000
 

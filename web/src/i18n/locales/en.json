@@ -1,0 +1,149 @@
+{
+  "app": {
+    "title": "JNPA UC-III — Traffic Decongestion",
+    "shortTitle": "JNPA UC-III",
+    "subtitle": "Traffic Control Room",
+    "corridor": "NH-348 · JNPA → Karal Phata"
+  },
+  "nav": {
+    "live": "Live Operations",
+    "advisory": "Driver Advisory",
+    "geofencing": "Geo-fencing Manager",
+    "reports": "Traffic-Police Reports",
+    "health": "System Health",
+    "whatIf": "What-If Console"
+  },
+  "common": {
+    "resetToBaseline": "Reset to baseline",
+    "language": "Language",
+    "live": "Live",
+    "offline": "Offline",
+    "activeScenario": "Active scenario",
+    "loading": "Loading…",
+    "noData": "No data",
+    "search": "Search",
+    "close": "Close",
+    "open": "Open",
+    "save": "Save",
+    "cancel": "Cancel"
+  },
+  "lang": {
+    "en": "English",
+    "hi": "हिन्दी",
+    "mr": "मराठी"
+  },
+  "decisionPath": {
+    "live": "LIVE",
+    "synthetic": "SYNTHETIC",
+    "cached": "CACHED",
+    "label": "data path"
+  },
+  "kpi": {
+    "title": "Corridor KPI strip",
+    "subtitle": "value vs target · Δ% vs baseline",
+    "target": "target",
+    "baseline": "baseline",
+    "onTarget": "on target",
+    "offTarget": "off target",
+    "empty": "No KPIs available."
+  },
+  "panels": {
+    "empty": {
+      "title": "Empty-container repositioning",
+      "subtitle": "probable depot allocations (C3)",
+      "demand": "Demand",
+      "depot": "Supply depot",
+      "containerType": "Container",
+      "cargoType": "Cargo",
+      "distance": "Distance",
+      "estTrt": "Est. TRT",
+      "confidence": "Conf.",
+      "empty": "No empty-container demand right now."
+    },
+    "carbon": {
+      "title": "Carbon footprint",
+      "subtitle": "corridor CO₂e roll-up (C6)",
+      "total": "Total CO₂e",
+      "vehicles": "vehicles",
+      "moving": "Moving",
+      "idle": "Idle",
+      "byClass": "By vehicle class",
+      "empty": "No carbon data."
+    },
+    "leo": {
+      "title": "Auto-LEO gate-out queue",
+      "subtitle": "per-container release readiness (C4/C5)",
+      "container": "Container",
+      "plate": "Vehicle",
+      "ready": "LEO ready",
+      "blocked": "Held",
+      "checks": "Checks",
+      "flags": "Customs flags",
+      "empty": "No containers awaiting LEO clearance.",
+      "customsTitle": "Customs alert feed",
+      "customsEmpty": "No customs flags raised."
+    },
+    "identity": {
+      "title": "Driver identity verification",
+      "subtitle": "synthetic gallery · embed → match (C2)",
+      "gallery": "Driver gallery",
+      "driver": "Driver",
+      "license": "Licence",
+      "verify": "Verify",
+      "simulate": "Simulate",
+      "genuine": "Genuine",
+      "impostor": "Impostor",
+      "unknown": "Unknown",
+      "score": "match score",
+      "decision": "Decision",
+      "verified": "VERIFIED",
+      "provisional": "PROVISIONAL",
+      "rejected": "REJECTED",
+      "cureWindow": "Cure window",
+      "cureUntil": "provisional until",
+      "dpdpNote": "DPDP posture — synthetic, consented faces only. No real driver biometrics are processed.",
+      "empty": "No drivers in the gallery."
+    },
+    "parking": {
+      "title": "Pre-gate parking availability",
+      "subtitle": "holding-yard occupancy (C7)",
+      "capacity": "Capacity",
+      "occupied": "Occupied",
+      "available": "Available",
+      "totalAvailable": "Total available",
+      "facilities": "facilities",
+      "full": "full",
+      "status": "Status",
+      "available_s": "AVAILABLE",
+      "filling": "FILLING",
+      "full_s": "FULL",
+      "empty": "No parking facilities reported."
+    }
+  },
+  "assumptions": {
+    "open": "Assumptions & Methodology",
+    "title": "Assumptions & Methodology",
+    "subtitle": "D.2 sub-criterion 1 — solution approach, synthetic data & simulators",
+    "intro": "Production APIs are JNPA-facilitated, post-award. In this PoC each is replaced by a public-schema simulator matching the real wire contract, so swapping mock → live is a configuration change, not a rewrite.",
+    "sources": {
+      "title": "Production APIs → PoC simulators",
+      "body": "Vahan (RC), Sarathi (DL) and FASTag are served by a 25k-plate regex-valid simulator; ICEGATE/TOS by schema-faithful gate & container events; ULIP relay and camera/ANPR streams by clip-replay and mock relays. Live keys drop into .env."
+    },
+    "synthetic": {
+      "title": "Synthetic data",
+      "body": "All demand/supply books, gate-data, parking occupancy and telemetry are deterministic synthetic datasets — no Math.random — so every figure is byte-stable across reloads. The 20k-device trucking simulator is hot-scalable to 30k+."
+    },
+    "dpdp": {
+      "title": "DPDP — synthetic faces only",
+      "body": "PoC biometrics use synthetic, consented faces only. No real driver biometrics are processed. Real PDP enrolment is a post-award, consent-gated workflow; the PoC proves the verification pipeline (embed → match → PROVISIONAL on miss) on a synthetic gallery."
+    },
+    "kpi": {
+      "title": "KPI baselines",
+      "body": "KPI targets/baselines are PoC demonstration defaults (KPI_TARGETS). Production baselines will be set from the JNPA baseline study; % deltas are computed against those baselines."
+    },
+    "real": {
+      "title": "Real in the PoC (not assumed)",
+      "body": "The fallback orchestration, the reactive what-if engine (TFC-1/2/3), the cross-twin UC2→UC3 DPD-release event, the KPI arithmetic, geofence violation detection and the police PDF export are all real code, exercised by tests."
+    }
+  }
+}

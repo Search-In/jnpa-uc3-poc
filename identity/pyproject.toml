@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "identity"
+version = "0.1.0"
+description = "Face-recognition driver verification (Appendix C #2, PDP augmentation) for the JNPA UC-III PoC"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "JNPA Digital Twin Team" }]
+
+# Vector math is pure stdlib (hashlib + math) — no numpy — to keep the image
+# lean and the embeddings deterministic across runs/hosts/CI.
+dependencies = [
+    "fastapi==0.115.*",
+    "uvicorn[standard]==0.32.*",
+    "prometheus-client==0.21.*",
+    "pydantic==2.*",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.*",
+    "pytest-asyncio==0.24.*",
+    "httpx==0.27.*",
+]
+
+[project.scripts]
+identity = "identity.app:run"
+
+[tool.setuptools]
+# The package directory IS this folder (identity/), imported as `identity` with
+# the repo root on PYTHONPATH (mirrors the compose bind mount).
+packages = ["identity"]
+package-dir = { "identity" = "." }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

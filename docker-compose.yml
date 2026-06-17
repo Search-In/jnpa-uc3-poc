@@ -823,6 +823,12 @@ services:
       GATEWAY_CONGESTION_URL: ${GATEWAY_CONGESTION_URL:-http://congestion:8311}
       GATEWAY_ANOMALY_URL: ${GATEWAY_ANOMALY_URL:-http://anomaly:8321}
       GATEWAY_SCENARIOS_URL: ${GATEWAY_SCENARIOS_URL:-http://scenarios:8400}
+      # Appendix-C capability services (proxied; in-process synthetic fallback).
+      GATEWAY_EMPTY_CONTAINER_URL: ${GATEWAY_EMPTY_CONTAINER_URL:-http://empty-container:8330}
+      GATEWAY_CARBON_URL: ${GATEWAY_CARBON_URL:-http://carbon:8340}
+      GATEWAY_GATE_DATA_URL: ${GATEWAY_GATE_DATA_URL:-http://gate-data:8350}
+      GATEWAY_IDENTITY_URL: ${GATEWAY_IDENTITY_URL:-http://identity:8360}
+      GATEWAY_PARKING_URL: ${GATEWAY_PARKING_URL:-http://parking:8370}
       # ULIP relay — empty -> mock relay used for the SECONDARY truck rung.
       GATEWAY_ULIP_URL: ${GATEWAY_ULIP_URL:-}
       ULIP_API_KEY: ${ULIP_API_KEY:-}
@@ -857,6 +863,129 @@ services:
       - "8000:8000"
     volumes:
       - ./gateway:/app/gateway:ro
+    networks:
+      - jnpa
+
+  # --------------------------------------------------------------------------
+  # Empty-container supply-demand optimiser (Appendix C #3) — host 8330.
+  # Explainable cost-minimising allocation across ECD/CFS/fleet/shipping-line
+  # (+ tanker/break-bulk/cement-bowser variants); drives the TRT-empty KPI.
+  # --------------------------------------------------------------------------
+  empty-container:
+    build:
+      context: .
+      dockerfile: empty-container/Dockerfile
+    image: jnpa/empty-container:0.1.0
+    container_name: jnpa-empty-container
+    restart: unless-stopped
+    environment:
+      PYTHONPATH: /app
+      PORT: "8330"
+      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      LOG_LEVEL: ${EMPTY_CONTAINER_LOG_LEVEL:-INFO}
+      TZ: Etc/UTC
+    ports:
+      - "8330:8330"
+    volumes:
+      - ./empty-container:/app/empty-container:ro
+    networks:
+      - jnpa
+
+  # --------------------------------------------------------------------------
+  # Carbon-emissions calculator (Appendix C #6) — host 8340.
+  # Published GHG-Protocol/IPCC road-freight factors over trip distance + idle
+  # (CPP/parking) dwell; AoI rollup for the dashboard carbon tile.
+  # --------------------------------------------------------------------------
+  carbon:
+    build:
+      context: .
+      dockerfile: carbon/Dockerfile
+    image: jnpa/carbon:0.1.0
+    container_name: jnpa-carbon
+    restart: unless-stopped
+    environment:
+      PYTHONPATH: /app
+      PORT: "8340"
+      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      LOG_LEVEL: ${CARBON_LOG_LEVEL:-INFO}
+      TZ: Etc/UTC
+    ports:
+      - "8340:8340"
+    volumes:
+      - ./carbon:/app/carbon:ro
+    networks:
+      - jnpa
+
+  # --------------------------------------------------------------------------
+  # Gate-data capture + Auto-LEO (Appendix C #4, #5) — host 8350.
+  # e-seal / Form 13 / weighbridge / ICEGATE -> container/vehicle ID match ->
+  # Auto-LEO readiness + Customs flags (CUSTOMS_FLAG alerts).
+  # --------------------------------------------------------------------------
+  gate-data:
+    build:
+      context: .
+      dockerfile: gate-data/Dockerfile
+    image: jnpa/gate-data:0.1.0
+    container_name: jnpa-gate-data
+    restart: unless-stopped
+    environment:
+      PYTHONPATH: /app
+      PORT: "8350"
+      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      LOG_LEVEL: ${GATE_DATA_LOG_LEVEL:-INFO}
+      TZ: Etc/UTC
+    ports:
+      - "8350:8350"
+    volumes:
+      - ./gate-data:/app/gate-data:ro
+    networks:
+      - jnpa
+
+  # --------------------------------------------------------------------------
+  # Identity / face-recognition driver verification (Appendix C #2) — host 8360.
+  # DPDP-safe: SYNTHETIC consented faces only. embed -> match -> VERIFIED /
+  # PROVISIONAL (24h cure) / REJECTED, mirroring the Vahan provisional path.
+  # --------------------------------------------------------------------------
+  identity:
+    build:
+      context: .
+      dockerfile: identity/Dockerfile
+    image: jnpa/identity:0.1.0
+    container_name: jnpa-identity
+    restart: unless-stopped
+    environment:
+      PYTHONPATH: /app
+      PORT: "8360"
+      LOG_LEVEL: ${IDENTITY_LOG_LEVEL:-INFO}
+      TZ: Etc/UTC
+    ports:
+      - "8360:8360"
+    volumes:
+      - ./identity:/app/identity:ro
+    networks:
+      - jnpa
+
+  # --------------------------------------------------------------------------
+  # Parking availability inside the geo-fenced port (Appendix C #1) — host 8370.
+  # Deterministic diurnal occupancy per facility; live availability board.
+  # --------------------------------------------------------------------------
+  parking:
+    build:
+      context: .
+      dockerfile: parking/Dockerfile
+    image: jnpa/parking:0.1.0
+    container_name: jnpa-parking
+    restart: unless-stopped
+    environment:
+      PYTHONPATH: /app
+      PORT: "8370"
+      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      LOG_LEVEL: ${PARKING_LOG_LEVEL:-INFO}
+      TZ: Etc/UTC
+    ports:
+      - "8370:8370"
+    volumes:
+      - ./parking:/app/parking:ro
     networks:
       - jnpa
 

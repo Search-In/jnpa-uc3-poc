@@ -4,7 +4,10 @@
 
 @layer base {
   :root {
-    color-scheme: light;
+    /* The app chrome (Calcite shell + ArcGIS map) is DARK. Screen content still
+       uses the light Tailwind tokens; the dark canvas only shows behind the
+       shell during load, so we paint it the Calcite dark background colour. */
+    color-scheme: dark;
   }
   html,
   body,
@@ -13,9 +16,14 @@
     margin: 0;
   }
   body {
-    @apply bg-background text-foreground font-sans antialiased;
+    /* Calcite dark background (token: --calcite-color-background) so there is no
+       light flash before the shell paints. Screen panels re-establish the light
+       Tailwind surface locally. */
+    background: #1e1e1e;
+    @apply text-foreground font-sans antialiased;
   }
-  /* Visible focus ring everywhere for keyboard users (WCAG 2.4.7). */
+  /* Visible focus ring everywhere for keyboard users (WCAG 2.4.7). Preserved
+     even under reduced motion below. */
   :focus-visible {
     outline: 2px solid hsl(199 89% 48%);
     outline-offset: 2px;
@@ -28,4 +36,33 @@
 }
 .maplibregl-canvas {
   outline: none;
+}
+
+/* The ArcGIS <arcgis-map> web component should always fill its container. */
+arcgis-map {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ---------------------------------------------------------------------------
+   Reduced-motion (WCAG 2.3.3 / prefers-reduced-motion). Disable transitions and
+   animations app-wide for users who request it. Focus-visible outlines and the
+   Calcite dark theme are unaffected. ArcGIS also honours this via
+   esriConfig.respectPrefersReducedMotion (default true).
+   --------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+  /* Keep the keyboard focus ring crisp and instant. */
+  :focus-visible {
+    outline: 2px solid hsl(199 89% 48%);
+    outline-offset: 2px;
+  }
 }

@@ -37,10 +37,15 @@ from .pumps import KafkaPump, mqtt_truck_pump
 from .routers import (
     alerts,
     anpr,
+    carbon,
     checkin,
     debug,
+    empty_container,
+    gate_data,
     geo,
+    identity,
     kpi,
+    parking,
     push,
     reports,
     scenario_ext,
@@ -127,6 +132,14 @@ app.include_router(push.router)
 app.include_router(geo.router)
 app.include_router(reports.router)
 app.include_router(scenario_ext.router)
+# Appendix-C capability services (Empty-Container, Carbon, Gate-Data/Auto-LEO,
+# Identity/face-recognition, Parking) — each proxies its upstream and degrades
+# to the service's own deterministic logic so the dashboard always renders.
+app.include_router(empty_container.router)
+app.include_router(carbon.router)
+app.include_router(gate_data.router)
+app.include_router(identity.router)
+app.include_router(parking.router)
 app.include_router(debug.router)
 app.include_router(ws.router)
 app.include_router(checkin.router)
@@ -152,8 +165,9 @@ async def root() -> dict:
         "apis": ["/api/anpr", "/api/vahan", "/api/traffic", "/api/trucks",
                  "/api/ulip", "/api/alerts", "/api/scenarios", "/api/kpi",
                  "/api/gates", "/api/corridor", "/api/zones", "/api/push",
-                 "/api/reports/police", "/api/debug/decisions", "/api/ws",
-                 "/checkin"],
+                 "/api/reports/police", "/api/empty", "/api/carbon",
+                 "/api/gate-data", "/api/identity", "/api/parking",
+                 "/api/debug/decisions", "/api/ws", "/checkin"],
     }
 
 

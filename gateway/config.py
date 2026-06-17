@@ -49,6 +49,13 @@ class GatewayConfig:
     scenarios_url: str = "http://scenarios:8400"
     ulip_url: str = ""  # ULIP relay; empty -> mock relay used (SECONDARY)
 
+    # --- Appendix-C capability services (proxied with synthetic fallback) ---
+    empty_container_url: str = "http://empty-container:8330"
+    carbon_url: str = "http://carbon:8340"
+    gate_data_url: str = "http://gate-data:8350"
+    identity_url: str = "http://identity:8360"
+    parking_url: str = "http://parking:8370"
+
     # --- Infra ---
     postgres_dsn: str = ""
     redis_url: str = ""
@@ -108,6 +115,11 @@ class GatewayConfig:
             anomaly_url=os.environ.get("GATEWAY_ANOMALY_URL", "http://anomaly:8321"),
             scenarios_url=os.environ.get("GATEWAY_SCENARIOS_URL", "http://scenarios:8400"),
             ulip_url=os.environ.get("GATEWAY_ULIP_URL", ""),
+            empty_container_url=os.environ.get("GATEWAY_EMPTY_CONTAINER_URL", "http://empty-container:8330"),
+            carbon_url=os.environ.get("GATEWAY_CARBON_URL", "http://carbon:8340"),
+            gate_data_url=os.environ.get("GATEWAY_GATE_DATA_URL", "http://gate-data:8350"),
+            identity_url=os.environ.get("GATEWAY_IDENTITY_URL", "http://identity:8360"),
+            parking_url=os.environ.get("GATEWAY_PARKING_URL", "http://parking:8370"),
             postgres_dsn=os.environ.get("POSTGRES_DSN", shared.postgres_dsn),
             redis_url=os.environ.get("REDIS_URL", shared.redis_url),
             kafka_brokers=os.environ.get("KAFKA_BROKERS", shared.kafka_brokers),

@@ -52,6 +52,81 @@ BOOTSTRAP OK
 
 ---
 
+## Production-parity build (Phase 1) — UC1 alignment
+
+The dashboard and capabilities were brought to **Use Case 1 production parity**.
+The single most useful entry point for an evaluator:
+
+```bash
+# Prove every D.2 sub-criterion + Appendix-C item is demonstrable (no docker):
+scripts/poc-selftest          # 16/17 PASS, 1 advisory WARN (congestion F1 gap)
+```
+
+### Run the dashboard with ZERO credentials (instant demo)
+
+```bash
+cd web && npm install && npm run dev      # http://localhost:5173
+```
+
+`npm run dev` defaults to **`VITE_DATA_MODE=mock`**: the full dashboard renders
+from deterministic in-app fixtures — no backend, no keys. Switch to the live
+gateway with `VITE_DATA_MODE=live` (the app then calls the gateway `/api`
+surface; the UI never touches camera/Vahan/ULIP/AI APIs directly). Both modes
+sit behind **one typed `DataAdapter`** (`web/src/data/`: `MockAdapter` +
+`LiveAdapter`), so screens are identical across modes.
+
+The Trucking-App PWA (`mobile-pwa/`) runs against the same adapter pattern.
+
+### Frontend stack (UC1 standard)
+
+- **ArcGIS Maps SDK for JavaScript** via `@arcgis/core` + `@arcgis/map-components`
+  (`<arcgis-map>` web components — no deprecated widget classes). PoC uses the
+  free `dark-gray-vector` basemap (no key); set `VITE_ARCGIS_API_KEY` for
+  premium basemaps / the ArcGIS Enterprise path.
+- **Calcite** dark shell (`@esri/calcite-components-react`); colour tokens only
+  in `web/src/lib/tokens.ts`.
+- **i18n EN / HI / MR** (Corrigendum 3 Appendix A6) with a language switcher.
+- Tested KPI engine (`shared/jnpa_shared/kpi.py`, pytest) returning
+  `{value, target, deltaPct, trend}`; the web KPI strip mirrors it (Vitest
+  adapter-contract test).
+
+### Appendix-C capability services (ports 8330–8370)
+
+Each is a FastAPI microservice proxied by the gateway with an **in-process
+synthetic fallback** (so the dashboard renders even when the service is down):
+
+| Service | Port | Appendix C | Gateway route | Dashboard |
+|---|---|---|---|---|
+| `empty-container/` | 8330 | #3 empty-container optimiser + TRT-empty KPI | `/api/empty/*` | Empty-Container board |
+| `carbon/` | 8340 | #6 carbon emissions (AoI rollup) | `/api/carbon/*` | Carbon tile |
+| `gate-data/` | 8350 | #4, #5 e-seal/Form13/weighbridge/ICEGATE → Auto-LEO + Customs | `/api/gate-data/*` | Auto-LEO panel + Customs feed |
+| `identity/` | 8360 | #2 face-recognition (DPDP-safe synthetic) | `/api/identity/*` | Identity panel |
+| `parking/` | 8370 | #1 parking availability in geo-fenced port | `/api/parking/*` | Parking board |
+
+### The three fallback chains (bid §8.5.3)
+
+Encoded in `gateway/fallback.py`; the chosen rung is recorded (`/api/debug/decisions`)
+and surfaced on screen as LIVE/CACHED/SYNTHETIC badges + the System-Health cards:
+
+1. **Camera / ANPR** — `LIVE` (frame age < 2 s) → `CACHED` (Redis, ≤ 60 s) → `SYNTHETIC` replay.
+2. **Vahan / Sarathi / FastTag** — `LIVE_PRIMARY` (Surepass) → `LIVE_FALLBACK` (sim) → `CACHED` (12 h KYC) → `PROVISIONAL` (admit-on-trust, **24-hr cure window**).
+3. **Trucking-App GPS** — `PRIMARY` (live GPS) → `SECONDARY` (ULIP relay) → `TERTIARY` (web check-in form), with a +5 s gate-boom delay on elevated scrutiny.
+
+The same admit-on-trust **PROVISIONAL 24-hr cure** path backs an identity
+face-match miss (`identity/`).
+
+### Live telemetry path (production)
+
+Real-time vehicle/camera streams flow **GeoEvent Server / ArcGIS Velocity →
+Stream Layer** into the ArcGIS map. JNPA runs **ArcGIS Enterprise 11.3**, where
+Velocity needs Enterprise 12.1 — so the **on-prem production path uses GeoEvent
+Server**; ArcGIS Online + Velocity is fine for the PoC demo. The PoC fallback is
+a client-side feature collection fed by the simulators behind the `mock|live`
+switch. See `docs/COVERAGE.md` for the full capability matrix and
+`docs/ASSUMPTIONS.md` for every synthetic dataset.
+
+---
+
 ## Where to put API keys
 
 Copy `.env.local.example` to `.env.local` and fill in the blanks. The example

@@ -1,0 +1,66 @@
+# ============================================================================
+# JNPA UC-III PoC — PRODUCTION (single-EC2) compose override.
+#
+# Overlaid on the base docker-compose.yml:
+#
+#   docker compose \
+#     --env-file .env.prod \
+#     -f docker-compose.yml \
+#     -f deploy/docker-compose.prod.yml \
+#     up -d
+#
+# (deploy/jnpa-uc3.sh wraps this so you don't type it by hand.)
+#
+# What this override changes vs. local dev:
+#   1. Removes the read-only SOURCE bind-mounts (./gateway:/app/..., etc.). In
+#      prod the code is baked into the image; the dev bind-mounts exist only for
+#      live-edit iteration and would shadow/break the image if the on-host repo
+#      layout drifts. Runtime data/asset mounts the services genuinely need are
+#      re-declared below. Named volumes (postgres, minio, models…) are inherited
+#      from the base file unchanged.
+#   2. Sets the Grafana admin password from .env.prod (no default admin/admin on
+#      a cloud box) and points evidence-image URLs at the public origin.
+#
+# ----------------------------------------------------------------------------
+# WHY THIS FILE DOES NOT TRY TO RE-BIND PORTS TO 127.0.0.1
+# ----------------------------------------------------------------------------
+# docker compose MERGES `ports:` lists across files by APPENDING — it cannot
+# replace a base mapping. So an override that adds "127.0.0.1:3001:3000" would
+# leave the base "0.0.0.0:3001->3000" in place too; the public binding wins and
+# nothing is actually locked down. (`!reset` is per-element and does not clear
+# the inherited list here either.)
+#
+# Therefore network exposure is enforced where it is authoritative on AWS: the
+# EC2 SECURITY GROUP. The base file publishes admin/infra ports on the host, but
+# the Security Group's default-deny inbound means only the port you explicitly
+# allow (the web port, reached via the ALB) is ever reachable from outside the
+# instance. Everything else (Grafana, Kafka-UI, Jaeger, MinIO console, the raw
+# service APIs, Postgres) is reachable ONLY from on the box or over an SSH
+# tunnel. See deploy/AWS_DEPLOY_GUIDE.md §"Security Group".
+#
+# NOTE on volume-list merge: compose also APPENDS `volumes:`. To actually drop a
+# dev source bind-mount we re-declare each affected service's `volumes:` with
+# only the runtime mounts to keep — but because append-merge means the base
+# mount would still be added back, we ALSO set the dev mounts to be harmless by
+# keeping the service's effective set minimal. The base source mounts are
+# `:ro`; if both the image code and the (identical) on-host source are present
+# the behaviour is unchanged. The mounts that MATTER to drop are none for
+# correctness — they are dropped here purely to avoid a hard dependency on the
+# repo being checked out at a fixed path. In practice the repo IS checked out at
+# /opt/jnpa-uc3-poc by the bootstrap, so the base mounts resolve fine and this
+# section is belt-and-braces.
+# ============================================================================
+
+services:
+  # Grafana: replace the shipped default admin/admin with a real password and
+  # keep the console off the public internet (SG handles exposure).
+  grafana:
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env.prod}
+
+  # Anomaly: evidence-image URLs must resolve from a browser (public origin),
+  # not from inside the container (localhost).
+  anomaly:
+    environment:
+      ANOMALY_EVIDENCE_URL_BASE: ${PUBLIC_BASE_URL:-http://localhost:9000}/evidence

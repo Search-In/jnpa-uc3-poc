@@ -39,6 +39,7 @@ const ROUTES = [
   { to: "/reports", i18nKey: "nav.reports", icon: "file-report" },
   { to: "/health", i18nKey: "nav.health", icon: "heart" },
   { to: "/what-if", i18nKey: "nav.whatIf", icon: "beaker" },
+  { to: "/demo", i18nKey: "nav.demo", icon: "sliders-horizontal" },
 ] as const;
 
 export interface ShellProps {

@@ -7,12 +7,14 @@ import type {
   AutoLeoResult,
   CarbonRollup,
   EmptyAllocation,
+  FaultControlResult,
+  FaultState,
   IdentityVerifyResult,
   KpiResult,
   ParkingFacility,
   ParkingSummary,
 } from "@/lib/types";
-import type { DataAdapter, DataMode } from "./types";
+import type { CongestionMetrics, DataAdapter, DataMode, OcrEval } from "./types";
 
 async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(path, { headers: { "content-type": "application/json" } });
@@ -25,6 +27,15 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText} (${path})`);
+  return (await res.json()) as T;
+}
+
+async function deleteJson<T>(path: string): Promise<T> {
+  const res = await fetch(path, {
+    method: "DELETE",
+    headers: { "content-type": "application/json" },
   });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} (${path})`);
   return (await res.json()) as T;
@@ -93,4 +104,40 @@ export class LiveAdapter implements DataAdapter {
     )).facilities;
   parkingSummary = (minuteOfDay?: number): Promise<ParkingSummary> =>
     getJson<ParkingSummary>(`/api/parking/summary${minuteOfDay != null ? `?minute_of_day=${minuteOfDay}` : ""}`);
+
+  // --- Fault-injection control surface (Demo Console) --------------------
+  // The three fallback chains the presenter can force a rung on. The gateway
+  // recomputes severity + the operator banner on every force/clear.
+  getFaults = (): Promise<FaultState> => getJson<FaultState>("/api/control/fault");
+  forceFault = (domain: string, rung: string): Promise<FaultControlResult> =>
+    postJson<FaultControlResult>(`/api/control/fault/${encodeURIComponent(domain)}`, { rung });
+  clearFault = (domain?: string): Promise<FaultControlResult> =>
+    deleteJson<FaultControlResult>(
+      domain ? `/api/control/fault/${encodeURIComponent(domain)}` : "/api/control/fault"
+    );
+
+  // --- Realism probes ----------------------------------------------------
+  // Both endpoints are optional on the gateway. Probe-don't-assume: on any
+  // failure (404 / network) we degrade to null so the Demo Console shows the
+  // static target/advisory note instead of erroring.
+  ocrEval = async (): Promise<OcrEval | null> => {
+    try {
+      const d = await getJson<{ clear_accuracy?: number; accuracy?: number }>("/api/anpr/eval");
+      const acc = d.clear_accuracy ?? d.accuracy;
+      return acc != null ? { clear_accuracy: acc } : null;
+    } catch {
+      return null;
+    }
+  };
+  congestionMetrics = async (): Promise<CongestionMetrics | null> => {
+    for (const path of ["/api/traffic/metrics", "/api/congestion/metrics"]) {
+      try {
+        const d = await getJson<{ f1?: number }>(path);
+        if (d.f1 != null) return { f1: d.f1 };
+      } catch {
+        /* try the next candidate, else fall through to null */
+      }
+    }
+    return null;
+  };
 }

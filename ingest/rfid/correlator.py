@@ -223,7 +223,10 @@ class Correlator:
         }
         try:
             kafka_io.produce(self._producer, self.cfg.confirmed_topic, event,
-                             key=gate, flush=False)
+                             key=gate, flush=False,
+                             event_type="jnpa.vehicle.confirmed",
+                             source_system="SIM",
+                             raw_ref=f"correlate://{gate}#plate={plate.value}&tag={tag.value}")
             self._producer.poll(0)
             VEHICLE_CONFIRMED.labels(gate_id=gate).inc()
             log.info("vehicle.confirmed", **event)
@@ -266,7 +269,8 @@ class Correlator:
                         continue
                     if msg.error():
                         raise RuntimeError(str(msg.error()))
-                    handler(kafka_io.decode_value(msg.value()))
+                    from jnpa_shared import cloudevents
+                    handler(cloudevents.unwrap(kafka_io.decode_value(msg.value())))
             except Exception as exc:  # noqa: BLE001
                 log.warning("consume_loop_error", topic=topic, error=str(exc))
                 self._stop.wait(2.0)

@@ -160,7 +160,8 @@ class TelemetryWorker:
                     break
                 if msg.error():
                     continue
-                out.append(kafka_io.decode_value(msg.value()))
+                from jnpa_shared import cloudevents
+                out.append(cloudevents.unwrap(kafka_io.decode_value(msg.value())))
         except Exception as exc:  # noqa: BLE001
             log.debug("telemetry_poll_failed", error=str(exc))
         return out

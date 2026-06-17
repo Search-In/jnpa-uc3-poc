@@ -162,7 +162,12 @@ def _publish_wrongway_track(cfg: ScenarioConfig, device_id: str, camera_id: str)
             "heading": WRONG_WAY_HEADING,
             "camera_id": camera_id,
         }
-        kafka_io.produce(producer, TOPIC_TELEMETRY, evt, key=device_id, flush=False)
+        kafka_io.produce(
+            producer, TOPIC_TELEMETRY, evt, key=device_id, flush=False,
+            event_type="jnpa.truck.telemetry",
+            source_system="SIM",     # scenario-injected synthetic wrong-way track
+            raw_ref=f"scenario://tfc2#device={device_id}&ping={i}",
+        )
         n += 1
     producer.flush(10)
     return n

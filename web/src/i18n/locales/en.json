@@ -11,7 +11,8 @@
     "geofencing": "Geo-fencing Manager",
     "reports": "Traffic-Police Reports",
     "health": "System Health",
-    "whatIf": "What-If Console"
+    "whatIf": "What-If Console",
+    "demo": "Demo Console"
   },
   "common": {
     "resetToBaseline": "Reset to baseline",

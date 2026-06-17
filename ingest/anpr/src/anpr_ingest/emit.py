@@ -10,6 +10,7 @@ Also emits the periodic ``no_feed`` health event when there are zero clips.
 """
 from __future__ import annotations
 
+import random
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -17,7 +18,12 @@ import httpx
 
 from jnpa_shared import kafka_io
 from jnpa_shared.logging import get_logger
-from jnpa_shared.schemas import AnprRead, VehicleClass
+from jnpa_shared.schemas import (
+    AnprRead,
+    Condition,
+    VehicleClass,
+    ocr_confidence_for_condition,
+)
 
 from .config import AnprConfig
 from .detect import PlateCandidate
@@ -41,12 +47,23 @@ class Emitter:
         self._producer = kafka_io.get_producer(
             {"bootstrap.servers": cfg.kafka_brokers, "client.id": "anpr-ingest"}
         )
+        # Seeded RNG for the DRY_RUN OCR-confidence draw, so the per-condition
+        # distribution (≥95% in CLEAR, degraded in FOG/NIGHT) replays identically
+        # under the same global SEED.
+        self._ocr_rng = random.Random(getattr(cfg, "seed", 1337))
 
     # -- internal -----------------------------------------------------------
-    def _produce(self, record: AnprRead) -> bool:
+    def _produce(self, record: AnprRead, raw_ref: Optional[str] = None) -> bool:
         try:
-            kafka_io.produce(self._producer, self.cfg.topic, record,
-                             key=record.camera_id, flush=False)
+            # DRY_RUN replay is synthetic (SIM); a live camera feed is LIVE.
+            source_system = "SIM" if getattr(self.cfg, "dry_run", True) else "LIVE"
+            kafka_io.produce(
+                self._producer, self.cfg.topic, record,
+                key=record.camera_id, flush=False,
+                event_type="jnpa.anpr.detection",
+                source_system=source_system,
+                raw_ref=raw_ref,
+            )
             self._producer.poll(0)
             return True
         except Exception as exc:  # noqa: BLE001 (BufferError, KafkaException, ...)
@@ -75,20 +92,35 @@ class Emitter:
             return "UNKNOWN", 0.0
 
     # -- public -------------------------------------------------------------
-    def emit_dry_run(self, cand: PlateCandidate, ts: datetime, weather: str) -> Optional[AnprRead]:
-        """DRY_RUN: emit the raw crop only (no OCR), with a placeholder plate."""
+    def emit_dry_run(
+        self,
+        cand: PlateCandidate,
+        ts: datetime,
+        weather: str,
+        condition: Condition = Condition.CLEAR,
+    ) -> Optional[AnprRead]:
+        """DRY_RUN: emit the raw crop only (no OCR), with a placeholder plate.
+
+        Confidence is drawn from the per-condition OCR distribution (seeded) so
+        the demo shows ≥95% in CLEAR and graceful degradation in FOG/NIGHT,
+        instead of echoing the raw detector score.
+        """
         b64 = cand.crop_b64_jpeg()
+        conf = round(ocr_confidence_for_condition(condition.value, self._ocr_rng), 4)
         record = AnprRead(
             ts=ts,
             camera_id=cand.camera_id,
             plate="DRYRUN-CROP",
-            conf=round(cand.det_conf, 4),
+            conf=conf,
             vehicle_class=cand.vehicle_class,
             image_url=f"data:image/jpeg;base64,{b64}" if b64 else None,
             weather=weather,
-            degraded=cand.degraded,
+            condition=condition,
+            # A low-confidence read in poor conditions is itself a (soft) degrade.
+            degraded=cand.degraded or conf < 0.90,
         )
-        if self._produce(record):
+        raw_ref = f"clip://{cand.camera_id}#box={cand.box}&ts={ts.isoformat()}"
+        if self._produce(record, raw_ref=raw_ref):
             PLATES_EMITTED.labels(camera_id=cand.camera_id).inc()
             return record
         return None
@@ -108,7 +140,8 @@ class Emitter:
             weather=weather,
             degraded=cand.degraded,
         )
-        if self._produce(record):
+        raw_ref = f"clip://{cand.camera_id}#box={cand.box}&ts={ts.isoformat()}"
+        if self._produce(record, raw_ref=raw_ref):
             PLATES_EMITTED.labels(camera_id=cand.camera_id).inc()
             return record
         return None

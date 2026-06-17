@@ -374,3 +374,69 @@ def test_reroute_broadcasts_advisory_and_is_pollable():
         assert ack.status_code == 200 and ack.json()["state"] == "ACK"
     finally:
         client.__exit__(None, None, None)
+
+
+# ===========================================================================
+# Fault injection (Phase D): forcing a fallback rung on demand
+# ===========================================================================
+def test_fault_force_vahan_provisional_overrides_live():
+    """Forcing vahan->PROVISIONAL yields the cure path even when LIVE answers."""
+    cache = FakeCache()
+    http = FakeHttp({
+        "vahan-live": _Resp(200, {"rc_number": PLATE, "blacklist_status": "CLEAR"}),
+        "vahan-sim": _Resp(200, {"rc_number": PLATE, "from": "sim"}),
+    })
+    client, _ = _make_client(surepass_token="tok-123", http=http, cache=cache)
+    try:
+        # Baseline: LIVE_PRIMARY answers.
+        assert client.get(f"/api/vahan/rc/{PLATE}").json()["decision_path"] == "LIVE_PRIMARY"
+
+        # Force the chain to PROVISIONAL.
+        r = client.post("/api/control/fault/vahan", json={"rung": "PROVISIONAL"})
+        assert r.status_code == 200
+        banner = r.json()["banner"]
+        assert banner["active"] is True and banner["severity"] == "RED"
+        assert banner["domains"]["vahan"]["forced_rung"] == "PROVISIONAL"
+
+        # Now the same RC call is admitted PROVISIONAL despite a healthy upstream.
+        body = client.get(f"/api/vahan/rc/{PLATE}").json()
+        assert body["decision_path"] == "PROVISIONAL"
+        assert body.get("provisional") is True
+
+        # Clearing restores the real cascade.
+        client.delete("/api/control/fault/vahan")
+        assert client.get(f"/api/vahan/rc/{PLATE}").json()["decision_path"] == "LIVE_PRIMARY"
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_fault_force_camera_synthetic_flips_card():
+    """Forcing camera->SYNTHETIC degrades every camera regardless of frame age."""
+    cache = FakeCache()
+    http = FakeHttp({})
+    client, _ = _make_client(surepass_token="", http=http, cache=cache)
+    try:
+        client.post("/api/control/fault/camera", json={"rung": "SYNTHETIC"})
+        cams = client.get("/api/anpr/cameras").json()["cameras"]
+        assert cams and all(c["decision_path"] == "SYNTHETIC" for c in cams)
+        assert all(c["forced"] for c in cams)
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_fault_control_validation_and_clear_all():
+    cache = FakeCache()
+    client, _ = _make_client(surepass_token="", http=FakeHttp({}), cache=cache)
+    try:
+        # Unknown domain -> 404.
+        assert client.post("/api/control/fault/nope", json={"rung": "X"}).status_code == 404
+        # Invalid rung for a real domain -> 422.
+        assert client.post("/api/control/fault/trucks", json={"rung": "PROVISIONAL"}).status_code == 422
+        # Valid force, then clear-all resets the banner.
+        client.post("/api/control/fault/trucks", json={"rung": "TERTIARY"})
+        snap = client.get("/api/control/fault").json()["domains"]
+        assert snap["trucks"]["forced_rung"] == "TERTIARY"
+        banner = client.delete("/api/control/fault").json()["banner"]
+        assert banner["active"] is False
+    finally:
+        client.__exit__(None, None, None)

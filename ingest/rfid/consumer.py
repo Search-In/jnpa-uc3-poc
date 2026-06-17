@@ -97,7 +97,10 @@ class Consumer:
     def _forward(self, read: RfidRead) -> None:
         try:
             kafka_io.produce(
-                self._producer, self.cfg.rfid_topic, read, key=read.reader_id, flush=False
+                self._producer, self.cfg.rfid_topic, read, key=read.reader_id, flush=False,
+                event_type="jnpa.rfid.read",
+                source_system="SIM",     # reads originate from the RFID emulator
+                raw_ref=f"reader://{read.reader_id}#tag={read.tag_id}",
             )
             self._producer.poll(0)
             RFID_FORWARDED.inc()

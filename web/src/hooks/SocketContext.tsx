@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useGatewaySocket } from "./useGatewaySocket";
-import type { Alert, ScenarioStep, WsFrame } from "@/lib/types";
+import type { Alert, OperatorBanner, ScenarioStep, WsFrame } from "@/lib/types";
 import { severityRank } from "@/lib/palette";
 
 // App-wide socket context: one /api/ws connection, a rolling buffer of the most
@@ -14,6 +14,10 @@ interface SocketCtx {
   // Live scenario steps keyed by handle_id, ordered by step_no (the What-If
   // storyline). Survives navigation between screens while the socket stays up.
   scenarioSteps: Record<string, ScenarioStep[]>;
+  // Latest operator-banner pushed by the gateway (fault-injection control
+  // surface). The Demo Console reads this so a forced fault on one client lights
+  // up the banner everywhere. Null until the first frame arrives.
+  operatorBanner: OperatorBanner | null;
   subscribe: (fn: (f: WsFrame) => void) => () => void;
 }
 
@@ -24,6 +28,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
   const { status, subscribe } = useGatewaySocket();
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [scenarioSteps, setScenarioSteps] = useState<Record<string, ScenarioStep[]>>({});
+  const [operatorBanner, setOperatorBanner] = useState<OperatorBanner | null>(null);
   const seen = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -51,6 +56,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
           );
           return { ...prev, [s.handle_id]: merged };
         });
+      } else if (frame.type === "operator_banner") {
+        // Latest-wins: the gateway pushes the full banner state on each change.
+        setOperatorBanner(frame.payload);
       }
     });
     return () => {
@@ -59,7 +67,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
   }, [subscribe]);
 
   return (
-    <Ctx.Provider value={{ status, alerts, scenarioSteps, subscribe }}>{children}</Ctx.Provider>
+    <Ctx.Provider value={{ status, alerts, scenarioSteps, operatorBanner, subscribe }}>
+      {children}
+    </Ctx.Provider>
   );
 }
 

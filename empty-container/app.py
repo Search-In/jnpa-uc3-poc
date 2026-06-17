@@ -29,8 +29,10 @@ from typing import Dict, List, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from jnpa_shared.backbone import PeriodicPublisher
 from jnpa_shared.kpi import compute_kpi
 from jnpa_shared.logging import configure_logging, get_logger
+from jnpa_shared.schemas import TOPIC_EMPTY_CONTAINER, EmptyContainerMove
 
 from .config import OptimizerConfig
 from .metrics import ALLOCATIONS, OPEN_DEMAND, metrics_asgi_app
@@ -59,6 +61,44 @@ def _rebuild_books() -> None:
 def _all_demand() -> List["seed_mod.Demand"]:
     """Seeded book plus any scenario-injected demand."""
     return _DEMAND + _INJECTED
+
+
+# Max moves published per tick (and logged when the snapshot is capped).
+_MAX_MOVES = 200
+
+
+def _moves_snapshot() -> List[EmptyContainerMove]:
+    """Current allocations as EmptyContainerMove events for the backbone.
+
+    Runs the optimiser over the current books and maps each :class:`Allocation`
+    to one move: ``ecd_id`` is the chosen depot (``supply_depot``) and, since the
+    demand/allocation carries no real container number, a stable synthetic one
+    (``ECMU{n:07d}``) is derived from the allocation index. Pure function of the
+    deterministic books, so a given tick publishes the same moves. Returns ``[]``
+    for empty books.
+    """
+    if not _SUPPLY or not _all_demand():
+        return []
+    allocs = allocate(_SUPPLY, _all_demand())
+    if len(allocs) > _MAX_MOVES:
+        log.info("moves_snapshot_capped", total=len(allocs), cap=_MAX_MOVES)
+        allocs = allocs[:_MAX_MOVES]
+    return [
+        EmptyContainerMove(
+            container_no=f"ECMU{n:07d}",
+            ecd_id=a.supply_depot,
+        )
+        for n, a in enumerate(allocs)
+    ]
+
+
+# Publishes EmptyContainerMove onto the backbone every few seconds, tagged SIM,
+# so the dashboard sees empty-container moves as just another live feed (Phase C).
+_publisher = PeriodicPublisher(
+    "empty-container", TOPIC_EMPTY_CONTAINER, "jnpa.empty_container.move",
+    _moves_snapshot, interval_s=5.0, key_fn=lambda ev: ev.container_no,
+    raw_ref_fn=lambda ev: f"container://{ev.container_no}",
+)
 
 
 def _service_registration():
@@ -93,7 +133,11 @@ async def _lifespan(_app: FastAPI):
     except Exception as exc:  # pragma: no cover - infra-timing dependent
         log.warning("startup_db_unavailable", error=str(exc))
 
-    yield
+    _publisher.start()
+    try:
+        yield
+    finally:
+        await _publisher.stop()
 
 
 app = FastAPI(title="JNPA Empty-Container Optimiser", version="0.1.0",

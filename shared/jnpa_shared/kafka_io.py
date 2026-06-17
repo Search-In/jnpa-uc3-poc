@@ -61,6 +61,12 @@ def produce(
     value: Any,
     key: Optional[str] = None,
     flush: bool = True,
+    *,
+    event_type: Optional[str] = None,
+    source_system: Optional[str] = None,
+    raw_ref: Optional[str] = None,
+    event_id: Optional[str] = None,
+    time_iso: Optional[str] = None,
 ) -> None:
     """Produce one JSON message; optionally flush synchronously.
 
@@ -68,12 +74,45 @@ def produce(
     message headers as W3C ``traceparent``/``tracestate`` so a downstream
     consumer can continue the same trace (cross-service propagation). This is a
     no-op when tracing is inactive.
+
+    CloudEvents envelope
+    --------------------
+    When ``event_type`` is supplied *and* ``settings.cloudevents_enabled`` is
+    true, the value is wrapped in a CloudEvents 1.0 structured-mode envelope
+    tagged with ``source_system`` (``SIM``/``LIVE``) and an optional
+    ``raw_ref``. Binary-mode mirror headers (``ce_type``, ``ce_source_system``)
+    are also set so a consumer can filter without decoding the body. Consumers
+    that call :func:`consume` get the *inner* payload transparently (auto-unwrap),
+    so this is fully back-compatible with pre-CloudEvents consumers.
     """
     headers = _trace_headers()
+    payload: Any = value
+
+    settings = get_settings()
+    use_ce = event_type is not None and getattr(settings, "cloudevents_enabled", True)
+    if use_ce:
+        from . import cloudevents
+
+        src_sys = (source_system or "SIM").upper()
+        payload = cloudevents.wrap(
+            value,
+            event_type=event_type,
+            source_system=src_sys,
+            raw_ref=raw_ref,
+            subject=key,
+            event_id=event_id,
+            time_iso=time_iso,
+        )
+        # Binary-mode mirror headers for header-only filtering.
+        headers = list(headers) + [
+            ("ce_type", event_type.encode("utf-8")),
+            ("ce_source_system", src_sys.encode("utf-8")),
+        ]
+
     producer.produce(
         topic=topic,
         key=key.encode("utf-8") if key else None,
-        value=encode_value(value),
+        value=encode_value(payload),
         headers=headers or None,
     )
     if flush:
@@ -163,7 +202,11 @@ def consume(
 
             with tracing.extract_context(headers_to_dict(msg), f"kafka.consume {topic}",
                                          {"messaging.system": "kafka", "messaging.destination": topic}):
-                handler(decode_value(msg.value()))
+                from . import cloudevents
+
+                # Auto-unwrap a CloudEvents envelope so pre-CloudEvents handlers
+                # receive the bare inner payload exactly as before.
+                handler(cloudevents.unwrap(decode_value(msg.value())))
             handled += 1
             if max_messages is not None and handled >= max_messages:
                 break

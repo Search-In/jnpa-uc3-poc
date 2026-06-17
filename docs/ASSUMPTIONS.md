@@ -72,6 +72,27 @@ configuration change, not a rewrite.
 - 20,000-device simulator, hot-scalable to 30,000+, deterministic GPS with jitter. Represents the
   Trucking-App install base committed in §8.5.1.
 
+## Simulator fidelity (faithful · deterministic · controllable)
+
+- **Faithful** — every simulated event is published onto the *same* event backbone the live
+  connectors use, wrapped in a **CloudEvents 1.0** envelope tagged `sourcesystem=SIM` with a
+  `rawref` pointer (`jnpa_shared.cloudevents`). Consumers auto-unwrap, so the dashboard cannot tell
+  SIM from LIVE except via the Health-Card mode badge. The five capability services
+  (parking/carbon/gate-data/identity/empty-container) also publish their state onto the backbone via
+  a shared periodic publisher, so they're indistinguishable from a live feed.
+- **Deterministic** — one global `SEED` (`.env.local`) derives a stable, per-component seed
+  (`Settings.derive_seed`) for every simulator, so a recorded runbook replays identically. The
+  per-condition OCR-confidence draw is seeded the same way.
+- **Controllable** — OCR confidence follows a per-condition distribution (≥95% in CLEAR, graceful
+  degradation in FOG/NIGHT). The three fallback chains (Camera `LIVE→CACHED→SYNTHETIC`,
+  Vahan `LIVE→CACHED→PROVISIONAL` 24-h cure, Trucking `APP_GPS→ULIP_RELAY→WEB_CHECKIN`) are
+  presenter-forceable on demand via `POST /api/control/fault/{domain}` and the **Demo Console**
+  screen; forcing a rung flips the Health Card and raises the Operator Banner over the WebSocket.
+- **Offline-first** — `DATA_MODE=mock` (the default) implies no external network egress; `OFFLINE=true`
+  enforces it even when API keys are present. The whole flow runs network-disabled.
+
+These properties are asserted by the `SIM.1`–`SIM.6` checks in `scripts/poc-selftest`.
+
 ## What is NOT assumed (real in the PoC)
 
 - The fallback orchestration (3 chains), the reactive what-if engine (TFC-1/2/3), the cross-twin

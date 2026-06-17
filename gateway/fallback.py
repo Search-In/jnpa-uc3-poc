@@ -192,6 +192,83 @@ def _p95(values: Deque[float]) -> Optional[float]:
     return round(ordered[idx], 2)
 
 
+# ---------------------------------------------------------------------------
+# Fault injection — presenter-controllable forcing of a fallback rung
+# ---------------------------------------------------------------------------
+# A "fault domain" is one of the three chains. Forcing a domain pins every
+# decision in that chain to the named rung, so a presenter can make
+# "PROVISIONAL 24-hr cure" or "GPS -> ULIP -> web-checkin" a live click rather
+# than words in the bid. The override is in-memory (per gateway process) and is
+# read at the TOP of each chain's decision function, short-circuiting the normal
+# health cascade. Clearing a domain resumes the real cascade.
+FAULT_DOMAINS = ("camera", "vahan", "trucks")
+
+# Allowed forced rungs per domain (validated by the control endpoint). The
+# values match the path enums above so a forced rung is a real decision_path.
+FAULT_RUNGS: Dict[str, tuple] = {
+    "camera": (AnprPath.LIVE.value, AnprPath.CACHED.value, AnprPath.SYNTHETIC.value),
+    "vahan": (
+        VahanPath.LIVE_PRIMARY.value, VahanPath.LIVE_FALLBACK.value,
+        VahanPath.CACHED.value, VahanPath.PROVISIONAL.value,
+    ),
+    "trucks": (
+        TruckPath.PRIMARY.value, TruckPath.SECONDARY.value, TruckPath.TERTIARY.value,
+    ),
+}
+
+# Health-Card colour for the forced rung (AMBER = degraded fallback, RED = the
+# last-ditch rung). Drives the Operator Banner severity.
+_RUNG_SEVERITY = {
+    AnprPath.LIVE.value: "GREEN", AnprPath.CACHED.value: "AMBER",
+    AnprPath.SYNTHETIC.value: "RED",
+    VahanPath.LIVE_PRIMARY.value: "GREEN", VahanPath.LIVE_FALLBACK.value: "GREEN",
+    VahanPath.CACHED.value: "AMBER", VahanPath.PROVISIONAL.value: "RED",
+    TruckPath.PRIMARY.value: "GREEN", TruckPath.SECONDARY.value: "AMBER",
+    TruckPath.TERTIARY.value: "RED",
+}
+
+
+class FaultRegistry:
+    """In-memory forced-rung overrides, one per fault domain.
+
+    ``force(domain, rung)`` pins the domain; ``clear(domain)`` releases it;
+    ``forced(domain)`` returns the pinned rung or ``None`` (no override → run the
+    real cascade). All reads are O(1) and side-effect-free so they're cheap to
+    call at the top of every request.
+    """
+
+    def __init__(self) -> None:
+        self._forced: Dict[str, str] = {}
+
+    def force(self, domain: str, rung: str) -> None:
+        if domain not in FAULT_DOMAINS:
+            raise ValueError(f"unknown fault domain: {domain}")
+        if rung not in FAULT_RUNGS[domain]:
+            raise ValueError(f"rung {rung!r} not valid for domain {domain!r}")
+        self._forced[domain] = rung
+
+    def clear(self, domain: str) -> None:
+        self._forced.pop(domain, None)
+
+    def clear_all(self) -> None:
+        self._forced.clear()
+
+    def forced(self, domain: str) -> Optional[str]:
+        return self._forced.get(domain)
+
+    def severity(self, domain: str) -> Optional[str]:
+        rung = self._forced.get(domain)
+        return _RUNG_SEVERITY.get(rung) if rung else None
+
+    def snapshot(self) -> Dict[str, Dict[str, Optional[str]]]:
+        """{domain: {rung, severity}} for every domain (forced or not)."""
+        out: Dict[str, Dict[str, Optional[str]]] = {}
+        for d in FAULT_DOMAINS:
+            rung = self._forced.get(d)
+            out[d] = {"forced_rung": rung, "severity": _RUNG_SEVERITY.get(rung) if rung else None}
+        return out
+
+
 __all__ = [
     "AnprPath",
     "VahanPath",
@@ -202,4 +279,7 @@ __all__ = [
     "SourceState",
     "SourceHealth",
     "SourceRegistry",
+    "FaultRegistry",
+    "FAULT_DOMAINS",
+    "FAULT_RUNGS",
 ]

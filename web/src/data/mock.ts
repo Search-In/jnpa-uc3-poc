@@ -19,9 +19,13 @@ import type {
   CorridorSegment,
   Decision,
   EmptyAllocation,
+  FaultControlResult,
+  FaultSeverity,
+  FaultState,
   Gate,
   IdentityVerifyResult,
   KpiResult,
+  OperatorBanner,
   ParkingFacility,
   ParkingSummary,
   PoliceIncident,
@@ -32,7 +36,7 @@ import type {
   TruckDevice,
   Zone,
 } from "@/lib/types";
-import type { DataAdapter, DataMode } from "./types";
+import type { CongestionMetrics, DataAdapter, DataMode, OcrEval } from "./types";
 
 // --------------------------------------------------------------------------
 // Deterministic helpers (no Math.random — every value is a function of a seed).
@@ -394,11 +398,63 @@ function timelineSteps(handleId: string): ScenarioStep[] {
 }
 
 // --------------------------------------------------------------------------
+// Fault-injection control surface — mirrors the gateway exactly so mock-mode
+// demos behave identically to live. The rung order matches the backend; the
+// first (natural LIVE/PRIMARY) rung is the un-forced default. Severity is a
+// pure function of the forced rung (no Math.random — deterministic by rule).
+// --------------------------------------------------------------------------
+
+const FAULT_DOMAINS = ["camera", "vahan", "trucks"] as const;
+type FaultDomain = (typeof FAULT_DOMAINS)[number];
+
+const FAULT_RUNGS: Record<FaultDomain, string[]> = {
+  camera: ["LIVE", "CACHED", "SYNTHETIC"],
+  vahan: ["LIVE_PRIMARY", "LIVE_FALLBACK", "CACHED", "PROVISIONAL"],
+  trucks: ["PRIMARY", "SECONDARY", "TERTIARY"],
+};
+
+/** Severity for a forced rung, mirroring the gateway's rules. */
+function rungSeverity(domain: FaultDomain, rung: string): FaultSeverity {
+  if (domain === "camera") {
+    if (rung === "SYNTHETIC") return "RED";
+    if (rung === "CACHED") return "AMBER";
+    return "GREEN";
+  }
+  if (domain === "vahan") {
+    if (rung === "PROVISIONAL") return "RED";
+    if (rung === "CACHED") return "AMBER";
+    return "GREEN";
+  }
+  // trucks
+  if (rung === "TERTIARY") return "RED";
+  if (rung === "SECONDARY") return "AMBER";
+  return "GREEN";
+}
+
+/** Roll up the per-domain forced rungs into the operator-banner summary. */
+function bannerFrom(forced: Partial<Record<FaultDomain, string>>): OperatorBanner {
+  const domains = (Object.keys(forced) as FaultDomain[]).filter((d) => forced[d]);
+  const severities = domains.map((d) => rungSeverity(d, forced[d]!));
+  const severity: FaultSeverity | null = severities.includes("RED")
+    ? "RED"
+    : severities.includes("AMBER")
+      ? "AMBER"
+      : severities.length
+        ? "GREEN"
+        : null;
+  return { active: domains.length > 0, domains, severity };
+}
+
+// --------------------------------------------------------------------------
 // The adapter.
 // --------------------------------------------------------------------------
 
 export class MockAdapter implements DataAdapter {
   readonly mode: DataMode = "mock";
+
+  // In-memory forced rungs (per adapter instance). force/clear mutate this and
+  // severity/banner are recomputed by rule, so the demo is fully deterministic.
+  private forcedRungs: Partial<Record<FaultDomain, string>> = {};
 
   // ---- geometry ----------------------------------------------------------
   gates(): Promise<Gate[]> {
@@ -817,5 +873,64 @@ export class MockAdapter implements DataAdapter {
       facilities: facilities.length,
       full_count,
     });
+  }
+
+  // ---- Fault-injection control surface ----------------------------------
+  getFaults(): Promise<FaultState> {
+    const domainState = (d: FaultDomain) => {
+      const forced_rung = this.forcedRungs[d] ?? null;
+      return {
+        forced_rung,
+        severity: forced_rung ? rungSeverity(d, forced_rung) : null,
+      };
+    };
+    return Promise.resolve({
+      domains: {
+        camera: domainState("camera"),
+        vahan: domainState("vahan"),
+        trucks: domainState("trucks"),
+      },
+      rungs: {
+        camera: [...FAULT_RUNGS.camera],
+        vahan: [...FAULT_RUNGS.vahan],
+        trucks: [...FAULT_RUNGS.trucks],
+      },
+    });
+  }
+
+  forceFault(domain: string, rung: string): Promise<FaultControlResult> {
+    if (!FAULT_DOMAINS.includes(domain as FaultDomain)) {
+      return Promise.reject(new Error(`404 unknown domain (${domain})`));
+    }
+    const d = domain as FaultDomain;
+    if (!FAULT_RUNGS[d].includes(rung)) {
+      return Promise.reject(new Error(`422 invalid rung (${rung})`));
+    }
+    this.forcedRungs[d] = rung;
+    return Promise.resolve({
+      forced: { [d]: rung },
+      banner: bannerFrom(this.forcedRungs),
+    });
+  }
+
+  clearFault(domain?: string): Promise<FaultControlResult> {
+    if (domain == null) {
+      this.forcedRungs = {};
+      return Promise.resolve({ cleared: "all", banner: bannerFrom(this.forcedRungs) });
+    }
+    if (!FAULT_DOMAINS.includes(domain as FaultDomain)) {
+      return Promise.reject(new Error(`404 unknown domain (${domain})`));
+    }
+    delete this.forcedRungs[domain as FaultDomain];
+    return Promise.resolve({ cleared: domain, banner: bannerFrom(this.forcedRungs) });
+  }
+
+  // ---- Realism probes (deterministic, plausible) ------------------------
+  ocrEval(): Promise<OcrEval | null> {
+    return Promise.resolve({ clear_accuracy: 0.97 });
+  }
+
+  congestionMetrics(): Promise<CongestionMetrics | null> {
+    return Promise.resolve({ f1: 0.86 });
   }
 }

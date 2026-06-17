@@ -202,9 +202,15 @@ async def ack_reroute(
 async def truck_position(device_id: str, state: GatewayState = Depends(get_state)) -> dict:
     cfg = state.cfg
 
+    # Presenter fault injection: a forced rung suppresses the rungs above it so
+    # the chain degrades on demand (APP_GPS -> ULIP_RELAY -> WEB_CHECKIN).
+    forced = state.faults.forced("trucks")
+    skip_primary = forced in (TruckPath.SECONDARY.value, TruckPath.TERTIARY.value)
+    skip_secondary = forced == TruckPath.TERTIARY.value
+
     # --- PRIMARY ---
     t0 = time.perf_counter()
-    data = await _primary(state, device_id)
+    data = None if skip_primary else await _primary(state, device_id)
     if data is not None:
         await state.record_decision(
             api="trucks", key=device_id, decision_path=TruckPath.PRIMARY.value,
@@ -216,7 +222,7 @@ async def truck_position(device_id: str, state: GatewayState = Depends(get_state
                 "gate_boom_delay_s": 0, "elevated_scrutiny": False, "record": data}
 
     # --- SECONDARY (ULIP relay) — elevated scrutiny ---
-    relay = await _secondary_ulip(state, device_id)
+    relay = None if skip_secondary else await _secondary_ulip(state, device_id)
     if relay is not None:
         await _raise_elevated(state, device_id, relay.get("plate"), TruckPath.SECONDARY.value)
         REQUESTS.labels("trucks", "ok").inc()

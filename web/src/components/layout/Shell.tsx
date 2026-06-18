@@ -39,6 +39,7 @@ const ROUTES = [
   { to: "/reports", i18nKey: "nav.reports", icon: "file-report" },
   { to: "/health", i18nKey: "nav.health", icon: "heart" },
   { to: "/what-if", i18nKey: "nav.whatIf", icon: "beaker" },
+  { to: "/demo", i18nKey: "nav.demo", icon: "sliders-horizontal" },
 ] as const;
 
 export interface ShellProps {
@@ -82,7 +83,7 @@ export function Shell({ children, onResetBaseline, resetDisabled }: ShellProps) 
   const currentLang = (i18n.resolvedLanguage ?? "en") as LangCode;
 
   return (
-    <CalciteShell className="calcite-mode-dark" style={{ height: "100%" }}>
+    <CalciteShell className="calcite-mode-light" style={{ height: "100%" }}>
       {/* ---- Header ---- */}
       <CalciteNavigation slot="header">
         <CalciteNavigationLogo

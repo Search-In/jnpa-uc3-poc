@@ -24,6 +24,7 @@ from .config import GatewayConfig
 from .fallback import (
     DecisionPath,
     DecisionRing,
+    FaultRegistry,
     SourceHealth,
     SourceRegistry,
     SourceState,
@@ -34,6 +35,14 @@ from .ws import WsHub
 
 log = get_logger("gateway.state")
 
+_SEVERITY_RANK = {"GREEN": 0, "AMBER": 1, "RED": 2}
+
+
+def _max_severity(domain_values) -> Optional[str]:
+    """Highest severity (RED > AMBER > GREEN) across the active fault domains."""
+    sev = [v["severity"] for v in domain_values if v.get("severity")]
+    return max(sev, key=lambda s: _SEVERITY_RANK.get(s, 0)) if sev else None
+
 
 class GatewayState:
     def __init__(self, cfg: GatewayConfig) -> None:
@@ -41,10 +50,31 @@ class GatewayState:
         self.http = httpx.AsyncClient(timeout=cfg.upstream_timeout_s)
         self.decisions = DecisionRing(maxlen=cfg.decision_ring_size)
         self.sources = SourceRegistry()
+        # Presenter-controllable fault injection (POST /api/control/fault/...).
+        # Read at the top of each fallback chain to force a rung on demand.
+        self.faults = FaultRegistry()
         self.ws = WsHub()
 
     async def aclose(self) -> None:
         await self.http.aclose()
+
+    # ----------------------------------------------------------------- faults
+    async def broadcast_operator_banner(self) -> dict:
+        """Push the current fault state as an ``operator_banner`` WS frame.
+
+        The banner payload lists every domain's forced rung + severity so the
+        dashboard can flip the corresponding Health Card and raise the banner.
+        Returns the payload (also used as the control-endpoint response body).
+        """
+        snap = self.faults.snapshot()
+        active = {d: v for d, v in snap.items() if v["forced_rung"]}
+        payload = {
+            "active": bool(active),
+            "domains": snap,
+            "severity": _max_severity(active.values()),
+        }
+        await self.ws.broadcast("operator_banner", payload)
+        return payload
 
     # ---------------------------------------------------------------- decisions
     async def record_decision(

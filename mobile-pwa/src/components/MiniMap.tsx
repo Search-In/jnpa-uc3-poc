@@ -4,7 +4,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import type { CorridorGeometry, DevicePosition, Gate } from "@/lib/types";
 
 // A lightweight "traffic ahead" mini-map. To stay fast (FCP target) and work
-// offline / without a paid tile key, it renders on a tile-less dark MapLibre
+// offline / without a paid tile key, it renders on a tile-less light MapLibre
 // style: just a background colour plus GeoJSON layers for the corridor polyline,
 // the four gates, the segment "traffic ahead" colouring, and the live truck. The
 // dashboard (web/) owns the full basemap; the driver only needs context.
@@ -12,7 +12,7 @@ import type { CorridorGeometry, DevicePosition, Gate } from "@/lib/types";
 const STYLE: maplibregl.StyleSpecification = {
   version: 8,
   sources: {},
-  layers: [{ id: "bg", type: "background", paint: { "background-color": "#0e1626" } }],
+  layers: [{ id: "bg", type: "background", paint: { "background-color": "#e7edf5" } }],
 };
 
 interface Props {
@@ -74,7 +74,7 @@ export default function MiniMap({ corridor, gates, truck, targetGateId, jam }: P
           id: "corridor-line",
           type: "line",
           source: "corridor",
-          paint: { "line-color": jam ? jamColor(worstJam) : "#3b4a66", "line-width": 4 },
+          paint: { "line-color": jam ? jamColor(worstJam) : "#94a3b8", "line-width": 4 },
         });
       } else {
         (m.getSource("corridor") as maplibregl.GeoJSONSource).setData(lineFc);
@@ -99,8 +99,8 @@ export default function MiniMap({ corridor, gates, truck, targetGateId, jam }: P
             source: "gates",
             paint: {
               "circle-radius": ["case", ["get", "target"], 8, 5],
-              "circle-color": ["case", ["get", "target"], "#56b4e9", "#64748b"],
-              "circle-stroke-color": "#0b1220",
+              "circle-color": ["case", ["get", "target"], "#1f78c2", "#64748b"],
+              "circle-stroke-color": "#ffffff",
               "circle-stroke-width": 2,
             },
           });
@@ -136,7 +136,7 @@ export default function MiniMap({ corridor, gates, truck, targetGateId, jam }: P
     if (!truckMarker.current) {
       const node = document.createElement("div");
       node.style.cssText =
-        "width:16px;height:16px;border-radius:50%;background:#f0e442;border:3px solid #0b1220;box-shadow:0 0 0 3px rgba(240,228,66,.35)";
+        "width:16px;height:16px;border-radius:50%;background:#eab308;border:3px solid #ffffff;box-shadow:0 0 0 3px rgba(234,179,8,.35)";
       truckMarker.current = new maplibregl.Marker({ element: node }).setLngLat(lngLat).addTo(m);
     } else {
       truckMarker.current.setLngLat(lngLat);

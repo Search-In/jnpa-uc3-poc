@@ -79,8 +79,18 @@ async def _orchestrate_rc(state: GatewayState, plate: str) -> dict:
     cfg = state.cfg
     path = f"/vahan/rc/{plate}"
 
+    # Presenter fault injection: a forced rung short-circuits the cascade.
+    #   PROVISIONAL  -> jump straight to the 24-hr cure path (the headline demo)
+    #   CACHED       -> skip the live upstreams, try cache then provisional
+    #   LIVE_FALLBACK-> skip the primary, serve from vahan-sim
+    forced = state.faults.forced("vahan")
+    if forced == VahanPath.PROVISIONAL.value:
+        return await _provisional(state, plate)
+    skip_live = forced in (VahanPath.CACHED.value, VahanPath.PROVISIONAL.value)
+    skip_primary = forced == VahanPath.LIVE_FALLBACK.value
+
     # --- Rung 1: LIVE_PRIMARY (vahan-live) — only when a token is configured ---
-    if cfg.surepass_enabled:
+    if cfg.surepass_enabled and not skip_live and not skip_primary:
         t0 = time.perf_counter()
         data = await _try_upstream(state, cfg.vahan_live_url, path, "vahan-live")
         if data is not None:
@@ -94,7 +104,7 @@ async def _orchestrate_rc(state: GatewayState, plate: str) -> dict:
 
     # --- Rung 2: LIVE_FALLBACK (vahan-sim) ---
     t0 = time.perf_counter()
-    data = await _try_upstream(state, cfg.vahan_sim_url, path, "vahan-sim")
+    data = None if skip_live else await _try_upstream(state, cfg.vahan_sim_url, path, "vahan-sim")
     if data is not None:
         await cache.put("vahan", plate, data, ttl=cfg.cache_ttl_vahan_s)
         await state.record_decision(

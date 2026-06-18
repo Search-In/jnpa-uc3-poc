@@ -97,10 +97,11 @@ async def _frame_loop(
             # Detection is CPU-bound; run it off the event loop.
             candidates = await asyncio.to_thread(detector.detect, camera_id, frame)
             wx = weather.current()
+            condition = weather.condition(ts)
 
             for cand in candidates:
                 if cfg.dry_run:
-                    emitter.emit_dry_run(cand, ts, wx)
+                    emitter.emit_dry_run(cand, ts, wx, condition)
                 else:
                     assert client is not None
                     await emitter.emit_with_ai(cand, ts, wx, client)

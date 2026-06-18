@@ -232,6 +232,123 @@ def c8_geofencing() -> CheckResult:
 
 
 # ---------------------------------------------------------------------------
+# Simulator-fidelity checks (the data-simulator standard): faithful (CloudEvents
+# SIM tagging onto the real backbone), deterministic (one global SEED), and
+# controllable (OCR-by-condition + presenter fault injection). All import-level.
+# ---------------------------------------------------------------------------
+def sim_cloudevents_backbone() -> CheckResult:
+    """SIM events ride a CloudEvents 1.0 envelope tagged sourcesystem=SIM with a
+    rawref, and consumers unwrap transparently (faithful: dashboard can't tell
+    SIM from LIVE except via the badge)."""
+    try:
+        from jnpa_shared import cloudevents as ce
+        env = ce.wrap({"plate": "MH04AB1234"}, event_type="jnpa.anpr.detection",
+                      source_system="SIM", raw_ref="clip://C1#f=1")
+        ok = (ce.is_cloudevent(env) and ce.source_system_of(env) == "SIM"
+              and ce.raw_ref_of(env) == "clip://C1#f=1"
+              and ce.unwrap(env) == {"plate": "MH04AB1234"}
+              # back-compat: bare payload passes through unwrap unchanged
+              and ce.unwrap({"x": 1}) == {"x": 1})
+    except Exception as exc:
+        return False, f"cloudevents module failed: {exc}"
+    # And the producers actually tag their events.
+    wired = _contains("ingest/anpr/src/anpr_ingest/emit.py", "event_type=\"jnpa.anpr.detection\"") \
+        and _contains("ingest/trucking_app/trucking_app/sinks.py", "source_system=\"SIM\"")
+    return ok and wired, "CloudEvents 1.0 envelope (sourcesystem=SIM + rawref), auto-unwrap, producers tagged"
+
+
+def sim_deterministic_seed() -> CheckResult:
+    """One global SEED derives a stable, distinct per-component seed so a recorded
+    runbook replays identically (deterministic)."""
+    try:
+        from jnpa_shared.config import Settings
+        s = Settings(seed=1337)
+        stable = s.derive_seed("truck") == s.derive_seed("truck")
+        distinct = s.derive_seed("truck") != s.derive_seed("rfid")
+        varies = Settings(seed=1).derive_seed("truck") != Settings(seed=2).derive_seed("truck")
+        ok = stable and distinct and varies
+    except Exception as exc:
+        return False, f"seed derivation failed: {exc}"
+    return ok, "global SEED -> stable, per-component-distinct derive_seed (identical replay)"
+
+
+def sim_ocr_by_condition() -> CheckResult:
+    """OCR confidence is >=95% in CLEAR and degrades in FOG/NIGHT, deterministically
+    (controllable realism — demonstrates the headline metric + graceful degradation)."""
+    try:
+        import random
+        from jnpa_shared import schemas as sc
+        rng = random.Random(42)
+        clear = [sc.ocr_confidence_for_condition("CLEAR", rng) for _ in range(3000)]
+        rng = random.Random(42)
+        fog = [sc.ocr_confidence_for_condition("FOG", rng) for _ in range(3000)]
+        mc = sum(clear) / len(clear)
+        mf = sum(fog) / len(fog)
+        # deterministic under seed
+        det = (sc.ocr_confidence_for_condition("FOG", random.Random(7))
+               == sc.ocr_confidence_for_condition("FOG", random.Random(7)))
+        ok = mc >= 0.95 and mf < mc and det
+    except Exception as exc:
+        return False, f"ocr-by-condition failed: {exc}"
+    return ok, f"OCR CLEAR mean {mc:.3f} (>=0.95) vs FOG {mf:.3f} (degraded), seeded"
+
+
+def sim_fault_injection_chains() -> CheckResult:
+    """Presenter fault injection forces each of the three fallback chains to a rung
+    and flips the Health-Card severity (the bid's fallback story as a live click)."""
+    try:
+        from gateway.fallback import FaultRegistry, FAULT_DOMAINS
+        fr = FaultRegistry()
+        fr.force("vahan", "PROVISIONAL")
+        fr.force("camera", "SYNTHETIC")
+        fr.force("trucks", "TERTIARY")
+        ok = (set(FAULT_DOMAINS) == {"camera", "vahan", "trucks"}
+              and fr.forced("vahan") == "PROVISIONAL"
+              and fr.severity("vahan") == "RED"
+              and fr.severity("camera") == "RED"
+              and fr.severity("trucks") == "RED")
+        fr.clear("vahan")
+        ok = ok and fr.forced("vahan") is None
+    except Exception as exc:
+        return False, f"fault registry failed: {exc}"
+    # And the control endpoints + decision-function overrides + UI console exist.
+    wired = _exists("gateway/routers/control.py") \
+        and _contains("gateway/routers/anpr.py", 'state.faults.forced("camera")') \
+        and _contains("gateway/routers/vahan.py", 'state.faults.forced("vahan")') \
+        and _contains("gateway/routers/trucks.py", 'state.faults.forced("trucks")') \
+        and _exists("web/src/screens/DemoConsole.tsx")
+    return ok and wired, "force camera/vahan/trucks rung -> Health-Card severity + /api/control/fault + Demo Console"
+
+
+def sim_event_sourced_feeds() -> CheckResult:
+    """The HTTP-only capability feeds also publish onto the backbone tagged SIM via
+    the shared periodic publisher (so they're indistinguishable from live feeds)."""
+    try:
+        from jnpa_shared.backbone import PeriodicPublisher  # noqa: F401
+    except Exception as exc:
+        return False, f"backbone publisher import failed: {exc}"
+    wired = all(_contains(f"{svc}/app.py", "PeriodicPublisher")
+                for svc in ("parking", "carbon", "gate-data", "identity", "empty-container"))
+    return wired, "parking/carbon/gate-data/identity/empty-container publish SIM events to backbone"
+
+
+def sim_offline_first() -> CheckResult:
+    """Offline-first: DATA_MODE=mock implies no external network, and the ANPR
+    weather tagger honours the offline flag (network-disabled run is possible)."""
+    try:
+        from jnpa_shared.config import Settings
+        offline_default = Settings(data_mode="mock").is_offline is True
+        live_online = Settings(data_mode="live", offline=False).is_offline is False
+        ok = offline_default and live_online
+    except Exception as exc:
+        return False, f"offline config failed: {exc}"
+    weather_guarded = _contains("ingest/anpr/src/anpr_ingest/weather.py",
+                                'reason="offline"')
+    env_doc = _contains(".env.local.example", "DATA_MODE", "OFFLINE", "SEED")
+    return ok and weather_guarded and env_doc, "DATA_MODE=mock => offline; weather network-skip; env knobs documented"
+
+
+# ---------------------------------------------------------------------------
 # Quality-bar checks (UC1 parity).
 # ---------------------------------------------------------------------------
 def q_mock_live_adapter() -> CheckResult:
@@ -276,6 +393,13 @@ CHECKS: List[Tuple[str, str, Callable[[], CheckResult], bool]] = [
     ("C.6", "Carbon-emissions calculation", c6_carbon, True),
     ("C.7", "AI video-analytics pipeline", c7_ai_video_analytics, True),
     ("C.8", "Geofencing + no-parking violation", c8_geofencing, True),
+    # Simulator fidelity (data-simulator standard)
+    ("SIM.1", "Faithful: CloudEvents SIM tagging onto the backbone", sim_cloudevents_backbone, True),
+    ("SIM.2", "Deterministic: one global SEED -> identical replay", sim_deterministic_seed, True),
+    ("SIM.3", "Controllable: OCR >=95% CLEAR, degrades FOG/NIGHT", sim_ocr_by_condition, True),
+    ("SIM.4", "Fault injection: 3 chains -> Health Card + banner", sim_fault_injection_chains, True),
+    ("SIM.5", "Event-sourced capability feeds (parking/carbon/...)", sim_event_sourced_feeds, True),
+    ("SIM.6", "Offline-first (DATA_MODE=mock, network-disabled)", sim_offline_first, True),
     # Quality bar
     ("Q.1", "Typed mock|live data adapter", q_mock_live_adapter, True),
     ("Q.2", "ArcGIS Maps SDK + Calcite", q_arcgis_calcite, True),

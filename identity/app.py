@@ -32,14 +32,17 @@ blocks port operations, it just raises a leash.
 """
 from __future__ import annotations
 
+import hashlib
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
+from jnpa_shared.backbone import PeriodicPublisher
 from jnpa_shared.logging import configure_logging, get_logger
+from jnpa_shared.schemas import TOPIC_FACE, FaceVerification
 
 from .config import IdentityConfig
 from .embeddings import capture_embedding, cosine
@@ -95,11 +98,103 @@ class VerifyResponse(BaseModel):
     synthetic: bool = True
 
 
+# --------------------------------------------------------------------------- #
+# Backbone publisher — synthetic face-verification snapshots (Phase C)
+# --------------------------------------------------------------------------- #
+# Gates the synthetic drivers are scored at; cycled deterministically so the
+# board shows verifications spread across the port's terminal gates.
+_GATES = ["G-NSICT", "G-GTI", "G-BMCT"]
+
+# Cap the snapshot fan-out so a large gallery doesn't flood the backbone each
+# tick (the HTTP /gallery surface still exposes the full enrolment).
+_SNAPSHOT_CAP = 100
+
+
+def _deterministic_score(driver_id: str) -> float:
+    """Stable per-driver match_score in [0, 1], skewed toward a clean MATCH.
+
+    Pure function of ``driver_id`` (sha256, no wall-clock / RNG / biometric data
+    — identical across runs, hosts, and CI). A first hash byte selects a band so
+    the population is realistically distributed:
+
+        ~80% -> [0.90, 1.00)  MATCH        (a confident face-match at the gate)
+        ~15% -> [0.50, 0.90)  PROVISIONAL  (low-confidence, admit-on-trust)
+         ~5% -> [0.20, 0.50)  NO_MATCH     (the rare mismatch)
+
+    A second hash slice positions the score continuously within the chosen band.
+    The band cutoffs line up with the cfg thresholds (verify=0.9, provisional=
+    0.5) so ``_result_for`` stays consistent if those are re-tuned via env.
+    """
+    h = hashlib.sha256(f"face-score|{driver_id}".encode("utf-8")).digest()
+    bucket = h[0] / 256.0  # band selector in [0, 1)
+    frac = int.from_bytes(h[1:9], "big") / float(1 << 64)  # position in band, [0, 1)
+    if bucket < 0.80:
+        score = 0.90 + 0.10 * frac
+    elif bucket < 0.95:
+        score = 0.50 + 0.40 * frac
+    else:
+        score = 0.20 + 0.30 * frac
+    return round(min(1.0, score), 6)
+
+
+def _result_for(score: float) -> str:
+    """Map a score onto MATCH | PROVISIONAL | NO_MATCH using the cfg thresholds."""
+    if score >= cfg.verify_threshold:
+        return "MATCH"
+    if score >= cfg.provisional_threshold:
+        return "PROVISIONAL"
+    return "NO_MATCH"
+
+
+def _face_verification_snapshot() -> List[FaceVerification]:
+    """One FaceVerification per enrolled (synthetic) driver, for the backbone.
+
+    DPDP: only the synthetic driver_id, gate_id, a deterministic match_score and
+    the MATCH/PROVISIONAL/NO_MATCH result go on the wire — never the enrolment
+    embedding or any real biometric. ``synthetic=True`` (the schema default).
+    """
+    drivers = list(_GALLERY)
+    if not drivers:
+        return []
+    if len(drivers) > _SNAPSHOT_CAP:
+        log.info(
+            "face_snapshot_capped",
+            enrolled=len(drivers),
+            cap=_SNAPSHOT_CAP,
+        )
+        drivers = drivers[:_SNAPSHOT_CAP]
+    events: List[FaceVerification] = []
+    for i, driver_id in enumerate(drivers):
+        score = _deterministic_score(driver_id)
+        events.append(
+            FaceVerification(
+                driver_id=driver_id,
+                gate_id=_GATES[i % len(_GATES)],
+                match_score=score,
+                result=_result_for(score),
+            )
+        )
+    return events
+
+
+# Publishes FaceVerification onto the backbone every few seconds, tagged SIM, so
+# the dashboard sees identity as just another live feed (Phase C).
+_publisher = PeriodicPublisher(
+    "identity", TOPIC_FACE, "jnpa.face.verification", _face_verification_snapshot,
+    interval_s=5.0, key_fn=lambda ev: ev.driver_id,
+    raw_ref_fn=lambda ev: f"driver://{ev.driver_id}",
+)
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     n = _rebuild_gallery()
     log.info("gallery_built", enrolled=n, synthetic=True)
-    yield
+    _publisher.start()
+    try:
+        yield
+    finally:
+        await _publisher.stop()
 
 
 app = FastAPI(

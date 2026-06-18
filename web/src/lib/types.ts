@@ -197,6 +197,45 @@ export interface ParkingSummary {
   full_count: number;
 }
 
+// --- Fault-injection / control surface (gateway /api/control/fault) ---
+// Mirrors the gateway responses 1:1 so the Demo Console behaves identically in
+// mock and live mode. `forced_rung === null` means the chain is on its natural
+// LIVE/PRIMARY rung; severity is null until a rung is forced.
+export type FaultSeverity = "GREEN" | "AMBER" | "RED";
+
+export interface FaultDomainState {
+  forced_rung: string | null;
+  severity: FaultSeverity | null;
+}
+
+export interface FaultState {
+  domains: {
+    camera: FaultDomainState;
+    vahan: FaultDomainState;
+    trucks: FaultDomainState;
+  };
+  rungs: {
+    camera: string[];
+    vahan: string[];
+    trucks: string[];
+  };
+}
+
+// The operator banner is echoed by force/clear responses AND pushed live over
+// the WS as an `operator_banner` frame (see SocketContext).
+export interface OperatorBanner {
+  active: boolean;
+  domains: string[];
+  severity: FaultSeverity | null;
+}
+
+// POST /api/control/fault/{domain} and DELETE responses share this shape.
+export interface FaultControlResult {
+  forced?: Record<string, string>;
+  cleared?: string;
+  banner: OperatorBanner;
+}
+
 // WebSocket frame shapes (gateway/routers/ws.py + scenario_ext.py).
 export type WsFrame =
   | { type: "hello"; payload: { service: string; channels: string[] } }
@@ -204,4 +243,5 @@ export type WsFrame =
   | { type: "traffic"; payload: TrafficSnapshot }
   | { type: "truck_position"; payload: { device_id: string; plate?: string; lat: number; lon: number; speed_kmh?: number } }
   | { type: "decision"; payload: Decision }
-  | { type: "scenario_step"; payload: ScenarioStep };
+  | { type: "scenario_step"; payload: ScenarioStep }
+  | { type: "operator_banner"; payload: OperatorBanner };

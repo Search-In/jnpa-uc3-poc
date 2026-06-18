@@ -15,6 +15,8 @@ import type {
   CorridorGeometry,
   Decision,
   EmptyAllocation,
+  FaultControlResult,
+  FaultState,
   Gate,
   IdentityVerifyResult,
   KpiResult,
@@ -28,6 +30,20 @@ import type {
   TruckDevice,
   Zone,
 } from "@/lib/types";
+
+// Realism probes for the Demo Console status panel. Both endpoints are optional
+// on the gateway, so LiveAdapter degrades to `null` rather than throwing (the
+// screen then shows a static "target/advisory" note). Mock returns plausible
+// deterministic values.
+export interface OcrEval {
+  /** OCR accuracy in the CLEAR condition, 0..1 (e.g. 0.97). */
+  clear_accuracy: number;
+}
+
+export interface CongestionMetrics {
+  /** Forecaster F1 score, 0..1 (e.g. 0.86). */
+  f1: number;
+}
 
 export type DataMode = "mock" | "live";
 
@@ -77,4 +93,13 @@ export interface DataAdapter {
   identityVerify(driverId: string, simulate: "genuine" | "impostor" | "unknown"): Promise<IdentityVerifyResult>;
   parkingAvailability(minuteOfDay?: number): Promise<ParkingFacility[]>;
   parkingSummary(minuteOfDay?: number): Promise<ParkingSummary>;
+
+  // --- Fault-injection control surface (Demo Console) ---
+  getFaults(): Promise<FaultState>;
+  forceFault(domain: string, rung: string): Promise<FaultControlResult>;
+  clearFault(domain?: string): Promise<FaultControlResult>; // no domain => clear all
+
+  // --- Realism probes (graceful: null when the gateway lacks the endpoint) ---
+  ocrEval(): Promise<OcrEval | null>;
+  congestionMetrics(): Promise<CongestionMetrics | null>;
 }

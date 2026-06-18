@@ -15,16 +15,30 @@ error) the label stays "clear" and the pull is counted as skipped/error.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
 
 from jnpa_shared.logging import get_logger
+from jnpa_shared.schemas import Condition
 
 from .config import AnprConfig
 from .metrics import WEATHER_PULLS
 
 log = get_logger("anpr_ingest.weather")
+
+# Coarse weather label -> canonical ANPR Condition. NIGHT is derived from the
+# local hour and takes precedence over a "clear" daytime label.
+_WEATHER_TO_CONDITION = {
+    "fog": Condition.FOG,
+    "rain": Condition.FOG,    # heavy rain degrades like fog for OCR purposes
+    "dust": Condition.DUST,
+    "clear": Condition.CLEAR,
+}
+# IST night window (roughly): 19:00–06:00. IST = UTC + 5:30.
+_NIGHT_START_IST = 19
+_NIGHT_END_IST = 6
 
 OWM_URL = "https://api.openweathermap.org/data/2.5/weather"
 OPENAQ_URL = "https://api.openaq.org/v2/latest"
@@ -43,6 +57,27 @@ class WeatherTagger:
     def current(self) -> str:
         """Return the most recently computed weather label (non-blocking)."""
         return self._label
+
+    def condition(self, now: Optional[datetime] = None) -> Condition:
+        """Map the current state to a canonical :class:`Condition` (non-blocking).
+
+        A presenter override (``cfg.condition_override``) wins outright; otherwise
+        NIGHT is derived from the local (IST) hour and takes precedence over a
+        "clear" daytime label so the demo can show graceful degradation.
+        """
+        override = (self.cfg.condition_override or "").strip().upper()
+        if override:
+            try:
+                return Condition(override)
+            except ValueError:
+                log.warning("bad_condition_override", value=override)
+        now = now or datetime.now(tz=timezone.utc)
+        ist_hour = (now.hour + 5 + (1 if now.minute >= 30 else 0)) % 24
+        is_night = ist_hour >= _NIGHT_START_IST or ist_hour < _NIGHT_END_IST
+        base = _WEATHER_TO_CONDITION.get(self._label, Condition.CLEAR)
+        if is_night and base == Condition.CLEAR:
+            return Condition.NIGHT
+        return base
 
     async def _fetch_pm10(self, client: httpx.AsyncClient) -> Optional[float]:
         """Best-effort PM10 from OpenAQ near the port (no key required)."""
@@ -70,6 +105,10 @@ class WeatherTagger:
 
     async def _refresh_once(self, client: httpx.AsyncClient) -> str:
         """Pull current conditions and compute the label. Updates the cache."""
+        if getattr(self.cfg, "offline", False):
+            WEATHER_PULLS.labels(result="skipped").inc()
+            log.info("weather_skipped", reason="offline", label=self._label)
+            return self._label
         if not self.cfg.openweather_api_key:
             WEATHER_PULLS.labels(result="skipped").inc()
             log.info("weather_skipped", reason="no_api_key", label=self._label)

@@ -64,11 +64,20 @@ class AnprConfig:
     ai_anpr_url: str = "http://anpr:8301/infer"
     ai_timeout_s: float = 2.0
 
-    # --- Weather ---
+    # --- Weather / condition ---
     weather_interval_s: float = 600.0  # 10 minutes
     openweather_api_key: str = ""
     port_lat: float = 18.9489
     port_lon: float = 72.9492
+    # Offline-first: when true, never call the weather network; the tagger uses
+    # the demo override (or "clear"). Set by OFFLINE/DATA_MODE.
+    offline: bool = True
+    # Presenter override forcing a condition (CLEAR|DUST|FOG|NIGHT|"" for auto).
+    # Lets the demo show ≥95% OCR in CLEAR and degradation in FOG/NIGHT on click.
+    condition_override: str = ""
+    # Global seed (from shared settings) so the synthetic OCR-confidence draw in
+    # DRY_RUN replays identically.
+    seed: int = 1337
 
     # --- Kafka ---
     kafka_brokers: str = "kafka:9092"
@@ -108,6 +117,9 @@ class AnprConfig:
             openweather_api_key=os.environ.get("OPENWEATHER_API_KEY", shared.openweather_api_key),
             port_lat=_as_float(os.environ.get("PORT_LAT"), shared.port_lat),
             port_lon=_as_float(os.environ.get("PORT_LON"), shared.port_lon),
+            offline=_as_bool(os.environ.get("OFFLINE"), shared.is_offline),
+            condition_override=os.environ.get("ANPR_CONDITION_OVERRIDE", ""),
+            seed=int(os.environ.get("SEED", shared.seed)),
             kafka_brokers=os.environ.get("KAFKA_BROKERS", shared.kafka_brokers),
             topic=os.environ.get("ANPR_TOPIC", "anpr.reads"),
             publish_frames=_as_bool(os.environ.get("PUBLISH_FRAMES"), True),

@@ -6,6 +6,7 @@ import {
   FileText,
   HeartPulse,
   FlaskConical,
+  SlidersHorizontal,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -16,6 +17,7 @@ export const NAV = [
   { to: "/reports", label: "Traffic-Police Reports", icon: FileText },
   { to: "/health", label: "System Health", icon: HeartPulse },
   { to: "/what-if", label: "What-If Console", icon: FlaskConical },
+  { to: "/demo", label: "Demo Console", icon: SlidersHorizontal },
 ] as const;
 
 export function Sidebar() {

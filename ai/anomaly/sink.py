@@ -66,6 +66,9 @@ class AlertSink:
                 alert,
                 key=alert.kind,
                 flush=False,
+                event_type=f"jnpa.alert.{alert.kind}",
+                source_system="SIM",
+                raw_ref=f"alert://{alert.id}",
             )
             self._producer.poll(0)
         except Exception as exc:  # noqa: BLE001

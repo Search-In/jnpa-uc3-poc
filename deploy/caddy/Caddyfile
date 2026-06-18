@@ -1,0 +1,43 @@
+# ============================================================================
+# Optional TLS front-end for the JNPA UC-III demo WITHOUT an AWS ALB.
+#
+# Caddy auto-provisions + renews a free Let's Encrypt certificate, terminates
+# HTTPS, and reverse-proxies to the web container on :3000 (REST + WebSocket).
+# Use this instead of the ALB+ACM path when you'd rather not pay the ALB's
+# ~$16-22/mo and you just need a single public HTTPS endpoint.
+#
+# Prereqs:
+#   - A DNS A record pointing your domain at the EC2 public/Elastic IP.
+#   - Security Group inbound 80 + 443 open to 0.0.0.0/0 (80 is needed for the
+#     ACME HTTP-01 challenge; 443 serves traffic).
+#
+# Run it alongside the stack (from the repo root on the box):
+#   docker run -d --name jnpa-caddy --restart unless-stopped \
+#     --network host \
+#     -v "$PWD/deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+#     -v jnpa-caddy-data:/data -v jnpa-caddy-config:/config \
+#     caddy:2
+#
+# (host networking lets Caddy reach the web container via localhost:3000, which
+#  the prod override publishes on 0.0.0.0:3000.)
+#
+# Replace uc3.example.com + the email below before running.
+# ============================================================================
+
+uc3.example.com {
+	encode gzip
+
+	# WebSocket fan-out + REST + the SPA all live behind the web container's
+	# own nginx, which already routes /api and the SPA fallback. So we proxy
+	# everything to it and let it sort paths out.
+	reverse_proxy localhost:3000
+
+	tls ops@jnpa-uc3.example
+
+	# Long read timeout so the /api/ws WebSocket isn't cut mid-demo.
+	@ws {
+		header Connection *Upgrade*
+		header Upgrade websocket
+	}
+	reverse_proxy @ws localhost:3000
+}

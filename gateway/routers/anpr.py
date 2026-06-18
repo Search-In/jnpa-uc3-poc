@@ -87,11 +87,24 @@ def _synthetic_read(camera_id: str) -> dict:
     }
 
 
+# Forced camera rung -> the SourceState its Health Card should show.
+_ANPR_FORCED_STATE = {
+    AnprPath.LIVE.value: SourceState.LIVE,
+    AnprPath.CACHED.value: SourceState.DEGRADED,
+    AnprPath.SYNTHETIC.value: SourceState.DOWN,
+}
+
+
 def camera_state(state: GatewayState, camera_id: str) -> dict:
     """Resolve the camera-feed rung for one camera (LIVE / CACHED / SYNTHETIC)."""
     cfg = state.cfg
     age = _latest_frame_age_s(camera_id)
-    if age is not None and age < cfg.anpr_lag_threshold_s:
+    # Presenter fault injection: a forced rung short-circuits the real cascade.
+    forced = state.faults.forced("camera")
+    if forced is not None:
+        path = AnprPath(forced)
+        src_state = _ANPR_FORCED_STATE[forced]
+    elif age is not None and age < cfg.anpr_lag_threshold_s:
         path, src_state = AnprPath.LIVE, SourceState.LIVE
     elif age is not None and age <= cfg.cache_ttl_anpr_s:
         path, src_state = AnprPath.CACHED, SourceState.DEGRADED
@@ -101,6 +114,7 @@ def camera_state(state: GatewayState, camera_id: str) -> dict:
         "camera_id": camera_id,
         "decision_path": path.value,
         "frame_age_s": round(age, 2) if age is not None else None,
+        "forced": forced is not None,
         "_state": src_state,
     }
 

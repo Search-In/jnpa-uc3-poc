@@ -4,10 +4,10 @@
 
 @layer base {
   :root {
-    /* The app chrome (Calcite shell + ArcGIS map) is DARK. Screen content still
-       uses the light Tailwind tokens; the dark canvas only shows behind the
-       shell during load, so we paint it the Calcite dark background colour. */
-    color-scheme: dark;
+    /* The whole app — chrome (Calcite shell + ArcGIS map) and screen content —
+       is LIGHT. Screen panels use the light Tailwind tokens; the canvas behind
+       the shell during load is painted the matching light background colour. */
+    color-scheme: light;
   }
   html,
   body,
@@ -16,10 +16,9 @@
     margin: 0;
   }
   body {
-    /* Calcite dark background (token: --calcite-color-background) so there is no
-       light flash before the shell paints. Screen panels re-establish the light
-       Tailwind surface locally. */
-    background: #1e1e1e;
+    /* Light canvas (matches the Tailwind `background` token hsl(210 40% 98%)) so
+       there is no dark flash before the Calcite light shell paints. */
+    background: hsl(210 40% 98%);
     @apply text-foreground font-sans antialiased;
   }
   /* Visible focus ring everywhere for keyboard users (WCAG 2.4.7). Preserved

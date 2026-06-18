@@ -144,7 +144,12 @@ async def reset(handle: ScenarioHandle) -> None:
 # --------------------------------------------------------------------------- helpers
 def _publish_dpd_release(event: Dict[str, Any]) -> None:
     producer = kafka_io.get_producer()
-    kafka_io.produce(producer, TOPIC_DPD_RELEASE, event, key="dpd", flush=True)
+    kafka_io.produce(
+        producer, TOPIC_DPD_RELEASE, event, key="dpd", flush=True,
+        event_type="jnpa.crosstwin.dpd_release",
+        source_system="SIM",     # cross-twin surge stub emitted by the UC-3 console
+        raw_ref="scenario://tfc3#dpd_release",
+    )
 
 
 async def _reissue_slots(up: Upstreams, h: ScenarioHandle, tag: str) -> List[dict]:

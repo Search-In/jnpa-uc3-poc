@@ -76,6 +76,34 @@ class Settings(BaseSettings):
     # --- Observability ---
     trace_id: str = Field(default="local-dev")
 
+    # --- Determinism / demo mode ---
+    # A single global seed makes the whole simulated system reproducible: each
+    # component derives its own stream seed from this via ``derive_seed`` so a
+    # recorded runbook replays byte-identically. Per-component seeds (e.g.
+    # ``truck.config.seed``) still exist for backward compatibility but should
+    # default to ``derive_seed(<component>)`` so one knob drives them all.
+    seed: int = 1337
+
+    # DATA_MODE selects the dominant data source for the *whole* twin. ``mock``
+    # is offline-first (no external network); ``live`` lets connectors reach
+    # external APIs when keys are present. The frontend reads VITE_DATA_MODE; this
+    # is the backend counterpart so the self-test can assert an offline run.
+    data_mode: str = "mock"
+
+    # When true, simulators must not touch the network even if keys are present
+    # (used by the network-disabled acceptance run). Implies ``data_mode=mock``.
+    offline: bool = False
+
+    # CloudEvents envelope toggle. When true, sim/connector events are wrapped in
+    # a CloudEvents 1.0 structured-mode envelope carrying ``sourcesystem`` and
+    # ``rawref`` extensions so the dashboard can distinguish SIM from LIVE while
+    # the payload still flows through the real pipeline unchanged.
+    cloudevents_enabled: bool = True
+
+    # --- Fleet scale (statistical fleet; never instantiate N objects/tick) ---
+    truck_num_devices: int = 20000
+    truck_max_devices: int = 30000
+
     # ----------------------------------------------------------------- helpers
     @property
     def mqtt_host(self) -> str:
@@ -89,6 +117,25 @@ class Settings(BaseSettings):
     @property
     def kafka_first_broker(self) -> str:
         return self.kafka_brokers.split(",", 1)[0].strip()
+
+    @property
+    def is_offline(self) -> bool:
+        """True when the twin must run network-disabled (offline implies mock)."""
+        return self.offline or self.data_mode.lower() == "mock"
+
+    def derive_seed(self, component: str) -> int:
+        """Derive a stable per-component seed from the single global ``seed``.
+
+        Same global ``seed`` + same ``component`` name → same value across runs
+        and processes, so every simulator replays identically under one knob.
+        Uses a hash (not Python's salted ``hash``) so it is stable across
+        interpreter restarts.
+        """
+        import hashlib
+
+        h = hashlib.sha256(f"{self.seed}:{component}".encode("utf-8")).hexdigest()
+        # 32-bit unsigned — wide enough for random.Random / numpy seeding.
+        return int(h[:8], 16)
 
 
 @lru_cache(maxsize=1)

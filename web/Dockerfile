@@ -8,10 +8,10 @@ COPY web/nginx/default.conf /etc/nginx/conf.d/default.conf
 COPY web/dist /usr/share/nginx/html
 COPY mobile-pwa/dist /usr/share/nginx/html/pwa
 
-EXPOSE 3000
+EXPOSE 80 443
 
-# nginx serves on :3000 (HTTP 200). Use curl to verify health status.
+# nginx serves on :80 and :443. Use curl to verify health status via HTTPS (ignoring cert checks).
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=5 \
-    CMD curl -fsS http://localhost:3000/ >/dev/null 2>&1 || exit 1
+    CMD curl -kfsS https://localhost/ >/dev/null 2>&1 || exit 1
 
 CMD ["nginx", "-g", "daemon off;"]

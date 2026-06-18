@@ -14,7 +14,10 @@
 services:
   web:
     ports:
-      - "80:3000"
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /etc/letsencrypt:/etc/letsencrypt:ro
     restart: unless-stopped
 
   postgres:

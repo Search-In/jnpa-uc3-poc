@@ -24,8 +24,9 @@ from typing import Dict, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from jnpa_shared.backbone import PeriodicPublisher
 from jnpa_shared.logging import configure_logging, get_logger
-from jnpa_shared.schemas import ServiceRegistration
+from jnpa_shared.schemas import TOPIC_WEIGHBRIDGE, ServiceRegistration, WeighbridgeReading
 from jnpa_shared.vahan_db import ensure_schema, register_service
 
 from .config import GateConfig
@@ -74,6 +75,47 @@ def _record_to_dict(rec: "seed_mod.GateRecord") -> dict:
     }
 
 
+# Cap the per-tick weighbridge snapshot so a large dataset never floods the
+# backbone in one go (logged when it bites).
+_WEIGHBRIDGE_SNAPSHOT_CAP = 200
+
+
+def _weighbridge_snapshot() -> list[WeighbridgeReading]:
+    """Current weighbridge readings as backbone events.
+
+    Maps each seeded GateRecord's captured weighbridge reading into the
+    canonical WeighbridgeReading. The dataset is built into ``_STORE`` at
+    startup; before that (or if empty) we publish nothing. There is no explicit
+    weighbridge id in the seed corpus, so we derive a single stable lane id.
+    """
+    if not _STORE:
+        return []
+    events: list[WeighbridgeReading] = []
+    for rec in _STORE.values():
+        wb = rec.weighbridge
+        events.append(
+            WeighbridgeReading(
+                wb_id="WB-1",
+                vehicle_no=wb.vehicle_plate,
+                gross_wt_kg=float(wb.measured_wt_kg),
+            )
+        )
+        if len(events) >= _WEIGHBRIDGE_SNAPSHOT_CAP:
+            log.info("weighbridge_snapshot_capped", cap=_WEIGHBRIDGE_SNAPSHOT_CAP,
+                     total=len(_STORE))
+            break
+    return events
+
+
+# Publishes WeighbridgeReading onto the backbone every few seconds, tagged SIM,
+# so the dashboard sees gate-data as just another live feed (Phase C).
+_publisher = PeriodicPublisher(
+    "gate-data", TOPIC_WEIGHBRIDGE, "jnpa.weighbridge.read", _weighbridge_snapshot,
+    interval_s=5.0, key_fn=lambda ev: ev.vehicle_no,
+    raw_ref_fn=lambda ev: f"weighbridge://{ev.wb_id}#veh={ev.vehicle_no}",
+)
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     n = _rebuild_store()
@@ -88,7 +130,11 @@ async def _lifespan(_app: FastAPI):
     except Exception as exc:  # pragma: no cover - infra-timing dependent
         log.warning("startup_db_unavailable", error=str(exc))
 
-    yield
+    _publisher.start()
+    try:
+        yield
+    finally:
+        await _publisher.stop()
 
 
 app = FastAPI(title="JNPA Gate-Data / Auto-LEO Simulator", version="0.1.0",

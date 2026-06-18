@@ -165,7 +165,13 @@ class KafkaSink:
 
     def _produce(self, topic: str, key: str, value, kind: str) -> None:
         try:
-            kafka_io.produce(self._producer, topic, value, key=key, flush=False)
+            event_type = "jnpa.truck.eta" if kind == "eta" else "jnpa.truck.telemetry"
+            kafka_io.produce(
+                self._producer, topic, value, key=key, flush=False,
+                event_type=event_type,
+                source_system="SIM",          # truck-sim is the simulator feed
+                raw_ref=f"device://{key}",
+            )
             if kind == "eta":
                 ETA_PUBLISHED.labels("kafka").inc()
             else:

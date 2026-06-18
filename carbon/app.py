@@ -24,7 +24,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
+from jnpa_shared.backbone import PeriodicPublisher
 from jnpa_shared.logging import configure_logging, get_logger
+from jnpa_shared.schemas import TOPIC_CARBON, CarbonRecord
 
 from . import calculator
 from . import factors
@@ -44,6 +46,55 @@ def _compute_rollup() -> dict:
     return rollup
 
 
+# Cap on how many per-trip records we publish each tick — the deterministic AoI
+# fleet can be large, but the carbon tile only needs a representative slice.
+_PUBLISH_CAP = 200
+
+
+def _carbon_records_snapshot() -> list[CarbonRecord]:
+    """Per-trip CarbonRecord events for the backbone, from the synthetic fleet.
+
+    Pure function of the SHA-256-seeded AoI fleet (the same book ``/rollup``
+    uses), so each tick publishes the same deterministic set. Maps each fleet
+    trip to a CarbonRecord: the synthetic ``trailer_id`` is the ``vehicle_no``,
+    the trip leg's ``distance_km`` carries through, ``emissions_kg_co2`` is the
+    vehicle's total (moving + idle) per ``calculator.vehicle_emissions_kg``, and
+    ``trip_id`` is synthesised from the trip index (the fleet book has no native
+    trip id). Capped at ``_PUBLISH_CAP`` trips so we never flood the bus.
+    """
+    fleet = calculator.seed_aoi_fleet(cfg.aoi_fleet_size)
+    if len(fleet) > _PUBLISH_CAP:
+        log.info(
+            "carbon_records_capped",
+            fleet_size=len(fleet),
+            published=_PUBLISH_CAP,
+        )
+        fleet = fleet[:_PUBLISH_CAP]
+    return [
+        CarbonRecord(
+            vehicle_no=trip["trailer_id"],
+            trip_id=f"AOI-TRIP-{i:05d}",
+            distance_km=trip["distance_km"],
+            emissions_kg_co2=calculator.vehicle_emissions_kg(
+                trip["distance_km"],
+                trip["payload_tonnes"],
+                trip["idle_minutes"],
+                trip["vehicle_class"],
+            ),
+        )
+        for i, trip in enumerate(fleet)
+    ]
+
+
+# Publishes per-trip CarbonRecord onto the backbone every few seconds, tagged
+# SIM, so the dashboard sees carbon as just another live feed (Phase C).
+_publisher = PeriodicPublisher(
+    "carbon", TOPIC_CARBON, "jnpa.carbon.record", _carbon_records_snapshot,
+    interval_s=5.0, key_fn=lambda ev: ev.vehicle_no,
+    raw_ref_fn=lambda ev: f"trip://{ev.trip_id}",
+)
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     rollup = _compute_rollup()
@@ -53,7 +104,11 @@ async def _lifespan(_app: FastAPI):
         total_kg=rollup["total_kg"],
         seed=calculator.SEED,
     )
-    yield
+    _publisher.start()
+    try:
+        yield
+    finally:
+        await _publisher.stop()
 
 
 app = FastAPI(title="JNPA Carbon-Emissions Calculator", version="0.1.0",

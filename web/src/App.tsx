@@ -7,6 +7,7 @@ import GeofencingManager from "@/screens/GeofencingManager";
 import PoliceReports from "@/screens/PoliceReports";
 import SystemHealth from "@/screens/SystemHealth";
 import WhatIfConsole from "@/screens/WhatIfConsole";
+import DemoConsole from "@/screens/DemoConsole";
 
 export default function App() {
   const { scenario, reset } = useScenario();
@@ -24,6 +25,7 @@ export default function App() {
           <Route path="/what-if" element={<WhatIfConsole />} />
           {/* /whatif alias (verification cmd: open http://localhost:3000/whatif) */}
           <Route path="/whatif" element={<WhatIfConsole />} />
+          <Route path="/demo" element={<DemoConsole />} />
           <Route path="*" element={<Navigate to="/live" replace />} />
         </Routes>
       </main>

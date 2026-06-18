@@ -1,19 +1,21 @@
 :root {
-  /* Okabe–Ito palette to match the control-room dashboard (web/). */
-  --bg: #0b1220;
-  --surface: #131c2e;
-  --surface-2: #1b2740;
-  --border: #26334d;
-  --text: #e8edf6;
-  --muted: #94a3b8;
-  --blue: #56b4e9;
-  --green: #009e73;
-  --orange: #e69f00;
-  --red: #d55e00;
-  --vermillion: #d55e00;
-  --yellow: #f0e442;
+  /* Light theme, matched to the control-room dashboard (web/). The accent ramp
+     stays Okabe–Ito (colourblind-safe); the blue is darkened slightly so text
+     and chips meet WCAG AA contrast against the white surface. */
+  --bg: #f4f7fb;          /* light canvas (matches web background token) */
+  --surface: #ffffff;     /* card / topbar / tabbar */
+  --surface-2: #eef2f8;   /* tiles / inset panels */
+  --border: #d8e0ea;
+  --text: #14233b;        /* near-black, AA on white */
+  --muted: #5b6b82;       /* secondary text, AA on white */
+  --blue: #1f78c2;        /* darkened from #56b4e9 for AA on white */
+  --green: #007a5a;       /* darkened from #009e73 */
+  --orange: #b56b00;      /* darkened from #e69f00 */
+  --red: #c4441f;
+  --vermillion: #c4441f;
+  --yellow: #b59a00;
   --radius: 14px;
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 * {
@@ -187,8 +189,8 @@ a {
 
 /* ---------------- slot widget ---------------- */
 .slot {
-  background: linear-gradient(135deg, #0e3b30, #0b2a4a);
-  border: 1px solid #1f5e4e;
+  background: linear-gradient(135deg, #e3f5ee, #e4f0fb);
+  border: 1px solid #b7ddcf;
   border-radius: var(--radius);
   padding: 16px;
   margin-bottom: 12px;
@@ -197,7 +199,7 @@ a {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.6px;
-  color: #7fe9c8;
+  color: var(--green);
 }
 .slot .time {
   font-size: 32px;
@@ -210,8 +212,8 @@ a {
   color: var(--text);
 }
 .slot.resched {
-  background: linear-gradient(135deg, #4a2a0b, #3a1a0b);
-  border-color: #7a4a1e;
+  background: linear-gradient(135deg, #fbeeda, #fae4cf);
+  border-color: #e3b884;
 }
 .slot.resched .lbl {
   color: var(--orange);
@@ -282,12 +284,12 @@ a {
 .btn.primary {
   background: var(--blue);
   border-color: var(--blue);
-  color: #05223a;
+  color: #fff;
 }
 .btn.success {
   background: var(--green);
   border-color: var(--green);
-  color: #042b20;
+  color: #fff;
 }
 .btn.ghost {
   background: transparent;
@@ -323,11 +325,11 @@ a {
   background: var(--surface-2);
 }
 .inbox-item.reroute .icn {
-  background: #14324f;
+  background: #dceaf7;
   color: var(--blue);
 }
 .inbox-item.challan .icn {
-  background: #3a1a0b;
+  background: #fae4cf;
   color: var(--orange);
 }
 .inbox-item .ttl {
@@ -361,7 +363,7 @@ a {
   inset: 0;
   max-width: 520px;
   margin: 0 auto;
-  background: radial-gradient(120% 80% at 50% 0%, #14324f, var(--bg));
+  background: radial-gradient(120% 80% at 50% 0%, #dceaf7, var(--bg));
   z-index: 50;
   display: flex;
   flex-direction: column;
@@ -389,13 +391,13 @@ a {
   justify-content: center;
   font-size: 34px;
   background: var(--blue);
-  color: #05223a;
-  box-shadow: 0 0 0 0 rgba(86, 180, 233, 0.5);
+  color: #fff;
+  box-shadow: 0 0 0 0 rgba(31, 120, 194, 0.45);
   animation: ring 1.6s ease-out infinite;
 }
 @keyframes ring {
   to {
-    box-shadow: 0 0 0 26px rgba(86, 180, 233, 0);
+    box-shadow: 0 0 0 26px rgba(31, 120, 194, 0);
   }
 }
 .reroute-screen h2 {
@@ -527,6 +529,6 @@ a {
   margin-bottom: 12px;
 }
 .banner.warn {
-  border-color: #7a4a1e;
+  border-color: #e3b884;
   color: var(--orange);
 }

@@ -39,6 +39,7 @@ from .routers import (
     anpr,
     carbon,
     checkin,
+    control,
     debug,
     empty_container,
     gate_data,
@@ -141,6 +142,7 @@ app.include_router(gate_data.router)
 app.include_router(identity.router)
 app.include_router(parking.router)
 app.include_router(debug.router)
+app.include_router(control.router)
 app.include_router(ws.router)
 app.include_router(checkin.router)
 

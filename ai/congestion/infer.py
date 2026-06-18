@@ -185,6 +185,9 @@ async def _publish_loop() -> None:
                          "horizon_min": cfg.horizon_min, "threshold": pred.threshold},
                         key=seg_id,
                         flush=False,
+                        event_type="jnpa.congestion.prediction",
+                        source_system="SIM",
+                        raw_ref=f"forecast://{seg_id}#ts={ts}",
                     )
                 _producer.flush(5)
                 PUBLISHED.inc(len(probs))

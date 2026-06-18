@@ -25,8 +25,9 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query
 
+from jnpa_shared.backbone import PeriodicPublisher
 from jnpa_shared.logging import configure_logging, get_logger
-from jnpa_shared.schemas import ServiceRegistration
+from jnpa_shared.schemas import TOPIC_PARKING, ParkingState, ServiceRegistration
 from jnpa_shared.vahan_db import ensure_schema, register_service
 
 from . import facilities as fac
@@ -64,6 +65,32 @@ def _refresh_metrics(rows: list[dict]) -> None:
     )
 
 
+def _parking_state_snapshot() -> list[ParkingState]:
+    """Current per-facility availability as ParkingState events for the backbone.
+
+    Pure function of the wall-clock minute (the same deterministic curve the
+    HTTP board uses), so a given minute publishes the same states.
+    """
+    rows = fac.snapshot(_current_minute_of_day())
+    return [
+        ParkingState(
+            facility_id=r["facility_id"],
+            capacity=r["capacity"],
+            occupied=r["occupied"],
+        )
+        for r in rows
+    ]
+
+
+# Publishes ParkingState onto the backbone every few seconds, tagged SIM, so the
+# dashboard sees parking as just another live feed (Phase C).
+_publisher = PeriodicPublisher(
+    "parking", TOPIC_PARKING, "jnpa.parking.state", _parking_state_snapshot,
+    interval_s=5.0, key_fn=lambda ev: ev.facility_id,
+    raw_ref_fn=lambda ev: f"facility://{ev.facility_id}",
+)
+
+
 def _service_registration() -> ServiceRegistration:
     return ServiceRegistration(
         name=cfg.service_name,
@@ -85,7 +112,11 @@ async def _lifespan(_app: FastAPI):
         log.info("service_registered", name=cfg.service_name, kind=cfg.service_kind)
     except Exception as exc:  # pragma: no cover - infra-timing dependent
         log.warning("startup_db_unavailable", error=str(exc))
-    yield
+    _publisher.start()
+    try:
+        yield
+    finally:
+        await _publisher.stop()
 
 
 app = FastAPI(title="JNPA Parking-Availability Service", version="0.1.0",

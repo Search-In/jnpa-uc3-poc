@@ -44,8 +44,7 @@ export default defineConfig({
         ],
       },
       injectManifest: {
-        globPatterns: ["**/*.{js,css,html,svg,png,webp,woff2}"],
-        dontFindResultsBehavior: "disabled",
+        globPatterns: ["**/*.{js,css,html,svg,png}"],
       },
     }),
   ],

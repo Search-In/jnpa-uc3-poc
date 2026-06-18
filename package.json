@@ -1,0 +1,7 @@
+{
+  "name": "jnpa-uc3-poc",
+  "private": true,
+  "scripts": {
+    "build": "pnpm -r build"
+  }
+}

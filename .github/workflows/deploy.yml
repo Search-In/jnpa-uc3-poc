@@ -1,0 +1,76 @@
+name: Deploy to AWS EC2
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Build Workspace
+        run: pnpm -r build
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+
+      - name: Configure SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Copy Code to EC2 via Rsync
+        run: |
+          rsync -avz --delete \
+            --exclude '.git' \
+            --exclude '.github' \
+            --exclude 'node_modules' \
+            --exclude '**/node_modules' \
+            -e "ssh -i ~/.ssh/id_rsa" \
+            ./ ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}:/home/ec2-user/jnpa-uc3-poc/
+
+      - name: Deploy Stack using Docker Compose
+        run: |
+          ssh -i ~/.ssh/id_rsa ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }} << 'EOF'
+            cd /home/ec2-user/jnpa-uc3-poc
+            
+            # 1. Create a starter .env if it doesn't exist
+            if [ ! -f .env ]; then
+              echo "Creating initial .env file..."
+              cp .env.aws.example .env
+              
+              # Auto-generate secure random credentials
+              DB_PASS="$(openssl rand -hex 16)"
+              sed -i "s/change-me-postgres/${DB_PASS}/g" .env
+              
+              MINIO_KEY="$(openssl rand -hex 16)"
+              sed -i "s/change-me-minio-key/${MINIO_KEY}/g" .env
+              
+              MINIO_SEC="$(openssl rand -hex 24)"
+              sed -i "s/change-me-minio-secret/${MINIO_SEC}/g" .env
+            fi
+            
+            # 2. Run docker-compose build and restart the stack
+            docker compose -f docker-compose.yml -f docker-compose.aws.yml up -d --build
+            
+            # 3. Clean up unused/dangling Docker build cache to save space
+            docker image prune -f
+          EOF

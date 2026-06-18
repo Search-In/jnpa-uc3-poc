@@ -102,53 +102,49 @@ Leave outbound as default (all). Nothing else needs to be open — Postgres, Kaf
 4. **Key pair:** the one from Step 0
 5. **Network:** attach the `jnpa-uc3-demo` security group
 6. **Storage:** root volume → **30 GB gp3**
-7. **Advanced → User data:** paste the contents of `deploy/aws/user-data.sh`.
-   - If using **Git (option A)**, edit the top of the script first: set
-     `REPO_URL="https://github.com/<you>/<repo>.git"` (and `REPO_BRANCH` if not `main`).
-   - If using **copy (option B)**, leave `REPO_URL` empty and skip ahead — you'll
-     run the bootstrap by hand in Step 4B.
+7. **Advanced → User data:** paste the contents of `deploy/aws/user-data.sh`. This will configure swap space and install Docker, Compose, and Buildx.
 
 Launch.
 
 ---
 
-## Step 4 — Get the stack running
+## Step 4 — Get the stack running (CI/CD Deployment)
 
-### 4A — Git path (you set REPO_URL in user-data)
+### 4A — Configure GitHub Secrets
+In your GitHub repository settings, navigate to **Settings → Secrets and variables → Actions** and add the following repository secrets:
+* `EC2_HOST`: The public IP or public DNS of your EC2 instance.
+* `EC2_USERNAME`: The SSH user (typically `ec2-user`).
+* `EC2_SSH_KEY`: The contents of your private SSH key (`.pem`) used to access the instance.
 
-User-data runs automatically on first boot. It installs Docker, clones the repo to `/opt/jnpa-uc3`, writes a starter `.env` (automatically generating secure, random credentials for Postgres and MinIO), and runs `up -d --build`. The first build pulls base images and compiles the web bundle — give it **4–8 minutes**.
+### 4B — Trigger Deployment
+Push or merge your changes to the `main` branch. This triggers the GitHub Actions deploy workflow which:
+1. Compiles the TypeScript code and Vite dashboard/PWA assets on the runner (alleviating CPU/RAM pressure on the EC2 instance).
+2. Syncs the built workspace to `/home/ec2-user/jnpa-uc3-poc/` on the instance using `rsync` (excluding build toolchains and source file caches).
+3. Connects via SSH, auto-generates a secure `.env` file with random credentials if missing, builds the lightweight Docker images, and restarts the compose services.
 
-Check progress:
-
+Check bootstrap progress:
 ```bash
 ssh -i your-key.pem ec2-user@<EC2_PUBLIC_IP>
-sudo cat /var/log/cloud-init-output.log   # bootstrap log
-cd /opt/jnpa-uc3 && ./deploy/aws/manage.sh ps
+sudo cat /var/log/cloud-init-output.log   # bootstrap log (swap & docker installs)
 ```
-
-### 4B — Copy path (no git on the box)
-
+Check container status:
 ```bash
-# from your laptop, in the repo root:
-rsync -az --exclude node_modules --exclude .venv --exclude '.git' \
-  -e "ssh -i your-key.pem" ./ ec2-user@<EC2_PUBLIC_IP>:/opt/jnpa-uc3/
-
-ssh -i your-key.pem ec2-user@<EC2_PUBLIC_IP>
-cd /opt/jnpa-uc3
-sudo bash deploy/aws/user-data.sh      # installs Docker, writes .env, brings stack up
+cd /home/ec2-user/jnpa-uc3-poc && ./deploy/aws/manage.sh ps
 ```
 
 ---
 
 ## Step 5 — Configure secrets (do this before sharing the URL)
 
-The bootstrap copies `.env.aws.example → .env` and generates secure database/storage passwords. **Review and customize** keys for live endpoints:
+Review and customize keys for live endpoints on the EC2 host:
 
 ```bash
-cd /opt/jnpa-uc3
+cd /home/ec2-user/jnpa-uc3-poc
 sudo nano .env          # set MAPBOX_TOKEN, external API keys, etc.
 ./deploy/aws/manage.sh up   # re-applies .env (rebuilds only what changed)
 ```
+
+---
 
 Key environment variables to configure:
 

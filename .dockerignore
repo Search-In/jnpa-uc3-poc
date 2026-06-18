@@ -13,9 +13,6 @@
 
 # Node build artefacts (deps are reinstalled inside the image)
 **/node_modules/
-web/dist/
-mobile-pwa/dist/
-mobile-pwa/dev-dist/
 
 # VCS / local
 .git/

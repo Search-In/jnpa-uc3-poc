@@ -772,8 +772,8 @@ services:
         storage.sync_weights(cfg)
         sys.exit(0 if Path(cfg.weights_path).is_file() else 7)
         PY
-        have_weights=$?
-        if [ "$have_weights" -eq 0 ]; then
+        have_weights=$$?
+        if [ "$$have_weights" -eq 0 ]; then
           echo "[anomaly] AE weights present — skipping training";
         else
           echo "[anomaly] no AE weights — training on synthetic+telemetry corpus…";

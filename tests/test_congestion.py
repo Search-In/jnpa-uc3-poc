@@ -179,9 +179,10 @@ def _committed_congestion_metrics() -> dict:
 
 
 # HARD GATE — bid §8.5.2 commits congestion onset F1 >= 0.85.
-# The committed artifact now clears the bar (F1=0.8797 after the stride=1
-# retrain), so this is a live passing gate: the committed metrics.json can never
-# silently regress below 0.85 without failing the build.
+# The committed artifact was retrained (train_stride=1, all windows), lifting
+# F1 0.8411 -> 0.8797, which clears the bar. The prior xfail(strict=True) marker
+# has been removed now that metrics.json meets the commitment; this is now a
+# live gate that fails if F1 ever regresses below target.
 def test_congestion_f1_meets_target():
     m = _committed_congestion_metrics()
     f1 = float(m["congestion_onset_f1"])

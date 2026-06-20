@@ -108,6 +108,23 @@ jobs:
               sed -i "s/change-me-minio-secret/${MINIO_SEC}/g" .env
             fi
 
+            # 1b. Backfill any required keys missing from an existing .env (e.g. a
+            #     .env created by an earlier deploy before these keys existed).
+            #     Each compose ${VAR:?} guard must resolve, so append a random
+            #     value for any that's absent. Idempotent: only adds when missing.
+            ensure_key() {
+              local key="$1" val="$2"
+              if ! grep -q "^${key}=" .env; then
+                echo "${key}=${val}" >> .env
+                echo "  backfilled ${key}"
+              fi
+            }
+            ensure_key GRAFANA_ADMIN_USER "admin"
+            ensure_key GRAFANA_ADMIN_PASSWORD "$(openssl rand -hex 16)"
+            ensure_key MINIO_ACCESS_KEY "$(openssl rand -hex 16)"
+            ensure_key MINIO_SECRET_KEY "$(openssl rand -hex 24)"
+            ensure_key AUTH_JWT_SECRET "$(openssl rand -hex 32)"
+
             # 2. Build + restart the stack.
             docker compose -f docker-compose.yml -f docker-compose.aws.yml up -d --build
 

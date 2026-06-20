@@ -32,10 +32,16 @@ jobs:
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile=false
 
-      - name: Build Workspace
+      - name: Build Workspace (dashboard compiles to LIVE)
         run: pnpm -r build
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
+          # Production builds default to live anyway; set explicitly for clarity
+          # and to make the verification step below meaningful.
+          VITE_DATA_MODE: live
+
+      - name: Verify dashboard bundle is LIVE (no mock shipped)
+        run: bash scripts/verify_web_live_build.sh web/dist
 
       - name: Configure SSH Key
         run: |

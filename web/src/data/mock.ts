@@ -632,8 +632,24 @@ function bannerFrom(forced: Partial<Record<FaultDomain, string>>): OperatorBanne
 // The adapter.
 // --------------------------------------------------------------------------
 
+// Sentinel proving MockAdapter is linked into a bundle. A production (live)
+// build dead-code-eliminates MockAdapter, so this literal MUST NOT appear in the
+// shipped JS — the deploy guard (web/Dockerfile, scripts/verify_web_live_build.sh)
+// greps for it and fails the build if found. Referenced in the constructor so it
+// shares MockAdapter's liveness (it is removed iff MockAdapter is removed).
+const MOCK_ADAPTER_SENTINEL = "JNPA_MOCK_ADAPTER_PRESENT_DO_NOT_SHIP";
+
 export class MockAdapter implements DataAdapter {
   readonly mode: DataMode = "mock";
+
+  constructor() {
+    // Defence in depth: a live build never constructs this (the branch is
+    // DCE'd), but if one ever did, fail loudly instead of silently serving
+    // fixtures in production.
+    if (__JNPA_DATA_MODE__ === "live") {
+      throw new Error(`MockAdapter constructed in a live build (${MOCK_ADAPTER_SENTINEL})`);
+    }
+  }
 
   // In-memory forced rungs (per adapter instance). force/clear mutate this and
   // severity/banner are recomputed by rule, so the demo is fully deterministic.

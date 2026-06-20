@@ -1063,6 +1063,9 @@ services:
       args:
         VITE_MAPBOX_TOKEN: ${MAPBOX_TOKEN:-}
         VITE_BHUVAN_WMS: ${VITE_BHUVAN_WMS:-https://bhuvan-vec1.nrsc.gov.in/bhuvan/wms}
+        # Production images ship LIVE. The Dockerfile guard fails the build if the
+        # copied web/dist does not match this mode (see web/Dockerfile).
+        VITE_DATA_MODE: ${VITE_DATA_MODE:-live}
     image: jnpa/web:0.1.0
     container_name: jnpa-web
     restart: unless-stopped

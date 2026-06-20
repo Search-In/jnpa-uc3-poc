@@ -33,7 +33,7 @@ endif
 
 .DEFAULT_GOAL := help
 
-.PHONY: help venv up down logs ps psql redis-cli test bootstrap-check install-shared vahan-seed vahan-verify rfid-verify truck-verify anpr-verify anpr-bench congestion-train congestion-verify anomaly-train anomaly-verify gateway-verify dev-web web-build web-verify web-e2e scenarios-verify tfc1 tfc2 tfc3 vapid-keys dev-pwa pwa-build pwa-verify pwa-e2e preflight e2e demo demo-record evidence demo-reset
+.PHONY: help venv up down logs ps psql redis-cli test bootstrap-check install-shared vahan-seed vahan-verify rfid-verify truck-verify anpr-verify anpr-bench anpr-eval-real anpr-eval-selftest congestion-train congestion-verify anomaly-train anomaly-verify gateway-verify dev-web web-build web-build-mock web-verify-live web-verify web-e2e scenarios-verify tfc1 tfc2 tfc3 vapid-keys dev-pwa pwa-build pwa-verify pwa-e2e preflight e2e demo demo-record evidence demo-reset
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -127,6 +127,13 @@ anpr-verify: ## Smoke-test the ANPR+OCR service: /infer on the sample + /eval (s
 anpr-bench: ## Run the ANPR/OCR benchmark in-process (no stack needed) -> metrics.json
 	PYTHONPATH=ai/anpr/src:shared $(PY) ai/anpr/eval/bench.py
 
+anpr-eval-real: ## EVIDENCE-GRADE OCR eval on REAL plates. IMAGES=dir LABELS=csv [OUT=dir]
+	@test -n "$(IMAGES)" -a -n "$(LABELS)" || { echo "usage: make anpr-eval-real IMAGES=data/anpr_real/images LABELS=data/anpr_real/labels.csv"; exit 2; }
+	$(PY) ai/anpr/eval/evaluate_real.py --images "$(IMAGES)" --labels "$(LABELS)" --out "$(or $(OUT),ai/anpr/eval/real)"
+
+anpr-eval-selftest: ## Harness self-test on synthetic plates (NON-EVIDENTIAL; proves the runner works)
+	$(PY) ai/anpr/eval/evaluate_real.py --synthetic 200 --out ai/anpr/eval/baseline_synthetic
+
 congestion-train: ## Train the congestion forecaster in-process (no stack needed) -> artifacts + metrics.json
 	PYTHONPATH=ai:shared $(PY) -m congestion.train
 
@@ -170,8 +177,15 @@ gateway-verify: ## Smoke-test the API gateway: orchestrated RC lookup + decision
 dev-web: ## Run the dashboard dev server on :5173 (Vite, proxies /api -> :8000)
 	cd web && npm install && npm run dev
 
-web-build: ## Build the production dashboard bundle (web/dist)
+web-build: ## Build the production dashboard bundle (web/dist) — LIVE by default
 	cd web && npm install && npm run build
+	$(MAKE) web-verify-live
+
+web-build-mock: ## Build a LOCAL mock dashboard bundle (never deploy this)
+	cd web && npm install && npm run build:mock
+
+web-verify-live: ## Assert web/dist is a live bundle (no mock shipped)
+	bash scripts/verify_web_live_build.sh web/dist
 
 web-verify: ## Smoke-test the dashboard's gateway surface (stack must be up)
 	@echo "== /api/gates ==" && curl -s http://localhost:8000/api/gates | $(PY) -m json.tool || true

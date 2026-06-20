@@ -96,7 +96,10 @@ export type WsFrame =
   | { type: "reroute"; payload: RerouteAdvisory }
   | { type: "reroute_ack"; payload: { device_id: string; state: string; ts: string } }
   | { type: "alert"; payload: AlertFrame }
-  | { type: "truck_position"; payload: { device_id: string; lat: number; lon: number; speed_kmh?: number } }
+  | {
+      type: "truck_position";
+      payload: { device_id: string; lat: number; lon: number; speed_kmh?: number };
+    }
   | { type: "traffic"; payload: TrafficSnapshot }
   | { type: string; payload: any };
 

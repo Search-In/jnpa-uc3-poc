@@ -146,5 +146,15 @@
       "title": "Real in the PoC (not assumed)",
       "body": "The fallback orchestration, the reactive what-if engine (TFC-1/2/3), the cross-twin UC2→UC3 DPD-release event, the KPI arithmetic, geofence violation detection and the police PDF export are all real code, exercised by tests."
     }
+  },
+  "alertKind": {
+    "WRONG_WAY": "Wrong-way driving",
+    "ILLEGAL_PARKING": "Illegal parking",
+    "ABANDONED": "Abandoned vehicle",
+    "ROUTE_DEVIATION": "Route deviation",
+    "PROVISIONAL_VEHICLE": "Provisional vehicle",
+    "ELEVATED_SCRUTINY": "Elevated scrutiny",
+    "CUSTOMS_FLAG": "Customs flag",
+    "ALERT": "Alert"
   }
 }

@@ -25,7 +25,11 @@ export default function GeofencingManager() {
   const [zones, setZones] = useState<Zone[]>([]);
   const [dirty, setDirty] = useState(false);
 
-  const zonesQ = useQuery({ queryKey: ["zones"], queryFn: () => getAdapter().zones(), staleTime: 30_000 });
+  const zonesQ = useQuery({
+    queryKey: ["zones"],
+    queryFn: () => getAdapter().zones(),
+    staleTime: 30_000,
+  });
 
   const save = useMutation({
     mutationFn: () => getAdapter().putZones(zones),
@@ -100,7 +104,7 @@ export default function GeofencingManager() {
             id: z.id,
             properties: { mode: "polygon", zoneId: z.id, kind: z.kind, name: z.name },
             geometry: { type: "Polygon" as const, coordinates: [closeRing(z.polygon)] },
-          }))
+          })),
       );
     } catch {
       /* draw not ready yet — retried on next data tick */
@@ -130,7 +134,7 @@ export default function GeofencingManager() {
               polygon: ring,
               escalation: { warn_min: 5, notice_min: 15, challan_min: 30 },
               enabled: true,
-            }
+            },
       );
     }
     setZones(next);
@@ -152,10 +156,18 @@ export default function GeofencingManager() {
       <div className="relative min-w-0 flex-1">
         <div ref={mapEl} className="h-full w-full" data-testid="geofence-map" />
         <div className="absolute left-3 top-3 flex gap-2 rounded-md border border-border bg-card/85 p-1.5 backdrop-blur">
-          <Button size="sm" variant={mode === "select" ? "default" : "ghost"} onClick={() => setDrawMode("select")}>
+          <Button
+            size="sm"
+            variant={mode === "select" ? "default" : "ghost"}
+            onClick={() => setDrawMode("select")}
+          >
             <MousePointer2 className="h-3.5 w-3.5" /> Select / edit
           </Button>
-          <Button size="sm" variant={mode === "polygon" ? "default" : "ghost"} onClick={() => setDrawMode("polygon")}>
+          <Button
+            size="sm"
+            variant={mode === "polygon" ? "default" : "ghost"}
+            onClick={() => setDrawMode("polygon")}
+          >
             <Pencil className="h-3.5 w-3.5" /> Draw zone
           </Button>
         </div>
@@ -165,7 +177,9 @@ export default function GeofencingManager() {
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <div>
             <h2 className="text-sm font-semibold">Geo-fence zones</h2>
-            <p className="text-[11px] text-muted-foreground">{zones.length} zones · anomaly service reads live</p>
+            <p className="text-[11px] text-muted-foreground">
+              {zones.length} zones · anomaly service reads live
+            </p>
           </div>
           <Button size="sm" onClick={() => save.mutate()} disabled={!dirty || save.isPending}>
             {save.isPending ? <Spinner /> : <Save className="h-3.5 w-3.5" />}
@@ -173,7 +187,9 @@ export default function GeofencingManager() {
           </Button>
         </div>
         {save.isSuccess && !dirty && (
-          <div className="bg-severity-ok/15 px-4 py-1.5 text-xs text-severity-ok">Saved to Postgres.</div>
+          <div className="bg-severity-ok/15 px-4 py-1.5 text-xs text-severity-ok">
+            Saved to Postgres.
+          </div>
         )}
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
           {zonesQ.isLoading && (
@@ -182,11 +198,20 @@ export default function GeofencingManager() {
             </div>
           )}
           {zones.map((z) => (
-            <ZoneCard key={z.id} zone={z} onPatch={(p) => patchZone(z.id, p)} onDelete={() => {
-              setZones((zs) => zs.filter((x) => x.id !== z.id));
-              try { drawRef.current?.removeFeatures([z.id]); } catch { /* not on canvas */ }
-              setDirty(true);
-            }} />
+            <ZoneCard
+              key={z.id}
+              zone={z}
+              onPatch={(p) => patchZone(z.id, p)}
+              onDelete={() => {
+                setZones((zs) => zs.filter((x) => x.id !== z.id));
+                try {
+                  drawRef.current?.removeFeatures([z.id]);
+                } catch {
+                  /* not on canvas */
+                }
+                setDirty(true);
+              }}
+            />
           ))}
         </div>
       </aside>
@@ -210,7 +235,11 @@ function ZoneCard({
         <CardTitle className="truncate">{zone.name}</CardTitle>
         <div className="flex items-center gap-2">
           <Badge colour={zone.kind === "restricted" ? "#D55E00" : "#56B4E9"}>{zone.kind}</Badge>
-          <button onClick={onDelete} aria-label="delete zone" className="text-muted-foreground hover:text-severity-critical">
+          <button
+            onClick={onDelete}
+            aria-label="delete zone"
+            className="text-muted-foreground hover:text-severity-critical"
+          >
             <Trash2 className="h-3.5 w-3.5" />
           </button>
         </div>
@@ -229,11 +258,28 @@ function ZoneCard({
         </label>
 
         <div>
-          <div className="mb-1 text-[11px] text-muted-foreground">Escalation timeline (minutes)</div>
+          <div className="mb-1 text-[11px] text-muted-foreground">
+            Escalation timeline (minutes)
+          </div>
           <div className="grid grid-cols-3 gap-2">
-            <EscInput label="Warn" colour="#E69F00" value={esc.warn_min} onChange={(v) => onPatch({ escalation: { ...esc, warn_min: v } })} />
-            <EscInput label="Notice" colour="#D55E00" value={esc.notice_min} onChange={(v) => onPatch({ escalation: { ...esc, notice_min: v } })} />
-            <EscInput label="Challan" colour="#D55E00" value={esc.challan_min} onChange={(v) => onPatch({ escalation: { ...esc, challan_min: v } })} />
+            <EscInput
+              label="Warn"
+              colour="#E69F00"
+              value={esc.warn_min}
+              onChange={(v) => onPatch({ escalation: { ...esc, warn_min: v } })}
+            />
+            <EscInput
+              label="Notice"
+              colour="#D55E00"
+              value={esc.notice_min}
+              onChange={(v) => onPatch({ escalation: { ...esc, notice_min: v } })}
+            />
+            <EscInput
+              label="Challan"
+              colour="#D55E00"
+              value={esc.challan_min}
+              onChange={(v) => onPatch({ escalation: { ...esc, challan_min: v } })}
+            />
           </div>
           <EscalationBar esc={esc} />
         </div>
@@ -269,21 +315,34 @@ function EscInput({
   );
 }
 
-function EscalationBar({ esc }: { esc: { warn_min: number; notice_min: number; challan_min: number } }) {
+function EscalationBar({
+  esc,
+}: {
+  esc: { warn_min: number; notice_min: number; challan_min: number };
+}) {
   const max = Math.max(esc.challan_min, 30, 1);
   const seg = (m: number) => `${Math.min(100, (m / max) * 100)}%`;
   return (
     <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-muted" aria-hidden>
       <div className="relative h-full">
-        <div className="absolute h-full bg-severity-warning" style={{ left: 0, width: seg(esc.warn_min) }} />
-        <div className="absolute h-full bg-severity-critical/70" style={{ left: seg(esc.notice_min), right: 0 }} />
+        <div
+          className="absolute h-full bg-severity-warning"
+          style={{ left: 0, width: seg(esc.warn_min) }}
+        />
+        <div
+          className="absolute h-full bg-severity-critical/70"
+          style={{ left: seg(esc.notice_min), right: 0 }}
+        />
       </div>
     </div>
   );
 }
 
 function closeRing(ring: [number, number][]): [number, number][] {
-  if (ring.length && (ring[0][0] !== ring[ring.length - 1][0] || ring[0][1] !== ring[ring.length - 1][1])) {
+  if (
+    ring.length &&
+    (ring[0][0] !== ring[ring.length - 1][0] || ring[0][1] !== ring[ring.length - 1][1])
+  ) {
     return [...ring, ring[0]];
   }
   return ring;

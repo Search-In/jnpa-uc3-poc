@@ -36,7 +36,9 @@ function LeoRow({ row }: { row: AutoLeoResult }) {
           </div>
         )}
       </div>
-      <Badge colour={colour}>{row.leo_ready ? t("panels.leo.ready") : t("panels.leo.blocked")}</Badge>
+      <Badge colour={colour}>
+        {row.leo_ready ? t("panels.leo.ready") : t("panels.leo.blocked")}
+      </Badge>
     </div>
   );
 }
@@ -75,7 +77,10 @@ function CustomsFeed({ flags }: { flags: Alert[] }) {
 export function AutoLeoPanel() {
   const { t } = useTranslation();
   const queueQ = useQuery({ queryKey: ["leo-queue"], queryFn: () => getAdapter().leoQueue() });
-  const flagsQ = useQuery({ queryKey: ["customs-flags"], queryFn: () => getAdapter().customsFlags() });
+  const flagsQ = useQuery({
+    queryKey: ["customs-flags"],
+    queryFn: () => getAdapter().customsFlags(),
+  });
 
   const rows = queueQ.data ?? [];
   const flags = flagsQ.data ?? [];

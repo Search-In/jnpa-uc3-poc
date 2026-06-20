@@ -99,11 +99,15 @@ export class LiveAdapter implements DataAdapter {
   identityVerify = (driverId: string, simulate: any): Promise<IdentityVerifyResult> =>
     postJson<IdentityVerifyResult>("/api/identity/verify", { driver_id: driverId, simulate });
   parkingAvailability = async (minuteOfDay?: number): Promise<ParkingFacility[]> =>
-    (await getJson<{ facilities: ParkingFacility[] }>(
-      `/api/parking/availability${minuteOfDay != null ? `?minute_of_day=${minuteOfDay}` : ""}`
-    )).facilities;
+    (
+      await getJson<{ facilities: ParkingFacility[] }>(
+        `/api/parking/availability${minuteOfDay != null ? `?minute_of_day=${minuteOfDay}` : ""}`,
+      )
+    ).facilities;
   parkingSummary = (minuteOfDay?: number): Promise<ParkingSummary> =>
-    getJson<ParkingSummary>(`/api/parking/summary${minuteOfDay != null ? `?minute_of_day=${minuteOfDay}` : ""}`);
+    getJson<ParkingSummary>(
+      `/api/parking/summary${minuteOfDay != null ? `?minute_of_day=${minuteOfDay}` : ""}`,
+    );
 
   // --- Fault-injection control surface (Demo Console) --------------------
   // The three fallback chains the presenter can force a rung on. The gateway
@@ -113,7 +117,7 @@ export class LiveAdapter implements DataAdapter {
     postJson<FaultControlResult>(`/api/control/fault/${encodeURIComponent(domain)}`, { rung });
   clearFault = (domain?: string): Promise<FaultControlResult> =>
     deleteJson<FaultControlResult>(
-      domain ? `/api/control/fault/${encodeURIComponent(domain)}` : "/api/control/fault"
+      domain ? `/api/control/fault/${encodeURIComponent(domain)}` : "/api/control/fault",
     );
 
   // --- Realism probes ----------------------------------------------------
@@ -122,9 +126,28 @@ export class LiveAdapter implements DataAdapter {
   // static target/advisory note instead of erroring.
   ocrEval = async (): Promise<OcrEval | null> => {
     try {
-      const d = await getJson<{ clear_accuracy?: number; accuracy?: number }>("/api/anpr/eval");
-      const acc = d.clear_accuracy ?? d.accuracy;
-      return acc != null ? { clear_accuracy: acc } : null;
+      const d = await getJson<{
+        clear_accuracy?: number;
+        accuracy?: number;
+        combined_weighted_accuracy_pct?: number;
+        target_pct?: number;
+        OCR_TARGET_MET?: boolean;
+        degraded?: boolean;
+      }>("/api/anpr/eval");
+      // Prefer the explicit per-condition accuracy; fall back to the combined %.
+      const acc =
+        d.clear_accuracy ??
+        d.accuracy ??
+        (d.combined_weighted_accuracy_pct != null
+          ? d.combined_weighted_accuracy_pct / 100
+          : undefined);
+      if (acc == null) return null;
+      return {
+        clear_accuracy: acc,
+        target: d.target_pct != null ? d.target_pct / 100 : 0.95,
+        target_met: d.OCR_TARGET_MET,
+        degraded: d.degraded,
+      };
     } catch {
       return null;
     }
@@ -132,8 +155,14 @@ export class LiveAdapter implements DataAdapter {
   congestionMetrics = async (): Promise<CongestionMetrics | null> => {
     for (const path of ["/api/traffic/metrics", "/api/congestion/metrics"]) {
       try {
-        const d = await getJson<{ f1?: number }>(path);
-        if (d.f1 != null) return { f1: d.f1 };
+        const d = await getJson<{ f1?: number; congestion_onset_f1?: number; target_f1?: number }>(
+          path,
+        );
+        const f1 = d.f1 ?? d.congestion_onset_f1;
+        if (f1 != null) {
+          const target = d.target_f1 ?? 0.85;
+          return { f1, target, target_met: f1 >= target };
+        }
       } catch {
         /* try the next candidate, else fall through to null */
       }

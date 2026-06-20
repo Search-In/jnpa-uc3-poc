@@ -159,8 +159,23 @@ async def reroute_truck(
     await gw.ws.broadcast("reroute", advisory)
     push_delivered = await push.deliver(gw, device_id, advisory)
 
+    # SMS advisory channel (APP-3 / SCOPE-IU2): fan the same advisory out over SMS
+    # when a phone number is supplied. Uses the env-gated provider seam (no-op by
+    # default), so this never depends on a configured SMS account for the demo.
+    from ..sms import advisory_to_sms_text, send_sms
+
+    phone = body.get("phone") or body.get("driver_phone")
+    sms_result = send_sms(phone, advisory_to_sms_text(advisory)) if phone else None
+
     REQUESTS.labels("trucks", "ok").inc()
-    return {**data, "advisory": advisory, "push_delivered": push_delivered}
+    return {
+        **data,
+        "advisory": advisory,
+        "push_delivered": push_delivered,
+        "sms": {"delivered": sms_result.delivered, "provider": sms_result.provider}
+        if sms_result
+        else None,
+    }
 
 
 @router.get("/{device_id}/route/latest")

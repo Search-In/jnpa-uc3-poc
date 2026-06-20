@@ -1,4 +1,5 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { api } from "@/lib/api";
 import { appendAdvisories } from "@/lib/store";
 import { useRealtime } from "@/hooks/RealtimeContext";
@@ -16,6 +17,25 @@ const ICON: Record<string, string> = { reroute: "↻", challan: "₹", alert: "!
 
 export default function Inbox() {
   const { advisories, markInboxRead } = useRealtime();
+  const { t } = useTranslation();
+  const [acked, setAcked] = useState<Record<string, boolean>>({});
+
+  // Localised alert-kind label (NOTIF-5 multilingual). Falls back to the raw
+  // kind if a translation is missing.
+  const kindLabel = (kind?: string | null) =>
+    kind
+      ? t(`alertKind.${String(kind).toUpperCase()}`, { defaultValue: kind })
+      : t("alertKind.ALERT");
+
+  async function ack(a: Advisory) {
+    const rawId = String(a.id).replace(/^alert:/, "");
+    setAcked((m) => ({ ...m, [a.id]: true })); // optimistic
+    try {
+      await api.ackAlert(rawId);
+    } catch {
+      /* best-effort; the gateway also degrades gracefully */
+    }
+  }
 
   useEffect(() => {
     // Pull recent alert/challan history so the inbox isn't empty on a cold open.
@@ -25,13 +45,14 @@ export default function Inbox() {
         const rows: Advisory[] = (r.alerts || []).map((a: any) => {
           const kind = a.kind || "ALERT";
           const isChallan =
-            String(kind).toUpperCase().includes("CHALLAN") ||
-            a.severity === "REPORT_TO_POLICE";
+            String(kind).toUpperCase().includes("CHALLAN") || a.severity === "REPORT_TO_POLICE";
           return {
             id: `alert:${a.id || a.ts}`,
             type: isChallan ? "challan" : "alert",
             ts: a.ts || new Date().toISOString(),
-            title: isChallan ? "Challan / enforcement notice" : `Alert — ${kind}`,
+            title: isChallan
+              ? "Challan / enforcement notice"
+              : `${t("screens.inbox")} — ${kindLabel(kind)}`,
             body: a.payload?.message || a.payload?.detail,
             severity: a.severity || "info",
             kind,
@@ -64,6 +85,17 @@ export default function Inbox() {
               {fmtRelative(a.ts)}
             </div>
           </div>
+          {a.type !== "reroute" ? (
+            <button
+              type="button"
+              className="ack-btn"
+              disabled={!!acked[a.id]}
+              onClick={() => ack(a)}
+              aria-label="Acknowledge alert"
+            >
+              {acked[a.id] ? "✓ Acked" : "Ack"}
+            </button>
+          ) : null}
         </div>
       ))}
     </div>

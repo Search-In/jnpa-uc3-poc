@@ -38,11 +38,21 @@ import type {
 export interface OcrEval {
   /** OCR accuracy in the CLEAR condition, 0..1 (e.g. 0.97). */
   clear_accuracy: number;
+  /** Committed target (0..1), e.g. 0.95. */
+  target?: number;
+  /** True only when the real CRNN weights are loaded and the ≥95% gate passes. */
+  target_met?: boolean;
+  /** True when the deterministic fallback OCR is active (no CRNN weights). */
+  degraded?: boolean;
 }
 
 export interface CongestionMetrics {
   /** Forecaster F1 score, 0..1 (e.g. 0.86). */
   f1: number;
+  /** Committed target F1 (0..1), e.g. 0.85. */
+  target?: number;
+  /** True only when f1 >= target. */
+  target_met?: boolean;
 }
 
 export type DataMode = "mock" | "live";
@@ -56,9 +66,14 @@ export interface DataAdapter {
 
   // live state
   trafficSnapshots(): Promise<TrafficSnapshot[]>;
-  trafficPredict(horizon?: number): Promise<{ decision_path: string; predictions: Record<string, number> }>;
+  trafficPredict(
+    horizon?: number,
+  ): Promise<{ decision_path: string; predictions: Record<string, number> }>;
   trucks(state?: string, limit?: number): Promise<TruckDevice[]>;
-  reroute(deviceId: string, body: { gate_id?: string; lat?: number; lon?: number; force_state?: string }): Promise<{ rerouted: boolean }>;
+  reroute(
+    deviceId: string,
+    body: { gate_id?: string; lat?: number; lon?: number; force_state?: string },
+  ): Promise<{ rerouted: boolean }>;
 
   // alerts
   alerts(params?: { since?: string; kind?: string; limit?: number }): Promise<Alert[]>;
@@ -79,7 +94,10 @@ export interface DataAdapter {
 
   // scenarios
   scenarios(): Promise<Scenario[]>;
-  runScenario(name: string, params: Record<string, any>): Promise<{ handle_id: string; name: string; status: string; trace_id?: string }>;
+  runScenario(
+    name: string,
+    params: Record<string, any>,
+  ): Promise<{ handle_id: string; name: string; status: string; trace_id?: string }>;
   resetScenario(name: string, handleId?: string): Promise<{ ok: boolean }>;
   scenarioTimeline(handleId: string): Promise<{ handle_id: string; steps: ScenarioStep[] }>;
 
@@ -90,7 +108,10 @@ export interface DataAdapter {
   leoQueue(): Promise<AutoLeoResult[]>;
   customsFlags(): Promise<Alert[]>;
   identityGallery(): Promise<{ driver_id: string; name: string; license_no: string }[]>;
-  identityVerify(driverId: string, simulate: "genuine" | "impostor" | "unknown"): Promise<IdentityVerifyResult>;
+  identityVerify(
+    driverId: string,
+    simulate: "genuine" | "impostor" | "unknown",
+  ): Promise<IdentityVerifyResult>;
   parkingAvailability(minuteOfDay?: number): Promise<ParkingFacility[]>;
   parkingSummary(minuteOfDay?: number): Promise<ParkingSummary>;
 

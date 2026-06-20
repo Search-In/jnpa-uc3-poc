@@ -214,8 +214,11 @@ services:
     ports:
       - "3001:3000"
     environment:
-      GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: admin
+      # No hard-coded admin creds (SEC-4). Set GRAFANA_ADMIN_USER / _PASSWORD in
+      # .env; compose fails fast (`:?`) if the password is unset so an insecure
+      # default can never ship.
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
       GF_USERS_DEFAULT_THEME: dark
       GF_SERVER_HTTP_PORT: "3000"
       TZ: Etc/UTC
@@ -335,8 +338,8 @@ services:
       ANPR_EVAL_TARGET_PCT: ${ANPR_EVAL_TARGET_PCT:-95.0}
       ANPR_YOLO_SHA256: ${ANPR_YOLO_SHA256:-}
       MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?set MINIO_ACCESS_KEY in .env}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?set MINIO_SECRET_KEY in .env}
       ANPR_MODEL_BUCKET: ${ANPR_MODEL_BUCKET:-models}
       LOG_LEVEL: ${ANPR_LOG_LEVEL:-INFO}
       TZ: Etc/UTC
@@ -641,8 +644,8 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       KAFKA_BROKERS: kafka:9092
       MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?set MINIO_ACCESS_KEY in .env}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?set MINIO_SECRET_KEY in .env}
       CONGESTION_MODEL_BUCKET: ${CONGESTION_MODEL_BUCKET:-models}
       # Persist artifacts on a named volume so a rebuilt container reuses them.
       CONGESTION_WEIGHTS_DIR: /artifacts
@@ -735,8 +738,8 @@ services:
       ANOMALY_ROUTE_HOLD_S: ${ANOMALY_ROUTE_HOLD_S:-90}
       ANOMALY_AE_THRESHOLD_PCT: ${ANOMALY_AE_THRESHOLD_PCT:-99}
       MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?set MINIO_ACCESS_KEY in .env}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?set MINIO_SECRET_KEY in .env}
       ANOMALY_MODEL_BUCKET: ${ANOMALY_MODEL_BUCKET:-models}
       ANOMALY_EVIDENCE_BUCKET: ${ANOMALY_EVIDENCE_BUCKET:-evidence}
       # Public base for evidence URLs (host-reachable MinIO S3 port by default).

@@ -51,7 +51,9 @@ export function CarbonTile() {
               </div>
               <div className="text-right">
                 <div className="text-lg font-semibold tabular-nums">{c.vehicle_count}</div>
-                <div className="text-[10px] text-muted-foreground">{t("panels.carbon.vehicles")}</div>
+                <div className="text-[10px] text-muted-foreground">
+                  {t("panels.carbon.vehicles")}
+                </div>
               </div>
             </div>
 

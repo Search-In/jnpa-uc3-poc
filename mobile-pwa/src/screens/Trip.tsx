@@ -21,12 +21,24 @@ export default function Trip({ deviceId }: { deviceId: string }) {
   const [gates, setGates] = useState<Gate[] | undefined>();
   const [slot, setSlot] = useState<TasSlot | null>(null);
   const [livePos, setLivePos] = useState<{ lat: number; lon: number } | null>(null);
+  const [parking, setParking] = useState<{ available?: number; capacity?: number } | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   // Static geometry — fetched once.
   useEffect(() => {
-    api.corridor().then(setCorridor).catch(() => undefined);
-    api.gates().then((r) => setGates(r.gates)).catch(() => undefined);
+    api
+      .corridor()
+      .then(setCorridor)
+      .catch(() => undefined);
+    api
+      .gates()
+      .then((r) => setGates(r.gates))
+      .catch(() => undefined);
+    // Parking availability inside the geo-fenced port (SCOPE-R1 / IU2).
+    api
+      .parkingSummary()
+      .then((s) => setParking({ available: s.total_available, capacity: s.total_capacity }))
+      .catch(() => undefined);
   }, []);
 
   // Truck envelope poll.
@@ -108,8 +120,23 @@ export default function Trip({ deviceId }: { deviceId: string }) {
       <div className="stat-row" style={{ marginBottom: 12 }}>
         <Stat value={fmtEta(rec?.eta_s)} label="ETA to gate" />
         <Stat value={fmtSpeed(rec?.speed_kmh)} unit="km/h" label="Speed" />
-        <Stat value={rec?.remaining_km != null ? rec.remaining_km.toFixed(1) : "—"} unit="km" label="Remaining" />
+        <Stat
+          value={rec?.remaining_km != null ? rec.remaining_km.toFixed(1) : "—"}
+          unit="km"
+          label="Remaining"
+        />
       </div>
+
+      {/* Parking availability inside the geo-fenced port (SCOPE-R1 / IU2). */}
+      {parking && parking.available != null ? (
+        <div className="stat-row" style={{ marginBottom: 12 }}>
+          <Stat
+            value={String(parking.available)}
+            unit={parking.capacity != null ? `/ ${parking.capacity}` : ""}
+            label="Port parking free"
+          />
+        </div>
+      ) : null}
 
       {err ? <div className="banner warn">{err}</div> : null}
 

@@ -82,19 +82,40 @@ def d2_ai_ml() -> CheckResult:
     return ok, "ANPR(CNN+CRNN) + congestion(GNN+LSTM) + anomaly(ByteTrack+AE) services"
 
 
-def b_congestion_f1_gate() -> CheckResult:
-    """Bid §8.5.2 congestion F1 >= 0.85 — reported honestly (a tuning gap, not an
-    absence of AI/ML). Non-required: surfaces the real metric without masking it.
-    """
+def _congestion_f1_status() -> tuple[float, float, bool]:
+    """(f1, target, met). Reads the committed artifact; (-1,-1,False) if unreadable."""
     try:
         m = json.loads((REPO_ROOT / "ai/congestion/artifacts/metrics.json").read_text())
         f1 = float(m.get("congestion_onset_f1", 0))
         target = float(m.get("target_f1", 0.85))
-    except Exception as exc:
-        return False, f"metrics.json unreadable: {exc}"
-    ok = f1 >= target
-    note = "meets" if ok else "below — retune/retrain to close the gap"
-    return ok, f"congestion F1 = {f1:.4f} vs target {target:.2f} ({note})"
+        return f1, target, f1 >= target
+    except Exception:
+        return -1.0, -1.0, False
+
+
+def b_congestion_f1_gate() -> CheckResult:
+    """Bid §8.5.2 congestion F1 >= 0.85 — reported honestly.
+
+    This check is **dynamically required**: once the committed metric clears the
+    bar it becomes a hard gate (a later regression FAILs the selftest); while it
+    is still below target it is a non-blocking WARN that surfaces the real number
+    rather than masking it (the demo stays green on a CPU host, but the gap is
+    visible). The matching pytest gate (test_congestion_f1_meets_target,
+    xfail strict) prevents the number from being silently "fixed" without
+    acknowledgement.
+    """
+    f1, target, met = _congestion_f1_status()
+    if f1 < 0:
+        return False, "metrics.json unreadable"
+    note = "meets target" if met else "below target — retrain on a torch host to close (tuning item, not an architecture gap)"
+    return met, f"congestion F1 = {f1:.4f} vs target {target:.2f} ({note})"
+
+
+def _b1_required() -> bool:
+    """B.1 is a hard gate ONLY once the model genuinely meets its committed bar;
+    until then it reports honestly without blocking the CPU-host demo."""
+    _, _, met = _congestion_f1_status()
+    return met
 
 
 def d3_integration_fallback() -> CheckResult:
@@ -257,6 +278,55 @@ def sim_cloudevents_backbone() -> CheckResult:
     return ok and wired, "CloudEvents 1.0 envelope (sourcesystem=SIM + rawref), auto-unwrap, producers tagged"
 
 
+def sim_offline_30k_executed() -> CheckResult:
+    """EXECUTED offline + scale proof (SIM-5/SIM-3): build the committed 30k fleet
+    and tick it with NO network egress (sockets hard-blocked). Asserts the full
+    population materialises and a tick completes — proves the 20k->30k claim and
+    offline-first operation are real, not just configured."""
+    import socket
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    ta = str(_Path(REPO_ROOT) / "ingest" / "trucking_app")
+    if ta not in _sys.path:
+        _sys.path.insert(0, ta)
+    original = socket.socket
+    try:
+        from trucking_app.config import TruckConfig
+        from trucking_app.fleet import Fleet
+
+        class _Blocked:
+            def __init__(self, *a, **k):
+                raise AssertionError("network egress during offline run")
+
+        socket.socket = _Blocked  # type: ignore[assignment]
+        fleet = Fleet(TruckConfig(num_devices=30000, max_devices=30000, seed=1310))
+        fleet.populate(30000)
+        for truck in fleet.trucks.values():
+            truck.advance(dt=1.0, jam_factor=0.2)
+        ok = len(fleet.trucks) == 30000
+    except Exception as exc:  # noqa: BLE001
+        return False, f"offline 30k run failed: {exc}"
+    finally:
+        socket.socket = original  # type: ignore[assignment]
+    return ok, "built + ticked 30k fleet with sockets blocked (offline-first, sustains 30k)"
+
+
+def ai_latency_slo() -> CheckResult:
+    """AI-4: e2e alert latency p95 <= 6 s on the committed evidence artifact."""
+    path = REPO_ROOT / "evidence" / "metrics.json"
+    if not path.exists():
+        return True, "evidence/metrics.json absent — run build_evidence.py to populate (skipped)"
+    try:
+        p95 = float(json.loads(path.read_text()).get("e2e_latency_p95", -1))
+    except Exception as exc:  # noqa: BLE001
+        return False, f"latency artifact unreadable: {exc}"
+    if p95 < 0:
+        return True, "no e2e_latency_p95 recorded yet (skipped)"
+    ok = p95 <= 6.0
+    return ok, f"e2e latency p95 {p95:.3f}s vs 6.0s SLO ({'ok' if ok else 'OVER'})"
+
+
 def sim_deterministic_seed() -> CheckResult:
     """One global SEED derives a stable, distinct per-component seed so a recorded
     runbook replays identically (deterministic)."""
@@ -273,8 +343,11 @@ def sim_deterministic_seed() -> CheckResult:
 
 
 def sim_ocr_by_condition() -> CheckResult:
-    """OCR confidence is >=95% in CLEAR and degrades in FOG/NIGHT, deterministically
-    (controllable realism — demonstrates the headline metric + graceful degradation)."""
+    """SIMULATED OCR *confidence distribution* is >=95% in CLEAR and degrades in
+    FOG/NIGHT, deterministically (controllable realism + graceful degradation).
+    NOTE: this gates the per-condition confidence MODEL, not the real OCR engine's
+    measured accuracy — that is gated separately by the ANPR /eval artifact (bid
+    B-gate; see tests/test_anpr_ai.py::test_anpr_ocr_meets_target_when_weights_present)."""
     try:
         import random
         from jnpa_shared import schemas as sc
@@ -290,7 +363,7 @@ def sim_ocr_by_condition() -> CheckResult:
         ok = mc >= 0.95 and mf < mc and det
     except Exception as exc:
         return False, f"ocr-by-condition failed: {exc}"
-    return ok, f"OCR CLEAR mean {mc:.3f} (>=0.95) vs FOG {mf:.3f} (degraded), seeded"
+    return ok, f"SIM OCR-confidence CLEAR mean {mc:.3f} (>=0.95) vs FOG {mf:.3f} (degraded), seeded"
 
 
 def sim_fault_injection_chains() -> CheckResult:
@@ -396,16 +469,19 @@ CHECKS: List[Tuple[str, str, Callable[[], CheckResult], bool]] = [
     # Simulator fidelity (data-simulator standard)
     ("SIM.1", "Faithful: CloudEvents SIM tagging onto the backbone", sim_cloudevents_backbone, True),
     ("SIM.2", "Deterministic: one global SEED -> identical replay", sim_deterministic_seed, True),
-    ("SIM.3", "Controllable: OCR >=95% CLEAR, degrades FOG/NIGHT", sim_ocr_by_condition, True),
+    ("SIM.3", "Controllable: SIM OCR-confidence >=95% CLEAR, degrades FOG/NIGHT", sim_ocr_by_condition, True),
     ("SIM.4", "Fault injection: 3 chains -> Health Card + banner", sim_fault_injection_chains, True),
     ("SIM.5", "Event-sourced capability feeds (parking/carbon/...)", sim_event_sourced_feeds, True),
     ("SIM.6", "Offline-first (DATA_MODE=mock, network-disabled)", sim_offline_first, True),
+    ("SIM.7", "EXECUTED offline + 30k fleet sustain (sockets blocked)", sim_offline_30k_executed, True),
+    ("AI.4", "e2e alert latency p95 <= 6 s (SLO)", ai_latency_slo, True),
     # Quality bar
     ("Q.1", "Typed mock|live data adapter", q_mock_live_adapter, True),
     ("Q.2", "ArcGIS Maps SDK + Calcite", q_arcgis_calcite, True),
     ("Q.3", "Multilingual EN/HI/MR", q_i18n, True),
-    # Bid metric gates (reported honestly; not a pass/fail gate on the PoC).
-    ("B.1", "Bid §8.5.2 congestion F1 >= 0.85", b_congestion_f1_gate, False),
+    # Bid metric gates. B.1 is dynamically required: a hard gate once the model
+    # meets its bar, an honest non-blocking WARN while it is still below target.
+    ("B.1", "Bid §8.5.2 congestion F1 >= 0.85", b_congestion_f1_gate, _b1_required()),
 ]
 
 

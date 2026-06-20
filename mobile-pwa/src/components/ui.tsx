@@ -21,15 +21,7 @@ export function Card({
   );
 }
 
-export function Stat({
-  value,
-  unit,
-  label,
-}: {
-  value: ReactNode;
-  unit?: string;
-  label: string;
-}) {
+export function Stat({ value, unit, label }: { value: ReactNode; unit?: string; label: string }) {
   return (
     <div className="stat">
       <div className="v">

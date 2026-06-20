@@ -20,6 +20,10 @@ dependencies = [
     "websockets==13.*",
     "aiomqtt==2.*",
     "python-multipart==0.0.*",
+    # JWT bearer auth (Wave 3 / SEC-2). gateway/auth.py uses PyJWT when present
+    # and falls back to a stdlib HS256 verifier so the test suite needs no extra
+    # install; production images get the vetted library via this pin.
+    "pyjwt==2.*",
     # WebPush delivery for the trucking-app PWA re-route notifications
     # (/api/push). Imported lazily; push degrades to WS/polling if absent.
     "pywebpush==2.*",

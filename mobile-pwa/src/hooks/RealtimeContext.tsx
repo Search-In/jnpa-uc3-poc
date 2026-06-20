@@ -95,20 +95,23 @@ export function RealtimeProvider({
   const [pendingReroute, setPendingReroute] = useState<RerouteAdvisory | null>(null);
   const [pushHint, setPushHint] = useState<string | null>(null);
   const [lastReadTs, setLastReadTs] = useState<number>(() =>
-    Number(localStorage.getItem("jnpa.pwa.inboxReadTs") || 0)
+    Number(localStorage.getItem("jnpa.pwa.inboxReadTs") || 0),
   );
 
   const listeners = useRef<Set<(f: WsFrame) => void>>(new Set());
   const workerRef = useRef<Worker | null>(null);
   const lastRerouteTs = useRef<string | null>(null);
 
-  const ingestReroute = useCallback((r: RerouteAdvisory) => {
-    if (!r || (r.device_id && r.device_id !== deviceId)) return;
-    if (r.ts && r.ts === lastRerouteTs.current) return; // de-dupe across channels
-    lastRerouteTs.current = r.ts ?? null;
-    setPendingReroute(r);
-    appendAdvisories([rerouteToAdvisory(r)]).then(setAdvisories);
-  }, [deviceId]);
+  const ingestReroute = useCallback(
+    (r: RerouteAdvisory) => {
+      if (!r || (r.device_id && r.device_id !== deviceId)) return;
+      if (r.ts && r.ts === lastRerouteTs.current) return; // de-dupe across channels
+      lastRerouteTs.current = r.ts ?? null;
+      setPendingReroute(r);
+      appendAdvisories([rerouteToAdvisory(r)]).then(setAdvisories);
+    },
+    [deviceId],
+  );
 
   const handleFrame = useCallback(
     (frame: WsFrame) => {
@@ -123,7 +126,7 @@ export function RealtimeProvider({
         }
       }
     },
-    [ingestReroute, plate]
+    [ingestReroute, plate],
   );
 
   // --- boot: hydrate cache, start worker, wire SW push messages ---
@@ -185,7 +188,7 @@ export function RealtimeProvider({
       }
       setPendingReroute(null);
     },
-    [deviceId]
+    [deviceId],
   );
 
   const markInboxRead = useCallback(() => {
@@ -201,7 +204,7 @@ export function RealtimeProvider({
 
   const unread = useMemo(
     () => advisories.filter((a) => Date.parse(a.ts) > lastReadTs).length,
-    [advisories, lastReadTs]
+    [advisories, lastReadTs],
   );
 
   const value: RealtimeCtx = {

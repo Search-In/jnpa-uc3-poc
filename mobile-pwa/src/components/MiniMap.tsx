@@ -118,7 +118,7 @@ export default function MiniMap({ corridor, gates, truck, targetGateId, jam }: P
             [Math.min(...lons), Math.min(...lats)],
             [Math.max(...lons), Math.max(...lats)],
           ],
-          { padding: 28, animate: false, maxZoom: 13 }
+          { padding: 28, animate: false, maxZoom: 13 },
         );
       } catch {
         /* degenerate geometry */

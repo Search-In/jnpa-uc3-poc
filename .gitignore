@@ -40,3 +40,12 @@ ai/anpr/resources/*.pt
 ai/anpr/resources/rec_indian/
 ai/anpr/resources/datasets/
 ai/anpr/eval/metrics.json
+
+node_modules/
+
+# Build / test outputs
+**/coverage/
+*.tsbuildinfo
+web/dist/
+mobile-pwa/dist/
+web/_attic/

@@ -34,9 +34,11 @@ from .config import GatewayConfig
 from .logging import configure_logging, get_logger
 from .metrics import metrics_asgi_app
 from .pumps import KafkaPump, mqtt_truck_pump
+from .auth import install_auth
 from .routers import (
     alerts,
     anpr,
+    auth as auth_router,
     carbon,
     checkin,
     control,
@@ -110,17 +112,30 @@ app = FastAPI(
 )
 tracing.instrument_fastapi(app)
 
-# The dashboard + PWA are browser clients on other origins; allow them.
+# The dashboard + PWA are browser clients on other origins. CORS is origin-scoped
+# from env in production (CORS_ALLOW_ORIGINS="https://dash.jnpa,https://pwa.jnpa");
+# the default "*" keeps local/mock dev frictionless. Setting explicit origins also
+# enables credentialed requests (cookies/Authorization) which "*" forbids.
+import os as _os
+
+_origins_env = _os.environ.get("CORS_ALLOW_ORIGINS", "").strip()
+_allow_origins = [o.strip() for o in _origins_env.split(",") if o.strip()] or ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=_allow_origins,
+    allow_credentials=_allow_origins != ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# Auth + RBAC + rate-limit gate. Flag-gated: pass-through unless AUTH_ENABLED=true
+# (so the demo/mock profile and the in-process test suite are unaffected), full
+# JWT-bearer + per-path role enforcement when on. See gateway/auth.py.
+install_auth(app)
+
 # Routers (order matters only where static paths must beat /{param} — kpi router
 # declares /sources + /cameras before /{view}, so it is safe).
+app.include_router(auth_router.router)
 app.include_router(anpr.router)
 app.include_router(vahan.router)
 app.include_router(traffic.router)

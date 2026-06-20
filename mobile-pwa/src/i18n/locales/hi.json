@@ -88,5 +88,15 @@
     "enterCode": "या 6-अंकीय पेयरिंग कोड दर्ज करें",
     "pairDevice": "डिवाइस पेयर करें",
     "useDemo": "डेमो डिवाइस का उपयोग करें (DEV-000001)"
+  },
+  "alertKind": {
+    "WRONG_WAY": "गलत दिशा में वाहन",
+    "ILLEGAL_PARKING": "अवैध पार्किंग",
+    "ABANDONED": "परित्यक्त वाहन",
+    "ROUTE_DEVIATION": "मार्ग विचलन",
+    "PROVISIONAL_VEHICLE": "अनंतिम वाहन",
+    "ELEVATED_SCRUTINY": "बढ़ी हुई जाँच",
+    "CUSTOMS_FLAG": "सीमा शुल्क ध्वज",
+    "ALERT": "चेतावनी"
   }
 }

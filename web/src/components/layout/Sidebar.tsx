@@ -9,6 +9,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { canSeeScreen } from "@/lib/auth";
 
 export const NAV = [
   { to: "/live", label: "Live Operations", icon: Activity },
@@ -21,6 +22,9 @@ export const NAV = [
 ] as const;
 
 export function Sidebar() {
+  // Role-filtered nav: a role only sees the screens it may open (no-op when auth
+  // is disabled, i.e. the demo/mock build — every screen shows).
+  const nav = NAV.filter((item) => canSeeScreen(item.to));
   return (
     <nav
       aria-label="Primary"
@@ -36,7 +40,7 @@ export function Sidebar() {
         </div>
       </div>
       <ul className="flex flex-col gap-1 p-2">
-        {NAV.map(({ to, label, icon: Icon }) => (
+        {nav.map(({ to, label, icon: Icon }) => (
           <li key={to}>
             <NavLink
               to={to}
@@ -45,7 +49,7 @@ export function Sidebar() {
                   "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
                   isActive
                     ? "bg-primary/15 text-primary"
-                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
                 )
               }
             >

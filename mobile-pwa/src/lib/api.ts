@@ -2,13 +2,7 @@
 // relative paths; the Vite dev proxy (dev) or the web/ nginx (prod, at /pwa)
 // forwards to the gateway. Returns parsed JSON and throws on non-2xx.
 
-import type {
-  CorridorGeometry,
-  Gate,
-  TasSlot,
-  TruckEnvelope,
-  VahanEnvelope,
-} from "./types";
+import type { CorridorGeometry, Gate, TasSlot, TruckEnvelope, VahanEnvelope } from "./types";
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -23,7 +17,7 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
       /* non-json body */
     }
     const err = new Error(
-      `${res.status} ${res.statusText}${detail ? ` — ${JSON.stringify(detail)}` : ""}`
+      `${res.status} ${res.statusText}${detail ? ` — ${JSON.stringify(detail)}` : ""}`,
     );
     (err as any).status = res.status;
     throw err;
@@ -36,8 +30,7 @@ export const api = {
   health: () => http<{ status: string }>("/healthz"),
 
   // --- live trip / position ---
-  truck: (deviceId: string) =>
-    http<TruckEnvelope>(`/api/trucks/${encodeURIComponent(deviceId)}`),
+  truck: (deviceId: string) => http<TruckEnvelope>(`/api/trucks/${encodeURIComponent(deviceId)}`),
 
   // --- geometry for the mini-map ---
   gates: () => http<{ gates: Gate[] }>("/api/gates"),
@@ -45,17 +38,19 @@ export const api = {
 
   // --- TAS slot book (next allocated gate window) ---
   tasSlots: (gateId?: string) =>
-    http<{ slots: TasSlot[] }>(`/api/tas/slots${gateId ? `?gate_id=${encodeURIComponent(gateId)}` : ""}`),
+    http<{ slots: TasSlot[] }>(
+      `/api/tas/slots${gateId ? `?gate_id=${encodeURIComponent(gateId)}` : ""}`,
+    ),
 
   // --- re-route fallback polling + ACK round-trip ---
   latestReroute: (deviceId: string) =>
     http<{ device_id: string; advisory: any | null }>(
-      `/api/trucks/${encodeURIComponent(deviceId)}/route/latest`
+      `/api/trucks/${encodeURIComponent(deviceId)}/route/latest`,
     ),
   ackReroute: (deviceId: string, state: "ACK" | "DECLINE" = "ACK") =>
     http<{ acked: boolean; state: string }>(
       `/api/trucks/${encodeURIComponent(deviceId)}/route/ack`,
-      { method: "POST", body: JSON.stringify({ state }) }
+      { method: "POST", body: JSON.stringify({ state }) },
     ),
 
   // --- inbox: advisories / alerts / challans ---
@@ -64,17 +59,26 @@ export const api = {
     if (params?.since) q.set("since", params.since);
     if (params?.kind) q.set("kind", params.kind);
     if (params?.limit) q.set("limit", String(params.limit));
-    return http<{ source: string; alerts: any[] }>(
-      `/api/alerts${q.toString() ? `?${q}` : ""}`
-    );
+    return http<{ source: string; alerts: any[] }>(`/api/alerts${q.toString() ? `?${q}` : ""}`);
   },
+  // Acknowledge an alert (NOTIF-5 ack-tracking).
+  ackAlert: (alertId: string) =>
+    http<{ id: string; ack: boolean; persisted: boolean }>(
+      `/api/alerts/${encodeURIComponent(alertId)}/ack`,
+      { method: "POST" },
+    ),
+
+  // Parking availability inside the geo-fenced port (SCOPE-R1 / IU2 driver view).
+  parkingSummary: () =>
+    http<{ total_capacity?: number; total_available?: number; facilities?: number }>(
+      "/api/parking/summary",
+    ),
 
   // --- profile / vehicle: VahanRecord ---
-  vahanRc: (plate: string) =>
-    http<VahanEnvelope>(`/api/vahan/rc/${encodeURIComponent(plate)}`),
+  vahanRc: (plate: string) => http<VahanEnvelope>(`/api/vahan/rc/${encodeURIComponent(plate)}`),
   fastag: (plate: string) =>
     http<{ plate: string; decision_path: string; record: Record<string, any> }>(
-      `/api/vahan/fastag/${encodeURIComponent(plate)}`
+      `/api/vahan/fastag/${encodeURIComponent(plate)}`,
     ),
 
   // --- WebPush subscription ---

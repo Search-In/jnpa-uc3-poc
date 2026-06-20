@@ -10,12 +10,7 @@ import {
 } from "@esri/calcite-components-react";
 import { getAdapter, DATA_MODE } from "@/data";
 import { useSocket } from "@/hooks/SocketContext";
-import type {
-  FaultControlResult,
-  FaultSeverity,
-  FaultState,
-  OperatorBanner,
-} from "@/lib/types";
+import type { FaultControlResult, FaultSeverity, FaultState, OperatorBanner } from "@/lib/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/misc";
 import { KpiStrip } from "@/components/panels/KpiStrip";
@@ -35,7 +30,11 @@ import { SlidersHorizontal, Joystick } from "lucide-react";
 // backend's declared ladder exactly.
 const CHAINS: { domain: "camera" | "vahan" | "trucks"; label: string; blurb: string }[] = [
   { domain: "camera", label: "Camera", blurb: "LIVE → CACHED → SYNTHETIC frame fallback" },
-  { domain: "vahan", label: "Vahan", blurb: "LIVE_PRIMARY → LIVE_FALLBACK → CACHED → PROVISIONAL RC lookup" },
+  {
+    domain: "vahan",
+    label: "Vahan",
+    blurb: "LIVE_PRIMARY → LIVE_FALLBACK → CACHED → PROVISIONAL RC lookup",
+  },
   { domain: "trucks", label: "Trucks", blurb: "PRIMARY → SECONDARY → TERTIARY telemetry source" },
 ];
 
@@ -86,7 +85,10 @@ export default function DemoConsole() {
 
   // ---- Realism probes --------------------------------------------------
   const ocrQ = useQuery({ queryKey: ["ocr-eval"], queryFn: () => getAdapter().ocrEval() });
-  const f1Q = useQuery({ queryKey: ["congestion-metrics"], queryFn: () => getAdapter().congestionMetrics() });
+  const f1Q = useQuery({
+    queryKey: ["congestion-metrics"],
+    queryFn: () => getAdapter().congestionMetrics(),
+  });
 
   const faults = faultsQ.data;
   const anyForced = useMemo(() => {
@@ -111,7 +113,7 @@ export default function DemoConsole() {
           kind="neutral"
           iconStart="reset"
           scale="s"
-          disabled={(!anyForced || clear.isPending) || undefined}
+          disabled={!anyForced || clear.isPending || undefined}
           onClick={() => clear.mutate(undefined)}
         >
           {clear.isPending && clear.variables === undefined ? "Resetting…" : "Reset all faults"}
@@ -166,8 +168,10 @@ export default function DemoConsole() {
                     scale="s"
                     width="full"
                     onCalciteSegmentedControlChange={(e) => {
-                      const value = (e.target as HTMLCalciteSegmentedControlElement).value as string;
-                      if (value && value !== forced) force.mutate({ domain: chain.domain, rung: value });
+                      const value = (e.target as HTMLCalciteSegmentedControlElement)
+                        .value as string;
+                      if (value && value !== forced)
+                        force.mutate({ domain: chain.domain, rung: value });
                     }}
                   >
                     {rungs.map((rung) => (
@@ -190,7 +194,7 @@ export default function DemoConsole() {
                     appearance="outline"
                     kind="neutral"
                     scale="s"
-                    disabled={(!forced || clear.isPending) || undefined}
+                    disabled={!forced || clear.isPending || undefined}
                     onClick={() => clear.mutate(chain.domain)}
                   >
                     Clear
@@ -214,16 +218,43 @@ export default function DemoConsole() {
                 <Spinner /> probing…
               </div>
             ) : ocrQ.data ? (
-              <div className="flex items-baseline gap-2">
-                <span className="text-3xl font-semibold tabular-nums" style={{ color: STATUS.ok }}>
-                  {(ocrQ.data.clear_accuracy * 100).toFixed(1)}%
-                </span>
-                <span className="text-xs text-muted-foreground">OCR accuracy · CLEAR condition</span>
-              </div>
+              (() => {
+                const acc = ocrQ.data.clear_accuracy;
+                const target = ocrQ.data.target ?? 0.95;
+                const met = ocrQ.data.target_met ?? acc >= target;
+                const degraded = ocrQ.data.degraded ?? !met;
+                return (
+                  <>
+                    <div className="flex items-baseline gap-2">
+                      <span
+                        className="text-3xl font-semibold tabular-nums"
+                        style={{ color: met ? STATUS.ok : STATUS.critical }}
+                      >
+                        {(acc * 100).toFixed(1)}%
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        OCR accuracy · CLEAR · target ≥{(target * 100).toFixed(0)}%
+                      </span>
+                    </div>
+                    {degraded ? (
+                      <CalciteNotice open kind="danger" icon="exclamation-mark-triangle" scale="s">
+                        <div slot="title">DEGRADED MODEL — fallback OCR active</div>
+                        <div slot="message">
+                          No CRNN weights loaded; this is the deterministic fallback (~
+                          {(acc * 100).toFixed(0)}%), <strong>not</strong> the committed ≥
+                          {(target * 100).toFixed(0)}%. The CRNN architecture is proven; ≥95% is a
+                          post-award real-data/weights tuning item.
+                        </div>
+                      </CalciteNotice>
+                    ) : null}
+                  </>
+                );
+              })()
             ) : (
               <p className="text-sm text-muted-foreground">
                 Eval endpoint not exposed — target is{" "}
-                <span className="font-medium text-foreground">≥95% in CLEAR</span> per the per-condition spec.
+                <span className="font-medium text-foreground">≥95% in CLEAR</span> per the
+                per-condition spec.
               </p>
             )}
           </CardContent>
@@ -239,12 +270,36 @@ export default function DemoConsole() {
                 <Spinner /> probing…
               </div>
             ) : f1Q.data ? (
-              <div className="flex items-baseline gap-2">
-                <span className="text-3xl font-semibold tabular-nums" style={{ color: STATUS.ok }}>
-                  {f1Q.data.f1.toFixed(2)}
-                </span>
-                <span className="text-xs text-muted-foreground">F1 · NH-348 build-up forecast</span>
-              </div>
+              (() => {
+                const f1 = f1Q.data.f1;
+                const target = f1Q.data.target ?? 0.85;
+                const met = f1Q.data.target_met ?? f1 >= target;
+                return (
+                  <>
+                    <div className="flex items-baseline gap-2">
+                      <span
+                        className="text-3xl font-semibold tabular-nums"
+                        style={{ color: met ? STATUS.ok : STATUS.critical }}
+                      >
+                        {f1.toFixed(4)}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        F1 · NH-348 build-up forecast · target ≥{target.toFixed(2)}
+                      </span>
+                    </div>
+                    {!met ? (
+                      <CalciteNotice open kind="warning" icon="exclamation-mark-triangle" scale="s">
+                        <div slot="title">Below target — tuning item</div>
+                        <div slot="message">
+                          F1 {f1.toFixed(4)} is under the {target.toFixed(2)} commitment. The
+                          GNN+LSTM architecture is proven; closing the gap is a retrain/retune item,
+                          not an architecture gap.
+                        </div>
+                      </CalciteNotice>
+                    ) : null}
+                  </>
+                );
+              })()
             ) : (
               <p className="text-sm text-muted-foreground">
                 Metrics endpoint not exposed — the forecast remains{" "}
@@ -281,13 +336,32 @@ export default function DemoConsole() {
         </Card>
       </div>
 
-      {/* ---- Preview controls (no backend yet — demo-local only) ---- */}
+      {/* ---- Scenario triggers live in the What-If Console (wired) ---- */}
+      <div className="px-4 pt-4">
+        <CalciteNotice open kind="brand" icon="lightbulb" scale="s">
+          <div slot="title">Run scenarios from the What-If Console</div>
+          <div slot="message">
+            TFC-1 (gate closure), TFC-2 (wrong-way @ Karal Phata) and TFC-3 (cross-twin DPD release)
+            are fully wired and fireable from the <strong>What-If Console</strong> screen. The
+            fault-injection chains above are the live presenter controls here. The roadmap controls
+            below (feed/clock/fleet) are <strong>not wired</strong> and are disabled so nothing dead
+            can be clicked on stage.
+          </div>
+        </CalciteNotice>
+      </div>
+
+      {/* ---- Roadmap controls (NOT wired — disabled so nothing dead is clickable) ---- */}
       <div className="p-4">
-        <CalciteBlock open heading="Presenter controls (preview)" description="Not wired to a backend yet — demo-local only.">
+        <CalciteBlock
+          collapsible
+          heading="Roadmap controls (not wired)"
+          description="Disabled placeholders for the intended presenter surface — no backend yet."
+        >
           <div className="flex items-center gap-2 px-1 pb-2">
             <Joystick className="h-4 w-4 text-muted-foreground" aria-hidden />
             <span className="text-[11px] text-muted-foreground">
-              These adjust local state only; no fault or scenario is posted.
+              Shown as a roadmap only; controls are disabled. Use the What-If Console to drive a
+              demo.
             </span>
           </div>
           <PreviewControls />
@@ -302,63 +376,64 @@ export default function DemoConsole() {
 // backend). They demonstrate the intended presenter surface without claiming an
 // effect they don't have.
 function PreviewControls() {
-  const [feeds, setFeeds] = useState(true);
-  const [clockX, setClockX] = useState(1);
-  const [fleet, setFleet] = useState(25000);
-
+  // Static, NON-interactive placeholders. These controls are not wired to any
+  // backend; they are disabled so nothing dead can be clicked during a demo.
+  // Drive an actual demo from the What-If Console (TFC-1/2/3 are wired there).
   return (
-    <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+    <div className="grid grid-cols-1 gap-4 opacity-60 md:grid-cols-3" aria-disabled>
       <div className="space-y-1.5">
         <div className="flex items-center gap-2">
           <span className="text-xs font-medium">Feeds</span>
-          <CalciteChip scale="s" kind="neutral">(preview)</CalciteChip>
+          <CalciteChip scale="s" kind="neutral">
+            not wired
+          </CalciteChip>
         </div>
-        <CalciteButton
-          appearance={feeds ? "solid" : "outline"}
-          kind="neutral"
-          scale="s"
-          iconStart={feeds ? "pause" : "play"}
-          onClick={() => setFeeds((v) => !v)}
-        >
-          {feeds ? "Stop feeds (demo-local)" : "Start feeds (demo-local)"}
+        <CalciteButton appearance="outline" kind="neutral" scale="s" iconStart="play" disabled>
+          Start / stop feeds
         </CalciteButton>
       </div>
 
       <div className="space-y-1.5">
         <div className="flex items-center gap-2">
           <span className="text-xs font-medium">Demo clock</span>
-          <CalciteChip scale="s" kind="neutral">(preview)</CalciteChip>
+          <CalciteChip scale="s" kind="neutral">
+            not wired
+          </CalciteChip>
         </div>
         <input
           type="range"
           min={1}
           max={60}
           step={1}
-          value={clockX}
-          onChange={(e) => setClockX(Number(e.target.value))}
+          value={1}
+          readOnly
+          disabled
           className="w-full"
-          aria-label="Demo clock speed multiplier"
+          aria-label="Demo clock speed multiplier (disabled)"
         />
-        <span className="text-[11px] text-muted-foreground tabular-nums">{clockX}× speed (demo-local)</span>
+        <span className="text-[11px] text-muted-foreground tabular-nums">1×–60× (roadmap)</span>
       </div>
 
       <div className="space-y-1.5">
         <div className="flex items-center gap-2">
           <span className="text-xs font-medium">Fleet size</span>
-          <CalciteChip scale="s" kind="neutral">(preview)</CalciteChip>
+          <CalciteChip scale="s" kind="neutral">
+            not wired
+          </CalciteChip>
         </div>
         <input
           type="range"
           min={20000}
           max={30000}
           step={1000}
-          value={fleet}
-          onChange={(e) => setFleet(Number(e.target.value))}
+          value={25000}
+          readOnly
+          disabled
           className="w-full"
-          aria-label="Fleet size"
+          aria-label="Fleet size (disabled)"
         />
         <span className="text-[11px] text-muted-foreground tabular-nums">
-          {fleet.toLocaleString()} trucks (demo-local)
+          20,000–30,000 (roadmap)
         </span>
       </div>
     </div>

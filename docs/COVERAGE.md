@@ -24,7 +24,7 @@ Every Y/Partial row names a concrete way to see it live — an endpoint, a dashb
 | C4 | **Alerts & notifications for Customs** (compliance / flags) | App C §2.3 #4 | **Y** | `gate-data/`, `gateway/routers/gate_data.py`, `gateway/routers/alerts.py` | `CUSTOMS_FLAG` alerts on dashboard feed; Auto-LEO panel |
 | C5 | **e-seal, Form 13, weighbridge, ICEGATE** capture → **Auto-LEO** + container/vehicle ID match | App C §2.3 #5 | **Y** | `gate-data/`, `gateway/routers/gate_data.py` | `POST /api/gate-data/leo`; Auto-LEO panel shows reconciled record |
 | C6 | **Carbon-emissions** calc (fleet API + CPP / parking dwell, AoI rollup) | App C §2.3 #6 | **Y** | `carbon/`, `gateway/routers/carbon.py` | `GET /api/carbon/rollup`; Carbon tile on dashboard |
-| C7 | **AI video-analytics**: detection, classification, OCR, trajectory tracking, density heatmaps, ETA | App C §2.3 #7 | **Y** | `ai/anpr/`, `ai/congestion/`, `ai/anomaly/` | `/eval`, `/metrics` on each AI service |
+| C7 | **AI video-analytics**: detection, classification, OCR, trajectory tracking, density heatmaps, ETA | App C §2.3 #7 | **Partial** | `ai/anpr/` (detection/classification/OCR), `ai/anomaly/track/` (trajectory/ByteTrack), `ai/congestion/` (density). **ETA is a heuristic (OSRM + dead-reckoning), `ingest/trucking_app/trucking_app/routing.py` — NOT a learned model; a learned ETA head is a post-award item.** OCR currently in fallback (see §8.5.2 row). | `/eval`, `/metrics` on each AI service; ETA on the driver Trip screen (labelled, not claimed as AI) |
 | C8 | **Geofencing + no-parking-zone violation** + automated alerts & notifications | App C §2.3 #8 | **Y** | `ai/anomaly/rules/parking.py`, `web/src/screens/GeofencingManager.tsx` | Illegal-parking escalation; zone editor |
 
 ## B. Appendix C — KPIs (acceptance criteria)
@@ -56,7 +56,7 @@ Every KPI returns `{ value, target, deltaPct, trend[] }` against a configurable 
 | Clause | Present | Notes |
 |---|---|---|
 | §8.5.1 data sources (ANPR/OCR ≥95%; Vahan/Sarathi/FastTag sim; RFID; Trucking 20k→30k) | **Y / see note** | All sources wired. OCR ≥95% requires model weights loaded; runs in deterministic fallback on a CPU-only PoC host (state surfaced honestly in `/eval`). |
-| §8.5.2 models (CNN+CRNN; GNN+LSTM **F1≥0.85**; ByteTrack+rule+AE; ETA) | **Y / see note** | All three model architectures present. Congestion F1 = **0.8411** (`ai/congestion/artifacts/metrics.json`) — marginally **under** the 0.85 target; flagged as a WARN by `scripts/poc-selftest` (B.1), closeable by a retrain/retune, not an architecture gap. |
+| §8.5.2 models (CNN+CRNN; GNN+LSTM **F1≥0.85**; ByteTrack+rule+AE; ETA) | **Partial — see note** | All three model architectures present and trainable (`ai/congestion/model.py`, `ai/anomaly/autoencoder/model.py`, `ai/anomaly/track/bytetrack.py`). **Two committed numbers are not currently met:** congestion **F1 = 0.8411 — below the 0.85 target** (`ai/congestion/artifacts/metrics.json`; a tuning item, see audit AI-2, not an architecture gap); ANPR OCR currently runs the **deterministic fallback (~11% on the held-out set, `OCR_TARGET_MET:false`, `degraded:true`)** because no CRNN weights are loaded on the CPU-only host — the CRNN architecture is proven but the **≥95% figure is a post-award real-data/weights tuning item** (`ai/anpr/eval/metrics.json`). The **ETA engine is heuristic (OSRM + dead-reckoning), not a learned model** — it is **not** claimed as an AI prediction. Both AI numbers are now enforced by hard test gates so they cannot silently drift (see audit AI-2). |
 | §8.5.3 fallbacks (camera live→cached→synthetic; Vahan→cached→PROVISIONAL 24h; Trucking GPS→ULIP→web check-in) | **Y** | `gateway/fallback.py`; all three chains. |
 | §8.5.4 dashboard (40-km corridor heatmap; geofence escalation; **police reports**) | **Y** | `web/src/screens/PoliceReports.tsx`; PDF export. |
 | §8.5.5 scenarios (TFC-1/2/3 incl. cross-twin) | **Y** | `scenarios/tfc1.py`, `tfc2.py`, `tfc3.py`, `uc2_bridge.py`. |
@@ -67,7 +67,7 @@ Every KPI returns `{ value, target, deltaPct, trend[] }` against a configurable 
 
 | UC1 standard | This repo | Status |
 |---|---|---|
-| ArcGIS Maps SDK 5.x (`<arcgis-map>`) + Calcite dark shell | `web/` migrated to `@arcgis/core` + `@arcgis/map-components` + Calcite | **Y** (post-migration) |
+| ArcGIS Maps SDK **4.31** web components (`<arcgis-map>`) + Calcite **light** shell | `web/` uses `@arcgis/core@^4.31` + `@arcgis/map-components@^4.31` (web components, not deprecated widget classes) + Calcite `calcite-mode-light` (`web/src/components/layout/Shell.tsx`) | **Y** |
 | Single typed data adapter, `mock\|live` switch | `web/src/data/` `MockAdapter`+`LiveAdapter`, `VITE_DATA_MODE` | **Y** |
 | AI behind gateway; UI never calls models directly | Gateway mediates every upstream | **Y** |
 | Tested KPI engine `{value,target,deltaPct,trend}` | `shared/jnpa_shared/kpi.py` + `web/src/kpi/` + tests | **Y** |
@@ -87,5 +87,26 @@ Every KPI returns `{ value, target, deltaPct, trend[] }` against a configurable 
 | Keyboard focus + reduced-motion | **Y** |
 | Multilingual EN / HI / MR scaffolding (Corr. 3 App A6) | **Y** |
 | `scripts/poc-selftest` per-requirement pass/fail | **Y** |
-</content>
-</invoke>
+
+## Security & access control (audit §11 SEC)
+
+| Item | Status | Notes |
+|---|---|---|
+| RBAC — 6 roles, scoped views/data (SEC-1) | **Y (flag-gated)** | `gateway/auth.py` role enum + per-path policy; web nav/route guards (`web/src/lib/auth.ts`). Enforced when `AUTH_ENABLED=true`; OFF for the demo profile. 403 on out-of-role; tested in `tests/test_auth_rbac.py`. |
+| Gateway auth — JWT bearer, CORS, rate limit (SEC-2) | **Y (flag-gated)** | HS256 JWT (PyJWT, stdlib fallback), origin-scoped CORS (`CORS_ALLOW_ORIGINS`), per-consumer 429 token bucket. 401 on missing/invalid token. OIDC-ready. TLS terminated at the reverse proxy (README Security §). |
+| DPDP — synthetic/consented only, purpose-limited (SEC-3) | **Y (code-enforced)** | `gateway/dpdp.py`: closed purpose allow-list (400 otherwise), real-biometric refusal unless `ALLOW_REAL_BIOMETRICS` (post-award), per-access audit sink. Faces synthetic (`identity/gallery.py`). |
+| Secrets — none hard-coded; fail-fast (SEC-4) | **Y** | Grafana/MinIO creds via env-substitution; compose `${VAR:?}` fails fast if unset. `.env` gitignored; `.env.local.example` documents every key. |
+
+## Scope decisions — built vs explicitly deferred (audit Wave 6)
+
+Honest scoping: an explicit "post-award" defer costs no PoC marks; an
+implied-complete-but-absent feature costs trust. Each item below is one or the other.
+
+| Item | Audit | Decision | Detail |
+|---|---|---|---|
+| ArcGIS Stream Layer | GIS-4 | **Deferred (post-award)** | Live positions stream over WebSocket → ArcGIS `GraphicsLayer` (the PoC path). A real `StreamLayer` needs ArcGIS Enterprise GeoEvent/Velocity, which is a JNPA-facilitated, post-award component. The client-side feed is functionally equivalent for the demo. |
+| ArcGIS Dashboards embed | GIS-6 | **Deferred (post-award)** | The UC-III layers are a standalone ArcGIS-web-components app. Embedding into JNPA's existing ArcGIS Dashboards needs a published WebMap item in JNPA's ArcGIS org (post-award). README makes no embed claim. |
+| Learned ETA head | SCOPE-R7 | **Deferred (post-award)** | ETA is heuristic (OSRM + dead-reckoning) and **labelled as such** everywhere (not claimed as AI). A learned ETA model is a post-award enhancement. |
+| Mobile = PWA (not Expo) | APP-1 | **Built / kept** | Deliberate PoC choice (installable PWA, one codebase, no app-store gate). Driver parking-availability visibility added to the Trip screen (SCOPE-R1/IU2). |
+| Bronze→Silver→Gold tiers | DATA-6 | **Documented** | Raw-payload audit trail is retained via `raw_ref` on every event (the audit requirement). Explicit tier *naming* across all ingest is a labelling layer deferred post-award; `raw_ref` retention satisfies the audit need today. |
+| Cross-twin event typing | XT-1/XT-2 | **Built** | The DPD-release contract is now a typed `DpdReleaseEvent` in the shared `jnpa_shared.schemas` package (defined once; UC-II produces, UC-III consumes), with `TOPIC_DPD_RELEASE`. `translate_release` accepts the typed model or the raw dict. |

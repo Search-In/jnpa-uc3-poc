@@ -19,9 +19,7 @@ function dedupeSortPrune(rows: Advisory[]): Advisory[] {
     if (Number.isFinite(t) && t < cutoff) continue; // older than 24 h
     byId.set(r.id, { ...byId.get(r.id), ...r });
   }
-  return [...byId.values()]
-    .sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts))
-    .slice(0, MAX);
+  return [...byId.values()].sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts)).slice(0, MAX);
 }
 
 export async function loadAdvisories(): Promise<Advisory[]> {

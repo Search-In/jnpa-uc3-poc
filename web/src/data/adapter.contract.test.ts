@@ -38,7 +38,9 @@ describe("DataAdapter contract — MockAdapter", () => {
   it("trafficSnapshots() has per-segment speed + jam_factor", async () => {
     const snaps = await a.trafficSnapshots();
     expect(snaps.length).toBeGreaterThan(0);
-    expect(snaps.every((s) => typeof s.speed_kmh === "number" && typeof s.jam_factor === "number")).toBe(true);
+    expect(
+      snaps.every((s) => typeof s.speed_kmh === "number" && typeof s.jam_factor === "number"),
+    ).toBe(true);
   });
 
   it("trafficPredict() uses the SYNTHETIC decision path with SEG predictions", async () => {
@@ -51,7 +53,9 @@ describe("DataAdapter contract — MockAdapter", () => {
   it("trucks() returns realistic devices and honours the state filter", async () => {
     const all = await a.trucks();
     expect(all.length).toBeGreaterThan(10);
-    expect(all.every((t) => typeof t.position.lat === "number" && typeof t.position.lon === "number")).toBe(true);
+    expect(
+      all.every((t) => typeof t.position.lat === "number" && typeof t.position.lon === "number"),
+    ).toBe(true);
     const queued = await a.trucks("AT_GATE_QUEUE");
     expect(queued.every((t) => t.state === "AT_GATE_QUEUE")).toBe(true);
   });
@@ -123,14 +127,18 @@ describe("DataAdapter contract — MockAdapter", () => {
     expect(run.status).toBe("DONE");
     const tl = await a.scenarioTimeline(run.handle_id);
     expect(tl.steps.length).toBe(5);
-    expect(tl.steps.every((s) => typeof s.step_no === "number" && typeof s.title === "string")).toBe(true);
+    expect(
+      tl.steps.every((s) => typeof s.step_no === "number" && typeof s.title === "string"),
+    ).toBe(true);
     expect(tl.steps.some((s) => s.trigger === "cross-twin")).toBe(true);
   });
 
   it("emptyAllocations() + emptyTrtKpi() cover ECD/CFS and the trt_empty_ecd KPI", async () => {
     const allocs = await a.emptyAllocations();
     expect(allocs.length).toBeGreaterThanOrEqual(6);
-    expect(allocs.every((x) => typeof x.distance_km === "number" && typeof x.est_trt_min === "number")).toBe(true);
+    expect(
+      allocs.every((x) => typeof x.distance_km === "number" && typeof x.est_trt_min === "number"),
+    ).toBe(true);
     const kpi = await a.emptyTrtKpi();
     expect(kpi.key).toBe("trt_empty_ecd");
     expect(kpi.onTarget).toBe(true);

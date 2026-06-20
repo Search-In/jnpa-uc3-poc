@@ -2,7 +2,12 @@ import { cn } from "@/lib/utils";
 import { Loader2 } from "lucide-react";
 
 export function Spinner({ className }: { className?: string }) {
-  return <Loader2 className={cn("h-4 w-4 animate-spin text-muted-foreground", className)} aria-label="loading" />;
+  return (
+    <Loader2
+      className={cn("h-4 w-4 animate-spin text-muted-foreground", className)}
+      aria-label="loading"
+    />
+  );
 }
 
 export function StatusDot({ colour, pulse }: { colour: string; pulse?: boolean }) {
@@ -14,7 +19,10 @@ export function StatusDot({ colour, pulse }: { colour: string; pulse?: boolean }
           style={{ backgroundColor: colour }}
         />
       )}
-      <span className="relative inline-flex h-2.5 w-2.5 rounded-full" style={{ backgroundColor: colour }} />
+      <span
+        className="relative inline-flex h-2.5 w-2.5 rounded-full"
+        style={{ backgroundColor: colour }}
+      />
     </span>
   );
 }

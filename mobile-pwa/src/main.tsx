@@ -10,7 +10,7 @@ import "./index.css";
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <App />
-  </StrictMode>
+  </StrictMode>,
 );
 
 // Register the service worker (precache + WebPush handlers). Best-effort; the

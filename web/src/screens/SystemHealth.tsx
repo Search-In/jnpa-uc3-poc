@@ -23,17 +23,35 @@ const EXPECTED: { label: string; match: (s: string) => boolean; api?: string }[]
   { label: "Vahan (RC)", match: (s) => s.startsWith("vahan"), api: "vahan" },
   { label: "Sarathi (DL)", match: (s) => s.includes("sarathi"), api: "vahan" },
   { label: "FASTag (NETC)", match: (s) => s.includes("fastag"), api: "vahan" },
-  { label: "Traffic (Google/HERE/TomTom)", match: (s) => s.includes("congestion") || s.includes("traffic"), api: "traffic" },
+  {
+    label: "Traffic (Google/HERE/TomTom)",
+    match: (s) => s.includes("congestion") || s.includes("traffic"),
+    api: "traffic",
+  },
   { label: "RFID readers", match: (s) => s.includes("rfid"), api: "anpr" },
   { label: "Trucking App", match: (s) => s.includes("truck"), api: "trucks" },
   { label: "ULIP relay", match: (s) => s.includes("ulip"), api: "trucks" },
-  { label: "Anomaly engine", match: (s) => s.includes("anomaly") || s.includes("alert"), api: "alerts" },
+  {
+    label: "Anomaly engine",
+    match: (s) => s.includes("anomaly") || s.includes("alert"),
+    api: "alerts",
+  },
 ];
 
 export default function SystemHealth() {
-  const sourcesQ = useQuery({ queryKey: ["sources"], queryFn: () => getAdapter().sources(), refetchInterval: 5000 });
-  const camerasQ = useQuery({ queryKey: ["cameras"], queryFn: () => getAdapter().cameras(), refetchInterval: 5000 });
-  const [drawer, setDrawer] = useState<{ title: string; api?: string; source?: string } | null>(null);
+  const sourcesQ = useQuery({
+    queryKey: ["sources"],
+    queryFn: () => getAdapter().sources(),
+    refetchInterval: 5000,
+  });
+  const camerasQ = useQuery({
+    queryKey: ["cameras"],
+    queryFn: () => getAdapter().cameras(),
+    refetchInterval: 5000,
+  });
+  const [drawer, setDrawer] = useState<{ title: string; api?: string; source?: string } | null>(
+    null,
+  );
 
   const sources = sourcesQ.data ?? [];
   const cameras = camerasQ.data ?? [];
@@ -78,7 +96,11 @@ export default function SystemHealth() {
             <CardContent>
               <div className="grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-5">
                 {cameras.map((c) => (
-                  <CameraChip key={c.camera_id} cam={c} onClick={() => setDrawer({ title: c.camera_id, api: "anpr" })} />
+                  <CameraChip
+                    key={c.camera_id}
+                    cam={c}
+                    onClick={() => setDrawer({ title: c.camera_id, api: "anpr" })}
+                  />
                 ))}
               </div>
             </CardContent>
@@ -99,7 +121,15 @@ function rank(state?: string) {
   return state === "DOWN" ? 3 : state === "DEGRADED" ? 2 : state === "LIVE" ? 1 : 0;
 }
 
-function SourceChip({ label, row, onClick }: { label: string; row?: SourceHealth; onClick: () => void }) {
+function SourceChip({
+  label,
+  row,
+  onClick,
+}: {
+  label: string;
+  row?: SourceHealth;
+  onClick: () => void;
+}) {
   const state = row?.state ?? "no data";
   const colour = sourceStateColour(row?.state);
   return (
@@ -154,7 +184,7 @@ function LogDrawer({
     refetchInterval: drawer ? 4000 : false,
   });
   const rows: Decision[] = (q.data ?? []).filter(
-    (d) => !drawer?.source || !d.key || d.key === drawer.source || d.api === drawer.api
+    (d) => !drawer?.source || !d.key || d.key === drawer.source || d.api === drawer.api,
   );
 
   return (
@@ -171,11 +201,16 @@ function LogDrawer({
                   <Spinner /> loading decisions…
                 </div>
               ) : rows.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No recent decisions for this source.</p>
+                <p className="text-sm text-muted-foreground">
+                  No recent decisions for this source.
+                </p>
               ) : (
                 <ul className="space-y-1.5">
                   {rows.slice(0, 100).map((d, i) => (
-                    <li key={i} className="rounded-md border border-border/60 bg-background px-3 py-2 text-xs">
+                    <li
+                      key={i}
+                      className="rounded-md border border-border/60 bg-background px-3 py-2 text-xs"
+                    >
                       <div className="flex items-center justify-between">
                         <Badge colour={decisionPathColour(d.decision_path)}>
                           {d.decision_path}
@@ -183,7 +218,10 @@ function LogDrawer({
                         <span className="text-muted-foreground">{fmtDateTimeIST(d.ts)}</span>
                       </div>
                       <div className="mt-1 flex justify-between text-muted-foreground">
-                        <span className="font-mono">{d.api}{d.key ? ` · ${d.key}` : ""}</span>
+                        <span className="font-mono">
+                          {d.api}
+                          {d.key ? ` · ${d.key}` : ""}
+                        </span>
                         <span className="tabular-nums">
                           {d.latency_ms != null ? `${Math.round(d.latency_ms)} ms` : ""}
                         </span>

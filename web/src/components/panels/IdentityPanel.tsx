@@ -44,7 +44,10 @@ function ResultCard({ result }: { result: IdentityVerifyResult }) {
       </div>
       {result.reason && <p className="text-[11px] text-muted-foreground">{result.reason}</p>}
       {result.decision === "PROVISIONAL" && (
-        <div className="rounded-md border px-2 py-1.5 text-[11px]" style={{ borderColor: `${STATUS.warning}80` }}>
+        <div
+          className="rounded-md border px-2 py-1.5 text-[11px]"
+          style={{ borderColor: `${STATUS.warning}80` }}
+        >
           {t("panels.identity.cureWindow")}: {result.cure_window_h ?? 24} h
           {result.provisional_until && (
             <span className="block text-muted-foreground">
@@ -126,7 +129,11 @@ export function IdentityPanel() {
               </label>
             </div>
 
-            <Button size="sm" onClick={() => verify.mutate()} disabled={verify.isPending || !selected}>
+            <Button
+              size="sm"
+              onClick={() => verify.mutate()}
+              disabled={verify.isPending || !selected}
+            >
               {verify.isPending ? <Spinner /> : null}
               {t("panels.identity.verify")}
             </Button>

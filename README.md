@@ -83,8 +83,8 @@ The Trucking-App PWA (`mobile-pwa/`) runs against the same adapter pattern.
   (`<arcgis-map>` web components — no deprecated widget classes). PoC uses the
   free `dark-gray-vector` basemap (no key); set `VITE_ARCGIS_API_KEY` for
   premium basemaps / the ArcGIS Enterprise path.
-- **Calcite** dark shell (`@esri/calcite-components-react`); colour tokens only
-  in `web/src/lib/tokens.ts`.
+- **Calcite** light shell (`@esri/calcite-components-react`, `calcite-mode-light`);
+  colour tokens only in `web/src/lib/tokens.ts`.
 - **i18n EN / HI / MR** (Corrigendum 3 Appendix A6) with a language switcher.
 - Tested KPI engine (`shared/jnpa_shared/kpi.py`, pytest) returning
   `{value, target, deltaPct, trend}`; the web KPI strip mirrors it (Vitest
@@ -144,6 +144,56 @@ file documents where to obtain each key:
 
 The skeleton runs fully without any external keys — they are only needed once
 the ingest/AI services start calling live providers in later PoC stages.
+
+---
+
+## Security: auth, RBAC, secrets, TLS
+
+The gateway ships a **flag-gated** auth + RBAC layer (`gateway/auth.py`). It is
+**OFF by default** so the mock/demo profile and the test suite run with zero
+friction; turn it **ON** for any shared/production-adjacent deployment.
+
+```bash
+# .env (production-adjacent)
+AUTH_ENABLED=true
+AUTH_JWT_SECRET=<a strong random secret>          # HS256 signing key (OIDC-ready)
+CORS_ALLOW_ORIGINS=https://dashboard.example,https://pwa.example
+AUTH_RATE_LIMIT_PER_MIN=600
+AUTH_DEV_TOKENS=false                              # disable the dev-token seam in prod
+# web build
+VITE_AUTH_ENABLED=true                             # shows login + role-filtered nav
+```
+
+With the flag on, **every** gateway route requires a valid JWT bearer (401 if
+missing/invalid) carrying a role permitted for that path (403 otherwise), and a
+per-consumer token bucket returns 429 over budget. Roles:
+`JNPA_TRAFFIC · TERMINAL_OPS · CUSTOMS · TRAFFIC_POLICE · DRIVER · DTCCC_ADMIN`.
+Police reports are scoped to police + control room, fault/scenario control to the
+control room, identity (biometric) routes to customs + admin, driver check-in/push
+to drivers + control room; other operational routes are open to any authenticated
+role. The web nav and routes are filtered to match (`web/src/lib/auth.ts`). Mint a
+token via `POST /api/auth/login` (seeded demo users: `traffic/terminal/customs/
+police/driver/admin`, password == username; replace with a real IdP post-award).
+
+**DPDP (biometrics).** Identity access is purpose-limited and synthetic-only in
+code (`gateway/dpdp.py`): a request must declare a lawful `purpose`
+(`GATE_VERIFICATION`/`ENROLMENT`/`AUDIT_REVIEW`) or it is 400-refused, and a
+request asserting real biometrics (`is_synthetic=false`) is 403-refused unless
+`ALLOW_REAL_BIOMETRICS=true` (post-award, consent-gated; OFF by default). Every
+identity access emits a structured audit record.
+
+**Secrets.** No infra credentials are hard-coded: Grafana and MinIO read from env
+and compose **fails fast** if a password is unset (`${GRAFANA_ADMIN_PASSWORD:?…}`).
+App secrets live only in `.env` (gitignored); `.env.local.example` is the template.
+
+**TLS.** The gateway terminates plain HTTP behind a reverse proxy; TLS is
+terminated at that proxy. The AWS profile uses Nginx + Let's Encrypt
+(`web/nginx/`, `deploy/`); point `CORS_ALLOW_ORIGINS` at the HTTPS origins and
+route browser traffic through the proxy so bearer tokens never traverse plain HTTP.
+
+> The 401/403/429 + DPDP behaviour is covered by `tests/test_auth_rbac.py`
+> (14 tests). With `AUTH_ENABLED=false` (default) the gate is a pass-through, so
+> the demo and the other 170 tests are unaffected.
 
 ---
 
@@ -499,10 +549,19 @@ make up && sleep 60 && python tests/e2e/test_full_pipeline.py   # or: make e2e
 **Exit code 0 means every assertion passed.** It waits for steady state, then
 verifies, in order: (a) ANPR ingestion emits ≥ 5 events/s, (b) the Vahan chain
 serves a known plate via `LIVE_FALLBACK`, (c) the RFID+ANPR correlator emits
-`vehicle.confirmed`, (d) congestion `/metrics` F1 ≥ 0.85, (e) ANPR `/eval`
-reports `OCR_TARGET_MET = true`, and (f) each of TFC-1/2/3 runs and resets
+`vehicle.confirmed`, (d) congestion `/metrics` F1 **against its ≥ 0.85 target**,
+(e) ANPR `/eval` **`OCR_TARGET_MET`**, and (f) each of TFC-1/2/3 runs and resets
 cleanly. Under `pytest` each is its own test, skipped (not failed) when the
 stack is down, so `make test` stays green without a running stack.
+
+> **Current model state (honest):** on the CPU-only PoC host the congestion
+> forecaster scores **F1 = 0.8411 (below the 0.85 target — a tuning item)** and
+> ANPR runs the **deterministic fallback OCR (~11%, `OCR_TARGET_MET:false`)**
+> because no CRNN weights are loaded. The architectures are real and the
+> per-condition spec is met with weights loaded; the headline numbers are
+> post-award real-data/weights tuning items. The dashboard surfaces this
+> honestly via a "DEGRADED MODEL" notice — see `docs/UC3_PRODUCTION_AUDIT.md`
+> (AI-2) and the Demo Console realism panel.
 
 ### Evidence pack (`./evidence/`)
 

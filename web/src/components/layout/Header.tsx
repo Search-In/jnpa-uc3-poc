@@ -35,11 +35,7 @@ export function Header() {
         >
           map: {provider}
         </span>
-        <span
-          className="flex items-center gap-1.5 text-xs"
-          role="status"
-          aria-live="polite"
-        >
+        <span className="flex items-center gap-1.5 text-xs" role="status" aria-live="polite">
           <StatusDot colour={connected ? "#009E73" : "#D55E00"} pulse={connected} />
           {connected ? (
             <>

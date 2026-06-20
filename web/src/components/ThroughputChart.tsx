@@ -1,12 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import {
-  Area,
-  AreaChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
+import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { getAdapter } from "@/data";
 import { STATUS } from "@/lib/tokens";
 

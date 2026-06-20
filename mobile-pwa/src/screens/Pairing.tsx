@@ -81,15 +81,16 @@ export default function Pairing({ onPaired }: { onPaired: (deviceId: string) => 
         </div>
       </div>
 
-      <button className="btn primary" data-testid="pair-submit" disabled={!ready} onClick={() => pair()}>
+      <button
+        className="btn primary"
+        data-testid="pair-submit"
+        disabled={!ready}
+        onClick={() => pair()}
+      >
         Pair device
       </button>
 
-      <button
-        className="btn ghost"
-        data-testid="pair-demo"
-        onClick={() => pair(DEFAULT_CODE)}
-      >
+      <button className="btn ghost" data-testid="pair-demo" onClick={() => pair(DEFAULT_CODE)}>
         Use demo device (DEV-000001)
       </button>
     </div>

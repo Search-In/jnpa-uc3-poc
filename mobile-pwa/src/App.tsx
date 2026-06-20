@@ -47,9 +47,12 @@ function TopBar() {
   const { status } = useRealtime();
   const loc = useLocation();
   const titleKey =
-    { "/trip": "screens.trip", "/reroute": "screens.reroute", "/inbox": "screens.inbox", "/profile": "screens.vehicle" }[
-      loc.pathname
-    ] || "screens.trip";
+    {
+      "/trip": "screens.trip",
+      "/reroute": "screens.reroute",
+      "/inbox": "screens.inbox",
+      "/profile": "screens.vehicle",
+    }[loc.pathname] || "screens.trip";
   return (
     <header className="topbar">
       <div>

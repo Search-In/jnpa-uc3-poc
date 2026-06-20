@@ -28,7 +28,9 @@ function FacilityCard({ f }: { f: ParkingFacility }) {
         />
       </div>
       <div className="flex justify-between text-[10px] tabular-nums text-muted-foreground">
-        <span>{f.occupied}/{f.capacity}</span>
+        <span>
+          {f.occupied}/{f.capacity}
+        </span>
         <span style={{ color: colour }}>{f.available} free</span>
       </div>
     </div>
@@ -41,7 +43,10 @@ export function ParkingBoard() {
     queryKey: ["parking-availability"],
     queryFn: () => getAdapter().parkingAvailability(),
   });
-  const sumQ = useQuery({ queryKey: ["parking-summary"], queryFn: () => getAdapter().parkingSummary() });
+  const sumQ = useQuery({
+    queryKey: ["parking-summary"],
+    queryFn: () => getAdapter().parkingSummary(),
+  });
 
   const facilities = facQ.data ?? [];
   const s = sumQ.data;
@@ -56,7 +61,9 @@ export function ParkingBoard() {
         {s && (
           <div className="flex items-end justify-between rounded-md border border-border bg-background px-3 py-2">
             <div>
-              <div className="text-[11px] text-muted-foreground">{t("panels.parking.totalAvailable")}</div>
+              <div className="text-[11px] text-muted-foreground">
+                {t("panels.parking.totalAvailable")}
+              </div>
               <div className="text-2xl font-semibold tabular-nums">
                 {s.total_available}
                 <span className="ml-1 text-xs font-normal text-muted-foreground">

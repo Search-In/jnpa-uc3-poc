@@ -88,5 +88,15 @@
     "enterCode": "Or enter the 6-digit pairing code",
     "pairDevice": "Pair device",
     "useDemo": "Use demo device (DEV-000001)"
+  },
+  "alertKind": {
+    "WRONG_WAY": "Wrong-way driving",
+    "ILLEGAL_PARKING": "Illegal parking",
+    "ABANDONED": "Abandoned vehicle",
+    "ROUTE_DEVIATION": "Route deviation",
+    "PROVISIONAL_VEHICLE": "Provisional vehicle",
+    "ELEVATED_SCRUTINY": "Elevated scrutiny",
+    "CUSTOMS_FLAG": "Customs flag",
+    "ALERT": "Alert"
   }
 }

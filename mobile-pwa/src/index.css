@@ -2,15 +2,15 @@
   /* Light theme, matched to the control-room dashboard (web/). The accent ramp
      stays Okabe–Ito (colourblind-safe); the blue is darkened slightly so text
      and chips meet WCAG AA contrast against the white surface. */
-  --bg: #f4f7fb;          /* light canvas (matches web background token) */
-  --surface: #ffffff;     /* card / topbar / tabbar */
-  --surface-2: #eef2f8;   /* tiles / inset panels */
+  --bg: #f4f7fb; /* light canvas (matches web background token) */
+  --surface: #ffffff; /* card / topbar / tabbar */
+  --surface-2: #eef2f8; /* tiles / inset panels */
   --border: #d8e0ea;
-  --text: #14233b;        /* near-black, AA on white */
-  --muted: #5b6b82;       /* secondary text, AA on white */
-  --blue: #1f78c2;        /* darkened from #56b4e9 for AA on white */
-  --green: #007a5a;       /* darkened from #009e73 */
-  --orange: #b56b00;      /* darkened from #e69f00 */
+  --text: #14233b; /* near-black, AA on white */
+  --muted: #5b6b82; /* secondary text, AA on white */
+  --blue: #1f78c2; /* darkened from #56b4e9 for AA on white */
+  --green: #007a5a; /* darkened from #009e73 */
+  --orange: #b56b00; /* darkened from #e69f00 */
   --red: #c4441f;
   --vermillion: #c4441f;
   --yellow: #b59a00;
@@ -32,7 +32,12 @@ body,
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
   -webkit-font-smoothing: antialiased;
   overscroll-behavior-y: none;
 }
@@ -312,6 +317,22 @@ a {
 }
 .inbox-item:last-child {
   border-bottom: none;
+}
+.ack-btn {
+  align-self: center;
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ack-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+  color: var(--green, #2e7d32);
 }
 .inbox-item .icn {
   width: 34px;

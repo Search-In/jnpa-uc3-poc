@@ -77,16 +77,14 @@ self.addEventListener("notificationclick", (event: NotificationEvent) => {
   const target = data.type === "reroute" ? `${BASE}#/reroute` : `${BASE}#/inbox`;
 
   event.waitUntil(
-    self.clients
-      .matchAll({ type: "window", includeUncontrolled: true })
-      .then((clients) => {
-        for (const c of clients) {
-          if ("focus" in c) {
-            c.postMessage({ source: "push", frame: data });
-            return c.focus();
-          }
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+      for (const c of clients) {
+        if ("focus" in c) {
+          c.postMessage({ source: "push", frame: data });
+          return c.focus();
         }
-        return self.clients.openWindow(target);
-      })
+      }
+      return self.clients.openWindow(target);
+    }),
   );
 });

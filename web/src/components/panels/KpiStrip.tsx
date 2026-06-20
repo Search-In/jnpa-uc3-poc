@@ -13,8 +13,7 @@ import { STATUS } from "@/lib/tokens";
 
 /** Δ% colour: a move "the right way" + on-target reads green, otherwise amber/red. */
 function deltaColour(k: KpiResult): string {
-  const improving =
-    k.direction === "lower_is_better" ? k.deltaPct < 0 : k.deltaPct > 0;
+  const improving = k.direction === "lower_is_better" ? k.deltaPct < 0 : k.deltaPct > 0;
   if (k.onTarget) return STATUS.ok;
   return improving ? STATUS.warning : STATUS.critical;
 }

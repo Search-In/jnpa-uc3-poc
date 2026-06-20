@@ -20,11 +20,20 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body, Depends, Request
 
+from ..dpdp import audit_identity_access, enforce_dpdp
 from ..logging import get_logger
 from ..metrics import REQUESTS, UPSTREAM_LATENCY
 from ..state import GatewayState, get_state
+
+
+def _actor(request: Request) -> str:
+    """Best-effort caller identity for the DPDP audit record."""
+    principal = getattr(request.state, "principal", None)
+    if principal is not None:
+        return f"{principal.role}:{principal.sub}"
+    return request.client.host if request.client else "anonymous"
 
 log = get_logger("gateway.identity")
 
@@ -81,16 +90,27 @@ def _local_verify(driver_id: str, simulate: str) -> dict:
 
 
 @router.post("/verify")
-async def verify(body: Dict[str, Any] = Body(...),
+async def verify(request: Request, body: Dict[str, Any] = Body(...),
                  state: GatewayState = Depends(get_state)) -> dict:
+    # DPDP enforcement (SEC-3): purpose-limitation + synthetic-only in the PoC.
+    # PoC requests are synthetic by default; a caller asserting real biometrics is
+    # refused unless ALLOW_REAL_BIOMETRICS (post-award, consent-gated) is set.
+    is_synthetic = bool(body.get("is_synthetic", True))
+    purpose = enforce_dpdp(purpose=body.get("purpose"), is_synthetic=is_synthetic)
+    driver_id = body.get("driver_id", "")
+
     data = await _upstream(state, "POST", "/verify", body)
     if data is not None:
         REQUESTS.labels("identity", "ok").inc()
-        return {"decision_path": "LIVE", **data}
-    driver_id = body.get("driver_id", "")
+        audit_identity_access(actor=_actor(request), driver_id=driver_id, purpose=purpose,
+                              is_synthetic=is_synthetic, decision=str(data.get("decision", "?")))
+        return {"decision_path": "LIVE", "is_synthetic": is_synthetic, "purpose": purpose, **data}
     simulate = body.get("simulate", "genuine")
+    result = _local_verify(driver_id, simulate)
     REQUESTS.labels("identity", "ok").inc()
-    return {"decision_path": "SYNTHETIC", **_local_verify(driver_id, simulate)}
+    audit_identity_access(actor=_actor(request), driver_id=driver_id, purpose=purpose,
+                          is_synthetic=is_synthetic, decision=str(result.get("decision", "?")))
+    return {"decision_path": "SYNTHETIC", "is_synthetic": is_synthetic, "purpose": purpose, **result}
 
 
 @router.get("/gallery")

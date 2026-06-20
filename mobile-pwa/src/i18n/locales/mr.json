@@ -88,5 +88,15 @@
     "enterCode": "किंवा 6-अंकी पेअरिंग कोड प्रविष्ट करा",
     "pairDevice": "डिव्हाइस पेअर करा",
     "useDemo": "डेमो डिव्हाइस वापरा (DEV-000001)"
+  },
+  "alertKind": {
+    "WRONG_WAY": "चुकीच्या दिशेने वाहन",
+    "ILLEGAL_PARKING": "बेकायदा पार्किंग",
+    "ABANDONED": "सोडून दिलेले वाहन",
+    "ROUTE_DEVIATION": "मार्ग विचलन",
+    "PROVISIONAL_VEHICLE": "तात्पुरते वाहन",
+    "ELEVATED_SCRUTINY": "वाढीव तपासणी",
+    "CUSTOMS_FLAG": "सीमाशुल्क ध्वज",
+    "ALERT": "सूचना"
   }
 }

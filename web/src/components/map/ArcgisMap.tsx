@@ -22,7 +22,11 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 // React wrapper below only creates the React→element binding; this side-effect
 // import is what actually defines the element (otherwise it never upgrades).
 import "@arcgis/map-components/components/arcgis-map";
-import { ArcgisMap as ArcgisMapWC } from "@arcgis/map-components-react";
+// Layer-list toggle (GIS-5): an operator can show/hide each operational layer
+// (gates, road network, geofences, heatmap, parking, corridor). The web
+// component auto-binds to the parent <arcgis-map> view.
+import "@arcgis/map-components/components/arcgis-layer-list";
+import { ArcgisMap as ArcgisMapWC, ArcgisLayerList } from "@arcgis/map-components-react";
 import GraphicsLayer from "@arcgis/core/layers/GraphicsLayer";
 import Graphic from "@arcgis/core/Graphic";
 import Point from "@arcgis/core/geometry/Point";
@@ -42,13 +46,7 @@ import type {
   TruckDevice,
   Zone,
 } from "@/lib/types";
-import {
-  gateColour,
-  jamColour,
-  MAP_TOKENS,
-  parkingStatusColour,
-  zoneColour,
-} from "@/lib/tokens";
+import { gateColour, jamColour, MAP_TOKENS, parkingStatusColour, zoneColour } from "@/lib/tokens";
 import { JNPA_CENTER, JNPA_ZOOM } from "@/lib/basemap";
 
 const DEFAULT_BASEMAP = "dark-gray-vector";
@@ -140,23 +138,14 @@ export function ArcgisMap({
         gates: mk("uc3-gates"),
       };
       layers.current = set;
-      view.map.addMany([
-        set.heatmap,
-        set.zones,
-        set.corridor,
-        set.parking,
-        set.trucks,
-        set.gates,
-      ]);
+      view.map.addMany([set.heatmap, set.zones, set.corridor, set.parking, set.trucks, set.gates]);
 
       // Gate click → callback.
       clickHandle.current?.remove();
       clickHandle.current = view.on("click", (e) => {
         void view.hitTest(e).then((res) => {
           const hit = res.results.find(
-            (r) =>
-              r.type === "graphic" &&
-              r.graphic?.layer === layers.current?.gates,
+            (r) => r.type === "graphic" && r.graphic?.layer === layers.current?.gates,
           );
           if (hit && hit.type === "graphic") {
             const gateId = hit.graphic.getAttribute("id") as string | undefined;
@@ -301,11 +290,7 @@ export function ArcgisMap({
     if (!layer) return;
     layer.removeAll();
     for (const t of trucks) {
-      if (
-        typeof t.position?.lon !== "number" ||
-        typeof t.position?.lat !== "number"
-      )
-        continue;
+      if (typeof t.position?.lon !== "number" || typeof t.position?.lat !== "number") continue;
       layer.add(
         new Graphic({
           geometry: new Point({
@@ -398,7 +383,10 @@ export function ArcgisMap({
         zoom={zoom}
         onArcgisViewReadyChange={handleReady}
         style={{ height: "100%", width: "100%" }}
-      />
+      >
+        {/* Layer-toggle control (GIS-5). position via the map's UI manager. */}
+        <ArcgisLayerList position="top-left" />
+      </ArcgisMapWC>
     </div>
   );
 }
@@ -409,8 +397,7 @@ export default ArcgisMap;
 function closeRing(ring: [number, number][]): [number, number][] {
   if (
     ring.length &&
-    (ring[0][0] !== ring[ring.length - 1][0] ||
-      ring[0][1] !== ring[ring.length - 1][1])
+    (ring[0][0] !== ring[ring.length - 1][0] || ring[0][1] !== ring[ring.length - 1][1])
   ) {
     return [...ring, ring[0]];
   }

@@ -19,9 +19,27 @@ const SCENARIOS: {
   blurb: string;
   params: Record<string, any>;
 }[] = [
-  { id: "TFC-1", runner: "tfc1", blurb: "Close G-NSICT; forecaster predicts spillover; trucks auto-re-route; TAS slots rescheduled.", params: { gate_id: "G-NSICT", duration_minutes: 120 } },
-  { id: "TFC-2", runner: "tfc2", blurb: "Inject a wrong-way track at Karal Phata; anomaly fires; e-Challan issued with evidence.", params: { camera_id: "C-KARAL-EXIT" } },
-  { id: "TFC-3", runner: "tfc3", blurb: "UC-II DPD release spike (2.5×) → corridor demand surge; forecaster build-up; gate-slot reissue.", params: { dpd_release_spike: 2.5 } },
+  {
+    id: "TFC-1",
+    runner: "tfc1",
+    blurb:
+      "Close G-NSICT; forecaster predicts spillover; trucks auto-re-route; TAS slots rescheduled.",
+    params: { gate_id: "G-NSICT", duration_minutes: 120 },
+  },
+  {
+    id: "TFC-2",
+    runner: "tfc2",
+    blurb:
+      "Inject a wrong-way track at Karal Phata; anomaly fires; e-Challan issued with evidence.",
+    params: { camera_id: "C-KARAL-EXIT" },
+  },
+  {
+    id: "TFC-3",
+    runner: "tfc3",
+    blurb:
+      "UC-II DPD release spike (2.5×) → corridor demand surge; forecaster build-up; gate-slot reissue.",
+    params: { dpd_release_spike: 2.5 },
+  },
 ];
 
 export default function WhatIfConsole() {
@@ -47,10 +65,11 @@ export default function WhatIfConsole() {
   });
 
   const steps: ScenarioStep[] = useMemo(() => {
-    const live = activeHandle ? scenarioSteps[activeHandle] ?? [] : [];
+    const live = activeHandle ? (scenarioSteps[activeHandle] ?? []) : [];
     const fetched = (timelineQ.data?.steps ?? []) as ScenarioStep[];
     const byNo = new Map<number, ScenarioStep>();
-    for (const s of fetched) byNo.set(s.step_no, { ...s, handle_id: activeHandle!, scenario: activeRunner! });
+    for (const s of fetched)
+      byNo.set(s.step_no, { ...s, handle_id: activeHandle!, scenario: activeRunner! });
     for (const s of live) byNo.set(s.step_no, s);
     return [...byNo.values()].sort((a, b) => a.step_no - b.step_no);
   }, [scenarioSteps, activeHandle, activeRunner, timelineQ.data]);
@@ -83,7 +102,12 @@ export default function WhatIfConsole() {
             </p>
           </div>
         </div>
-        <Button variant="outline" size="sm" onClick={onReset} disabled={resetRun.isPending || !activeRunner}>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onReset}
+          disabled={resetRun.isPending || !activeRunner}
+        >
           {resetRun.isPending ? <Spinner /> : <RotateCcw className="h-3.5 w-3.5" />}
           Reset to baseline
         </Button>
@@ -101,12 +125,12 @@ export default function WhatIfConsole() {
               <CardContent className="space-y-3">
                 <p className="text-xs text-muted-foreground">{s.blurb}</p>
                 <pre className="rounded bg-muted p-2 text-[11px]">{JSON.stringify(s.params)}</pre>
-                <Button
-                  size="sm"
-                  onClick={() => trigger(s)}
-                  disabled={run.isPending}
-                >
-                  {run.isPending && run.variables?.id === s.id ? <Spinner /> : <Play className="h-3.5 w-3.5" />}
+                <Button size="sm" onClick={() => trigger(s)} disabled={run.isPending}>
+                  {run.isPending && run.variables?.id === s.id ? (
+                    <Spinner />
+                  ) : (
+                    <Play className="h-3.5 w-3.5" />
+                  )}
                   Run {s.id}
                 </Button>
               </CardContent>
@@ -135,7 +159,9 @@ export default function WhatIfConsole() {
         </div>
 
         {!activeHandle ? (
-          <p className="text-sm text-muted-foreground">Run a scenario to see its step-by-step storyline.</p>
+          <p className="text-sm text-muted-foreground">
+            Run a scenario to see its step-by-step storyline.
+          </p>
         ) : steps.length === 0 ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Spinner /> waiting for steps…
@@ -150,13 +176,19 @@ export default function WhatIfConsole() {
                   aria-hidden
                 />
                 <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold tabular-nums text-muted-foreground">#{s.step_no}</span>
+                  <span className="text-xs font-semibold tabular-nums text-muted-foreground">
+                    #{s.step_no}
+                  </span>
                   <span className="text-sm font-medium">{s.title}</span>
                   <Badge colour={stepColour(s.status)}>{s.status}</Badge>
-                  <span className="ml-auto text-[10px] text-muted-foreground">{fmtTimeIST(s.ts)}</span>
+                  <span className="ml-auto text-[10px] text-muted-foreground">
+                    {fmtTimeIST(s.ts)}
+                  </span>
                 </div>
                 {s.trigger && (
-                  <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">↳ {s.trigger}</div>
+                  <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">
+                    ↳ {s.trigger}
+                  </div>
                 )}
                 <CrossTwinArrow step={s} />
               </li>

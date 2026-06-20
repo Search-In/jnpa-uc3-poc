@@ -62,7 +62,12 @@ export default function PoliceReports() {
       <div className="grid grid-cols-2 gap-3 border-b border-border p-4 md:grid-cols-5">
         <FilterSelect label="Kind" value={kind} onChange={setKind} options={KINDS} />
         <FilterSelect label="Gate" value={gate} onChange={setGate} options={GATES} />
-        <FilterSelect label="Severity" value={severity} onChange={setSeverity} options={SEVERITIES} />
+        <FilterSelect
+          label="Severity"
+          value={severity}
+          onChange={setSeverity}
+          options={SEVERITIES}
+        />
         <FilterDate label="From" value={since} onChange={setSince} />
         <FilterDate label="To" value={until} onChange={setUntil} />
       </div>
@@ -153,7 +158,15 @@ function FilterSelect({
   );
 }
 
-function FilterDate({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+function FilterDate({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
   return (
     <label className="text-[11px] text-muted-foreground">
       {label}
@@ -167,7 +180,13 @@ function FilterDate({ label, value, onChange }: { label: string; value: string; 
   );
 }
 
-function IncidentDialog({ incident, onClose }: { incident: PoliceIncident | null; onClose: () => void }) {
+function IncidentDialog({
+  incident,
+  onClose,
+}: {
+  incident: PoliceIncident | null;
+  onClose: () => void;
+}) {
   return (
     <Dialog open={!!incident} onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
@@ -185,7 +204,10 @@ function IncidentDialog({ incident, onClose }: { incident: PoliceIncident | null
                 <KV k="Time (IST)" v={fmtDateTimeIST(incident.ts)} />
                 <KV k="Owner (masked)" v={incident.rc?.owner_name_masked ?? "—"} />
                 <KV k="Vehicle class" v={incident.rc?.vehicle_class ?? "—"} />
-                <KV k="RTO / State" v={`${incident.rc?.rto_code ?? "—"} / ${incident.rc?.state ?? "—"}`} />
+                <KV
+                  k="RTO / State"
+                  v={`${incident.rc?.rto_code ?? "—"} / ${incident.rc?.state ?? "—"}`}
+                />
                 <KV k="FASTag" v={incident.rc?.fastag_status ?? "—"} />
               </div>
               {incident.evidence_url && (

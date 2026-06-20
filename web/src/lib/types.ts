@@ -241,7 +241,10 @@ export type WsFrame =
   | { type: "hello"; payload: { service: string; channels: string[] } }
   | { type: "alert"; payload: Alert }
   | { type: "traffic"; payload: TrafficSnapshot }
-  | { type: "truck_position"; payload: { device_id: string; plate?: string; lat: number; lon: number; speed_kmh?: number } }
+  | {
+      type: "truck_position";
+      payload: { device_id: string; plate?: string; lat: number; lon: number; speed_kmh?: number };
+    }
   | { type: "decision"; payload: Decision }
   | { type: "scenario_step"; payload: ScenarioStep }
   | { type: "operator_banner"; payload: OperatorBanner };

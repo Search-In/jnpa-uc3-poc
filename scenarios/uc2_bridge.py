@@ -18,12 +18,13 @@ from dataclasses import dataclass
 from typing import Any, Dict
 
 from jnpa_shared.logging import get_logger
+from jnpa_shared.schemas import TOPIC_DPD_RELEASE, DpdReleaseEvent
 
 log = get_logger("scenarios.uc2_bridge")
 
-# Cross-twin Kafka topic (UC-II produces; UC-III consumes). Not in
-# jnpa_shared.schemas because it is owned by the other twin.
-TOPIC_DPD_RELEASE = "cargo.dpd_release"
+# Cross-twin Kafka topic + typed event live in the shared schemas package (XT-1):
+# defined ONCE so UC-II (producer) and UC-III (consumer) agree on the contract.
+# Re-exported here for the existing call sites.
 
 # Baseline corridor truck demand (trucks/hour) at 1.0x release.
 BASELINE_TRUCKS_PER_H = 240
@@ -47,14 +48,17 @@ class DemandProfile:
         }
 
 
-def translate_release(event: Dict[str, Any]) -> DemandProfile:
+def translate_release(event: "Dict[str, Any] | DpdReleaseEvent") -> DemandProfile:
     """Translate a ``cargo.dpd_release`` event into a UC-III demand profile.
 
-    Event shape (what UC-II would publish):
+    Accepts either the typed cross-twin model (``DpdReleaseEvent``) or the raw
+    dict UC-II would put on the wire:
         {"dpd_release_spike": 2.5, "window_min": 40}
     The spec's TFC-3 calls for "bursts of 600 trucks/h released over 40 min";
     that is exactly 2.5x the 240/h baseline, so the defaults reproduce it.
     """
+    if isinstance(event, DpdReleaseEvent):
+        event = event.model_dump()
     mult = float(event.get("dpd_release_spike", 1.0))
     window_min = int(event.get("window_min", 40))
     trucks_per_h = int(round(BASELINE_TRUCKS_PER_H * mult))
@@ -66,4 +70,10 @@ def translate_release(event: Dict[str, Any]) -> DemandProfile:
     return profile
 
 
-__all__ = ["TOPIC_DPD_RELEASE", "BASELINE_TRUCKS_PER_H", "DemandProfile", "translate_release"]
+__all__ = [
+    "TOPIC_DPD_RELEASE",
+    "DpdReleaseEvent",
+    "BASELINE_TRUCKS_PER_H",
+    "DemandProfile",
+    "translate_release",
+]

@@ -140,6 +140,58 @@ def test_combined_weighted_accuracy_gate():
 
 
 # --------------------------------------------------------------------------
+# Committed-artifact OCR accuracy gate (bid §8.5.2 / §8.5.1: OCR >= 95%)
+# --------------------------------------------------------------------------
+import json  # noqa: E402
+
+ANPR_EVAL_METRICS = REPO_ROOT / "ai" / "anpr" / "eval" / "metrics.json"
+
+
+def _anpr_eval() -> dict:
+    if not ANPR_EVAL_METRICS.exists():
+        pytest.skip("ai/anpr/eval/metrics.json absent (run ai/anpr eval/bench.py to produce)")
+    return json.loads(ANPR_EVAL_METRICS.read_text())
+
+
+def _weights_loaded(m: dict) -> bool:
+    """The real CRNN/PaddleOCR path ran iff weights are present and the service
+    did NOT fall back to the deterministic OCR."""
+    return bool(m.get("weights_sha256")) and not m.get("degraded", False)
+
+
+def test_anpr_eval_artifact_is_wellformed():
+    """The eval artifact must always carry the fields the gate reads, regardless
+    of whether real weights are loaded."""
+    m = _anpr_eval()
+    for k in ("combined_weighted_accuracy_pct", "target_pct", "OCR_TARGET_MET", "degraded"):
+        assert k in m, f"ai/anpr/eval/metrics.json missing {k}"
+
+
+def test_anpr_ocr_meets_target_when_weights_present():
+    """HARD GATE — bid commits OCR >= 95%.
+
+    * SKIP when the real CRNN weights are absent / the service is in the
+      deterministic fallback (the CPU-only PoC host): the architecture is proven
+      but the headline number is a post-award real-data/weights tuning item, and
+      the dashboard shows the 'DEGRADED MODEL' notice (see Wave 0.2).
+    * FAIL when weights ARE loaded but accuracy is below 95% — a real regression.
+    """
+    m = _anpr_eval()
+    if not _weights_loaded(m):
+        pytest.skip(
+            "ANPR running deterministic fallback (no CRNN weights) — OCR >=95% is a "
+            "post-award weights/real-data tuning item; dashboard surfaces it via the "
+            "DEGRADED MODEL notice. Load weights + re-run eval/bench.py to enforce."
+        )
+    target = float(m.get("target_pct", 95.0))
+    acc = float(m["combined_weighted_accuracy_pct"])
+    assert m.get("OCR_TARGET_MET") is True, (
+        f"OCR_TARGET_MET is false with weights loaded (acc={acc:.2f}% vs {target:.1f}%)"
+    )
+    assert acc >= target, f"OCR combined accuracy {acc:.2f}% is below the {target:.1f}% commitment"
+
+
+# --------------------------------------------------------------------------
 # Degradation
 # --------------------------------------------------------------------------
 from anpr.degradation import DEGRADATIONS, dust_haze, low_light, night_low_light  # noqa: E402

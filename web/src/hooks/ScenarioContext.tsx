@@ -25,7 +25,7 @@ const KEY = "jnpa.scenario";
 
 export function ScenarioProvider({ children }: { children: ReactNode }) {
   const [scenario, setScenarioState] = useState<ScenarioId>(
-    () => (sessionStorage.getItem(KEY) as ScenarioId) || "none"
+    () => (sessionStorage.getItem(KEY) as ScenarioId) || "none",
   );
   const setScenario = (s: ScenarioId) => {
     sessionStorage.setItem(KEY, s);

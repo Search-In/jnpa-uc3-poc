@@ -20,7 +20,7 @@ export const DialogContent = React.forwardRef<
         side === "right"
           ? "right-0 top-0 h-full w-full max-w-xl overflow-y-auto"
           : "left-1/2 top-1/2 max-h-[85vh] w-[92vw] max-w-2xl -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-lg",
-        className
+        className,
       )}
       {...props}
     >
@@ -44,7 +44,11 @@ export const DialogTitle = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Title>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Title>
 >(({ className, ...props }, ref) => (
-  <DialogPrimitive.Title ref={ref} className={cn("text-base font-semibold", className)} {...props} />
+  <DialogPrimitive.Title
+    ref={ref}
+    className={cn("text-base font-semibold", className)}
+    {...props}
+  />
 ));
 DialogTitle.displayName = "DialogTitle";
 

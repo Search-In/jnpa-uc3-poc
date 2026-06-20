@@ -129,22 +129,13 @@ export function Shell({ children, onResetBaseline, resetDisabled }: ShellProps) 
       </CalciteNavigation>
 
       {/* ---- Left nav rail ---- */}
-      <CalciteShellPanel
-        slot="panel-start"
-        widthScale="m"
-        collapsed={false}
-        resizable={false}
-      >
+      <CalciteShellPanel slot="panel-start" widthScale="m" collapsed={false} resizable={false}>
         <nav
           aria-label={t("app.title")}
           style={{ display: "flex", flexDirection: "column", paddingBlock: "0.5rem" }}
         >
           {ROUTES.map((r) => (
-            <NavLink
-              key={r.to}
-              to={r.to}
-              style={({ isActive }) => navLinkStyle(isActive)}
-            >
+            <NavLink key={r.to} to={r.to} style={({ isActive }) => navLinkStyle(isActive)}>
               <CalciteIcon icon={r.icon} scale="s" />
               <span>{t(r.i18nKey)}</span>
             </NavLink>

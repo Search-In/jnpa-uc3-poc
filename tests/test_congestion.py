@@ -15,6 +15,7 @@ Two layers:
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import socket
 import sys
@@ -55,6 +56,11 @@ def _small_cfg(**kw) -> CongestionConfig:
 
 
 # --------------------------------------------------------------------------- graph
+# build_corridor_graph() imports torch (graph.py uses torch tensors), so the
+# graph/synthetic/feature/source tests below are skipped — not failed — on a
+# torch-less host. The model-metric thresholds are gated separately by
+# test_congestion_f1_meets_target (which reads metrics.json, no torch needed).
+@pytest.mark.skipif(not HAVE_TORCH, reason="build_corridor_graph requires torch")
 def test_graph_matches_corridor_segments():
     from jnpa_shared import corridor
 
@@ -69,12 +75,14 @@ def test_graph_matches_corridor_segments():
     assert g.meta[0].lane_count >= g.meta[-1].lane_count
 
 
+@pytest.mark.skipif(not HAVE_TORCH, reason="build_corridor_graph requires torch")
 def test_graph_has_signalised_segments():
     g = build_corridor_graph()
     assert any(m.signalised for m in g.meta), "expected at least one signalised segment"
 
 
 # --------------------------------------------------------------------------- synthetic
+@pytest.mark.skipif(not HAVE_TORCH, reason="build_corridor_graph requires torch")
 def test_synthetic_history_shape_and_peaks():
     cfg = _small_cfg()
     g = build_corridor_graph()
@@ -86,6 +94,7 @@ def test_synthetic_history_shape_and_peaks():
     assert all(r.speed_kmh > 0 for r in rows[:1000])
 
 
+@pytest.mark.skipif(not HAVE_TORCH, reason="build_corridor_graph requires torch")
 def test_synthetic_respects_commute_peaks():
     """Mean jam during the evening peak window must exceed a 03:00 night floor."""
     cfg = _small_cfg(history_days=3)
@@ -106,6 +115,7 @@ def test_synthetic_respects_commute_peaks():
 
 
 # --------------------------------------------------------------------------- features
+@pytest.mark.skipif(not HAVE_TORCH, reason="build_corridor_graph requires torch")
 def test_feature_matrix_dims_and_labels():
     cfg = _small_cfg()
     g = build_corridor_graph()
@@ -124,6 +134,7 @@ def test_feature_matrix_dims_and_labels():
     assert fm.features.min() >= -1.01 and fm.features.max() <= 1.6
 
 
+@pytest.mark.skipif(not HAVE_TORCH, reason="build_corridor_graph requires torch")
 def test_onset_excludes_already_congested():
     """A segment congested at window-end must be masked out (not a positive)."""
     cfg = _small_cfg()
@@ -160,6 +171,40 @@ def test_metrics_summary_keys():
         assert k in s
 
 
+# --------------------------------------------------------------------------- threshold gate
+def _committed_congestion_metrics() -> dict:
+    """The committed congestion artifact (no torch needed). Single source of
+    truth for the bid §8.5.2 F1 >= 0.85 gate, mirrored by scripts/poc_selftest."""
+    return json.loads((REPO_ROOT / "ai/congestion/artifacts/metrics.json").read_text())
+
+
+# HARD GATE — bid §8.5.2 commits congestion onset F1 >= 0.85.
+# Marked xfail(strict=True) because the CURRENT committed artifact is 0.8411
+# (below target — a known tuning item, see docs/UC3_PRODUCTION_AUDIT.md AI-2).
+# This keeps the suite honest on a CPU host AND self-correcting: the moment a
+# retrain pushes F1 >= 0.85 this test XPASSes, which (under strict) FAILS the
+# build and forces removal of the xfail marker — the number can never silently
+# drift or be silently "fixed" without acknowledgement.
+@pytest.mark.xfail(
+    reason="committed F1=0.8411 < 0.85 target — retrain on a torch host to close; "
+    "remove this marker once metrics.json clears the bar",
+    strict=True,
+)
+def test_congestion_f1_meets_target():
+    m = _committed_congestion_metrics()
+    f1 = float(m["congestion_onset_f1"])
+    target = float(m.get("target_f1", 0.85))
+    assert f1 >= target, f"congestion onset F1 {f1:.4f} is below the {target:.2f} commitment"
+
+
+def test_congestion_metrics_artifact_is_wellformed():
+    """The artifact must always carry the gateable fields (independent of value)."""
+    m = _committed_congestion_metrics()
+    for k in ("congestion_onset_f1", "precision", "recall", "target_f1"):
+        assert k in m, f"metrics.json missing {k}"
+    assert 0.0 <= float(m["congestion_onset_f1"]) <= 1.0
+
+
 # --------------------------------------------------------------------------- sources
 class _FakeRedis:
     def __init__(self):
@@ -172,6 +217,7 @@ class _FakeRedis:
         self.store[k] = v
 
 
+@pytest.mark.skipif(not HAVE_TORCH, reason="build_corridor_graph requires torch")
 def test_source_manager_cascade_and_stale(monkeypatch):
     from congestion.sources import SourceManager
     from congestion.sources.base import SpeedReading
@@ -223,6 +269,7 @@ def test_source_manager_cascade_and_stale(monkeypatch):
     assert r2.speed_kmh == 40.0  # the last-known value
 
 
+@pytest.mark.skipif(not HAVE_TORCH, reason="build_corridor_graph requires torch")
 def test_source_synthetic_when_unconfigured():
     """An adapter with no API key returns a synthetic reading tagged with its
     own name (keeps the cascade alive offline)."""

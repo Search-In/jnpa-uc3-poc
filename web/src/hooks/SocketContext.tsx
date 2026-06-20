@@ -43,7 +43,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
           return next.sort(
             (x, y) =>
               severityRank(y.severity) - severityRank(x.severity) ||
-              (y.ts || "").localeCompare(x.ts || "")
+              (y.ts || "").localeCompare(x.ts || ""),
           );
         });
       } else if (frame.type === "scenario_step") {
@@ -52,7 +52,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
           const existing = prev[s.handle_id] ?? [];
           // de-dupe by step_no, keep ordered
           const merged = [...existing.filter((x) => x.step_no !== s.step_no), s].sort(
-            (a, b) => a.step_no - b.step_no
+            (a, b) => a.step_no - b.step_no,
           );
           return { ...prev, [s.handle_id]: merged };
         });

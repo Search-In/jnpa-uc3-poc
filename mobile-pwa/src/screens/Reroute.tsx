@@ -29,13 +29,21 @@ export default function Reroute() {
   };
 
   return (
-    <div className="reroute-screen" data-testid="reroute-screen" role="alertdialog" aria-live="assertive">
+    <div
+      className="reroute-screen"
+      data-testid="reroute-screen"
+      role="alertdialog"
+      aria-live="assertive"
+    >
       <div className="pulse">↻</div>
       <h2>{t("reroute.title")}</h2>
       <p className="lead">{r.reason || t("reroute.defaultReason")}</p>
 
       <div className="dest">
-        <div className="muted" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: 0.6 }}>
+        <div
+          className="muted"
+          style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: 0.6 }}
+        >
           {t("reroute.proceedTo")}
         </div>
         <div className="g">{gateShort(r.gate_id) || t("reroute.newDestination")}</div>

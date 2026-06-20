@@ -70,7 +70,11 @@ export default function Profile({ deviceId, plate }: { deviceId: string; plate?:
   return (
     <>
       <Card title={t("common.language")}>
-        <label htmlFor="lang-select" className="muted" style={{ fontSize: 13, display: "block", marginBottom: 6 }}>
+        <label
+          htmlFor="lang-select"
+          className="muted"
+          style={{ fontSize: 13, display: "block", marginBottom: 6 }}
+        >
           {t("common.language")}
         </label>
         <select
@@ -107,12 +111,27 @@ export default function Profile({ deviceId, plate }: { deviceId: string; plate?:
                 {path}
               </Chip>
             </div>
-            <Row k={t("profile.owner")} v={rc.owner_name_masked || rc.owner_name || t("common.noData")} />
-            <Row k={t("profile.makerModel")} v={[rc.maker, rc.model].filter(Boolean).join(" ") || t("common.noData")} />
-            <Row k={t("profile.class")} v={rc.vehicle_class || rc.vehicle_category || t("common.noData")} />
+            <Row
+              k={t("profile.owner")}
+              v={rc.owner_name_masked || rc.owner_name || t("common.noData")}
+            />
+            <Row
+              k={t("profile.makerModel")}
+              v={[rc.maker, rc.model].filter(Boolean).join(" ") || t("common.noData")}
+            />
+            <Row
+              k={t("profile.class")}
+              v={rc.vehicle_class || rc.vehicle_category || t("common.noData")}
+            />
             <Row k={t("profile.fuel")} v={rc.fuel_type || t("common.noData")} />
-            <Row k={t("profile.rcStatus")} v={rc.rc_status || (provisional ? "PROVISIONAL" : t("common.noData"))} />
-            <Row k={t("profile.insuranceUpto")} v={rc.insurance_upto || rc.insurance_validity || t("common.noData")} />
+            <Row
+              k={t("profile.rcStatus")}
+              v={rc.rc_status || (provisional ? "PROVISIONAL" : t("common.noData"))}
+            />
+            <Row
+              k={t("profile.insuranceUpto")}
+              v={rc.insurance_upto || rc.insurance_validity || t("common.noData")}
+            />
             <Row k={t("profile.fitnessUpto")} v={rc.fitness_upto || t("common.noData")} />
             {provisional ? (
               <div className="banner warn" style={{ marginTop: 10 }}>
@@ -129,7 +148,11 @@ export default function Profile({ deviceId, plate }: { deviceId: string; plate?:
 
       <Card title={t("profile.notifications")}>
         <button className="btn" disabled={pushBusy || push === "subscribed"} onClick={onEnablePush}>
-          {pushBusy ? t("profile.enabling") : push === "subscribed" ? t("profile.pushEnabled") : t("profile.enablePush")}
+          {pushBusy
+            ? t("profile.enabling")
+            : push === "subscribed"
+              ? t("profile.pushEnabled")
+              : t("profile.enablePush")}
         </button>
         {push ? (
           <div className="muted" style={{ fontSize: 12, marginTop: 8, textAlign: "center" }}>

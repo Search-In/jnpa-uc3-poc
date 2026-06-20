@@ -19,14 +19,7 @@ import {
 // ---------------------------------------------------------------------------
 // Re-exports — palette ramps stay the canonical, colour-blind-safe source.
 // ---------------------------------------------------------------------------
-export {
-  SEVERITY_COLOUR,
-  severityColour,
-  severityRank,
-  jamColour,
-  gateColour,
-  sourceStateColour,
-};
+export { SEVERITY_COLOUR, severityColour, severityRank, jamColour, gateColour, sourceStateColour };
 
 // ---------------------------------------------------------------------------
 // Okabe–Ito palette (colour-blind safe). The atomic literals live ONLY here.
@@ -138,7 +131,5 @@ export function parkingStatusColour(status?: string | null): string {
 
 /** Zone kind → fill/outline colour. */
 export function zoneColour(kind?: string | null): string {
-  return kind === "restricted"
-    ? MAP_TOKENS.zoneRestrictedFill
-    : MAP_TOKENS.zoneNoParkingFill;
+  return kind === "restricted" ? MAP_TOKENS.zoneRestrictedFill : MAP_TOKENS.zoneNoParkingFill;
 }

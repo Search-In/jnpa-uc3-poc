@@ -454,6 +454,18 @@ def mask_owner_name(name: str) -> str:
     return " ".join(out)
 
 
+# --- Cross-twin contract (XT-1): defined ONCE in the shared package so UC-II
+# (producer) and UC-III (consumer) share one typed schema. UC-II publishes a DPD
+# (Direct Port Delivery) release spike; UC-III consumes it as leading-indicator
+# truck demand (see scenarios/uc2_bridge.py + TFC-3).
+class DpdReleaseEvent(_Base):
+    """UC-II -> UC-III DPD release-spike event (topic ``cargo.dpd_release``)."""
+
+    dpd_release_spike: float = Field(default=1.0, ge=0.0, description="multiplier vs 1.0x baseline")
+    window_min: int = Field(default=40, ge=1, description="release window in minutes")
+    ts: datetime = Field(default_factory=_utcnow)
+
+
 # Topic name constants used across services.
 TOPIC_ANPR = "anpr.reads"
 TOPIC_RFID = "rfid.reads"
@@ -473,6 +485,7 @@ TOPIC_EMPTY_CONTAINER = "empty.container.moves"
 TOPIC_CARBON = "carbon.records"
 TOPIC_FACE = "face.verifications"
 TOPIC_GEOFENCE = "geofence.violations"
+TOPIC_DPD_RELEASE = "cargo.dpd_release"  # cross-twin (UC-II -> UC-III), XT-1/XT-2
 
 MQTT_RFID_PREFIX = "rfid/readers"  # e.g. rfid/readers/R-01
 
@@ -513,6 +526,7 @@ __all__ = [
     "FaceVerification",
     "GeofenceType",
     "GeofenceViolation",
+    "DpdReleaseEvent",
     # --- topics ---
     "TOPIC_ANPR",
     "TOPIC_RFID",
@@ -528,5 +542,6 @@ __all__ = [
     "TOPIC_CARBON",
     "TOPIC_FACE",
     "TOPIC_GEOFENCE",
+    "TOPIC_DPD_RELEASE",
     "MQTT_RFID_PREFIX",
 ]

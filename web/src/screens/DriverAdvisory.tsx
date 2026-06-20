@@ -29,7 +29,7 @@ export default function DriverAdvisory() {
   for (const t of devices) if (t.gate_id) depth.set(t.gate_id, (depth.get(t.gate_id) ?? 0) + 1);
   const recommendFor = (current?: string | null) => {
     const ranked = GATES.filter((g) => g !== current).sort(
-      (a, b) => (depth.get(a) ?? 0) - (depth.get(b) ?? 0)
+      (a, b) => (depth.get(a) ?? 0) - (depth.get(b) ?? 0),
     );
     return ranked[0];
   };
@@ -40,7 +40,8 @@ export default function DriverAdvisory() {
         <div>
           <h1 className="text-lg font-semibold">Driver Advisory</h1>
           <p className="text-sm text-muted-foreground">
-            Trucks in <span className="font-mono">AT_GATE_QUEUE</span> · ETA-to-gate &amp; re-route recommendation
+            Trucks in <span className="font-mono">AT_GATE_QUEUE</span> · ETA-to-gate &amp; re-route
+            recommendation
           </p>
         </div>
         <Badge colour="#56B4E9">{devices.length} queued</Badge>
@@ -74,7 +75,12 @@ export default function DriverAdvisory() {
               </thead>
               <tbody>
                 {devices.slice(0, 200).map((t) => (
-                  <QueueRow key={t.device_id} truck={t} recommend={recommendFor(t.gate_id)} qc={qc} />
+                  <QueueRow
+                    key={t.device_id}
+                    truck={t}
+                    recommend={recommendFor(t.gate_id)}
+                    qc={qc}
+                  />
                 ))}
               </tbody>
             </table>
@@ -96,7 +102,11 @@ function QueueRow({
 }) {
   const [done, setDone] = useState(false);
   const reroute = useMutation({
-    mutationFn: () => getAdapter().reroute(truck.device_id, { gate_id: recommend, force_state: "EN_ROUTE_TO_PORT" }),
+    mutationFn: () =>
+      getAdapter().reroute(truck.device_id, {
+        gate_id: recommend,
+        force_state: "EN_ROUTE_TO_PORT",
+      }),
     onSuccess: () => {
       setDone(true);
       qc.invalidateQueries({ queryKey: ["trucks"] });

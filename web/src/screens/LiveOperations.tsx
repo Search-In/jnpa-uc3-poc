@@ -27,20 +27,39 @@ export default function LiveOperations() {
 
   // All data now flows through the typed adapter (never the gateway directly).
   // Adapter methods return UNWRAPPED data (Gate[], TrafficSnapshot[], …).
-  const corridorQ = useQuery({ queryKey: ["corridor"], queryFn: () => getAdapter().corridor(), staleTime: Infinity });
+  const corridorQ = useQuery({
+    queryKey: ["corridor"],
+    queryFn: () => getAdapter().corridor(),
+    staleTime: Infinity,
+  });
   const gatesQ = useQuery({ queryKey: ["gates"], queryFn: () => getAdapter().gates() });
-  const snapsQ = useQuery({ queryKey: ["snapshots"], queryFn: () => getAdapter().trafficSnapshots() });
+  const snapsQ = useQuery({
+    queryKey: ["snapshots"],
+    queryFn: () => getAdapter().trafficSnapshots(),
+  });
   const zonesQ = useQuery({ queryKey: ["zones"], queryFn: () => getAdapter().zones() });
-  const trucksQ = useQuery({ queryKey: ["trucks", "live-map"], queryFn: () => getAdapter().trucks(undefined, 500) });
+  const trucksQ = useQuery({
+    queryKey: ["trucks", "live-map"],
+    queryFn: () => getAdapter().trucks(undefined, 500),
+  });
   const queuedQ = useQuery({
     queryKey: ["trucks", "AT_GATE_QUEUE"],
     queryFn: () => getAdapter().trucks("AT_GATE_QUEUE", 500),
   });
-  const parkingQ = useQuery({ queryKey: ["parking-availability"], queryFn: () => getAdapter().parkingAvailability() });
+  const parkingQ = useQuery({
+    queryKey: ["parking-availability"],
+    queryFn: () => getAdapter().parkingAvailability(),
+  });
   // Seed the alert list from the adapter so the panel isn't empty before the first WS push.
-  const alertsSeed = useQuery({ queryKey: ["alerts-seed"], queryFn: () => getAdapter().alerts({ limit: 20 }) });
+  const alertsSeed = useQuery({
+    queryKey: ["alerts-seed"],
+    queryFn: () => getAdapter().alerts({ limit: 20 }),
+  });
   // Prediction carries a decision_path → surfaced as a LIVE/SYNTHETIC badge.
-  const predictQ = useQuery({ queryKey: ["traffic-predict"], queryFn: () => getAdapter().trafficPredict() });
+  const predictQ = useQuery({
+    queryKey: ["traffic-predict"],
+    queryFn: () => getAdapter().trafficPredict(),
+  });
 
   const gates: Gate[] = gatesQ.data ?? [];
   const snapshots: TrafficSnapshot[] = snapsQ.data ?? [];
@@ -81,14 +100,20 @@ export default function LiveOperations() {
           <Card key={g.id}>
             <CardContent className="flex flex-col gap-1 py-3">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-medium text-muted-foreground">{g.id.replace("G-", "")}</span>
-                <Badge colour={severityColour(g.utilisation && g.utilisation >= 1 ? "critical" : "ok")}>
+                <span className="text-xs font-medium text-muted-foreground">
+                  {g.id.replace("G-", "")}
+                </span>
+                <Badge
+                  colour={severityColour(g.utilisation && g.utilisation >= 1 ? "critical" : "ok")}
+                >
                   {Math.round((g.utilisation ?? 0) * 100)}%
                 </Badge>
               </div>
               <div className="text-xl font-semibold tabular-nums">
                 {g.throughput_60min}
-                <span className="ml-1 text-xs font-normal text-muted-foreground">/{g.target_vph} vph</span>
+                <span className="ml-1 text-xs font-normal text-muted-foreground">
+                  /{g.target_vph} vph
+                </span>
               </div>
               <div className="text-[11px] text-muted-foreground">
                 queue {queueByGate.get(g.id) ?? 0} · target {g.target_vph}/h
@@ -131,7 +156,9 @@ export default function LiveOperations() {
         <aside className="flex w-80 shrink-0 flex-col border-l border-border bg-card/40">
           <div className="border-b border-border px-4 py-3">
             <h2 className="text-sm font-semibold">Active alerts</h2>
-            <p className="text-[11px] text-muted-foreground">Top 10 · click to locate & view evidence</p>
+            <p className="text-[11px] text-muted-foreground">
+              Top 10 · click to locate & view evidence
+            </p>
           </div>
           <ul className="min-h-0 flex-1 overflow-y-auto">
             {merged.length === 0 && (
@@ -248,7 +275,12 @@ function AlertEvidenceDialog({ alert, onClose }: { alert: Alert | null; onClose:
                     e-Challan <span className="font-mono font-semibold">{echallanId}</span>
                   </span>
                   {echallanPdf && (
-                    <a href={echallanPdf} target="_blank" rel="noreferrer" className="text-severity-info hover:underline">
+                    <a
+                      href={echallanPdf}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-severity-info hover:underline"
+                    >
                       open PDF
                     </a>
                   )}

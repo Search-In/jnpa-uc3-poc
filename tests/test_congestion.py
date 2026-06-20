@@ -179,17 +179,10 @@ def _committed_congestion_metrics() -> dict:
 
 
 # HARD GATE — bid §8.5.2 commits congestion onset F1 >= 0.85.
-# Marked xfail(strict=True) because the CURRENT committed artifact is 0.8411
-# (below target — a known tuning item, see docs/UC3_PRODUCTION_AUDIT.md AI-2).
-# This keeps the suite honest on a CPU host AND self-correcting: the moment a
-# retrain pushes F1 >= 0.85 this test XPASSes, which (under strict) FAILS the
-# build and forces removal of the xfail marker — the number can never silently
-# drift or be silently "fixed" without acknowledgement.
-@pytest.mark.xfail(
-    reason="committed F1=0.8411 < 0.85 target — retrain on a torch host to close; "
-    "remove this marker once metrics.json clears the bar",
-    strict=True,
-)
+# The committed artifact was retrained (train_stride=1, all windows), lifting
+# F1 0.8411 -> 0.8797, which clears the bar. The prior xfail(strict=True) marker
+# has been removed now that metrics.json meets the commitment; this is now a
+# live gate that fails if F1 ever regresses below target.
 def test_congestion_f1_meets_target():
     m = _committed_congestion_metrics()
     f1 = float(m["congestion_onset_f1"])

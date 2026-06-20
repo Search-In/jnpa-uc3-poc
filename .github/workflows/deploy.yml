@@ -44,40 +44,75 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
 
+      - name: Free disk space on EC2 (before sync)
+        run: |
+          ssh -i ~/.ssh/id_rsa ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }} << 'EOF'
+            set -e
+            echo "== disk before cleanup =="; df -h / || true
+            # Reclaim Docker space aggressively: stopped containers, unused images,
+            # networks AND the build cache (the big accumulator across --build runs).
+            docker container prune -f || true
+            docker image prune -af || true
+            docker builder prune -af || true
+            docker network prune -f || true
+            # Drop stale rsync temp files from any prior failed run.
+            find /home/ec2-user/jnpa-uc3-poc -name '.*.??????' -type f -delete 2>/dev/null || true
+            echo "== disk after cleanup =="; df -h / || true
+          EOF
+
       - name: Copy Code to EC2 via Rsync
         run: |
+          # Ship source + the prebuilt web/mobile dist (the web image COPYies dist;
+          # it does NOT build the frontend), but exclude everything the host never
+          # needs — these are what filled the disk (rsync ignores .dockerignore).
           rsync -avz --delete \
             --exclude '.git' \
             --exclude '.github' \
             --exclude 'node_modules' \
             --exclude '**/node_modules' \
+            --exclude '.venv' \
+            --exclude '**/__pycache__' \
+            --exclude '**/*.egg-info' \
+            --exclude '**/.pytest_cache' \
+            --exclude '**/coverage' \
+            --exclude '_attic' \
+            --exclude '**/_attic' \
+            --exclude '**/test-results' \
+            --exclude '**/playwright-report' \
+            --exclude '*.tsbuildinfo' \
+            --exclude 'data/clips/*.mp4' \
+            --exclude 'data/clips/*.mov' \
+            --exclude 'evidence/screenshots' \
             -e "ssh -i ~/.ssh/id_rsa" \
             ./ ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}:/home/ec2-user/jnpa-uc3-poc/
 
       - name: Deploy Stack using Docker Compose
         run: |
           ssh -i ~/.ssh/id_rsa ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }} << 'EOF'
+            set -e
             cd /home/ec2-user/jnpa-uc3-poc
-            
+
             # 1. Create a starter .env if it doesn't exist
             if [ ! -f .env ]; then
               echo "Creating initial .env file..."
               cp .env.aws.example .env
-              
+
               # Auto-generate secure random credentials
               DB_PASS="$(openssl rand -hex 16)"
               sed -i "s/change-me-postgres/${DB_PASS}/g" .env
-              
+
               MINIO_KEY="$(openssl rand -hex 16)"
               sed -i "s/change-me-minio-key/${MINIO_KEY}/g" .env
-              
+
               MINIO_SEC="$(openssl rand -hex 24)"
               sed -i "s/change-me-minio-secret/${MINIO_SEC}/g" .env
             fi
-            
-            # 2. Run docker-compose build and restart the stack
+
+            # 2. Build + restart the stack.
             docker compose -f docker-compose.yml -f docker-compose.aws.yml up -d --build
-            
-            # 3. Clean up unused/dangling Docker build cache to save space
-            docker image prune -f
+
+            # 3. Reclaim space again post-build (old image layers + build cache).
+            docker image prune -af || true
+            docker builder prune -af || true
+            echo "== disk after deploy =="; df -h / || true
           EOF

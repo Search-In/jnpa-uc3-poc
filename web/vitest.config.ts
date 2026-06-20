@@ -8,6 +8,13 @@ export default defineConfig({
   resolve: {
     alias: { "@": path.resolve(__dirname, "./src") },
   },
+  // Mirror the build-time globals injected by vite.config.ts so `@/data`
+  // resolves a mode in the Node test context (the adapter-contract test
+  // exercises the MockAdapter, so tests run in mock mode).
+  define: {
+    __JNPA_DATA_MODE__: JSON.stringify("mock"),
+    __JNPA_DATA_MODE_MARKER__: JSON.stringify("JNPA_DATA_MODE:mock"),
+  },
   test: {
     environment: "node",
     include: ["src/**/*.test.ts"],

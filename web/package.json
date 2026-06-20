@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5173",
     "build": "tsc -b && vite build",
+    "build:mock": "VITE_DATA_MODE=mock VITE_ALLOW_MOCK=true tsc -b && VITE_DATA_MODE=mock VITE_ALLOW_MOCK=true vite build",
     "preview": "vite preview --host 0.0.0.0 --port 3000",
     "typecheck": "tsc -b --noEmit",
     "lint": "eslint . --ext ts,tsx",

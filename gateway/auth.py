@@ -123,9 +123,17 @@ def _b64url_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + pad)
 
 
+# The well-known PoC/demo secret. Acceptable ONLY for local development with
+# enforcement off; `validate_auth_config()` refuses to start any auth-enabled or
+# non-development deployment that still carries it (SEC-2 / C2).
+_DEFAULT_JWT_SECRET = "jnpa-uc3-dev-secret-change-me"
+
+
 def _secret() -> str:
-    # PoC default keeps the demo working; production MUST override via env.
-    return os.environ.get("AUTH_JWT_SECRET", "jnpa-uc3-dev-secret-change-me")
+    # Local-dev convenience only. The default is gated by validate_auth_config(),
+    # which fails startup when AUTH_ENABLED=true and the secret is missing/default,
+    # so this fallback can never be used to sign tokens in an enforced deployment.
+    return os.environ.get("AUTH_JWT_SECRET", _DEFAULT_JWT_SECRET)
 
 
 def encode_token(sub: str, role: str, *, device_id: str | None = None, ttl_s: int = 8 * 3600) -> str:
@@ -204,6 +212,96 @@ def _is_public(path: str) -> bool:
 
 def auth_enabled() -> bool:
     return os.environ.get("AUTH_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
+# Environments that are treated as "local development": auth may be off and the
+# dev-token seam / default secret are tolerated. Everything else (staging,
+# production, anything unrecognised) is production-like and locked down.
+_DEV_ENVS: frozenset[str] = frozenset({"development", "dev", "local", "test"})
+
+
+def app_env() -> str:
+    """The deployment environment name (APP_ENV), lowercased. Defaults to
+    ``development`` so local/in-process runs keep working with zero config."""
+    return os.environ.get("APP_ENV", "development").strip().lower()
+
+
+def is_production_like() -> bool:
+    """True for any non-development environment (staging / production / unknown).
+
+    Production-like environments must run with AUTH_ENABLED=true, a non-default
+    AUTH_JWT_SECRET, and the dev-token endpoint disabled — enforced at startup by
+    ``validate_auth_config()`` and at request time by the dev-token guard.
+    """
+    return app_env() not in _DEV_ENVS
+
+
+def dev_tokens_enabled() -> bool:
+    """True when the password-less /api/auth/dev-token seam is allowed.
+
+    Defaults to ``true`` so the local demo profile keeps working, but the endpoint
+    additionally refuses to run in any production-like environment regardless of
+    this flag (see ``gateway/routers/auth.py``)."""
+    return os.environ.get("AUTH_DEV_TOKENS", "true").strip().lower() in {"1", "true", "yes", "on"}
+
+
+class AuthConfigError(RuntimeError):
+    """Raised at startup when the auth posture is unsafe for the environment.
+
+    Carrying a dedicated type lets the entrypoint (and tests) distinguish a
+    deliberate fail-fast from an unrelated import error."""
+
+
+def validate_auth_config() -> None:
+    """Fail-fast guard run once at gateway startup (C1 + C2 + C3).
+
+    Refuses to start the process when the security posture is unsafe for the
+    declared ``APP_ENV``:
+
+      * **C1** — staging/production (any non-dev env) MUST set ``AUTH_ENABLED=true``;
+        an unauthenticated gateway may not start outside local development.
+      * **C2** — when ``AUTH_ENABLED=true`` the ``AUTH_JWT_SECRET`` must be set and
+        must not be the well-known default; an insecure signing key is fatal.
+      * **C3** — staging/production MUST set ``AUTH_DEV_TOKENS=false``; the
+        password-less dev-token seam may never be live in a production-like env.
+
+    Raises :class:`AuthConfigError` with an actionable message. A no-op for a
+    correctly configured deployment and for local development (the demo/test path).
+    """
+    env = app_env()
+    prod_like = is_production_like()
+
+    # C1 — enforcement must be on outside development.
+    if prod_like and not auth_enabled():
+        raise AuthConfigError(
+            f"AUTH_ENABLED must be 'true' in the '{env}' environment: refusing to "
+            "start an unauthenticated gateway outside local development. "
+            "Set AUTH_ENABLED=true (and provide AUTH_JWT_SECRET), or set "
+            "APP_ENV=development for local use."
+        )
+
+    # C2 — no insecure signing key when enforcement is on.
+    if auth_enabled():
+        secret = os.environ.get("AUTH_JWT_SECRET", "").strip()
+        if not secret:
+            raise AuthConfigError(
+                "AUTH_ENABLED=true but AUTH_JWT_SECRET is not set. Provide a strong "
+                "random secret, e.g. `openssl rand -hex 32`."
+            )
+        if secret == _DEFAULT_JWT_SECRET:
+            raise AuthConfigError(
+                "AUTH_ENABLED=true but AUTH_JWT_SECRET is still the insecure default "
+                f"('{_DEFAULT_JWT_SECRET}'). Set a unique strong secret "
+                "(`openssl rand -hex 32`)."
+            )
+
+    # C3 — the dev-token seam must be off outside development.
+    if prod_like and dev_tokens_enabled():
+        raise AuthConfigError(
+            f"AUTH_DEV_TOKENS must be 'false' in the '{env}' environment: the "
+            "dev-token endpoint mints role-bearing tokens without credentials and "
+            "is for local development only."
+        )
 
 
 def rate_limit_per_min() -> int:

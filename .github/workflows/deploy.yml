@@ -112,6 +112,11 @@ jobs:
 
               MINIO_SEC="$(openssl rand -hex 24)"
               sed -i "s/change-me-minio-secret/${MINIO_SEC}/g" .env
+
+              # Replace the placeholder JWT secret with a strong random value so
+              # the gateway's startup validation (non-default secret) passes.
+              AUTH_SEC="$(openssl rand -hex 32)"
+              sed -i "s/change-me-auth-secret/${AUTH_SEC}/g" .env
             fi
 
             # 1b. Backfill any required keys missing from an existing .env (e.g. a
@@ -129,7 +134,36 @@ jobs:
             ensure_key GRAFANA_ADMIN_PASSWORD "$(openssl rand -hex 16)"
             ensure_key MINIO_ACCESS_KEY "$(openssl rand -hex 16)"
             ensure_key MINIO_SECRET_KEY "$(openssl rand -hex 24)"
+            # Production auth posture (C4). Backfill safe values for any .env that
+            # predates these keys, then VALIDATE below — the deploy must abort if
+            # the gateway would refuse to start.
+            ensure_key APP_ENV "production"
+            ensure_key AUTH_ENABLED "true"
+            ensure_key AUTH_DEV_TOKENS "false"
             ensure_key AUTH_JWT_SECRET "$(openssl rand -hex 32)"
+
+            # 1c. Fail the deploy fast if the auth posture is unsafe. This mirrors
+            #     gateway/auth.validate_auth_config() so a misconfigured .env is
+            #     caught here (clear CI failure) rather than as a crash-loop.
+            get_val() { grep "^$1=" .env | tail -n1 | cut -d= -f2-; }
+            AUTH_ENABLED_VAL="$(get_val AUTH_ENABLED)"
+            AUTH_SECRET_VAL="$(get_val AUTH_JWT_SECRET)"
+            AUTH_DEV_VAL="$(get_val AUTH_DEV_TOKENS)"
+            if [ "${AUTH_ENABLED_VAL}" != "true" ]; then
+              echo "DEPLOY ABORTED: AUTH_ENABLED must be 'true' (got '${AUTH_ENABLED_VAL}')." >&2
+              exit 1
+            fi
+            if [ -z "${AUTH_SECRET_VAL}" ] || \
+               [ "${AUTH_SECRET_VAL}" = "change-me-auth-secret" ] || \
+               [ "${AUTH_SECRET_VAL}" = "jnpa-uc3-dev-secret-change-me" ]; then
+              echo "DEPLOY ABORTED: AUTH_JWT_SECRET is missing or still a default/placeholder." >&2
+              exit 1
+            fi
+            if [ "${AUTH_DEV_VAL}" != "false" ]; then
+              echo "DEPLOY ABORTED: AUTH_DEV_TOKENS must be 'false' in production (got '${AUTH_DEV_VAL}')." >&2
+              exit 1
+            fi
+            echo "Auth posture OK: enforcement on, non-default secret, dev-tokens off."
 
             # 2. Build + restart the stack.
             docker compose -f docker-compose.yml -f docker-compose.aws.yml up -d --build

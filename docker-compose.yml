@@ -843,6 +843,18 @@ services:
       KAFKA_BROKERS: kafka:9092
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
+      # Auth + RBAC (SEC-1/SEC-2). APP_ENV drives the fail-fast startup guard in
+      # gateway/auth.validate_auth_config(): any non-development APP_ENV must run
+      # with AUTH_ENABLED=true, a non-default AUTH_JWT_SECRET, and AUTH_DEV_TOKENS
+      # =false or the gateway refuses to start. Defaults below keep the local demo
+      # frictionless (development, enforcement off); the prod env-file overrides.
+      APP_ENV: ${APP_ENV:-development}
+      AUTH_ENABLED: ${AUTH_ENABLED:-false}
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-}
+      AUTH_DEV_TOKENS: ${AUTH_DEV_TOKENS:-true}
+      AUTH_RATE_LIMIT_PER_MIN: ${AUTH_RATE_LIMIT_PER_MIN:-600}
+      AUTH_USERS: ${AUTH_USERS:-}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-}
       # Fallback / cache knobs (spec defaults).
       GATEWAY_UPSTREAM_TIMEOUT_S: ${GATEWAY_UPSTREAM_TIMEOUT_S:-2.0}
       GATEWAY_ANPR_LAG_S: ${GATEWAY_ANPR_LAG_S:-2.0}

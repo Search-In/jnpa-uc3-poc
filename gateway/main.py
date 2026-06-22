@@ -34,7 +34,7 @@ from .config import GatewayConfig
 from .logging import configure_logging, get_logger
 from .metrics import metrics_asgi_app
 from .pumps import KafkaPump, mqtt_truck_pump
-from .auth import install_auth
+from .auth import install_auth, validate_auth_config
 from .routers import (
     alerts,
     anpr,
@@ -64,6 +64,13 @@ from .state import GatewayState
 cfg = GatewayConfig.from_env()
 configure_logging(cfg.log_level)
 log = get_logger("gateway")
+
+# Fail fast on an unsafe auth posture BEFORE the app is constructed or any port is
+# bound: staging/production must run with AUTH_ENABLED=true, a non-default
+# AUTH_JWT_SECRET, and the dev-token seam disabled (C1/C2/C3). A no-op for a
+# correctly configured deployment and for local development. Raising here aborts
+# process startup with a clear, actionable message.
+validate_auth_config()
 
 # OpenTelemetry: export spans to Jaeger (no-op if otel deps / endpoint absent).
 # instrument_httpx() makes the gateway's outbound proxy calls continue the trace

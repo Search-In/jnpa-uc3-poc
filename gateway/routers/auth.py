@@ -15,7 +15,14 @@ import os
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from ..auth import ALL_ROLES, Role, auth_enabled, encode_token
+from ..auth import (
+    ALL_ROLES,
+    Role,
+    auth_enabled,
+    dev_tokens_enabled,
+    encode_token,
+    is_production_like,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -74,7 +81,11 @@ class DevTokenBody(BaseModel):
 
 @router.post("/dev-token", response_model=TokenResponse)
 async def dev_token(body: DevTokenBody) -> TokenResponse:
-    if os.environ.get("AUTH_DEV_TOKENS", "true").strip().lower() not in {"1", "true", "yes", "on"}:
+    # Hard environment guard (C3): the password-less seam is local-development
+    # only. It is disabled in any production-like environment (staging/production)
+    # regardless of AUTH_DEV_TOKENS, and otherwise only when the flag is on. Return
+    # 404 so the route is indistinguishable from "not mounted" outside dev.
+    if is_production_like() or not dev_tokens_enabled():
         raise HTTPException(status_code=404, detail="dev tokens disabled")
     if body.role not in ALL_ROLES:
         raise HTTPException(status_code=400, detail=f"unknown role {body.role}")

@@ -37,9 +37,22 @@ from gateway.auth import Role, encode_token, roles_for_path  # noqa: E402
 _OPEN_CLIENTS: list[TestClient] = []
 
 
+_AUTH_ENV_KEYS = (
+    "AUTH_ENABLED",
+    "AUTH_RATE_LIMIT_PER_MIN",
+    "AUTH_JWT_SECRET",
+    "AUTH_DEV_TOKENS",
+    "APP_ENV",
+)
+
+# A non-default secret so the startup guard (validate_auth_config) is satisfied
+# whenever a test enables auth in-process.
+_TEST_SECRET = "test-secret-not-the-default-0123456789abcdef"
+
+
 @pytest.fixture(autouse=True)
 def _restore_env_and_clients():
-    saved = {k: os.environ.get(k) for k in ("AUTH_ENABLED", "AUTH_RATE_LIMIT_PER_MIN")}
+    saved = {k: os.environ.get(k) for k in _AUTH_ENV_KEYS}
     try:
         yield
     finally:
@@ -75,6 +88,9 @@ def _client(enabled: bool, rate_per_min: int = 10_000) -> TestClient:
 
     os.environ["AUTH_ENABLED"] = "true" if enabled else "false"
     os.environ["AUTH_RATE_LIMIT_PER_MIN"] = str(rate_per_min)
+    # Provide a non-default secret so the startup guard accepts an auth-enabled
+    # in-process app (the guard rejects the well-known default when enabled).
+    os.environ["AUTH_JWT_SECRET"] = _TEST_SECRET
 
     import gateway.main as mainmod
 
@@ -235,3 +251,114 @@ def test_alert_ack_endpoint_degrades_gracefully():
     assert r.status_code == 200
     body = r.json()
     assert body["id"] == "abc-123" and body["ack"] is True
+
+
+# --------------------------------------------------------------------------- C1/C2/C3 startup guard
+# These exercise validate_auth_config() directly (the function main.py calls at
+# import to fail fast). Each sets the relevant env then asserts the guard raises
+# AuthConfigError — i.e. the gateway process would refuse to start.
+def _set_env(**kw) -> None:
+    for k, v in kw.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
+
+def test_startup_ok_for_local_development_defaults():
+    from gateway.auth import validate_auth_config
+
+    _set_env(APP_ENV="development", AUTH_ENABLED="false", AUTH_JWT_SECRET=None)
+    # Local dev with enforcement off is a no-op (the demo / existing suite path).
+    validate_auth_config()
+
+
+def test_startup_fails_in_production_without_auth_enabled():
+    # C1: staging/production may not start unauthenticated.
+    from gateway.auth import AuthConfigError, validate_auth_config
+
+    _set_env(APP_ENV="production", AUTH_ENABLED="false")
+    with pytest.raises(AuthConfigError):
+        validate_auth_config()
+
+
+def test_startup_fails_when_secret_missing():
+    # C2: AUTH_ENABLED=true but no secret -> fatal.
+    from gateway.auth import AuthConfigError, validate_auth_config
+
+    _set_env(APP_ENV="production", AUTH_ENABLED="true", AUTH_DEV_TOKENS="false",
+             AUTH_JWT_SECRET=None)
+    with pytest.raises(AuthConfigError):
+        validate_auth_config()
+
+
+def test_startup_fails_when_secret_is_default():
+    # C2: AUTH_ENABLED=true but the well-known default secret -> fatal.
+    from gateway.auth import AuthConfigError, _DEFAULT_JWT_SECRET, validate_auth_config
+
+    _set_env(APP_ENV="production", AUTH_ENABLED="true", AUTH_DEV_TOKENS="false",
+             AUTH_JWT_SECRET=_DEFAULT_JWT_SECRET)
+    with pytest.raises(AuthConfigError):
+        validate_auth_config()
+
+
+def test_startup_fails_in_production_with_dev_tokens_enabled():
+    # C3: dev-token seam may never be live in a production-like environment.
+    from gateway.auth import AuthConfigError, validate_auth_config
+
+    _set_env(APP_ENV="production", AUTH_ENABLED="true", AUTH_JWT_SECRET=_TEST_SECRET,
+             AUTH_DEV_TOKENS="true")
+    with pytest.raises(AuthConfigError):
+        validate_auth_config()
+
+
+def test_startup_ok_for_hardened_production():
+    from gateway.auth import validate_auth_config
+
+    _set_env(APP_ENV="production", AUTH_ENABLED="true", AUTH_JWT_SECRET=_TEST_SECRET,
+             AUTH_DEV_TOKENS="false")
+    validate_auth_config()  # fully hardened -> no raise
+
+
+def test_main_import_aborts_on_unsafe_config():
+    # Proves the guard is actually wired into process startup: reloading the
+    # gateway entrypoint under an unsafe posture must propagate AuthConfigError.
+    import importlib
+
+    from gateway.auth import AuthConfigError
+
+    _set_env(APP_ENV="production", AUTH_ENABLED="false")
+    import gateway.main as mainmod
+
+    with pytest.raises(AuthConfigError):
+        importlib.reload(mainmod)
+
+
+# --------------------------------------------------------------------------- C3 dev-token endpoint
+def test_dev_token_available_in_development():
+    # Local dev (default APP_ENV) with AUTH_DEV_TOKENS=true -> seam works.
+    _set_env(APP_ENV="development", AUTH_DEV_TOKENS="true")
+    c = _client(enabled=False)
+    r = c.post("/api/auth/dev-token", json={"role": Role.DTCCC_ADMIN.value})
+    assert r.status_code == 200
+    assert r.json()["role"] == Role.DTCCC_ADMIN.value
+
+
+def test_dev_token_disabled_outside_development():
+    # C3: staging/production -> the endpoint 404s regardless of AUTH_DEV_TOKENS.
+    _set_env(AUTH_DEV_TOKENS="true", AUTH_JWT_SECRET=_TEST_SECRET)
+    c = _client(enabled=True)  # _client forces a non-default secret
+    os.environ["APP_ENV"] = "production"
+    r = c.post(
+        "/api/auth/dev-token",
+        json={"role": Role.DTCCC_ADMIN.value},
+        headers=_bearer(Role.DTCCC_ADMIN.value),
+    )
+    assert r.status_code == 404
+
+
+def test_dev_token_disabled_when_flag_off():
+    _set_env(APP_ENV="development", AUTH_DEV_TOKENS="false")
+    c = _client(enabled=False)
+    r = c.post("/api/auth/dev-token", json={"role": Role.DRIVER.value})
+    assert r.status_code == 404

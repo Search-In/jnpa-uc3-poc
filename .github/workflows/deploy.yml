@@ -39,6 +39,13 @@ jobs:
           # Production builds default to live anyway; set explicitly for clarity
           # and to make the verification step below meaningful.
           VITE_DATA_MODE: live
+          # The dashboard auth gate is compile-time gated on this flag (Vite inlines
+          # import.meta.env.VITE_AUTH_ENABLED). It MUST be "true" so the shipped
+          # bundle renders the login gate and attaches the bearer token — the gateway
+          # runs AUTH_ENABLED=true, so a bundle built without this returns 401
+          # "missing bearer token" on every /api call. Keep in lockstep with the
+          # gateway AUTH_ENABLED below.
+          VITE_AUTH_ENABLED: "true"
 
       - name: Verify dashboard bundle is LIVE (no mock shipped)
         run: bash scripts/verify_web_live_build.sh web/dist

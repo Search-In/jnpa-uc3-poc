@@ -2,6 +2,7 @@
 // directly; it receives a DataAdapter from the selector in ./index.ts.
 
 import { api } from "@/lib/api";
+import { getToken } from "@/lib/auth";
 import type {
   Alert,
   AutoLeoResult,
@@ -16,8 +17,18 @@ import type {
 } from "@/lib/types";
 import type { CongestionMetrics, DataAdapter, DataMode, OcrEval } from "./types";
 
+// Attach the bearer token when a session exists (auth-enabled builds), mirroring
+// lib/api.ts. When auth is disabled there is no token and the header is omitted.
+function authHeaders(): Record<string, string> {
+  const token = getToken();
+  return {
+    "content-type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
 async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(path, { headers: { "content-type": "application/json" } });
+  const res = await fetch(path, { headers: authHeaders() });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} (${path})`);
   return (await res.json()) as T;
 }
@@ -25,7 +36,7 @@ async function getJson<T>(path: string): Promise<T> {
 async function postJson<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(path, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: authHeaders(),
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} (${path})`);
@@ -35,7 +46,7 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 async function deleteJson<T>(path: string): Promise<T> {
   const res = await fetch(path, {
     method: "DELETE",
-    headers: { "content-type": "application/json" },
+    headers: authHeaders(),
   });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} (${path})`);
   return (await res.json()) as T;

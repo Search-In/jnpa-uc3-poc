@@ -46,6 +46,12 @@ jobs:
           # "missing bearer token" on every /api call. Keep in lockstep with the
           # gateway AUTH_ENABLED below.
           VITE_AUTH_ENABLED: "true"
+          # The Driver PWA mints its DRIVER token at /api/auth/device-token, which
+          # the gateway gates on PWA_PAIRING_SECRET. Vite inlines this value at
+          # build time; it MUST equal the gateway's PWA_PAIRING_SECRET. Without it
+          # device-token returns 401 and the PWA cannot authenticate (no dev-token
+          # seam exists in prod) — every /api call and the WebSocket then fail auth.
+          VITE_PWA_PAIRING_SECRET: ${{ secrets.PWA_PAIRING_SECRET }}
 
       - name: Verify dashboard bundle is LIVE (no mock shipped)
         run: bash scripts/verify_web_live_build.sh web/dist

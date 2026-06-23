@@ -38,44 +38,60 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
 // attestation flow would replace the shared secret post-award.)
 const PAIRING_SECRET: string | undefined = import.meta.env.VITE_PWA_PAIRING_SECRET;
 
+// POST a token-mint request; store + return true on a 2xx carrying access_token.
+// Best-effort: a network error / non-2xx resolves to false (caller decides next).
+async function mintToken(path: string, body: unknown): Promise<boolean> {
+  try {
+    const res = await fetch(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (res.ok) {
+      const data = (await res.json()) as { access_token?: string };
+      if (data.access_token) {
+        setToken(data.access_token);
+        return true;
+      }
+    }
+  } catch {
+    /* network / auth-disabled — caller decides */
+  }
+  return false;
+}
+
 // Mint a DRIVER-scoped JWT bound to this device. Public endpoint (no auth
-// required). Stores the token on success. Falls back to the dev-token seam for
-// older gateways / local dev. Best-effort: returns false rather than throwing so
-// pairing never hard-fails the UI.
+// required). Best-effort: returns false rather than throwing so pairing never
+// hard-fails the UI.
 export async function ensureDeviceToken(deviceId: string): Promise<boolean> {
   if (!tokenNeedsRefresh()) return true;
-  try {
-    const res = await fetch("/api/auth/device-token", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ device_id: deviceId, pairing_secret: PAIRING_SECRET }),
-    });
-    if (res.ok) {
-      const data = (await res.json()) as { access_token?: string };
-      if (data.access_token) {
-        setToken(data.access_token);
-        return true;
-      }
-    }
-  } catch {
-    /* fall through to dev-token */
+
+  // A production build MUST carry the pairing secret (Vite inlines
+  // VITE_PWA_PAIRING_SECRET at build time). Without it /api/auth/device-token
+  // returns 401 and there is no dev-token seam in prod — surface the misconfig
+  // loudly instead of failing silently.
+  if (import.meta.env.PROD && !PAIRING_SECRET) {
+    console.error(
+      "[auth] VITE_PWA_PAIRING_SECRET is missing from this production build — " +
+        "/api/auth/device-token will 401. Rebuild the PWA with " +
+        "VITE_PWA_PAIRING_SECRET set to the gateway's PWA_PAIRING_SECRET.",
+    );
   }
-  // Local-dev fallback: the password-less dev-token seam (404 in prod-like envs).
-  try {
-    const res = await fetch("/api/auth/dev-token", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ role: "DRIVER", device_id: deviceId }),
-    });
-    if (res.ok) {
-      const data = (await res.json()) as { access_token?: string };
-      if (data.access_token) {
-        setToken(data.access_token);
-        return true;
-      }
-    }
-  } catch {
-    /* auth disabled or unreachable — proceed unauthenticated */
+
+  // Primary path (dev + prod): DRIVER-scoped device token.
+  if (
+    await mintToken("/api/auth/device-token", {
+      device_id: deviceId,
+      pairing_secret: PAIRING_SECRET,
+    })
+  ) {
+    return true;
+  }
+
+  // Dev-only fallback: the password-less seam 404s in any production-like env,
+  // so never call it from a production bundle (keeps prod traffic off dev-token).
+  if (import.meta.env.DEV) {
+    return mintToken("/api/auth/dev-token", { role: "DRIVER", device_id: deviceId });
   }
   return false;
 }

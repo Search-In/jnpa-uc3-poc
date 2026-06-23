@@ -3,8 +3,8 @@
 // device_id persisted. Two entry points set it:
 //
 //   * the Pairing screen (driver scans a QR / types the 6-digit code), and
-//   * the WEB VARIANT (?device=DEV-...): an evaluator without a phone opens
-//     http://localhost:3000/pwa?device=DEV-000001 and is paired instantly so the
+//   * the WEB VARIANT (?device=TRK-...): an evaluator without a phone opens
+//     http://localhost:3000/pwa?device=TRK-000001 and is paired instantly so the
 //     re-route push can be demoed live.
 //
 // The id is kept in localStorage under a stable key.
@@ -18,12 +18,17 @@ export interface Pairing {
   plate?: string | null;
 }
 
-// The device-id format the truck-sim mints (DEV-000001 ...). The 6-digit pairing
-// code maps to a device id: code "000001" -> "DEV-000001". This keeps the demo
-// deterministic without a real pairing server.
+// Canonical device-id format. MUST match the truck simulator, which mints
+// `TRK-{i:06d}` (ingest/trucking_app/trucking_app/fleet.py) — that id is what
+// appears in jnpa.truck_telemetry and is later requested at /api/trucks/{id}.
+// The DRIVER JWT is scoped to this id, so the pairing id, the token's device_id,
+// and the truck id must all be identical. The 6-digit pairing code maps
+// deterministically: code "000001" -> "TRK-000001".
+export const DEVICE_PREFIX = "TRK-";
+
 export function codeToDeviceId(code: string): string {
   const digits = code.replace(/\D/g, "").padStart(6, "0").slice(-6);
-  return `DEV-${digits}`;
+  return `${DEVICE_PREFIX}${digits}`;
 }
 
 export function deviceIdToCode(deviceId: string): string {

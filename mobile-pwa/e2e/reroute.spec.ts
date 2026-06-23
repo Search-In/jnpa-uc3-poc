@@ -11,7 +11,7 @@ import { test, expect, request as pwRequest } from "@playwright/test";
 
 const GATEWAY = process.env.E2E_GATEWAY_URL || "http://localhost:8000";
 const PWA_BASE = process.env.PWA_BASE || "/pwa/";
-const DEVICE = process.env.E2E_DEVICE || "DEV-000001";
+const DEVICE = process.env.E2E_DEVICE || "TRK-000001";
 
 // Re-route target: any of the four JNPA gates other than the truck's current one.
 const ALT_GATE = "G-JNPCT";

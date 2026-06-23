@@ -163,7 +163,7 @@ def build_steps() -> List[Step]:
         Step(
             key="02_tfc1_gate_closure",
             title="TFC-1 — gate closure -> re-route",
-            url=f"{WEB}/pwa?device=DEV-000001",
+            url=f"{WEB}/pwa?device=TRK-000001",
             instruction="Triggering TFC-1 (G-NSICT closure). The trucking-app PWA "
                         "should paint a full-screen re-route advisory within ~5 s.",
             countdown_s=5,

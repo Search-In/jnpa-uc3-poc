@@ -254,7 +254,7 @@ pwa-verify: ## Smoke-test the PWA surface + push channel (stack must be up)
 	@echo "== /api/push/vapid-public-key ==" \
 		&& curl -s http://localhost:8000/api/push/vapid-public-key \
 		| $(PY) -c "import sys,json; d=json.load(sys.stdin); print('configured=%s' % d['configured'])" || true
-	@echo "== Open the PWA: http://localhost:3000/pwa  (web variant: ?device=DEV-000001) =="
+	@echo "== Open the PWA: http://localhost:3000/pwa  (web variant: ?device=TRK-000001) =="
 
 pwa-e2e: ## Run the PWA Playwright e2e suite (stack must be up)
 	cd mobile-pwa && npm install && npx playwright install --with-deps chromium && npm run test:e2e

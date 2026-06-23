@@ -168,7 +168,7 @@ curl -s localhost/api/vahan/rc/MH04AB1234  # gateway answers through nginx rever
 
 Then open the following URLs in a browser:
 - **Dashboard:** `http://<EC2_PUBLIC_IP>/`
-- **Driver PWA:** `http://<EC2_PUBLIC_IP>/pwa` (add `?device=DEV-000001` to test a virtual vehicle driver)
+- **Driver PWA:** `http://<EC2_PUBLIC_IP>/pwa` (add `?device=TRK-000001` to test a virtual vehicle driver)
 
 You should see the live congestion panels and active vehicle tracks.
 

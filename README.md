@@ -476,7 +476,7 @@ Prompt 11. The driver-facing **ETA / re-route advisory** app — the channel tha
 pushes re-routes during **TFC-1** / **TFC-3**. Vite + React 18 + TS, installable
 (`vite-plugin-pwa`). Bundled into the `web` image and served at
 `http://localhost:3000/pwa`; an evaluator without a phone opens
-`…/pwa?device=DEV-000001` to pair instantly and receive the re-route push live.
+`…/pwa?device=TRK-000001` to pair instantly and receive the re-route push live.
 
 Screens: **Trip** (target gate, ETA, speed, traffic-ahead mini-map, "Slot at
 Gate" widget from TAS-mock), **Re-route** (full-screen Accept → `state=ACK`),

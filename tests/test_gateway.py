@@ -316,18 +316,18 @@ def test_push_subscribe_and_status():
         assert key["configured"] is False and key["key"] is None
 
         ok = client.post("/api/push/subscribe", json={
-            "device_id": "DEV-000001",
+            "device_id": "TRK-000001",
             "subscription": {"endpoint": "https://example.com/x",
                              "keys": {"p256dh": "a", "auth": "b"}},
         })
         assert ok.status_code == 200 and ok.json()["subscribed"] is True
 
-        bad = client.post("/api/push/subscribe", json={"device_id": "DEV-000001"})
+        bad = client.post("/api/push/subscribe", json={"device_id": "TRK-000001"})
         assert bad.status_code == 422
 
         status = client.get("/api/push/status").json()
         assert status["subscriptions"] >= 1
-        assert "DEV-000001" in status["devices"]
+        assert "TRK-000001" in status["devices"]
     finally:
         client.__exit__(None, None, None)
 
@@ -338,8 +338,8 @@ def test_reroute_broadcasts_advisory_and_is_pollable():
     cache = FakeCache()
     # The upstream truck-sim accepts the override and returns a route.
     http = FakeHttp({
-        "/devices/DEV-000001/route": _Resp(200, {
-            "rerouted": True, "device_id": "DEV-000001",
+        "/devices/TRK-000001/route": _Resp(200, {
+            "rerouted": True, "device_id": "TRK-000001",
             "dest": {"lat": 18.95, "lon": 72.95}, "route_km": 4.2,
             "state": "EN_ROUTE_TO_PORT",
         }),
@@ -348,7 +348,7 @@ def test_reroute_broadcasts_advisory_and_is_pollable():
     try:
         with client.websocket_connect("/api/ws") as ws:
             assert ws.receive_json()["type"] == "hello"
-            resp = client.post("/api/trucks/DEV-000001/route", json={"gate_id": "G-JNPCT"})
+            resp = client.post("/api/trucks/TRK-000001/route", json={"gate_id": "G-JNPCT"})
             body = resp.json()
             assert body["advisory"]["gate_id"] == "G-JNPCT"
             assert body["push_delivered"] is False  # no VAPID in test env
@@ -359,18 +359,18 @@ def test_reroute_broadcasts_advisory_and_is_pollable():
                 f = ws.receive_json()
                 seen.append(f["type"])
                 if f["type"] == "reroute":
-                    assert f["payload"]["device_id"] == "DEV-000001"
+                    assert f["payload"]["device_id"] == "TRK-000001"
                     assert f["payload"]["gate_id"] == "G-JNPCT"
                     break
             assert "reroute" in seen
 
         # Polling fallback now returns the stored advisory.
-        latest = client.get("/api/trucks/DEV-000001/route/latest").json()
+        latest = client.get("/api/trucks/TRK-000001/route/latest").json()
         assert latest["advisory"] is not None
         assert latest["advisory"]["gate_id"] == "G-JNPCT"
 
         # ACK round-trip records a decision and returns the state.
-        ack = client.post("/api/trucks/DEV-000001/route/ack", json={"state": "ACK"})
+        ack = client.post("/api/trucks/TRK-000001/route/ack", json={"state": "ACK"})
         assert ack.status_code == 200 and ack.json()["state"] == "ACK"
     finally:
         client.__exit__(None, None, None)

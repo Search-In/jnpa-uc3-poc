@@ -3,9 +3,9 @@ import QRCode from "qrcode";
 import { codeToDeviceId, setPairing } from "@/lib/device";
 
 // Pairing — PoC authentication is a simple device_id pairing: scan the QR (which
-// encodes the PWA URL with ?device=DEV-...) or type the 6-digit code printed on
+// encodes the PWA URL with ?device=TRK-...) or type the 6-digit code printed on
 // the in-cab unit. No real OTP — but the screen exists and looks right. A code
-// like "000001" maps deterministically to device "DEV-000001" (the ids the
+// like "000001" maps deterministically to device "TRK-000001" (the ids the
 // truck-sim mints), so the demo pairs without a pairing server.
 
 const DEFAULT_CODE = "000001";
@@ -91,7 +91,7 @@ export default function Pairing({ onPaired }: { onPaired: (deviceId: string) => 
       </button>
 
       <button className="btn ghost" data-testid="pair-demo" onClick={() => pair(DEFAULT_CODE)}>
-        Use demo device (DEV-000001)
+        Use demo device (TRK-000001)
       </button>
     </div>
   );

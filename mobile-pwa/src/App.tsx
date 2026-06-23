@@ -10,6 +10,7 @@ import {
   useNavigate,
 } from "react-router-dom";
 import { getPairing } from "@/lib/device";
+import { ensureDeviceToken } from "@/lib/api";
 import { RealtimeProvider, useRealtime } from "@/hooks/RealtimeContext";
 import Pairing from "@/screens/Pairing";
 import Trip from "@/screens/Trip";
@@ -102,6 +103,21 @@ function PairedApp({ deviceId, plate }: { deviceId: string; plate?: string | nul
 
 export default function App() {
   const [pairing, setPairingState] = useState(() => getPairing());
+  // Acquire the DRIVER token before mounting the authed shell so the first API
+  // calls (Trip/Profile) carry a bearer when AUTH_ENABLED=true. Best-effort: we
+  // proceed even if minting fails (auth-disabled gateway / transient error).
+  const [tokenReady, setTokenReady] = useState(false);
+
+  useEffect(() => {
+    if (!pairing) return;
+    let alive = true;
+    void ensureDeviceToken(pairing.deviceId).finally(() => {
+      if (alive) setTokenReady(true);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [pairing]);
 
   if (!pairing) {
     return (
@@ -109,6 +125,9 @@ export default function App() {
         <Pairing onPaired={(deviceId) => setPairingState({ deviceId })} />
       </div>
     );
+  }
+  if (!tokenReady) {
+    return <div className="app-shell" aria-busy="true" />;
   }
   return <PairedApp deviceId={pairing.deviceId} plate={pairing.plate} />;
 }

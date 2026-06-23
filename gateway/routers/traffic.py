@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Any, Dict
 
 import httpx
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from jnpa_shared import corridor
 
@@ -88,6 +88,30 @@ async def predict(
     )
     REQUESTS.labels("traffic", "ok").inc()
     return {"decision_path": "SYNTHETIC", "horizon_min": horizon_min, "predictions": synth}
+
+
+@router.get("/metrics")
+async def metrics(state: GatewayState = Depends(get_state)) -> dict:
+    """Proxy ai/congestion's evaluation metrics (``GET /metrics``) so the
+    dashboard's realism probe (web/src/data/live.ts:congestionMetrics) can render
+    the congestion-onset F1 panel.
+
+    Returns the upstream JSON verbatim (``congestion_onset_f1``, ``precision``,
+    ``recall``, ``target_f1``, ...). 503 when ai/congestion is unreachable — the
+    dashboard degrades that to the static target note.
+    """
+    url = state.cfg.congestion_url.rstrip("/") + "/metrics"
+    t0 = time.perf_counter()
+    try:
+        resp = await state.http.get(url, timeout=10.0)
+        UPSTREAM_LATENCY.labels("traffic", "congestion").observe(time.perf_counter() - t0)
+        if resp.status_code == 200:
+            REQUESTS.labels("traffic", "ok").inc()
+            return resp.json()
+        log.info("traffic_metrics_miss", status=resp.status_code)
+    except httpx.HTTPError as exc:
+        log.warning("traffic_metrics_unreachable", url=url, error=str(exc))
+    raise HTTPException(status_code=503, detail={"error": "congestion_metrics_unavailable"})
 
 
 @router.get("/snapshots")

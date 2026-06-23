@@ -9,6 +9,7 @@ import {
 } from "react";
 import RealtimeWorker from "@/workers/realtime.worker?worker";
 import { api } from "@/lib/api";
+import { getToken } from "@/lib/device";
 import { appendAdvisories, loadAdvisories } from "@/lib/store";
 import type { Advisory, RerouteAdvisory, WsFrame } from "@/lib/types";
 
@@ -41,7 +42,12 @@ const Ctx = createContext<RealtimeCtx | null>(null);
 
 function wsUrl(): string {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  return `${proto}://${location.host}/api/ws`;
+  // Carry the DRIVER token as a query param: the WS handshake can't set an
+  // Authorization header from the browser, so the gateway validates ?token=
+  // when AUTH_ENABLED=true (and ignores it when auth is off).
+  const token = getToken();
+  const q = token ? `?token=${encodeURIComponent(token)}` : "";
+  return `${proto}://${location.host}/api/ws${q}`;
 }
 
 function rerouteToAdvisory(r: RerouteAdvisory): Advisory {

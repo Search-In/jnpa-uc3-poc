@@ -11,6 +11,7 @@
 
 const KEY = "jnpa.pwa.device_id";
 const PLATE_KEY = "jnpa.pwa.plate";
+const TOKEN_KEY = "jnpa.pwa.token";
 
 export interface Pairing {
   deviceId: string;
@@ -60,6 +61,57 @@ export function setPairing(deviceId: string, plate?: string | null): Pairing {
 export function clearPairing(): void {
   localStorage.removeItem(KEY);
   localStorage.removeItem(PLATE_KEY);
+  localStorage.removeItem(TOKEN_KEY);
+}
+
+// --- DRIVER JWT (issued by the gateway at pairing) -------------------------
+// The PWA carries a DRIVER-scoped bearer token so the gateway's auth middleware
+// (AUTH_ENABLED=true) admits its requests and scopes them to this device. When
+// auth is disabled the gateway ignores the header, so attaching it is harmless.
+
+export function getToken(): string | null {
+  try {
+    return localStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setToken(token: string): void {
+  try {
+    localStorage.setItem(TOKEN_KEY, token);
+  } catch {
+    /* storage unavailable (private mode) — requests just go unauthenticated */
+  }
+}
+
+export function clearToken(): void {
+  try {
+    localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+// Decode a JWT payload (no verification — only to read `exp` for refresh). Returns
+// null on any malformed input.
+function decodeExp(token: string): number | null {
+  try {
+    const [, payload] = token.split(".");
+    const json = JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/")));
+    return typeof json.exp === "number" ? json.exp : null;
+  } catch {
+    return null;
+  }
+}
+
+// True when the stored token is missing or expires within the next 60 s.
+export function tokenNeedsRefresh(): boolean {
+  const tok = getToken();
+  if (!tok) return true;
+  const exp = decodeExp(tok);
+  if (exp == null) return false; // opaque token — assume the server manages TTL
+  return exp - 60 < Math.floor(Date.now() / 1000);
 }
 
 export function isPaired(): boolean {

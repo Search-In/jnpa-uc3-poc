@@ -23,7 +23,7 @@ import httpx
 from jnpa_shared.frame_bus import FrameBusProducer
 from jnpa_shared.logging import configure_logging, get_logger
 
-from .config import AnprConfig
+from .config import AnprConfig, validate_anpr_config
 from .detect import VehicleDetector
 from .emit import Emitter
 from .metrics import (
@@ -144,6 +144,8 @@ async def main_async() -> None:
     cfg = AnprConfig.from_env()
     configure_logging(cfg.log_level)
     log = get_logger("anpr_ingest.main")
+    # Fail-fast before any work: never run synthetic OCR in a production-like env.
+    validate_anpr_config(cfg)
     log.info(
         "anpr_ingest_starting",
         dry_run=cfg.dry_run,

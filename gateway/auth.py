@@ -28,6 +28,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -111,6 +112,49 @@ def roles_for_path(path: str) -> frozenset[str]:
         if path.startswith(prefix) and len(prefix) > best_len:
             best, best_len = roles, len(prefix)
     return best if best is not None else ALL_ROLES
+
+
+# Endpoints whose first path segment after the prefix is a device id a DRIVER may
+# only address for its own device. (The PWA only ever calls its own device.)
+_DRIVER_DEVICE_SCOPED = (
+    re.compile(r"^/api/trucks/([^/]+)"),
+    re.compile(r"^/api/push/test/([^/]+)"),
+)
+
+
+def driver_scope_violation(path: str, device_id: str | None) -> str | None:
+    """For a DRIVER principal, return an error string if ``path`` reaches outside
+    the principal's own ``device_id``; ``None`` if the request is in-scope.
+
+    A DRIVER token is bound to one device. It may read/command only that device's
+    resources and may not enumerate the fleet (the bare ``/api/trucks`` list).
+    Other roles are unaffected — this is only consulted for DRIVER principals.
+    """
+    if path in ("/api/trucks", "/api/trucks/"):
+        return "driver token may not list the fleet"
+    for pat in _DRIVER_DEVICE_SCOPED:
+        m = pat.match(path)
+        if m:
+            if not device_id or m.group(1) != device_id:
+                return "driver token may only access its own device"
+            return None
+    return None
+
+
+def principal_from_token(token: str) -> "Principal":
+    """Decode + validate a bearer token into a :class:`Principal`.
+
+    Raises :class:`ValueError` on a bad signature, expiry, or a missing/invalid
+    role. Shared by the HTTP middleware and the WebSocket handshake so both apply
+    identical verification.
+    """
+    claims = decode_token(token)  # raises ValueError on bad sig / expiry
+    role = claims.get("role")
+    if role not in ALL_ROLES:
+        raise ValueError("token carries no valid role")
+    return Principal(
+        sub=str(claims.get("sub", "")), role=role, device_id=claims.get("device_id")
+    )
 
 
 # --------------------------------------------------------------------------- JWT
@@ -357,6 +401,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 {"detail": f"role {role} not permitted for {request.url.path}"},
                 status_code=403,
             )
+
+        # 4. DRIVER device-scope: a DRIVER token is bound to a single device and
+        #    may only touch that device's resources (never the fleet at large).
+        if role == Role.DRIVER.value:
+            violation = driver_scope_violation(request.url.path, claims.get("device_id"))
+            if violation:
+                return JSONResponse({"detail": violation}, status_code=403)
 
         request.state.principal = Principal(
             sub=str(claims.get("sub", "")), role=role, device_id=claims.get("device_id")

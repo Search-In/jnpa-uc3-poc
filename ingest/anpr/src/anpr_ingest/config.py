@@ -52,7 +52,10 @@ class AnprConfig:
     no_feed_interval_s: float = 5.0   # emit a no_feed health event this often
 
     # --- Detection ---
-    dry_run: bool = True
+    # Production default: run real YOLO detection + AI OCR. DRY_RUN (synthetic
+    # crops, no OCR call) is a local-dev convenience only and is REFUSED in any
+    # production-like environment by validate_anpr_config().
+    dry_run: bool = False
     yolo_weights: str = "yolov8n.pt"
     detect_conf: float = 0.25
     # When YOLO finds no vehicles in a frame, still emit a degraded full-frame
@@ -63,6 +66,20 @@ class AnprConfig:
     # service POSTs each plate crop here as multipart when DRY_RUN=false.
     ai_anpr_url: str = "http://anpr:8301/infer"
     ai_timeout_s: float = 2.0
+
+    # --- Evidence object store (MinIO/S3) ---
+    # In the live (non-DRY_RUN) path the plate crop is uploaded here and the
+    # resolved object URL is written to AnprRead.image_url (replacing the DRY_RUN
+    # base64 data-URL). Best-effort: MinIO down -> no URL, never a crash.
+    evidence_enabled: bool = True
+    minio_endpoint: str = "minio:9000"
+    minio_access_key: str = "minioadmin"
+    minio_secret_key: str = "minioadmin"
+    minio_secure: bool = False
+    evidence_bucket: str = "evidence"
+    # Public base URL for stored objects (what the DB / dashboard see). Computed
+    # from endpoint+bucket when left empty.
+    evidence_base_url: str = ""
 
     # --- Weather / condition ---
     weather_interval_s: float = 600.0  # 10 minutes
@@ -107,12 +124,19 @@ class AnprConfig:
             target_fps=_as_float(os.environ.get("TARGET_FPS"), 5.0),
             snapshot_interval_s=_as_float(os.environ.get("SNAPSHOT_INTERVAL_S"), 1.0),
             no_feed_interval_s=_as_float(os.environ.get("NO_FEED_INTERVAL_S"), 5.0),
-            dry_run=_as_bool(os.environ.get("DRY_RUN"), True),
+            dry_run=_as_bool(os.environ.get("DRY_RUN"), False),
             yolo_weights=os.environ.get("YOLO_WEIGHTS", "yolov8n.pt"),
             detect_conf=_as_float(os.environ.get("DETECT_CONF"), 0.25),
             emit_on_empty=_as_bool(os.environ.get("EMIT_ON_EMPTY"), True),
             ai_anpr_url=os.environ.get("AI_ANPR_URL", "http://anpr:8301/infer"),
             ai_timeout_s=_as_float(os.environ.get("AI_TIMEOUT_S"), 2.0),
+            evidence_enabled=_as_bool(os.environ.get("ANPR_EVIDENCE_ENABLED"), True),
+            minio_endpoint=os.environ.get("MINIO_ENDPOINT", shared.minio_endpoint),
+            minio_access_key=os.environ.get("MINIO_ACCESS_KEY", shared.minio_access_key),
+            minio_secret_key=os.environ.get("MINIO_SECRET_KEY", shared.minio_secret_key),
+            minio_secure=_as_bool(os.environ.get("MINIO_SECURE"), False),
+            evidence_bucket=os.environ.get("ANPR_EVIDENCE_BUCKET", "evidence"),
+            evidence_base_url=os.environ.get("ANPR_EVIDENCE_BASE_URL", ""),
             weather_interval_s=_as_float(os.environ.get("WEATHER_INTERVAL_S"), 600.0),
             openweather_api_key=os.environ.get("OPENWEATHER_API_KEY", shared.openweather_api_key),
             port_lat=_as_float(os.environ.get("PORT_LAT"), shared.port_lat),
@@ -133,3 +157,28 @@ class AnprConfig:
 
 def camera_id_for_clip(stem: str) -> str:
     return CLIP_CAMERA_MAP.get(stem, stem.upper())
+
+
+# Environments treated as local development (DRY_RUN tolerated). Everything else
+# (staging / production / unknown) is production-like and must run real OCR.
+_DEV_ENVS = frozenset({"development", "dev", "local", "test"})
+
+
+class AnprConfigError(RuntimeError):
+    """Raised at startup when the ANPR ingest posture is unsafe for the env."""
+
+
+def validate_anpr_config(cfg: "AnprConfig") -> None:
+    """Fail-fast guard: refuse to start with synthetic OCR in production.
+
+    In any production-like environment (``APP_ENV`` not in the dev set), DRY_RUN
+    must be false — otherwise the ingest would emit synthetic plate reads while
+    presenting as a live AI pipeline. A no-op for local development.
+    """
+    env = os.environ.get("APP_ENV", "development").strip().lower()
+    if env not in _DEV_ENVS and cfg.dry_run:
+        raise AnprConfigError(
+            f"DRY_RUN must be 'false' in the '{env}' environment: refusing to start "
+            "the ANPR ingest with synthetic OCR (no real recognition). "
+            "Set DRY_RUN=false, or set APP_ENV=development for local use."
+        )

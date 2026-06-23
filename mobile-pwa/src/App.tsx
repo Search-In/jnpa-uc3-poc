@@ -101,19 +101,44 @@ function PairedApp({ deviceId, plate }: { deviceId: string; plate?: string | nul
   );
 }
 
+type BootState = "pending" | "ready" | "auth-failed";
+
 export default function App() {
   const [pairing, setPairingState] = useState(() => getPairing());
-  // Acquire the DRIVER token before mounting the authed shell so the first API
-  // calls (Trip/Profile) carry a bearer when AUTH_ENABLED=true. Best-effort: we
-  // proceed even if minting fails (auth-disabled gateway / transient error).
-  const [tokenReady, setTokenReady] = useState(false);
+  // Acquire the DRIVER token BEFORE mounting the authed shell so the first API
+  // calls (Trip/Profile) and the WebSocket carry a bearer when AUTH_ENABLED=true.
+  // Critically, we mount the shell only once a token is actually obtained — never
+  // merely because the mint attempt *completed*. Mounting without a token would
+  // spam /api 401s and the WS handshake would be rejected ("Not enough segments").
+  const [boot, setBoot] = useState<BootState>("pending");
 
   useEffect(() => {
     if (!pairing) return;
     let alive = true;
-    void ensureDeviceToken(pairing.deviceId).finally(() => {
-      if (alive) setTokenReady(true);
-    });
+    let attempt = 0;
+    const acquire = async () => {
+      while (alive) {
+        const ok = await ensureDeviceToken(pairing.deviceId);
+        if (ok) {
+          if (alive) setBoot("ready");
+          return;
+        }
+        // In development the gateway typically runs with auth disabled (no token
+        // needed), so proceed rather than block the local demo.
+        if (import.meta.env.DEV) {
+          if (alive) setBoot("ready");
+          return;
+        }
+        // Production with a failed mint: do NOT open the authed shell. Surface the
+        // state and retry with capped backoff so the app self-heals once the token
+        // becomes obtainable (e.g. transient gateway blip) instead of 401-storming.
+        if (alive) setBoot("auth-failed");
+        attempt += 1;
+        const delay = Math.min(1000 * 2 ** attempt, 15_000);
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    };
+    void acquire();
     return () => {
       alive = false;
     };
@@ -126,7 +151,17 @@ export default function App() {
       </div>
     );
   }
-  if (!tokenReady) {
+  if (boot === "auth-failed") {
+    return (
+      <div className="app-shell" style={{ padding: 24, textAlign: "center" }}>
+        <p>Authorizing this device…</p>
+        <p className="muted" style={{ fontSize: 13 }}>
+          Could not obtain a session token. Retrying — check connectivity.
+        </p>
+      </div>
+    );
+  }
+  if (boot === "pending") {
     return <div className="app-shell" aria-busy="true" />;
   }
   return <PairedApp deviceId={pairing.deviceId} plate={pairing.plate} />;

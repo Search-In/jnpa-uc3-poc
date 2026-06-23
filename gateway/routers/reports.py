@@ -165,11 +165,17 @@ async def police_report(
         challan["plate"] = a.get("plate")
         challan["incident_id"] = a["id"]
         challan["issued_at"] = a.get("ts")
+        # Evidence must be an object-store URL (MinIO/S3), never an inline base64
+        # data-URL — drop any legacy data: value so reports only ever reference
+        # durable, retained evidence.
+        _evidence = (a.get("payload") or {}).get("evidence_url")
+        if isinstance(_evidence, str) and _evidence.startswith("data:"):
+            _evidence = None
         incidents.append({
             **a,
             "rc": rc.get(a.get("plate") or "", {}),
             "challan": challan,
-            "evidence_url": (a.get("payload") or {}).get("evidence_url"),
+            "evidence_url": _evidence,
         })
 
     REQUESTS.labels("reports", "ok").inc()

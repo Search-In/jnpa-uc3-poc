@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from ..auth import auth_enabled, principal_from_token
 from ..logging import get_logger
 from ..state import GatewayState
 
@@ -22,10 +23,27 @@ log = get_logger("gateway.ws_router")
 
 router = APIRouter(tags=["ws"])
 
+# WebSocket close code for a policy violation (RFC 6455).
+_WS_POLICY_VIOLATION = 1008
+
 
 @router.websocket("/api/ws")
 async def ws_endpoint(ws: WebSocket) -> None:
     state: GatewayState = ws.app.state.gw
+
+    # Auth: the HTTP middleware skips /api/ws (it can't read the body of an
+    # upgrade), so validate the bearer here. The browser can't set an
+    # Authorization header on a WS handshake, so the token rides as ?token=.
+    # When AUTH_ENABLED is off this is a no-op and the socket stays open.
+    if auth_enabled():
+        token = ws.query_params.get("token", "")
+        try:
+            principal_from_token(token)
+        except ValueError as exc:
+            log.info("ws_auth_rejected", error=str(exc))
+            await ws.close(code=_WS_POLICY_VIOLATION)
+            return
+
     await state.ws.connect(ws)
     try:
         await ws.send_json({"type": "hello", "payload": {"service": "jnpa-gateway",

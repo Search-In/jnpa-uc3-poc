@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
+import { getToken } from "@/lib/auth";
 import type { WsFrame } from "@/lib/types";
 
 type Status = "connecting" | "open" | "closed";
@@ -10,7 +11,12 @@ type Status = "connecting" | "open" | "closed";
 
 function wsUrl(): string {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  return `${proto}://${location.host}/api/ws`;
+  // The gateway validates the bearer on the WS handshake when AUTH_ENABLED=true.
+  // A browser can't set an Authorization header on a socket, so the token rides
+  // as ?token= (omitted, and ignored server-side, when auth is disabled).
+  const token = getToken();
+  const q = token ? `?token=${encodeURIComponent(token)}` : "";
+  return `${proto}://${location.host}/api/ws${q}`;
 }
 
 type Listener = (frame: WsFrame) => void;

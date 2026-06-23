@@ -115,10 +115,8 @@ export default function Profile({ deviceId, plate }: { deviceId: string; plate?:
               k={t("profile.owner")}
               v={rc.owner_name_masked || rc.owner_name || t("common.noData")}
             />
-            <Row
-              k={t("profile.makerModel")}
-              v={[rc.maker, rc.model].filter(Boolean).join(" ") || t("common.noData")}
-            />
+            {/* Maker/model is not part of the gateway VahanRecord contract, so the
+                row was removed. Vehicle class (below) is the canonical descriptor. */}
             <Row
               k={t("profile.class")}
               v={rc.vehicle_class || rc.vehicle_category || t("common.noData")}
@@ -126,13 +124,27 @@ export default function Profile({ deviceId, plate }: { deviceId: string; plate?:
             <Row k={t("profile.fuel")} v={rc.fuel_type || t("common.noData")} />
             <Row
               k={t("profile.rcStatus")}
-              v={rc.rc_status || (provisional ? "PROVISIONAL" : t("common.noData"))}
+              v={
+                rc.blacklist_status ||
+                rc.rc_status ||
+                (provisional ? "PROVISIONAL" : t("common.noData"))
+              }
             />
+            {/* Canonical backend field is *_valid_to; legacy aliases kept for
+                backward compatibility with older gateway responses. */}
             <Row
               k={t("profile.insuranceUpto")}
-              v={rc.insurance_upto || rc.insurance_validity || t("common.noData")}
+              v={
+                rc.insurance_valid_to ||
+                rc.insurance_upto ||
+                rc.insurance_validity ||
+                t("common.noData")
+              }
             />
-            <Row k={t("profile.fitnessUpto")} v={rc.fitness_upto || t("common.noData")} />
+            <Row
+              k={t("profile.fitnessUpto")}
+              v={rc.fitness_valid_to || rc.fitness_upto || t("common.noData")}
+            />
             {provisional ? (
               <div className="banner warn" style={{ marginTop: 10 }}>
                 {t("profile.provisionalNote")}

@@ -3,10 +3,16 @@
 // forwards to the gateway. Returns parsed JSON and throws on non-2xx.
 
 import type { CorridorGeometry, Gate, TasSlot, TruckEnvelope, VahanEnvelope } from "./types";
+import { getToken, setToken, tokenNeedsRefresh } from "./device";
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = getToken();
   const res = await fetch(path, {
-    headers: { "content-type": "application/json", ...(init?.headers || {}) },
+    headers: {
+      "content-type": "application/json",
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(init?.headers || {}),
+    },
     ...init,
   });
   if (!res.ok) {
@@ -24,6 +30,54 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+// Build-time pairing secret. In a production deployment the gateway requires
+// PWA_PAIRING_SECRET; the same value is injected into the bundle so the PWA can
+// mint its DRIVER token at pairing. (This is the seam where a real OTP / device
+// attestation flow would replace the shared secret post-award.)
+const PAIRING_SECRET: string | undefined = import.meta.env.VITE_PWA_PAIRING_SECRET;
+
+// Mint a DRIVER-scoped JWT bound to this device. Public endpoint (no auth
+// required). Stores the token on success. Falls back to the dev-token seam for
+// older gateways / local dev. Best-effort: returns false rather than throwing so
+// pairing never hard-fails the UI.
+export async function ensureDeviceToken(deviceId: string): Promise<boolean> {
+  if (!tokenNeedsRefresh()) return true;
+  try {
+    const res = await fetch("/api/auth/device-token", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ device_id: deviceId, pairing_secret: PAIRING_SECRET }),
+    });
+    if (res.ok) {
+      const data = (await res.json()) as { access_token?: string };
+      if (data.access_token) {
+        setToken(data.access_token);
+        return true;
+      }
+    }
+  } catch {
+    /* fall through to dev-token */
+  }
+  // Local-dev fallback: the password-less dev-token seam (404 in prod-like envs).
+  try {
+    const res = await fetch("/api/auth/dev-token", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ role: "DRIVER", device_id: deviceId }),
+    });
+    if (res.ok) {
+      const data = (await res.json()) as { access_token?: string };
+      if (data.access_token) {
+        setToken(data.access_token);
+        return true;
+      }
+    }
+  } catch {
+    /* auth disabled or unreachable — proceed unauthenticated */
+  }
+  return false;
 }
 
 export const api = {

@@ -93,6 +93,43 @@ async def dev_token(body: DevTokenBody) -> TokenResponse:
     return TokenResponse(access_token=token, role=body.role, auth_enabled=auth_enabled())
 
 
+class DeviceTokenBody(BaseModel):
+    device_id: str
+    pairing_secret: str | None = None
+
+
+@router.post("/device-token", response_model=TokenResponse)
+async def device_token(body: DeviceTokenBody) -> TokenResponse:
+    """Mint a DRIVER-scoped, device-bound JWT for the Driver PWA at pairing.
+
+    Unlike ``/dev-token`` this can ONLY ever issue the ``DRIVER`` role (never a
+    control-room role), so it is safe to expose to the public PWA. It is gated by
+    ``PWA_PAIRING_SECRET``:
+
+      * when the secret is configured the request MUST present a matching
+        ``pairing_secret`` (401 otherwise);
+      * in a production-like environment the secret is REQUIRED — without it the
+        endpoint 404s, exactly like ``/dev-token``.
+
+    This is the seam where a real OTP / device-attestation flow plugs in
+    post-award; the token shape and DRIVER scoping stay the same.
+    """
+    expected = os.environ.get("PWA_PAIRING_SECRET", "").strip()
+    if is_production_like() and not expected:
+        # No pairing secret configured in prod → behave as if the route is absent.
+        raise HTTPException(status_code=404, detail="device pairing not configured")
+    if expected and (body.pairing_secret or "").strip() != expected:
+        raise HTTPException(status_code=401, detail="invalid pairing secret")
+    device_id = body.device_id.strip()
+    if not device_id:
+        raise HTTPException(status_code=400, detail="device_id required")
+    # 12 h TTL: long enough for a driving shift, short enough to bound exposure.
+    token = encode_token(
+        sub=f"device:{device_id}", role=Role.DRIVER.value, device_id=device_id, ttl_s=12 * 3600
+    )
+    return TokenResponse(access_token=token, role=Role.DRIVER.value, auth_enabled=auth_enabled())
+
+
 @router.get("/roles")
 async def roles() -> dict:
     return {"roles": sorted(ALL_ROLES), "auth_enabled": auth_enabled()}

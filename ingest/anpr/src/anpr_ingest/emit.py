@@ -10,6 +10,7 @@ Also emits the periodic ``no_feed`` health event when there are zero clips.
 """
 from __future__ import annotations
 
+import asyncio
 import random
 from datetime import datetime, timezone
 from typing import Optional
@@ -27,6 +28,7 @@ from jnpa_shared.schemas import (
 
 from .config import AnprConfig
 from .detect import PlateCandidate
+from .evidence_store import EvidenceStore
 from .metrics import KAFKA_ERRORS, NO_FEED_EVENTS, PLATES_EMITTED
 
 log = get_logger("anpr_ingest.emit")
@@ -51,6 +53,9 @@ class Emitter:
         # distribution (≥95% in CLEAR, degraded in FOG/NIGHT) replays identically
         # under the same global SEED.
         self._ocr_rng = random.Random(getattr(cfg, "seed", 1337))
+        # Evidence object store for the live path (replaces the DRY_RUN base64
+        # data-URL with a real MinIO/S3 object URL). Best-effort.
+        self._evidence = EvidenceStore(cfg)
 
     # -- internal -----------------------------------------------------------
     def _produce(self, record: AnprRead, raw_ref: Optional[str] = None) -> bool:
@@ -71,12 +76,13 @@ class Emitter:
             log.warning("kafka_produce_failed", error=str(exc), camera_id=record.camera_id)
             return False
 
-    async def _recognise(self, cand: PlateCandidate, client: httpx.AsyncClient) -> tuple[str, float]:
+    async def _recognise(
+        self, jpeg: bytes, cand: PlateCandidate, client: httpx.AsyncClient
+    ) -> tuple[str, float]:
         """Call the AI ANPR + OCR service (ai/anpr ``POST /infer``) for a plate
         string + confidence. The crop is sent as a multipart JPEG image; the
         service returns ``{plate, conf, bbox, valid, ...}``."""
         try:
-            jpeg = cand.crop_jpeg_bytes()
             if not jpeg:
                 return "UNKNOWN", 0.0
             resp = await client.post(
@@ -128,15 +134,22 @@ class Emitter:
     async def emit_with_ai(
         self, cand: PlateCandidate, ts: datetime, weather: str, client: httpx.AsyncClient
     ) -> Optional[AnprRead]:
-        """Non-DRY_RUN: OCR via the AI service, then emit the recognised plate."""
-        plate, conf = await self._recognise(cand, client)
+        """Non-DRY_RUN: persist the crop to the evidence store, OCR via the AI
+        service, then emit the recognised plate with a real object-store URL."""
+        jpeg = cand.crop_jpeg_bytes()
+        # Store the crop in MinIO/S3 and link the read to its object URL. The
+        # upload runs in a worker thread so the (blocking) MinIO put stays off the
+        # event loop. Best-effort: a failed/disabled store yields image_url=None.
+        object_name = f"anpr/{cand.camera_id}/{ts.strftime('%Y%m%dT%H%M%S%f')}.jpg"
+        evidence_url = await asyncio.to_thread(self._evidence.put, object_name, jpeg)
+        plate, conf = await self._recognise(jpeg, cand, client)
         record = AnprRead(
             ts=ts,
             camera_id=cand.camera_id,
             plate=plate,
             conf=conf,
             vehicle_class=cand.vehicle_class,
-            image_url=None,  # AI service persists the snapshot (Prompt 3.1)
+            image_url=evidence_url,  # MinIO/S3 object URL (None if store unavailable)
             weather=weather,
             degraded=cand.degraded,
         )

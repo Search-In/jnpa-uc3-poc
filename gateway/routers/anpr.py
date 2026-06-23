@@ -133,6 +133,29 @@ async def cameras(state: GatewayState = Depends(get_state)) -> dict:
     return {"cameras": rows}
 
 
+@router.get("/eval")
+async def eval_metrics(state: GatewayState = Depends(get_state)) -> dict:
+    """Proxy ai/anpr's held-out OCR benchmark (``GET /eval``) so the dashboard's
+    realism probe (web/src/data/live.ts:ocrEval) can render the accuracy panel.
+
+    Returns the upstream JSON verbatim (``combined_weighted_accuracy_pct``,
+    ``OCR_TARGET_MET``, per-condition accuracies, ...). 503 when the AI service is
+    unreachable — the dashboard already degrades that to a static target note.
+    """
+    url = state.cfg.anpr_ai_url.rstrip("/") + "/eval"
+    t0 = time.perf_counter()
+    try:
+        resp = await state.http.get(url, timeout=10.0)
+        UPSTREAM_LATENCY.labels("anpr", "anpr-ai").observe(time.perf_counter() - t0)
+        if resp.status_code == 200:
+            REQUESTS.labels("anpr", "ok").inc()
+            return resp.json()
+        log.info("anpr_eval_miss", status=resp.status_code)
+    except httpx.HTTPError as exc:
+        log.warning("anpr_eval_unreachable", url=url, error=str(exc))
+    raise HTTPException(status_code=503, detail={"error": "anpr_eval_unavailable"})
+
+
 @router.post("/infer")
 async def infer(
     image: UploadFile = File(...), state: GatewayState = Depends(get_state)

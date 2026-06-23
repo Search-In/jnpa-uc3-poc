@@ -11,18 +11,18 @@ Vite + React 18 + TypeScript, installable as a PWA (`vite-plugin-pwa`,
 - **Mobile** — installed on a driver's phone (Add to Home Screen).
 - **Web variant** — bundled into the control-room image (`web/`) and served at
   `http://localhost:3000/pwa`, so an evaluator without a phone can pair with
-  `?device=DEV-...` and receive the re-route push live during the demo.
+  `?device=TRK-...` and receive the re-route push live during the demo.
 
 ```
 open http://localhost:3000/pwa            # web variant (stack up)
-open http://localhost:3000/pwa?device=DEV-000001   # pre-paired for the demo
+open http://localhost:3000/pwa?device=TRK-000001   # pre-paired for the demo
 ```
 
 ## Screens
 
 | Screen            | What it shows                                                                                       |
 | ----------------- | --------------------------------------------------------------------------------------------------- |
-| **Pairing**       | Device pairing — QR + 6-digit code (PoC: no real OTP). `000001` → `DEV-000001`.                      |
+| **Pairing**       | Device pairing — QR + 6-digit code (PoC: no real OTP). `000001` → `TRK-000001`.                      |
 | **Trip**          | Target gate, ETA, speed, remaining km, **traffic-ahead mini-map**, and the **"Slot at Gate"** widget (next TAS-mock window). |
 | **Re-route**      | Full-screen confirmation when a re-route push arrives. **Accept** sends `state=ACK` back.            |
 | **Inbox**         | Advisories, alerts and challans (last 24 h; cached in IndexedDB so it renders offline).              |

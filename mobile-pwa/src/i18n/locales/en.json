@@ -87,7 +87,7 @@
     "tagline": "Pair your in-cab unit to receive gate slots & live re-routes.",
     "enterCode": "Or enter the 6-digit pairing code",
     "pairDevice": "Pair device",
-    "useDemo": "Use demo device (DEV-000001)"
+    "useDemo": "Use demo device (TRK-000001)"
   },
   "alertKind": {
     "WRONG_WAY": "Wrong-way driving",

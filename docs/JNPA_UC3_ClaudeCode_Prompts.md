@@ -1046,7 +1046,7 @@ PERF TARGETS
 
 WEB VARIANT
 - The same app at /pwa is served from web/ in Prompt 9 with a query
-  parameter ?device=DEV-... — used so an evaluator without a phone
+  parameter ?device=TRK-... — used so an evaluator without a phone
   can still receive the re-route push live during the demo.
 
 TESTS

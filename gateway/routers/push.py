@@ -60,7 +60,7 @@ async def subscribe(
 ) -> dict:
     """Store a PWA's push subscription against its device_id.
 
-    Body: ``{"device_id": "DEV-...", "subscription": {endpoint, keys}}``.
+    Body: ``{"device_id": "TRK-...", "subscription": {endpoint, keys}}``.
     """
     device_id = body.get("device_id")
     subscription = body.get("subscription")

@@ -40,6 +40,8 @@ const PAIRING_SECRET: string | undefined = import.meta.env.VITE_PWA_PAIRING_SECR
 
 // POST a token-mint request; store + return true on a 2xx carrying access_token.
 // Best-effort: a network error / non-2xx resolves to false (caller decides next).
+// Logs the outcome so a failed mint is diagnosable in the field (it is otherwise
+// invisible — the app would silently proceed unauthenticated).
 async function mintToken(path: string, body: unknown): Promise<boolean> {
   try {
     const res = await fetch(path, {
@@ -53,9 +55,12 @@ async function mintToken(path: string, body: unknown): Promise<boolean> {
         setToken(data.access_token);
         return true;
       }
+      console.error(`[auth] ${path} returned 200 but no access_token`);
+      return false;
     }
-  } catch {
-    /* network / auth-disabled — caller decides */
+    console.error(`[auth] ${path} -> ${res.status} ${res.statusText}`);
+  } catch (err) {
+    console.error(`[auth] ${path} request failed`, err);
   }
   return false;
 }

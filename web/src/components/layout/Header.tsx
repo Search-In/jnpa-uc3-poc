@@ -31,7 +31,14 @@ export function Header() {
       <div className="flex items-center gap-4">
         <span
           className="flex items-center gap-1.5 text-xs text-muted-foreground"
-          title={`Basemap provider: ${provider === "mapbox" ? "Mapbox" : "Bhuvan (ISRO) WMS"}`}
+          title={`Basemap provider: ${
+            {
+              mapbox: "Mapbox Satellite",
+              esri: "Esri World Imagery (Satellite)",
+              carto: "Carto Positron",
+              bhuvan: "Bhuvan (ISRO) WMS",
+            }[provider]
+          }`}
         >
           map: {provider}
         </span>

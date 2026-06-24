@@ -157,8 +157,13 @@ async def _reroute_inbound(up: Upstreams, h: ScenarioHandle, gate_id: str) -> Li
         return rerouted
     targets = [d for d in listing.get("devices", []) if d.get("gate_id") == gate_id][:50]
     for d in targets:
-        ok = await up.truck_post(f"/devices/{d['device_id']}/route",
-                                 {"gate_id": best_gate, "force_state": "EN_ROUTE_TO_PORT"})
+        # Reroute via the GATEWAY (not the sim directly): the gateway forwards the
+        # body to the truck-sim AND broadcasts the type=reroute WS frame + caches
+        # LAST_REROUTE, so the driver PWA's Inbox / Re-route screen actually lights
+        # up. truck_post() would move the truck but never notify the driver.
+        ok = await up.gw_post(f"/api/trucks/{d['device_id']}/route",
+                              {"gate_id": best_gate, "force_state": "EN_ROUTE_TO_PORT",
+                               "reason": f"Gate {gate_id} congested — proceed to {best_gate}"})
         if ok:
             rerouted.append({"device_id": d["device_id"], "from": gate_id, "to": best_gate})
     return rerouted

@@ -18,6 +18,13 @@ def _int(v: str | None, d: int) -> int:
         return d
 
 
+def _float(v: str | None, d: float) -> float:
+    try:
+        return float(v) if v is not None else d
+    except (TypeError, ValueError):
+        return d
+
+
 @dataclass
 class ScenarioConfig:
     host: str = "0.0.0.0"
@@ -34,9 +41,13 @@ class ScenarioConfig:
     redis_url: str = ""
     kafka_brokers: str = ""
 
-    # Tunables (kept short so the verification curl returns quickly; the reactive
-    # downstream effects keep running via the injected trucks / forecaster).
-    upstream_timeout_s: float = 5.0
+    # Upstream call timeout. The truck-sim's /devices/list recomputes every
+    # device's position/ETA on each call, so listing a large fleet (1000) can take
+    # ~9s under load. A short timeout here silently drops the listing (httpx
+    # TimeoutException -> _req returns None), which made the TFC-1/TFC-3 reroute
+    # step find 0 trucks and never call the gateway -> no PWA advisory. Default
+    # generously and allow an env override.
+    upstream_timeout_s: float = 20.0
     # How long to wait for the forecaster to reflect an injected build-up before
     # recording the assertion as met/degraded (best-effort, per design decision).
     forecast_poll_attempts: int = 6
@@ -58,6 +69,7 @@ class ScenarioConfig:
             redis_url=os.environ.get("REDIS_URL", s.redis_url),
             kafka_brokers=os.environ.get("KAFKA_BROKERS", s.kafka_brokers),
             forecast_poll_attempts=_int(os.environ.get("SCENARIOS_FORECAST_ATTEMPTS"), 6),
+            upstream_timeout_s=_float(os.environ.get("SCENARIOS_UPSTREAM_TIMEOUT"), 20.0),
             log_level=os.environ.get("LOG_LEVEL", "INFO"),
         )
 

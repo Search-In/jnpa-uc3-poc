@@ -62,8 +62,7 @@ function esriSatelliteStyle(): StyleSpecification {
           "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
         ],
         tileSize: 256,
-        attribution:
-          "Imagery © Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+        attribution: "Imagery © Esri, Maxar, Earthstar Geographics, and the GIS User Community",
       },
     },
     layers: [

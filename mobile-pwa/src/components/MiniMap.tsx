@@ -1,19 +1,15 @@
 import { useEffect, useRef } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { mapStyle } from "@/lib/basemap";
 import type { CorridorGeometry, DevicePosition, Gate } from "@/lib/types";
 
-// A lightweight "traffic ahead" mini-map. To stay fast (FCP target) and work
-// offline / without a paid tile key, it renders on a tile-less light MapLibre
-// style: just a background colour plus GeoJSON layers for the corridor polyline,
-// the four gates, the segment "traffic ahead" colouring, and the live truck. The
-// dashboard (web/) owns the full basemap; the driver only needs context.
-
-const STYLE: maplibregl.StyleSpecification = {
-  version: 8,
-  sources: {},
-  layers: [{ id: "bg", type: "background", paint: { "background-color": "#e7edf5" } }],
-};
+// "Traffic ahead" mini-map. It loads the SAME basemap as the dashboard (Carto
+// Positron raster by default, token-free; Mapbox/Bhuvan optional via the shared
+// VITE_* contract — see lib/basemap.ts) so the driver sees real roads, the port
+// area and surrounding geography. On top of the basemap it overlays GeoJSON
+// layers for the corridor polyline, the four gates, the segment "traffic ahead"
+// colouring, and the live truck marker.
 
 interface Props {
   corridor?: CorridorGeometry;
@@ -39,10 +35,12 @@ export default function MiniMap({ corridor, gates, truck, targetGateId, jam }: P
     if (!el.current || map.current) return;
     const m = new maplibregl.Map({
       container: el.current,
-      style: STYLE,
+      style: mapStyle(),
       center: [72.952, 18.948],
       zoom: 11.5,
-      attributionControl: false,
+      // Carto/OSM tiles require attribution; use the compact "ⓘ" toggle so it
+      // stays unobtrusive on the small driver map.
+      attributionControl: { compact: true },
       interactive: true,
       dragRotate: false,
       pitchWithRotate: false,

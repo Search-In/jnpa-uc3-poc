@@ -161,8 +161,12 @@ async def _reissue_slots(up: Upstreams, h: ScenarioHandle, tag: str) -> List[dic
     targets = [d for d in listing.get("devices", []) if str(d.get("device_id", "")).startswith(f"SYN-{tag}")][:50]
     for d in targets:
         # Reissue toward the same gate (a fresh route/slot window); record a push.
-        ok = await up.truck_post(f"/devices/{d['device_id']}/route",
-                                 {"gate_id": d.get("gate_id"), "force_state": "EN_ROUTE_TO_PORT"})
+        # Go through the GATEWAY so the reissue also broadcasts the type=reroute WS
+        # frame + caches LAST_REROUTE — that is what populates the driver PWA's
+        # Inbox / Re-route screen. Posting straight to the sim skips that notify.
+        ok = await up.gw_post(f"/api/trucks/{d['device_id']}/route",
+                              {"gate_id": d.get("gate_id"), "force_state": "EN_ROUTE_TO_PORT",
+                               "reason": "Gate-slot window reissued — confirm new arrival window"})
         if ok:
             pushes.append({"device_id": d["device_id"], "gate_id": d.get("gate_id"),
                            "pwa_push": "gate-slot-window-reissued"})

@@ -1,18 +1,20 @@
 import type { StyleSpecification } from "maplibre-gl";
 
 // Basemap providers, in preference order:
-//   1. Mapbox light style   -> only if VITE_MAPBOX_TOKEN is set (optional upgrade)
-//   2. Carto Positron       -> free, token-free light raster tiles (DEFAULT)
-//   3. Bhuvan (ISRO) WMS     -> opt-in via VITE_BASEMAP=bhuvan (govt basemap)
+//   1. Mapbox satellite      -> only if VITE_MAPBOX_TOKEN is set (optional upgrade)
+//   2. Esri World Imagery    -> free, token-free satellite raster tiles (DEFAULT)
+//   3. Carto Positron        -> opt-in via VITE_BASEMAP=carto (light road map)
+//   4. Bhuvan (ISRO) WMS      -> opt-in via VITE_BASEMAP=bhuvan (govt basemap)
 //
 // The PoC ships without any paid map key, so the default must render with no
-// token. Carto Positron is a clean, light-themed OSM raster basemap that needs
-// no key and matches the dashboard's light theme. (Note: a Google Maps API key
-// cannot drive MapLibre — Google does not serve MapLibre vector/raster styles —
-// so GOOGLE_MAPS_API_KEY is intentionally not used here.)
+// token. Esri World Imagery is the satellite layer that backs the dashboard's
+// ArcGIS "satellite" basemap, so this MapLibre surface matches the operations
+// dashboard. (Note: a Google Maps API key cannot drive MapLibre — Google does
+// not serve MapLibre vector/raster styles — so GOOGLE_MAPS_API_KEY is
+// intentionally not used here.)
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN as string | undefined;
-const BASEMAP = (import.meta.env.VITE_BASEMAP as string | undefined) || "carto";
+const BASEMAP = (import.meta.env.VITE_BASEMAP as string | undefined) || "satellite";
 const BHUVAN_WMS =
   (import.meta.env.VITE_BHUVAN_WMS as string | undefined) ||
   "https://bhuvan-vec1.nrsc.gov.in/bhuvan/wms";
@@ -20,20 +22,50 @@ const BHUVAN_WMS =
 export const JNPA_CENTER: [number, number] = [73.0, 18.86]; // [lon, lat] corridor mid
 export const JNPA_ZOOM = 11.2;
 
-export function activeBasemapProvider(): "mapbox" | "carto" | "bhuvan" {
+export function activeBasemapProvider(): "mapbox" | "esri" | "carto" | "bhuvan" {
   if (MAPBOX_TOKEN) return "mapbox";
+  if (BASEMAP === "carto") return "carto";
   if (BASEMAP === "bhuvan") return "bhuvan";
-  return "carto";
+  return "esri"; // satellite — default
 }
 
 export function mapStyle(): string | StyleSpecification {
   if (MAPBOX_TOKEN) {
-    return `https://api.mapbox.com/styles/v1/mapbox/light-v11?access_token=${MAPBOX_TOKEN}`;
+    // Mapbox satellite-streets keeps road labels on top of satellite imagery.
+    return `https://api.mapbox.com/styles/v1/mapbox/satellite-streets-v12?access_token=${MAPBOX_TOKEN}`;
+  }
+  if (BASEMAP === "carto") {
+    return cartoLightStyle();
   }
   if (BASEMAP === "bhuvan") {
     return bhuvanStyle();
   }
-  return cartoLightStyle();
+  return esriSatelliteStyle();
+}
+
+// Free, token-free satellite basemap (Esri World Imagery). Served as 256px raster
+// tiles from ArcGIS Online — the same imagery that backs the dashboard's ArcGIS
+// "satellite"/"hybrid" basemap, keeping the Driver PWA and dashboard aligned.
+// Note the {z}/{y}/{x} tile order (Esri serves row-before-column).
+function esriSatelliteStyle(): StyleSpecification {
+  return {
+    version: 8,
+    sources: {
+      esri: {
+        type: "raster",
+        tiles: [
+          "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        ],
+        tileSize: 256,
+        attribution:
+          "Imagery © Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+      },
+    },
+    layers: [
+      { id: "bg", type: "background", paint: { "background-color": "#0b1f33" } },
+      { id: "esri", type: "raster", source: "esri" },
+    ],
+  };
 }
 
 // Free, token-free, light-themed OSM basemap (Carto Positron). Served as 256px

@@ -10,12 +10,14 @@ test("live operations renders the map and a live alert chip", async ({ page }) =
   await expect(page.getByTestId("live-map")).toBeVisible({ timeout: 15_000 });
   await expect(page.locator('[data-testid="live-map"] canvas')).toBeVisible({ timeout: 15_000 });
 
-  // The side panel header is always present.
+  // Alerts now live in a header notification drawer — open it via the bell, then
+  // the drawer header is shown.
+  await page.getByRole("button", { name: "Active alerts" }).first().click();
   await expect(page.getByRole("heading", { name: "Active alerts" })).toBeVisible();
 
-  // At least one alert chip (kind badge) appears within 30 s — seeded from REST
-  // and/or pushed over the WebSocket on a freshly booted stack.
-  const alertButton = page.locator("aside button").first();
+  // At least one alert row appears within 30 s — seeded from REST and/or pushed
+  // over the WebSocket on a freshly booted stack.
+  const alertButton = page.locator('[data-testid="alerts-panel"] button').first();
   await expect(alertButton).toBeVisible({ timeout: 30_000 });
 });
 

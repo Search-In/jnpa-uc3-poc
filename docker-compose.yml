@@ -818,6 +818,7 @@ services:
     environment:
       PYTHONPATH: /app
       PORT: "8000"
+      PWA_PAIRING_SECRET: ${PWA_PAIRING_SECRET}
       # Upstream services (jnpa network names).
       GATEWAY_ANPR_URL: ${GATEWAY_ANPR_URL:-http://anpr:8301}
       GATEWAY_VAHAN_SIM_URL: ${GATEWAY_VAHAN_SIM_URL:-http://vahan-sim:8201}

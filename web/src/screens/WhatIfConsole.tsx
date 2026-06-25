@@ -152,7 +152,17 @@ export default function WhatIfConsole() {
               </CardHeader>
               <CardContent className="space-y-3">
                 <p className="text-xs text-muted-foreground">{s.blurb}</p>
-                <pre className="rounded bg-muted p-2 text-[11px]">{JSON.stringify(s.params)}</pre>
+                <div className="flex flex-wrap gap-1.5">
+                  {Object.entries(s.params).map(([key, value]) => (
+                    <span
+                      key={key}
+                      className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/50 px-2 py-1 text-[11px]"
+                    >
+                      <span className="text-muted-foreground">{humanizeParamKey(key)}</span>
+                      <span className="font-mono font-medium text-foreground">{String(value)}</span>
+                    </span>
+                  ))}
+                </div>
                 <Button size="sm" onClick={() => trigger(s)} disabled={run.isPending}>
                   {run.isPending && run.variables?.id === s.id ? (
                     <Spinner />
@@ -236,6 +246,12 @@ function stepColour(status: string): string {
   if (status === "degraded") return "#E69F00";
   if (status === "info") return "#56B4E9";
   return "#009E73";
+}
+
+/** "gate_id" → "Gate id" — readable label for a scenario param chip. */
+function humanizeParamKey(key: string): string {
+  const spaced = key.replace(/[_-]+/g, " ").trim();
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
 // TFC-3 step 5 carries an explicit cross-twin arrow annotation.

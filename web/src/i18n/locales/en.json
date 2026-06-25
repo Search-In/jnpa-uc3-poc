@@ -28,6 +28,37 @@
     "save": "Save",
     "cancel": "Cancel"
   },
+  "header": {
+    "moreOptions": "More options",
+    "actions": "Dashboard actions",
+    "refresh": "Refresh dashboard",
+    "export": "Export report (CSV)",
+    "mapSettings": "Map settings",
+    "basemap": {
+      "satellite": "Satellite",
+      "hybrid": "Hybrid",
+      "streets": "Streets",
+      "topographic": "Topographic"
+    }
+  },
+  "notifications": {
+    "title": "Active alerts",
+    "subtitle": "Click an alert to locate it on the map",
+    "search": "Search alerts…",
+    "empty": "No active alerts.",
+    "locate": "Locate on map",
+    "vehicle": "Vehicle",
+    "location": "Location",
+    "status": "Status",
+    "time": "Time (IST)",
+    "severity": "Severity",
+    "gate": "Gate",
+    "zone": "Zone",
+    "details": "Details",
+    "evidence": "View evidence",
+    "statusActive": "Active",
+    "statusAck": "Acknowledged"
+  },
   "lang": {
     "en": "English",
     "hi": "हिन्दी",

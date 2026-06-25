@@ -22,11 +22,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 // React wrapper below only creates the React→element binding; this side-effect
 // import is what actually defines the element (otherwise it never upgrades).
 import "@arcgis/map-components/components/arcgis-map";
-// Layer-list toggle (GIS-5): an operator can show/hide each operational layer
-// (gates, road network, geofences, heatmap, parking, corridor). The web
-// component auto-binds to the parent <arcgis-map> view.
-import "@arcgis/map-components/components/arcgis-layer-list";
-import { ArcgisMap as ArcgisMapWC, ArcgisLayerList } from "@arcgis/map-components-react";
+import { ArcgisMap as ArcgisMapWC } from "@arcgis/map-components-react";
+import { Layers as LayersIcon, X as XIcon } from "lucide-react";
 import GraphicsLayer from "@arcgis/core/layers/GraphicsLayer";
 import Graphic from "@arcgis/core/Graphic";
 import Point from "@arcgis/core/geometry/Point";
@@ -48,10 +45,33 @@ import type {
 } from "@/lib/types";
 import { gateColour, jamColour, MAP_TOKENS, parkingStatusColour, zoneColour } from "@/lib/tokens";
 import { JNPA_CENTER, JNPA_ZOOM } from "@/lib/basemap";
+import {
+  snapPathToRoads,
+  buildPathIndex,
+  projectOnPath,
+  sliceBetween,
+  type PathIndex,
+  type LngLat,
+} from "@/lib/roadSnap";
+import { useClickOutside } from "@/hooks/useClickOutside";
 
 const DEFAULT_BASEMAP = "dark-gray-vector";
 // Spotlight halo colour (CB-safe info blue, matching the guided-tour ring tone).
 const HIGHLIGHT_COLOUR = "#56B4E9";
+// Alert-focus halo colour (CB-safe orange) — distinct from the tour spotlight.
+const FOCUS_COLOUR = "#E69F00";
+
+// Operator-toggleable operational layers, surfaced in the floating Layers
+// control (GIS-5). The tour-driven `highlight` layer is intentionally omitted.
+type ToggleLayerKey = "gates" | "corridor" | "trucks" | "heatmap" | "zones" | "parking";
+const LAYER_DEFS: { key: ToggleLayerKey; label: string }[] = [
+  { key: "gates", label: "Gates" },
+  { key: "corridor", label: "NH-348 corridor" },
+  { key: "trucks", label: "Trucks (1:50)" },
+  { key: "heatmap", label: "Congestion heatmap" },
+  { key: "zones", label: "Geofence zones" },
+  { key: "parking", label: "Parking facilities" },
+];
 
 export interface ArcgisMapProps {
   /** NH-348 corridor geometry (polyline + segments). */
@@ -73,6 +93,12 @@ export interface ArcgisMapProps {
    * PortMap `highlights` prop (highlightGraphics + view.goTo). Empty = no focus.
    */
   highlights?: string[];
+  /**
+   * A single incident location to ring + frame (the header notification drawer
+   * publishes this when an operator clicks an alert). Drawn as a distinct amber
+   * halo on the highlight layer; null clears it.
+   */
+  focusPoint?: { lat: number; lon: number } | null;
   /** Override basemap (default "dark-gray-vector" — no API key needed in dev). */
   basemap?: string;
   /** Map centre [lon, lat]; defaults to the JNPA corridor mid-point. */
@@ -110,6 +136,7 @@ export function ArcgisMap({
   trucks = [],
   parkingFacilities = [],
   highlights = [],
+  focusPoint = null,
   basemap = DEFAULT_BASEMAP,
   center = JNPA_CENTER,
   zoom = JNPA_ZOOM,
@@ -132,6 +159,17 @@ export function ArcgisMap({
     highlight: GraphicsLayer;
   } | null>(null);
   const clickHandle = useRef<ViewHandle | null>(null);
+  // Snapped road geometry for the corridor (OSRM, render-time only). Null until
+  // the route resolves, or permanently if OSRM is unreachable — callers then
+  // fall back to the authored straight-line geometry.
+  const [roadIndex, setRoadIndex] = useState<PathIndex | null>(null);
+  // Floating Layers control (GIS-5): hidden by default, opens on the icon.
+  const [layersOpen, setLayersOpen] = useState(false);
+  const [layerVis, setLayerVis] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(LAYER_DEFS.map((d) => [d.key, true])),
+  );
+  const layersCtrlRef = useRef<HTMLDivElement>(null);
+  useClickOutside(layersCtrlRef, () => setLayersOpen(false), layersOpen);
   // Last spotlight id-set we framed, so we only re-zoom when it changes — exactly
   // the reference PortMap's lastZoomKey guard.
   const lastZoomKey = useRef<string>("");
@@ -144,6 +182,14 @@ export function ArcgisMap({
       const view = event.target.view;
       if (!view || !view.map) return;
       viewRef.current = view;
+
+      // GIS-5 UX: continuous (non-stepped) wheel/pinch zoom for a smooth feel.
+      if (view.constraints) view.constraints.snapToZoom = false;
+
+      // Ensure the native zoom (+/−) and attribution widgets are present at the
+      // top-left corner (canonical ArcGIS default UI). Idempotent — keeps exactly
+      // one zoom control regardless of the map-component default UI set.
+      view.ui.components = ["zoom", "attribution"];
 
       // GraphicsLayers, ordered bottom → top via add order.
       const mk = (id: string) => new GraphicsLayer({ id, title: id });
@@ -214,10 +260,16 @@ export function ArcgisMap({
     const jamBySeg = new Map(snapshots.map((s) => [s.segment_id, s.jam_factor]));
     for (const seg of corridor.segments) {
       const jf = jamBySeg.get(seg.id) ?? 0;
+      // Draw the actual road polyline for this segment when the snapped route is
+      // available (its real on-road vertices between the segment's endpoints);
+      // otherwise fall back to the authored straight line.
+      const path = roadIndex
+        ? sliceBetween(roadIndex, seg.start as LngLat, seg.end as LngLat)
+        : [seg.start, seg.end];
       layer.add(
         new Graphic({
           geometry: new Polyline({
-            paths: [[seg.start, seg.end]],
+            paths: [path],
             spatialReference: WGS84,
           }),
           symbol: new SimpleLineSymbol({
@@ -246,10 +298,12 @@ export function ArcgisMap({
       const jfRaw = jamBySeg.get(seg.id) ?? 0;
       const ratio = jfRaw > 1 ? jfRaw / 10 : jfRaw;
       if (ratio <= 0) continue;
-      const mid: [number, number] = [
+      const midRaw: [number, number] = [
         (seg.start[0] + seg.end[0]) / 2,
         (seg.start[1] + seg.end[1]) / 2,
       ];
+      // Keep the congestion halo on the road when the snapped route is available.
+      const mid = roadIndex ? projectOnPath(roadIndex, midRaw as LngLat).point : midRaw;
       // Graduated translucent halo as a lightweight congestion "heat" cue.
       const stop =
         MAP_TOKENS.heatStops.find((s) => ratio <= s.ratio) ??
@@ -260,7 +314,9 @@ export function ArcgisMap({
           symbol: new SimpleMarkerSymbol({
             style: "circle",
             color: stop.color,
-            size: 18 + ratio * 22,
+            // Compact congestion cue (≈8–16px) so it reads as a marker on the
+            // road rather than a halo that obscures the line geometry.
+            size: 8 + ratio * 8,
             outline: { color: [0, 0, 0, 0], width: 0 },
           }),
           attributes: { segment_id: seg.id, ratio },
@@ -323,11 +379,15 @@ export function ArcgisMap({
     layer.removeAll();
     for (const t of trucks) {
       if (typeof t.position?.lon !== "number" || typeof t.position?.lat !== "number") continue;
+      // Keep every vehicle on the road network: snap its reported position onto
+      // the snapped corridor polyline (falls back to the raw point off-route).
+      const raw: LngLat = [t.position.lon, t.position.lat];
+      const [lon, lat] = roadIndex ? projectOnPath(roadIndex, raw).point : raw;
       layer.add(
         new Graphic({
           geometry: new Point({
-            longitude: t.position.lon,
-            latitude: t.position.lat,
+            longitude: lon,
+            latitude: lat,
           }),
           symbol: new SimpleMarkerSymbol({
             style: "circle",
@@ -423,14 +483,62 @@ export function ArcgisMap({
         }),
       );
     }
+    // Alert-focus halo (from the header notification drawer). Drawn after the
+    // tour spotlights and in a distinct colour so the two never read as one.
+    if (focusPoint && typeof focusPoint.lon === "number" && typeof focusPoint.lat === "number") {
+      const geom = new Point({
+        longitude: focusPoint.lon,
+        latitude: focusPoint.lat,
+        spatialReference: WGS84,
+      });
+      layer.add(
+        new Graphic({
+          geometry: geom,
+          symbol: new SimpleMarkerSymbol({
+            style: "circle",
+            color: [0, 0, 0, 0],
+            size: 46,
+            outline: { color: hexToRgba(FOCUS_COLOUR, 0.45), width: 2 },
+          }),
+          attributes: { focus: true },
+        }),
+      );
+      layer.add(
+        new Graphic({
+          geometry: geom,
+          symbol: new SimpleMarkerSymbol({
+            style: "circle",
+            color: [0, 0, 0, 0],
+            size: 30,
+            outline: { color: FOCUS_COLOUR, width: 4 },
+          }),
+          attributes: { focus: true },
+        }),
+      );
+    }
   }
+
+  // Snap the corridor waypoints to the road network (render-time only, GIS-1).
+  // Re-runs whenever the corridor changes; aborts the in-flight request on
+  // change/unmount. On failure roadIndex stays null → straight-line fallback.
+  useEffect(() => {
+    if (!corridor?.polyline?.length) {
+      setRoadIndex(null);
+      return;
+    }
+    const ctrl = new AbortController();
+    void snapPathToRoads(corridor.polyline as LngLat[], ctrl.signal).then((road) => {
+      if (road) setRoadIndex(buildPathIndex(road));
+    });
+    return () => ctrl.abort();
+  }, [corridor]);
 
   // ---- reactive prop → layer updates ------------------------------------
   useEffect(() => {
     renderCorridor();
     renderHeatmap();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [corridor, snapshots]);
+  }, [corridor, snapshots, roadIndex]);
 
   // Spotlight sync — reproduces the reference PortMap effect exactly: redraw the
   // halos, then (only when the spotlight id-set changes — lastZoomKey guard)
@@ -458,14 +566,14 @@ export function ArcgisMap({
       lastZoomKey.current = "";
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [highlights, gates, corridor, viewReady]);
+  }, [highlights, gates, corridor, viewReady, focusPoint]);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => renderZones(), [zones]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => renderGates(), [gates]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => renderTrucks(), [trucks]);
+  useEffect(() => renderTrucks(), [trucks, roadIndex]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => renderParking(), [parkingFacilities]);
 
@@ -476,6 +584,16 @@ export function ArcgisMap({
       clickHandle.current = null;
     };
   }, []);
+
+  // Toggle a GraphicsLayer's visibility from the floating Layers control,
+  // preserving the exact show/hide capability the old layer-list provided.
+  function toggleLayer(key: ToggleLayerKey) {
+    const set = layers.current;
+    if (!set) return;
+    const next = !(layerVis[key] ?? true);
+    set[key].visible = next;
+    setLayerVis((v) => ({ ...v, [key]: next }));
+  }
 
   // The initial centre Point (the prop's getter type is Point, not a tuple).
   // Only the FIRST value is honoured by the element, so we memoise on mount.
@@ -499,10 +617,55 @@ export function ArcgisMap({
         zoom={zoom}
         onArcgisViewReadyChange={handleReady}
         style={{ height: "100%", width: "100%" }}
-      >
-        {/* Layer-toggle control (GIS-5). position via the map's UI manager. */}
-        <ArcgisLayerList position="top-left" />
-      </ArcgisMapWC>
+      />
+
+      {/* Floating Layers control (GIS-5): hidden by default, opens on the icon,
+          closes on the icon again or an outside click. ArcGIS-widget styling.
+          Positioned just BELOW the native zoom (+/−) widget (top-left) so the two
+          stack cleanly instead of overlapping. */}
+      <div ref={layersCtrlRef} className="absolute left-[15px] top-[92px] z-10">
+        <button
+          type="button"
+          onClick={() => setLayersOpen((o) => !o)}
+          aria-label="Toggle map layers"
+          aria-expanded={layersOpen}
+          title="Layers"
+          className="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-card/90 text-foreground shadow-md backdrop-blur transition hover:bg-muted"
+        >
+          <LayersIcon className="h-4 w-4" />
+        </button>
+        {layersOpen && (
+          <div className="mt-2 w-52 rounded-md border border-border bg-card/95 p-2 shadow-lg backdrop-blur">
+            <div className="mb-1 flex items-center justify-between px-1">
+              <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Layers
+              </span>
+              <button
+                type="button"
+                onClick={() => setLayersOpen(false)}
+                aria-label="Close layers panel"
+                className="text-muted-foreground transition hover:text-foreground"
+              >
+                <XIcon className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            {LAYER_DEFS.map((d) => (
+              <label
+                key={d.key}
+                className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-xs hover:bg-muted"
+              >
+                <input
+                  type="checkbox"
+                  checked={layerVis[d.key] ?? true}
+                  onChange={() => toggleLayer(d.key)}
+                  className="h-3.5 w-3.5 accent-severity-info"
+                />
+                {d.label}
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

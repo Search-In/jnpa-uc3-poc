@@ -118,5 +118,11 @@ export const api = {
       steps: import("./types").ScenarioStep[];
     }>(`/api/scenarios/handle/${handleId}/timeline`),
 
+  // --- Terminal Appointment System (TFC-1) ---
+  tasSlots: (gateId?: string) =>
+    http<{ slots: import("./types").TasSlot[] }>(
+      `/api/tas/slots${gateId ? `?gate_id=${encodeURIComponent(gateId)}` : ""}`,
+    ),
+
   health: () => http<{ status: string; ws_clients: number }>("/healthz"),
 };

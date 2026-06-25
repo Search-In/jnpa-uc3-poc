@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type MapView from "@arcgis/core/views/MapView";
 import { getAdapter } from "@/data";
 import { useSocket } from "@/hooks/SocketContext";
+import { useTourStore } from "@/whatif/useTourStore";
+import { getScript } from "@/whatif/scenarioScripts";
 import type { Alert, Gate, TrafficSnapshot } from "@/lib/types";
 import { ArcgisMap } from "@/components/map/ArcgisMap";
 import { Card, CardContent } from "@/components/ui/card";
@@ -10,6 +12,7 @@ import { ThroughputChart } from "@/components/ThroughputChart";
 import { KpiStrip } from "@/components/panels/KpiStrip";
 import { CarbonTile } from "@/components/panels/CarbonTile";
 import { EmptyContainerBoard } from "@/components/panels/EmptyContainerBoard";
+import { TasWidget } from "@/components/panels/TasWidget";
 import { ParkingBoard } from "@/components/panels/ParkingBoard";
 import { AutoLeoPanel } from "@/components/panels/AutoLeoPanel";
 import { DecisionPathBadge } from "@/components/DecisionPathBadge";
@@ -24,6 +27,16 @@ export default function LiveOperations() {
   const { alerts: liveAlerts } = useSocket();
   const [view, setView] = useState<MapView | null>(null);
   const [selected, setSelected] = useState<Alert | null>(null);
+
+  // Map spotlight follows the guided What-If tour, but ONLY when the current step
+  // is a map-related business event (target.kind === "map"). DOM steps hand the
+  // map an empty set, so the map is never highlighted as a generic default.
+  const tour = useTourStore();
+  const spotlight = useMemo(() => {
+    if (!tour.scenarioId) return [];
+    const t = getScript(tour.scenarioId)?.steps[tour.stepIndex]?.target;
+    return t?.kind === "map" ? (t.mapAssets ?? []) : [];
+  }, [tour.scenarioId, tour.stepIndex]);
 
   // All data now flows through the typed adapter (never the gateway directly).
   // Adapter methods return UNWRAPPED data (Gate[], TrafficSnapshot[], …).
@@ -142,12 +155,14 @@ export default function LiveOperations() {
       <div className="flex min-h-[420px] flex-1">
         <div className="relative min-w-0 flex-1">
           <ArcgisMap
+            basemap="satellite"
             corridor={corridorQ.data}
             gates={gates}
             zones={zonesQ.data}
             snapshots={snapshots}
             trucks={trucksQ.data}
             parkingFacilities={parkingQ.data}
+            highlights={spotlight}
             onViewReady={setView}
           />
           <MapLegend />
@@ -165,7 +180,9 @@ export default function LiveOperations() {
               <li className="p-4 text-sm text-muted-foreground">No active alerts.</li>
             )}
             {merged.map((a) => (
-              <li key={a.id}>
+              // Tagged by alert kind so the guided tour can ring the EXACT alert
+              // (e.g. the WRONG_WAY card) rather than the whole panel.
+              <li key={a.id} data-guided-id={`alert-${a.kind}`}>
                 <button
                   onClick={() => focusAlert(a)}
                   className="flex w-full flex-col gap-1 border-b border-border/60 px-4 py-2.5 text-left hover:bg-muted"
@@ -185,11 +202,12 @@ export default function LiveOperations() {
         </aside>
       </div>
 
-      {/* Appendix-C capability tiles (DTCCC view). */}
+      {/* Appendix-C capability tiles (DTCCC view) + TAS appointment board. */}
       <div className="grid grid-cols-1 gap-3 border-t border-border p-3 lg:grid-cols-3">
         <CarbonTile />
         <ParkingBoard />
         <EmptyContainerBoard />
+        <TasWidget />
       </div>
       <div className="grid grid-cols-1 gap-3 border-t border-border p-3 lg:grid-cols-2">
         <AutoLeoPanel />

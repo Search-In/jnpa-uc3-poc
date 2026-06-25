@@ -96,8 +96,11 @@ export default function PoliceReports() {
                 </thead>
                 <tbody>
                   {incidents.map((inc) => (
+                    // Tagged by incident kind so the guided tour can ring the
+                    // EXACT row (e.g. the WRONG_WAY e-Challan), not the table.
                     <tr
                       key={inc.id}
+                      data-guided-id={`report-${inc.kind}`}
                       onClick={() => setSelected(inc)}
                       className="cursor-pointer border-b border-border/50 hover:bg-muted/40"
                     >

@@ -197,6 +197,15 @@ export interface ParkingSummary {
   full_count: number;
 }
 
+// --- Terminal Appointment System (gateway /api/tas/slots) ---
+export interface TasSlot {
+  slot_id: string;
+  gate_id: string;
+  start: string; // ISO timestamp
+  status: "BOOKED" | "RESCHEDULED" | "CANCELLED" | string;
+  rescheduled_to?: string | null;
+}
+
 // --- Fault-injection / control surface (gateway /api/control/fault) ---
 // Mirrors the gateway responses 1:1 so the Demo Console behaves identically in
 // mock and live mode. `forced_rung === null` means the chain is on its natural

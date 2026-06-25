@@ -17,7 +17,7 @@
 //
 // Colours come exclusively from src/lib/tokens.ts (single source of truth).
 
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 // Register the <arcgis-map> custom element + bundle its runtime locally. The
 // React wrapper below only creates the React→element binding; this side-effect
 // import is what actually defines the element (otherwise it never upgrades).
@@ -50,6 +50,8 @@ import { gateColour, jamColour, MAP_TOKENS, parkingStatusColour, zoneColour } fr
 import { JNPA_CENTER, JNPA_ZOOM } from "@/lib/basemap";
 
 const DEFAULT_BASEMAP = "dark-gray-vector";
+// Spotlight halo colour (CB-safe info blue, matching the guided-tour ring tone).
+const HIGHLIGHT_COLOUR = "#56B4E9";
 
 export interface ArcgisMapProps {
   /** NH-348 corridor geometry (polyline + segments). */
@@ -64,6 +66,13 @@ export interface ArcgisMapProps {
   trucks?: TruckDevice[];
   /** Parking facilities. */
   parkingFacilities?: ParkingFacility[];
+  /**
+   * Asset ids the guided What-If tour is spotlighting for the current step
+   * (gate ids / corridor segment ids). The map rings each with a halo and
+   * pans/zooms to frame them — the direct analog of the reference project's
+   * PortMap `highlights` prop (highlightGraphics + view.goTo). Empty = no focus.
+   */
+  highlights?: string[];
   /** Override basemap (default "dark-gray-vector" — no API key needed in dev). */
   basemap?: string;
   /** Map centre [lon, lat]; defaults to the JNPA corridor mid-point. */
@@ -100,6 +109,7 @@ export function ArcgisMap({
   snapshots = [],
   trucks = [],
   parkingFacilities = [],
+  highlights = [],
   basemap = DEFAULT_BASEMAP,
   center = JNPA_CENTER,
   zoom = JNPA_ZOOM,
@@ -108,6 +118,10 @@ export function ArcgisMap({
   className,
 }: ArcgisMapProps) {
   const viewRef = useRef<MapView | null>(null);
+  // Flips true once the MapView is ready. Because /live remounts each time the
+  // guided tour navigates to it, the spotlight effect must (re)run after the view
+  // exists — otherwise the first frame on a fresh mount never zooms.
+  const [viewReady, setViewReady] = useState(false);
   const layers = useRef<{
     heatmap: GraphicsLayer;
     zones: GraphicsLayer;
@@ -115,8 +129,12 @@ export function ArcgisMap({
     parking: GraphicsLayer;
     trucks: GraphicsLayer;
     gates: GraphicsLayer;
+    highlight: GraphicsLayer;
   } | null>(null);
   const clickHandle = useRef<ViewHandle | null>(null);
+  // Last spotlight id-set we framed, so we only re-zoom when it changes — exactly
+  // the reference PortMap's lastZoomKey guard.
+  const lastZoomKey = useRef<string>("");
   const onGateClickRef = useRef(onGateClick);
   onGateClickRef.current = onGateClick;
 
@@ -136,9 +154,19 @@ export function ArcgisMap({
         parking: mk("uc3-parking"),
         trucks: mk("uc3-trucks"),
         gates: mk("uc3-gates"),
+        // Spotlight halos sit on top so the ring is never occluded.
+        highlight: mk("uc3-highlight"),
       };
       layers.current = set;
-      view.map.addMany([set.heatmap, set.zones, set.corridor, set.parking, set.trucks, set.gates]);
+      view.map.addMany([
+        set.heatmap,
+        set.zones,
+        set.corridor,
+        set.parking,
+        set.trucks,
+        set.gates,
+        set.highlight,
+      ]);
 
       // Gate click → callback.
       clickHandle.current?.remove();
@@ -157,6 +185,9 @@ export function ArcgisMap({
       // Paint everything we already have.
       renderAll();
       onViewReady?.(view);
+      // Signal readiness so the spotlight effect frames the current assets even
+      // on a fresh mount (the effect runs once before the view exists).
+      setViewReady(true);
     },
     // renderAll/onViewReady are stable enough for our purposes; deps kept tight.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -171,6 +202,7 @@ export function ArcgisMap({
     renderParking();
     renderTrucks();
     renderGates();
+    renderHighlight();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -337,12 +369,96 @@ export function ArcgisMap({
     }
   }
 
+  // Resolve a spotlight asset id (gate or corridor segment) to its on-map point.
+  // Gates use their explicit lon/lat; a segment uses its mid-point, normalised so
+  // the halo lands at the correct geographic location regardless of whether the
+  // segment coords are authored [lon,lat] or [lat,lon] (JNPA lat ≈ 18.9 ≤ 30,
+  // lon ≈ 73 > 30, so the value ≤ 30 is the latitude).
+  function geomFor(id: string): Point | null {
+    const g = gates.find((x) => x.id === id);
+    if (g) return new Point({ longitude: g.lon, latitude: g.lat, spatialReference: WGS84 });
+    const seg = corridor?.segments.find((s) => s.id === id);
+    if (seg) {
+      const a = (seg.start[0] + seg.end[0]) / 2;
+      const b = (seg.start[1] + seg.end[1]) / 2;
+      const lat = Math.abs(a) <= 30 ? a : b;
+      const lon = Math.abs(a) <= 30 ? b : a;
+      return new Point({ longitude: lon, latitude: lat, spatialReference: WGS84 });
+    }
+    return null;
+  }
+
+  // Spotlight halos — a static double ring around each spotlighted asset (the
+  // analog of the reference highlightedAssetsLayer's outline halo).
+  function renderHighlight() {
+    const layer = layers.current?.highlight;
+    if (!layer) return;
+    layer.removeAll();
+    for (const id of highlights) {
+      const geom = geomFor(id);
+      if (!geom) continue;
+      // Outer faint ring + inner solid ring read as a halo without animation.
+      layer.add(
+        new Graphic({
+          geometry: geom,
+          symbol: new SimpleMarkerSymbol({
+            style: "circle",
+            color: [0, 0, 0, 0],
+            size: 46,
+            outline: { color: hexToRgba(HIGHLIGHT_COLOUR, 0.45), width: 2 },
+          }),
+          attributes: { id },
+        }),
+      );
+      layer.add(
+        new Graphic({
+          geometry: geom,
+          symbol: new SimpleMarkerSymbol({
+            style: "circle",
+            color: [0, 0, 0, 0],
+            size: 30,
+            outline: { color: HIGHLIGHT_COLOUR, width: 4 },
+          }),
+          attributes: { id },
+        }),
+      );
+    }
+  }
+
   // ---- reactive prop → layer updates ------------------------------------
   useEffect(() => {
     renderCorridor();
     renderHeatmap();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [corridor, snapshots]);
+
+  // Spotlight sync — reproduces the reference PortMap effect exactly: redraw the
+  // halos, then (only when the spotlight id-set changes — lastZoomKey guard)
+  // pan/zoom-frame the assets. Single asset → zoom in to ≥ 14; multiple → frame
+  // them all. Re-runs when the asset geometry sources change so the halo tracks.
+  useEffect(() => {
+    renderHighlight();
+    const view = viewRef.current;
+    const targets = highlights.map(geomFor).filter((g): g is Point => g != null);
+    const zoomKey = [...highlights].sort().join("|");
+    if (view && targets.length > 0 && zoomKey !== lastZoomKey.current) {
+      lastZoomKey.current = zoomKey;
+      void view.when(() => {
+        void view
+          .goTo(
+            targets.length === 1
+              ? { target: targets[0], zoom: Math.max(view.zoom ?? 0, 14) }
+              : { target: targets },
+            { duration: 700, easing: "ease-in-out" },
+          )
+          // goTo rejects if a newer animation interrupts it — expected, ignore.
+          .catch(() => {});
+      });
+    } else if (targets.length === 0) {
+      lastZoomKey.current = "";
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlights, gates, corridor, viewReady]);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => renderZones(), [zones]);

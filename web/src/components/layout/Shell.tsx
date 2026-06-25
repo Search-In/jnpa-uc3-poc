@@ -29,6 +29,7 @@ import {
 import { SUPPORTED_LANGS, LANG_LABELS, type LangCode } from "@/i18n";
 import i18n from "@/i18n";
 import { SHELL } from "@/lib/tokens";
+import { HeaderActions } from "@/components/layout/HeaderActions";
 
 // Route table — labels resolved through t() at render time. The `i18nKey` maps
 // into the `nav` namespace seeded in src/i18n/locales/*.json.
@@ -115,6 +116,9 @@ export function Shell({ children, onResetBaseline, resetDisabled }: ShellProps) 
             ))}
           </CalciteSelect>
 
+          {/* Notification bell (+ unread badge) opening the alerts drawer. */}
+          <HeaderActions />
+
           <CalciteButton
             appearance="outline"
             kind="neutral"
@@ -129,7 +133,8 @@ export function Shell({ children, onResetBaseline, resetDisabled }: ShellProps) 
       </CalciteNavigation>
 
       {/* ---- Left nav rail ---- */}
-      <CalciteShellPanel slot="panel-start" widthScale="m" collapsed={false} resizable={false}>
+      {/* widthScale "s" keeps the rail snug against the content (no wide gap). */}
+      <CalciteShellPanel slot="panel-start" widthScale="s" collapsed={false} resizable={false}>
         <nav
           aria-label={t("app.title")}
           style={{ display: "flex", flexDirection: "column", paddingBlock: "0.5rem" }}

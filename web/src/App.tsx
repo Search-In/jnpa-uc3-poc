@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { Shell } from "@/components/layout/Shell";
 import { useScenario } from "@/hooks/ScenarioContext";
 import { authEnabled, canSeeScreen, getRole, type Role } from "@/lib/auth";
@@ -11,6 +11,7 @@ import PoliceReports from "@/screens/PoliceReports";
 import SystemHealth from "@/screens/SystemHealth";
 import WhatIfConsole from "@/screens/WhatIfConsole";
 import DemoConsole from "@/screens/DemoConsole";
+import { GuidedTour } from "@/whatif/GuidedTour";
 
 /** Guard a screen by role. When auth is disabled (demo build) it always renders;
  *  when enabled, an out-of-role screen redirects to Live Operations (which every
@@ -23,6 +24,7 @@ function Guard({ path, children }: { path: string; children: React.ReactNode }) 
 
 export default function App() {
   const { scenario, reset } = useScenario();
+  const navigate = useNavigate();
   const [role, setRole] = useState<Role | null>(getRole());
 
   // Auth-enabled build with no session yet -> show the login gate (never mounted
@@ -97,6 +99,13 @@ export default function App() {
           <Route path="*" element={<Navigate to="/live" replace />} />
         </Routes>
       </main>
+
+      {/* Guided What-If runtime — mounted once, above the router outlet, so it
+          survives view changes. It switches the visible view per scenario step
+          via onView (the host-owned view switcher), exactly like the reference's
+          Dashboard passing onTab={setActiveTab}. Here the host owns routes, so
+          onView is navigate. Renders nothing unless a guided scenario is active. */}
+      <GuidedTour onView={(view) => navigate(view)} />
     </Shell>
   );
 }

@@ -22,8 +22,7 @@ degrades gracefully rather than 500-ing during a demo; the dashboard's
 from __future__ import annotations
 
 import html
-import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Query, Response
@@ -240,79 +239,182 @@ def _severity_colour(sev: str) -> str:
     }.get(sev, "#0072B2")
 
 
+# Readable incident-kind labels (mirrors the dashboard's alertKind i18n).
+_KIND_LABELS: Dict[str, str] = {
+    "WRONG_WAY": "Wrong-way driving",
+    "ILLEGAL_PARKING": "Illegal parking",
+    "OVERSPEEDING": "Over-speeding",
+    "ROUTE_DEVIATION": "Route deviation",
+}
+
+
+def _kind_label(kind: Optional[str]) -> str:
+    if not kind:
+        return "—"
+    return _KIND_LABELS.get(kind, kind.replace("_", " ").title())
+
+
+def _fmt_inr(value: Any) -> str:
+    """Indian-grouped rupee amount, e.g. 5000 -> ₹5,000."""
+    try:
+        return f"₹{int(value):,}"
+    except (TypeError, ValueError):
+        return "—"
+
+
 def _render_html(incidents: List[dict]) -> str:
     """One printable A4 page per incident (page-break between)."""
+    generated = datetime.now(timezone.utc).strftime("%d %b %Y, %H:%M UTC")
+    total = len(incidents)
     pages = []
     for idx, inc in enumerate(incidents):
         rc = inc.get("rc") or {}
         challan = inc.get("challan") or {}
         evidence = inc.get("evidence_url")
         ev_html = (
+            f'<figure class="evidence-wrap">'
             f'<img class="evidence" src="{_esc(evidence)}" '
-            f'alt="evidence" onerror="this.style.display=\'none\'"/>'
+            f'alt="evidence" onerror="this.parentNode.style.display=\'none\'"/>'
+            f'<figcaption>Photographic evidence · retained in MinIO object store</figcaption>'
+            f'</figure>'
             if evidence else
             '<div class="evidence noimg">No photographic evidence on file</div>'
         )
         sev = _esc(inc.get("severity"))
+        kind = inc.get("kind") or ""
         pages.append(f"""
-        <section class="incident" style="page-break-after: {'always' if idx < len(incidents) - 1 else 'auto'};">
+        <section class="incident" style="page-break-after: {'always' if idx < total - 1 else 'auto'};">
           <header>
-            <div>
-              <h1>JNPA Traffic-Police Incident Report</h1>
-              <div class="sub">NH-348 Corridor · Use Case III — Traffic Monitoring</div>
+            <div class="brand">
+              <div class="emblem">JNPA</div>
+              <div>
+                <h1>Traffic-Police Incident Report</h1>
+                <div class="sub">NH-348 Corridor · Use Case III — Traffic Monitoring &amp; Enforcement</div>
+              </div>
             </div>
             <div class="badge" style="background:{_severity_colour(inc.get('severity',''))}">{sev}</div>
           </header>
+
+          <div class="incident-title">
+            <span class="kind">{_esc(_kind_label(kind))}</span>
+            <span class="kind-code">{_esc(kind)}</span>
+            <span class="ref">Page {idx + 1} of {total}</span>
+          </div>
+
+          <h2 class="section-h">Incident &amp; vehicle details</h2>
           <table class="kv">
             <tr><th>Incident ID</th><td>{_esc(inc.get('id'))}</td>
-                <th>Kind</th><td>{_esc(inc.get('kind'))}</td></tr>
-            <tr><th>Timestamp (UTC)</th><td>{_esc(inc.get('ts'))}</td>
-                <th>Gate</th><td>{_esc(inc.get('gate_id') or '—')}</td></tr>
-            <tr><th>Plate</th><td class="plate">{_esc(inc.get('plate') or '—')}</td>
-                <th>Vehicle Class</th><td>{_esc(rc.get('vehicle_class') or '—')}</td></tr>
-            <tr><th>Owner (masked)</th><td>{_esc(rc.get('owner_name_masked') or '—')}</td>
-                <th>RTO / State</th><td>{_esc(rc.get('rto_code') or '—')} / {_esc(rc.get('state') or '—')}</td></tr>
-            <tr><th>FASTag</th><td>{_esc(rc.get('fastag_status') or '—')}</td>
-                <th>Blacklist</th><td>{_esc(rc.get('blacklist_status') or 'CLEAR')}</td></tr>
+                <th>Timestamp (UTC)</th><td>{_esc(inc.get('ts'))}</td></tr>
+            <tr><th>Gate</th><td>{_esc(inc.get('gate_id') or '—')}</td>
+                <th>Plate</th><td class="plate">{_esc(inc.get('plate') or '—')}</td></tr>
+            <tr><th>Vehicle class</th><td>{_esc(rc.get('vehicle_class') or '—')}</td>
+                <th>Owner (masked)</th><td>{_esc(rc.get('owner_name_masked') or '—')}</td></tr>
+            <tr><th>RTO / State</th><td>{_esc(rc.get('rto_code') or '—')} / {_esc(rc.get('state') or '—')}</td>
+                <th>FASTag</th><td>{_esc(rc.get('fastag_status') or '—')}</td></tr>
+            <tr><th>Blacklist</th><td>{_esc(rc.get('blacklist_status') or 'CLEAR')}</td>
+                <th></th><td></td></tr>
           </table>
+
           {ev_html}
+
           <div class="challan">
-            <h2>Recommended action — e-Challan (pre-filled)</h2>
-            <table class="kv">
-              <tr><th>Action</th><td>{_esc(challan.get('action') or '—')}</td></tr>
-              <tr><th>MVA Section</th><td>{_esc(challan.get('section') or '—')}</td>
-                  <th>Fine (₹)</th><td>{_esc(challan.get('fine_inr') or '—')}</td></tr>
-            </table>
-            <pre class="payload">{_esc(json.dumps(challan, indent=2))}</pre>
+            <h2 class="section-h">Recommended action — e-Challan <span class="prefilled">pre-filled</span></h2>
+            <div class="challan-body">
+              <div class="action">{_esc(challan.get('action') or '—')}</div>
+              <div class="challan-grid">
+                <div class="cell">
+                  <div class="label">MVA Section</div>
+                  <div class="value">{_esc(challan.get('section') or '—')}</div>
+                </div>
+                <div class="cell fine">
+                  <div class="label">Fine payable</div>
+                  <div class="value amount">{_fmt_inr(challan.get('fine_inr'))}</div>
+                </div>
+              </div>
+            </div>
           </div>
-          <footer>Generated by the JNPA UC-III control room · evidence retained in MinIO</footer>
+
+          <footer>
+            <span>Generated by the JNPA UC-III control room · {generated}</span>
+            <span>Evidence retained in MinIO · This is a system-generated document.</span>
+          </footer>
         </section>
         """)
-    body = "\n".join(pages) or '<section class="incident"><h1>No incidents match the filter.</h1></section>'
+    body = "\n".join(pages) or f"""
+        <section class="incident">
+          <header>
+            <div class="brand">
+              <div class="emblem">JNPA</div>
+              <div>
+                <h1>Traffic-Police Incident Report</h1>
+                <div class="sub">NH-348 Corridor · Use Case III — Traffic Monitoring &amp; Enforcement</div>
+              </div>
+            </div>
+          </header>
+          <div class="empty">
+            <div class="empty-title">No incidents to report</div>
+            <div class="empty-sub">No police-relevant incidents match the selected filters.</div>
+          </div>
+          <footer>
+            <span>Generated by the JNPA UC-III control room · {generated}</span>
+            <span>This is a system-generated document.</span>
+          </footer>
+        </section>
+    """
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>JNPA Police Report</title>
 <style>
   * {{ box-sizing: border-box; }}
-  body {{ font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color:#111; margin:0; }}
-  .incident {{ padding: 8mm; }}
+  body {{ font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+          color:#1a1a1a; margin:0; -webkit-print-color-adjust:exact; print-color-adjust:exact; }}
+  .incident {{ padding: 10mm; position:relative; }}
+  .incident::before {{ content:""; position:absolute; top:0; left:0; right:0; height:5px;
+                       background:linear-gradient(90deg,#0072B2,#56B4E9); }}
   header {{ display:flex; justify-content:space-between; align-items:flex-start;
-            border-bottom:2px solid #111; padding-bottom:6px; margin-bottom:12px; }}
-  h1 {{ font-size: 18px; margin:0; }}
-  .sub {{ color:#555; font-size:12px; }}
-  .badge {{ color:#fff; font-weight:700; padding:4px 10px; border-radius:4px; font-size:12px; }}
-  table.kv {{ width:100%; border-collapse:collapse; margin:8px 0; font-size:12px; }}
-  table.kv th {{ text-align:left; color:#555; font-weight:600; width:18%; padding:4px 6px;
-                 vertical-align:top; }}
-  table.kv td {{ padding:4px 6px; border-bottom:1px solid #eee; }}
+            border-bottom:2px solid #0072B2; padding:14px 0 10px; margin-bottom:14px; }}
+  .brand {{ display:flex; align-items:center; gap:12px; }}
+  .emblem {{ width:42px; height:42px; border-radius:8px; background:#0072B2; color:#fff;
+             font-weight:800; font-size:13px; letter-spacing:.5px;
+             display:flex; align-items:center; justify-content:center; }}
+  h1 {{ font-size: 18px; margin:0; letter-spacing:.2px; }}
+  .sub {{ color:#666; font-size:11px; margin-top:2px; }}
+  .badge {{ color:#fff; font-weight:700; padding:5px 12px; border-radius:999px; font-size:11px;
+            letter-spacing:.4px; white-space:nowrap; }}
+  .incident-title {{ display:flex; align-items:center; gap:10px; margin:0 0 12px; }}
+  .incident-title .kind {{ font-size:16px; font-weight:700; }}
+  .incident-title .kind-code {{ font-family: ui-monospace, monospace; font-size:10px; color:#888;
+                                background:#f1f1f1; border-radius:4px; padding:2px 6px; }}
+  .incident-title .ref {{ margin-left:auto; font-size:11px; color:#888; }}
+  .section-h {{ font-size:12px; text-transform:uppercase; letter-spacing:.6px; color:#0072B2;
+                margin:16px 0 6px; font-weight:700; }}
+  table.kv {{ width:100%; border-collapse:collapse; margin:4px 0; font-size:12px;
+              border:1px solid #e6e6e6; border-radius:6px; overflow:hidden; }}
+  table.kv th {{ text-align:left; color:#666; font-weight:600; width:16%; padding:7px 10px;
+                 vertical-align:top; background:#fafafa; }}
+  table.kv td {{ padding:7px 10px; border-bottom:1px solid #eee; }}
+  table.kv tr:last-child th, table.kv tr:last-child td {{ border-bottom:none; }}
   .plate {{ font-family: ui-monospace, monospace; font-weight:700; letter-spacing:1px; }}
-  .evidence {{ display:block; max-width:100%; max-height:90mm; margin:10px 0;
-               border:1px solid #ccc; border-radius:4px; }}
-  .evidence.noimg {{ color:#888; font-style:italic; border:1px dashed #ccc; padding:24px;
-                     text-align:center; }}
-  .challan h2 {{ font-size:13px; margin:14px 0 4px; }}
-  .payload {{ background:#f6f6f6; border:1px solid #e0e0e0; border-radius:4px; padding:8px;
-              font-size:11px; white-space:pre-wrap; }}
-  footer {{ margin-top:14px; color:#888; font-size:10px; border-top:1px solid #eee;
-            padding-top:6px; }}
+  .evidence-wrap {{ margin:12px 0; }}
+  .evidence {{ display:block; max-width:100%; max-height:88mm; margin:0;
+               border:1px solid #ddd; border-radius:6px; }}
+  .evidence-wrap figcaption {{ color:#888; font-size:10px; margin-top:4px; }}
+  .evidence.noimg {{ color:#999; font-style:italic; border:1px dashed #ccc; padding:24px;
+                     text-align:center; border-radius:6px; margin:12px 0; }}
+  .challan {{ margin-top:8px; }}
+  .prefilled {{ font-size:9px; font-weight:700; color:#E69F00; background:#fdf3e2;
+                border-radius:999px; padding:2px 8px; letter-spacing:.3px; vertical-align:middle; }}
+  .challan-body {{ border:1px solid #f0d9ad; border-left:4px solid #E69F00; background:#fffdf8;
+                   border-radius:6px; padding:12px 14px; }}
+  .challan-body .action {{ font-size:13px; font-weight:600; margin-bottom:10px; }}
+  .challan-grid {{ display:flex; gap:14px; }}
+  .challan-grid .cell {{ flex:1; }}
+  .challan-grid .label {{ font-size:10px; text-transform:uppercase; letter-spacing:.5px; color:#888; }}
+  .challan-grid .value {{ font-size:13px; font-weight:600; margin-top:2px; }}
+  .challan-grid .amount {{ font-size:18px; color:#D55E00; }}
+  .empty {{ padding:60px 40px; text-align:center; }}
+  .empty-title {{ font-size:16px; font-weight:700; color:#333; }}
+  .empty-sub {{ font-size:12px; color:#999; margin-top:6px; }}
+  footer {{ display:flex; justify-content:space-between; margin-top:18px; color:#999; font-size:10px;
+            border-top:1px solid #eee; padding-top:8px; }}
 </style></head>
 <body>{body}</body></html>"""

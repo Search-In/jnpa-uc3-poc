@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { getAdapter } from "@/data";
 import type { PoliceIncident } from "@/lib/types";
@@ -9,7 +10,7 @@ import { Spinner, EmptyState } from "@/components/ui/misc";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { severityColour } from "@/lib/palette";
 import { fmtDateTimeIST } from "@/lib/utils";
-import { FileDown, ExternalLink } from "lucide-react";
+import { FileDown, ExternalLink, ReceiptText } from "lucide-react";
 
 const KINDS = ["WRONG_WAY", "ILLEGAL_PARKING", "OVERSPEEDING", "ROUTE_DEVIATION"];
 const GATES = ["G-NSICT", "G-JNPCT", "G-NSIGT", "G-BMCT"];
@@ -96,8 +97,11 @@ export default function PoliceReports() {
                 </thead>
                 <tbody>
                   {incidents.map((inc) => (
+                    // Tagged by incident kind so the guided tour can ring the
+                    // EXACT row (e.g. the WRONG_WAY e-Challan), not the table.
                     <tr
                       key={inc.id}
+                      data-guided-id={`report-${inc.kind}`}
                       onClick={() => setSelected(inc)}
                       className="cursor-pointer border-b border-border/50 hover:bg-muted/40"
                     >
@@ -187,19 +191,32 @@ function IncidentDialog({
   incident: PoliceIncident | null;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
+  const sev = incident ? severityColour(incident.severity) : undefined;
+  const challan = incident?.challan;
   return (
     <Dialog open={!!incident} onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
         {incident && (
           <>
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2">
-                <Badge colour={severityColour(incident.severity)}>{incident.kind}</Badge>
-                <span className="font-mono text-sm">{incident.plate ?? "—"}</span>
+            <DialogHeader className="flex items-center gap-3">
+              {/* Left severity rail — consistent with the alert evidence dialog. */}
+              <span
+                className="h-9 w-1 shrink-0 rounded-full"
+                style={{ backgroundColor: sev }}
+                aria-hidden
+              />
+              <DialogTitle className="flex min-w-0 flex-col gap-0.5">
+                <span className="truncate text-base font-semibold leading-tight tracking-tight">
+                  {t(`alertKind.${incident.kind}`, { defaultValue: incident.kind })}
+                </span>
+                <span className="font-mono text-xs font-medium text-muted-foreground">
+                  {incident.plate ?? "—"}
+                </span>
               </DialogTitle>
             </DialogHeader>
-            <div className="space-y-3 p-4 text-xs">
-              <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-4 p-5">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-3.5">
                 <KV k="Incident ID" v={incident.id} />
                 <KV k="Time (IST)" v={fmtDateTimeIST(incident.ts)} />
                 <KV k="Owner (masked)" v={incident.rc?.owner_name_masked ?? "—"} />
@@ -214,23 +231,46 @@ function IncidentDialog({
                 <img
                   src={incident.evidence_url}
                   alt="evidence"
-                  className="w-full rounded-md border border-border"
+                  className="w-full rounded-lg border border-border shadow-sm"
                   onError={(e) => ((e.target as HTMLImageElement).style.display = "none")}
                 />
               )}
-              <div className="rounded-md border border-border p-3">
-                <div className="mb-1 font-semibold">Recommended action — e-Challan</div>
-                <pre className="overflow-auto rounded bg-muted p-2 text-[11px]">
-                  {JSON.stringify(incident.challan, null, 2)}
-                </pre>
-              </div>
+
+              {/* Recommended action — the e-Challan payload as a readable list. */}
+              {challan && Object.keys(challan).length > 0 && (
+                <div className="overflow-hidden rounded-lg border border-severity-warning/40">
+                  <div className="flex items-center gap-1.5 border-b border-severity-warning/30 bg-severity-warning/10 px-3.5 py-2.5 text-xs font-semibold">
+                    <ReceiptText className="h-4 w-4 text-severity-warning" aria-hidden />
+                    Recommended action — e-Challan
+                  </div>
+                  <dl>
+                    {Object.entries(challan).map(([key, value]) => (
+                      <div
+                        key={key}
+                        className="flex items-start justify-between gap-3 border-b border-border/60 px-3.5 py-2 text-xs last:border-b-0"
+                      >
+                        <dt className="shrink-0 font-medium text-muted-foreground">
+                          {humanizeKey(key)}
+                        </dt>
+                        <dd
+                          className="min-w-0 break-words text-right font-mono font-medium text-foreground"
+                          title={formatChallanValue(key, value)}
+                        >
+                          {formatChallanValue(key, value)}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                </div>
+              )}
+
               <a
                 href={getAdapter().policePdfUrl({ kind: incident.kind })}
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex items-center gap-1 text-severity-info hover:underline"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-severity-info/40 bg-severity-info/10 px-4 py-2.5 text-sm font-semibold text-severity-info transition-colors hover:bg-severity-info/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-severity-info/40"
               >
-                <ExternalLink className="h-3.5 w-3.5" /> Open PDF for this kind
+                <ExternalLink className="h-4 w-4" /> Open PDF for this kind
               </a>
             </div>
           </>
@@ -242,9 +282,27 @@ function IncidentDialog({
 
 function KV({ k, v }: { k: string; v: React.ReactNode }) {
   return (
-    <div>
-      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{k}</div>
-      <div className="break-all">{v}</div>
+    <div className="min-w-0">
+      <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        {k}
+      </div>
+      <div className="break-words text-sm text-foreground">{v}</div>
     </div>
   );
+}
+
+/** "echallan_id" → "Echallan id" — readable label from a payload key. */
+function humanizeKey(key: string): string {
+  const spaced = key.replace(/[_-]+/g, " ").trim();
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+/** Render a challan value readably — INR amounts as ₹, objects as JSON. */
+function formatChallanValue(key: string, value: unknown): string {
+  if (value == null) return "—";
+  if (typeof value === "number" && /amount|inr|fee|fine/i.test(key)) {
+    return `₹${value.toLocaleString("en-IN")}`;
+  }
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
 }

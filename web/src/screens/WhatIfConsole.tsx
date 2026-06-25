@@ -9,7 +9,9 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/misc";
 import { fmtTimeIST } from "@/lib/utils";
-import { FlaskConical, Play, RotateCcw, ArrowRight, ExternalLink } from "lucide-react";
+import { FlaskConical, Play, RotateCcw, ArrowRight, ExternalLink, Sparkles } from "lucide-react";
+import { tourStore } from "@/whatif/tourStore";
+import { getScript } from "@/whatif/scenarioScripts";
 
 // What-If Console (Sub-Criterion 5). Trigger TFC-1/2/3, watch the step-by-step
 // storyline paint live from /api/ws (type=scenario_step), and reset to baseline.
@@ -45,8 +47,18 @@ const SCENARIOS: {
 export default function WhatIfConsole() {
   const { scenario, setScenario, reset: resetBanner } = useScenario();
   const { scenarioSteps } = useSocket();
-  const [activeHandle, setActiveHandle] = useState<string | null>(null);
-  const [activeRunner, setActiveRunner] = useState<string | null>(null);
+  const [guided, setGuided] = useState(true);
+  // Restore the active run from the tour store so the timeline survives a round
+  // trip to another screen while a guided scenario is mid-flight (the guided
+  // runtime switches the view away and back). Falls back to null for a fresh
+  // console.
+  const [activeHandle, setActiveHandle] = useState<string | null>(
+    () => tourStore.getState().handleId,
+  );
+  const [activeRunner, setActiveRunner] = useState<string | null>(() => {
+    const sid = tourStore.getState().scenarioId;
+    return sid ? (getScript(sid)?.runner ?? null) : null;
+  });
 
   const run = useMutation({
     mutationFn: (s: (typeof SCENARIOS)[number]) => getAdapter().runScenario(s.runner, s.params),
@@ -83,9 +95,14 @@ export default function WhatIfConsole() {
     setActiveRunner(s.runner);
     const res = await run.mutateAsync(s);
     setActiveHandle(res.handle_id);
+    // Start the guided coach-mark in parallel with the real run; the app-level
+    // GuidedTour follows this handle's live steps over /api/ws — narrating,
+    // advancing the step, and switching the visible view as each step lands.
+    if (guided) tourStore.startScenario(s.id, res.handle_id);
   }
 
   async function onReset() {
+    tourStore.stopScenario();
     if (activeRunner) await resetRun.mutateAsync();
     resetBanner();
   }
@@ -102,15 +119,26 @@ export default function WhatIfConsole() {
             </p>
           </div>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onReset}
-          disabled={resetRun.isPending || !activeRunner}
-        >
-          {resetRun.isPending ? <Spinner /> : <RotateCcw className="h-3.5 w-3.5" />}
-          Reset to baseline
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant={guided ? "default" : "outline"}
+            size="sm"
+            onClick={() => setGuided((g) => !g)}
+            title="Show the step-by-step guided narration while a scenario runs"
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            Guided {guided ? "on" : "off"}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onReset}
+            disabled={resetRun.isPending || !activeRunner}
+          >
+            {resetRun.isPending ? <Spinner /> : <RotateCcw className="h-3.5 w-3.5" />}
+            Reset to baseline
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-3 p-4 md:grid-cols-3">
@@ -124,7 +152,17 @@ export default function WhatIfConsole() {
               </CardHeader>
               <CardContent className="space-y-3">
                 <p className="text-xs text-muted-foreground">{s.blurb}</p>
-                <pre className="rounded bg-muted p-2 text-[11px]">{JSON.stringify(s.params)}</pre>
+                <div className="flex flex-wrap gap-1.5">
+                  {Object.entries(s.params).map(([key, value]) => (
+                    <span
+                      key={key}
+                      className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/50 px-2 py-1 text-[11px]"
+                    >
+                      <span className="text-muted-foreground">{humanizeParamKey(key)}</span>
+                      <span className="font-mono font-medium text-foreground">{String(value)}</span>
+                    </span>
+                  ))}
+                </div>
                 <Button size="sm" onClick={() => trigger(s)} disabled={run.isPending}>
                   {run.isPending && run.variables?.id === s.id ? (
                     <Spinner />
@@ -140,7 +178,10 @@ export default function WhatIfConsole() {
       </div>
 
       {/* Storyline */}
-      <div className="min-h-0 flex-1 overflow-y-auto border-t border-border p-4">
+      <div
+        className="min-h-0 flex-1 overflow-y-auto border-t border-border p-4"
+        data-guided-id="whatif-timeline"
+      >
         <div className="mb-2 flex items-center justify-between">
           <h2 className="text-sm font-semibold">
             Reactive timeline {activeRunner ? `· ${activeRunner.toUpperCase()}` : ""}
@@ -207,12 +248,21 @@ function stepColour(status: string): string {
   return "#009E73";
 }
 
+/** "gate_id" → "Gate id" — readable label for a scenario param chip. */
+function humanizeParamKey(key: string): string {
+  const spaced = key.replace(/[_-]+/g, " ").trim();
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
 // TFC-3 step 5 carries an explicit cross-twin arrow annotation.
 function CrossTwinArrow({ step }: { step: ScenarioStep }) {
   const arrow = step.detail?.arrow as { from: string; to: string } | undefined;
   if (!arrow) return null;
   return (
-    <div className="mt-1 inline-flex items-center gap-2 rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-xs">
+    <div
+      data-guided-id="crosstwin-link"
+      className="mt-1 inline-flex items-center gap-2 rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-xs"
+    >
       <span className="font-medium">{arrow.from}</span>
       <ArrowRight className="h-3.5 w-3.5 text-primary" />
       <span className="font-medium">{arrow.to}</span>

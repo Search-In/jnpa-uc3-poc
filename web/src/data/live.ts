@@ -120,6 +120,9 @@ export class LiveAdapter implements DataAdapter {
       `/api/parking/summary${minuteOfDay != null ? `?minute_of_day=${minuteOfDay}` : ""}`,
     );
 
+  // --- Terminal Appointment System (TFC-1) ---
+  tasSlots = async (gateId?: string) => (await api.tasSlots(gateId)).slots;
+
   // --- Fault-injection control surface (Demo Console) --------------------
   // The three fallback chains the presenter can force a rung on. The gateway
   // recomputes severity + the operator banner on every force/clear.

@@ -26,6 +26,7 @@ import type {
   Scenario,
   ScenarioStep,
   SourceHealth,
+  TasSlot,
   TrafficSnapshot,
   TruckDevice,
   Zone,
@@ -114,6 +115,9 @@ export interface DataAdapter {
   ): Promise<IdentityVerifyResult>;
   parkingAvailability(minuteOfDay?: number): Promise<ParkingFacility[]>;
   parkingSummary(minuteOfDay?: number): Promise<ParkingSummary>;
+
+  // --- Terminal Appointment System (TAS) ---
+  tasSlots(gateId?: string): Promise<TasSlot[]>;
 
   // --- Fault-injection control surface (Demo Console) ---
   getFaults(): Promise<FaultState>;

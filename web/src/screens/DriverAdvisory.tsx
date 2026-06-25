@@ -56,7 +56,7 @@ export default function DriverAdvisory() {
           <EmptyState>No trucks currently in a gate queue.</EmptyState>
         </Card>
       ) : (
-        <Card>
+        <Card data-guided-id="advisory-queue">
           <CardHeader>
             <CardTitle>Queued trucks</CardTitle>
           </CardHeader>
@@ -132,6 +132,7 @@ function QueueRow({
           <Button
             size="sm"
             variant="outline"
+            data-guided-id="advisory-reroute"
             onClick={() => reroute.mutate()}
             disabled={reroute.isPending}
           >

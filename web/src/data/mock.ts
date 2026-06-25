@@ -36,6 +36,7 @@ import type {
   TruckDevice,
   Zone,
 } from "@/lib/types";
+import type { TasSlot } from "@/lib/types";
 import type { CongestionMetrics, DataAdapter, DataMode, OcrEval } from "./types";
 import { buildKpiResult } from "@/kpi/compute";
 
@@ -1148,6 +1149,21 @@ export class MockAdapter implements DataAdapter {
 
   parkingAvailability(minuteOfDay?: number): Promise<ParkingFacility[]> {
     return Promise.resolve(buildParking(minuteOfDay));
+  }
+
+  // Deterministic TAS slot book for the TAS widget. 12 slots at a 15-min cadence;
+  // the first 5 are RESCHEDULED (what TFC-1 step 5 does) so the widget shows the
+  // post-reschedule state in mock mode too.
+  tasSlots(gateId = "G-NSICT"): Promise<TasSlot[]> {
+    const baseMs = Date.UTC(2026, 5, 25, 9, 0, 0);
+    const slots: TasSlot[] = Array.from({ length: 12 }, (_, i) => ({
+      slot_id: `TAS-${gateId}-${String(i).padStart(2, "0")}`,
+      gate_id: gateId,
+      start: new Date(baseMs + i * 15 * 60_000).toISOString(),
+      status: i < 5 ? "RESCHEDULED" : "BOOKED",
+      rescheduled_to: i < 5 ? "G-JNPCT" : null,
+    }));
+    return Promise.resolve(slots);
   }
 
   parkingSummary(minuteOfDay?: number): Promise<ParkingSummary> {

@@ -71,6 +71,15 @@ async function mintToken(path: string, body: unknown): Promise<boolean> {
 export async function ensureDeviceToken(deviceId: string): Promise<boolean> {
   if (!tokenNeedsRefresh()) return true;
 
+  // Never POST without a device_id: JSON.stringify drops undefined-valued keys,
+  // so a falsy deviceId would serialize to `{}` and the gateway answers 422
+  // (DeviceTokenBody.device_id is required) — an otherwise invisible failure.
+  const id = (deviceId ?? "").trim();
+  if (!id) {
+    console.error("[auth] ensureDeviceToken called without a device_id — skipping mint");
+    return false;
+  }
+
   // A production build MUST carry the pairing secret (Vite inlines
   // VITE_PWA_PAIRING_SECRET at build time). Without it /api/auth/device-token
   // returns 401 and there is no dev-token seam in prod — surface the misconfig
@@ -86,7 +95,7 @@ export async function ensureDeviceToken(deviceId: string): Promise<boolean> {
   // Primary path (dev + prod): DRIVER-scoped device token.
   if (
     await mintToken("/api/auth/device-token", {
-      device_id: deviceId,
+      device_id: id,
       pairing_secret: PAIRING_SECRET,
     })
   ) {
@@ -96,7 +105,7 @@ export async function ensureDeviceToken(deviceId: string): Promise<boolean> {
   // Dev-only fallback: the password-less seam 404s in any production-like env,
   // so never call it from a production bundle (keeps prod traffic off dev-token).
   if (import.meta.env.DEV) {
-    return mintToken("/api/auth/dev-token", { role: "DRIVER", device_id: deviceId });
+    return mintToken("/api/auth/dev-token", { role: "DRIVER", device_id: id });
   }
   return false;
 }

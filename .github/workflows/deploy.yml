@@ -193,7 +193,9 @@ jobs:
             #    peak to one heavy build at a time. Do NOT prune the build cache
             #    here: the `up --build` below must cache-hit these images instead
             #    of rebuilding all three in parallel (which re-creates the spike).
-            for svc in congestion anomaly anpr; do
+            #    Heaviest first (anpr: torch+torchvision+paddle+paddleocr+ultralytics)
+            #    so it builds with the most free disk, before the others commit.
+            for svc in anpr anomaly congestion; do
               echo "== building ${svc} =="
               docker compose -f docker-compose.yml -f docker-compose.aws.yml build "${svc}"
               df -h / || true

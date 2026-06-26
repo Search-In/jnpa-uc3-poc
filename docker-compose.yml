@@ -20,6 +20,7 @@ volumes:
   grafana-data:
   congestion-artifacts:
   anomaly-artifacts:
+  kafka-data:
 
 services:
   # --------------------------------------------------------------------------
@@ -119,9 +120,22 @@ services:
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_NUM_PARTITIONS: 1
+      # Retention caps — WITHOUT these the broker defaults to 7-day, unbounded-size
+      # retention. The simulators produce continuously, so the log dir grew to 15 GB
+      # and filled the EC2 root volume. Keep only a few hours / a small size per
+      # partition, with small segments (default 1 GiB segments rarely roll for these
+      # low-volume topics, so old data never ages out). Plenty for a live PoC demo.
+      KAFKA_LOG_RETENTION_HOURS: 6
+      KAFKA_LOG_RETENTION_BYTES: 268435456        # 256 MiB per partition
+      KAFKA_LOG_SEGMENT_BYTES: 134217728          # 128 MiB segments so retention triggers
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 300000  # sweep every 5 min
       TZ: Etc/UTC
     networks:
       - jnpa
+    # Named volume so the broker's log dir is managed (not an orphan-prone anonymous
+    # volume) and survives restarts without accumulating across redeploys.
+    volumes:
+      - kafka-data:/var/lib/kafka/data
     healthcheck:
       test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 >/dev/null 2>&1 || exit 1"]
       interval: 10s

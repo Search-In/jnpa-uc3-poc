@@ -74,6 +74,11 @@ jobs:
             docker image prune -af || true
             docker builder prune -af || true
             docker network prune -f || true
+            # Orphaned anonymous volumes from prior container generations (e.g. the
+            # old Kafka log dir) are NOT removed by image/builder prune and can hold
+            # many GB. Only DANGLING (unattached) volumes are removed, so live data
+            # (pgdata, minio-data, kafka-data, ...) is safe.
+            docker volume prune -f || true
             # Reclaim host-level space too — the in-container build's transient
             # /tmp wheel cache lives on this same root volume, so journal logs and
             # the apt cache compete with it for space.

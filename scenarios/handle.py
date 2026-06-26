@@ -98,7 +98,7 @@ class ScenarioHandle:
                 """
                 INSERT INTO jnpa.scenario_steps
                     (handle_id, step_no, ts, title, status, trigger, detail)
-                VALUES (:hid, :no, :ts, :title, :status, :trigger, CAST(:detail AS jsonb))
+                VALUES (:hid, :no, CAST(:ts AS timestamptz), :title, :status, :trigger, CAST(:detail AS jsonb))
                 """,
                 {"hid": self.handle_id, "no": s.step_no, "ts": s.ts, "title": s.title,
                  "status": s.status, "trigger": s.trigger, "detail": json.dumps(s.detail)},

@@ -76,8 +76,7 @@ export function IdentityPanel() {
 
   const enrol = useMutation({
     mutationFn: (image: string) => getAdapter().identityEnrol(selected, image),
-    onSuccess: () =>
-      setNotice({ kind: "ok", text: t("identityPanel.enrolSuccess") }),
+    onSuccess: () => setNotice({ kind: "ok", text: t("identityPanel.enrolSuccess") }),
   });
 
   async function captureValidated(): Promise<string | null> {
@@ -276,7 +275,8 @@ function VerifyResult({
   const colour = decisionColour(result.decision);
   const matchPct = `${(result.score * 100).toFixed(1)}%`;
   const conf = confidenceBand(result.score);
-  const providerLabel = result.provider === "onnx" ? "ArcFace (ONNX)" : t("identityPanel.synthetic");
+  const providerLabel =
+    result.provider === "onnx" ? "ArcFace (ONNX)" : t("identityPanel.synthetic");
 
   return (
     <div className="space-y-2.5 rounded-lg border border-border bg-background p-3">
@@ -309,7 +309,8 @@ function VerifyResult({
           className="rounded-md border px-2 py-1.5 text-[11px]"
           style={{ borderColor: `${STATUS.warning}80` }}
         >
-          {t("identityPanel.cureWindow")} {result.cure_window_h ?? 24} {t("identityPanel.hoursShort")}
+          {t("identityPanel.cureWindow")} {result.cure_window_h ?? 24}{" "}
+          {t("identityPanel.hoursShort")}
           {result.provisional_until && (
             <span className="block text-muted-foreground">
               {t("identityPanel.provisionalUntil")} {fmtDateTimeIST(result.provisional_until)}

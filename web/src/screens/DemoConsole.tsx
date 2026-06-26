@@ -193,9 +193,7 @@ export default function DemoConsole() {
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] text-muted-foreground">
                     {t("demo.forced")}:{" "}
-                    <span className="font-medium text-foreground">
-                      {forced ?? t("demo.none")}
-                    </span>
+                    <span className="font-medium text-foreground">{forced ?? t("demo.none")}</span>
                   </span>
                   <CalciteButton
                     appearance="outline"
@@ -310,7 +308,9 @@ export default function DemoConsole() {
             ) : (
               <p className="text-sm text-muted-foreground">
                 {t("demo.f1NoEndpointPre")}{" "}
-                <span className="font-medium text-foreground">{t("demo.f1NoEndpointAdvisory")}</span>{" "}
+                <span className="font-medium text-foreground">
+                  {t("demo.f1NoEndpointAdvisory")}
+                </span>{" "}
                 {t("demo.f1NoEndpointPost")}
               </p>
             )}
@@ -364,7 +364,9 @@ export default function DemoConsole() {
         >
           <div className="flex items-center gap-2 px-1 pb-2">
             <Joystick className="h-4 w-4 text-muted-foreground" aria-hidden />
-            <span className="text-[11px] text-muted-foreground">{t("demo.roadmapControlsNote")}</span>
+            <span className="text-[11px] text-muted-foreground">
+              {t("demo.roadmapControlsNote")}
+            </span>
           </div>
           <PreviewControls />
         </CalciteBlock>

@@ -114,6 +114,7 @@
       "flags": "Customs flags",
       "empty": "No containers awaiting LEO clearance.",
       "customsTitle": "Customs alert feed",
+      "customsSubtitle": "blocked containers flagged by customs",
       "customsEmpty": "No customs flags raised."
     },
     "identity": {

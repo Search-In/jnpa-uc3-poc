@@ -47,14 +47,14 @@ export function TasWidget() {
   const updatedTs = q.dataUpdatedAt ? new Date(q.dataUpdatedAt).toISOString() : undefined;
 
   return (
-    <Card data-guided-id="tas-widget">
+    <Card data-guided-id="tas-widget" className="flex h-full flex-col">
       <CardHeader className="flex-row items-center justify-between">
         <CardTitle>Terminal Appointment System</CardTitle>
         <Badge colour="#56B4E9" dot={false}>
           Gate {GATE.replace("G-", "")}
         </Badge>
       </CardHeader>
-      <CardContent className="space-y-3">
+      <CardContent className="flex-1 space-y-3">
         {/* Active / Rescheduled / Pending slot counts */}
         <div className="grid grid-cols-3 gap-2">
           <Stat label="Active" value={active} colour={STATUS_COLOUR.BOOKED} />

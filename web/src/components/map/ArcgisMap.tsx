@@ -157,6 +157,7 @@ export function ArcgisMap({
     trucks: GraphicsLayer;
     gates: GraphicsLayer;
     highlight: GraphicsLayer;
+    pulse: GraphicsLayer;
   } | null>(null);
   const clickHandle = useRef<ViewHandle | null>(null);
   // Snapped road geometry for the corridor (OSRM, render-time only). Null until
@@ -173,6 +174,8 @@ export function ArcgisMap({
   // Last spotlight id-set we framed, so we only re-zoom when it changes — exactly
   // the reference PortMap's lastZoomKey guard.
   const lastZoomKey = useRef<string>("");
+  // requestAnimationFrame id for the focus-marker pulse, so it can be cancelled.
+  const pulseRaf = useRef<number | null>(null);
   const onGateClickRef = useRef(onGateClick);
   onGateClickRef.current = onGateClick;
 
@@ -202,6 +205,9 @@ export function ArcgisMap({
         gates: mk("uc3-gates"),
         // Spotlight halos sit on top so the ring is never occluded.
         highlight: mk("uc3-highlight"),
+        // Animated focus-pulse ring on its own layer (never cleared by the
+        // spotlight redraw), drawn topmost.
+        pulse: mk("uc3-pulse"),
       };
       layers.current = set;
       view.map.addMany([
@@ -212,6 +218,7 @@ export function ArcgisMap({
         set.trucks,
         set.gates,
         set.highlight,
+        set.pulse,
       ]);
 
       // Gate click → callback.
@@ -567,6 +574,50 @@ export function ArcgisMap({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [highlights, gates, corridor, viewReady, focusPoint]);
+
+  // Pulsing ring on the focused queue/feed item (spec: "marker pulse
+  // animation"). On its own layer so the spotlight redraw never clears it; the
+  // graphic geometry is the focus point, so it tracks the map during pan/zoom.
+  useEffect(() => {
+    const layer = layers.current?.pulse;
+    if (!layer) return;
+    if (pulseRaf.current != null) {
+      cancelAnimationFrame(pulseRaf.current);
+      pulseRaf.current = null;
+    }
+    layer.removeAll();
+    if (!focusPoint || typeof focusPoint.lon !== "number" || typeof focusPoint.lat !== "number") {
+      return;
+    }
+    const graphic = new Graphic({
+      geometry: new Point({
+        longitude: focusPoint.lon,
+        latitude: focusPoint.lat,
+        spatialReference: WGS84,
+      }),
+      attributes: { pulse: true },
+    });
+    layer.add(graphic);
+    const PERIOD = 1400; // ms per pulse cycle
+    let start: number | null = null;
+    const tick = (ts: number) => {
+      if (start == null) start = ts;
+      const phase = ((ts - start) % PERIOD) / PERIOD; // 0 → 1
+      graphic.symbol = new SimpleMarkerSymbol({
+        style: "circle",
+        color: [0, 0, 0, 0],
+        size: 26 + phase * 36, // expands outward
+        outline: { color: hexToRgba(FOCUS_COLOUR, 0.85 * (1 - phase)), width: 3 }, // fades as it grows
+      });
+      pulseRaf.current = requestAnimationFrame(tick);
+    };
+    pulseRaf.current = requestAnimationFrame(tick);
+    return () => {
+      if (pulseRaf.current != null) cancelAnimationFrame(pulseRaf.current);
+      pulseRaf.current = null;
+      layer.removeAll();
+    };
+  }, [focusPoint]);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => renderZones(), [zones]);

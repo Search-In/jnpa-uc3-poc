@@ -14,7 +14,7 @@ import { CarbonTile } from "@/components/panels/CarbonTile";
 import { EmptyContainerBoard } from "@/components/panels/EmptyContainerBoard";
 import { TasWidget } from "@/components/panels/TasWidget";
 import { ParkingBoard } from "@/components/panels/ParkingBoard";
-import { AutoLeoPanel } from "@/components/panels/AutoLeoPanel";
+import { AutoLeoPanel, CustomsFeedPanel } from "@/components/panels/AutoLeoPanel";
 import { DecisionPathBadge } from "@/components/DecisionPathBadge";
 import { Badge } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/misc";
@@ -55,8 +55,9 @@ export default function LiveOperations() {
     }
     setFocusPoint({ lat, lon });
     if (view) {
+      // Smooth pan + zoom-in to the selected queue/feed item (spec: zoom 16).
       void view
-        .goTo({ center: [lon, lat], zoom: 15 }, { duration: 700, easing: "ease-in-out" })
+        .goTo({ center: [lon, lat], zoom: 16 }, { duration: 800, easing: "ease-in-out" })
         .catch(() => {});
     }
   }, [focus, view]);
@@ -176,15 +177,21 @@ export default function LiveOperations() {
         <FloatingLegend />
       </div>
 
-      {/* Appendix-C capability tiles (DTCCC view) + TAS appointment board. */}
-      <div className="grid grid-cols-1 gap-2.5 border-t border-border px-3 py-2.5 lg:grid-cols-3">
+      {/* Appendix-C capability tiles (DTCCC view). */}
+      <div className="grid grid-cols-1 gap-2.5 border-t border-border px-3 py-2.5 md:grid-cols-2 lg:grid-cols-3">
         <CarbonTile />
         <ParkingBoard />
         <EmptyContainerBoard />
-        <TasWidget />
       </div>
-      <div className="grid grid-cols-1 gap-2.5 border-t border-border px-3 py-2.5 lg:grid-cols-2">
+
+      {/* Operations row — Terminal Appointment System, Auto-LEO gate-out queue,
+          and the Customs alert feed sit in ONE row on desktop (3 cols), 2 cols
+          on tablet, 1 col on mobile. items-stretch + h-full cards keep them
+          aligned at equal height. */}
+      <div className="grid grid-cols-1 items-stretch gap-2.5 border-t border-border px-3 py-2.5 md:grid-cols-2 lg:grid-cols-3">
+        <TasWidget />
         <AutoLeoPanel />
+        <CustomsFeedPanel />
       </div>
     </div>
   );

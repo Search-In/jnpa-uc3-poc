@@ -8,9 +8,10 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Spinner, EmptyState } from "@/components/ui/misc";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { IdentityPanel } from "@/components/panels/IdentityPanel";
 import { severityColour } from "@/lib/palette";
 import { fmtDateTimeIST } from "@/lib/utils";
-import { FileDown, ExternalLink, ReceiptText } from "lucide-react";
+import { FileDown, ExternalLink, ReceiptText, ScanFace } from "lucide-react";
 
 const KINDS = ["WRONG_WAY", "ILLEGAL_PARKING", "OVERSPEEDING", "ROUTE_DEVIATION"];
 const GATES = ["G-NSICT", "G-JNPCT", "G-NSIGT", "G-BMCT"];
@@ -27,6 +28,9 @@ export default function PoliceReports() {
   const [since, setSince] = useState<string>("");
   const [until, setUntil] = useState<string>("");
   const [selected, setSelected] = useState<PoliceIncident | null>(null);
+  // Driver Identity Verification opens the existing IdentityPanel in a centered
+  // modal — no routing change, verification logic reused as-is.
+  const [identityOpen, setIdentityOpen] = useState(false);
 
   const filters: Record<string, string | undefined> = {
     kind: kind || undefined,
@@ -52,11 +56,17 @@ export default function PoliceReports() {
             WRONG_WAY · ILLEGAL_PARKING · OVERSPEEDING · ROUTE_DEVIATION
           </p>
         </div>
-        <a href={getAdapter().policePdfUrl(filters)} target="_blank" rel="noreferrer">
-          <Button>
-            <FileDown className="h-4 w-4" /> Export PDF
+        {/* Header actions — Driver Identity Verification before Export, same style. */}
+        <div className="flex items-center gap-2">
+          <Button onClick={() => setIdentityOpen(true)}>
+            <ScanFace className="h-4 w-4" /> Driver Identity Verification
           </Button>
-        </a>
+          <a href={getAdapter().policePdfUrl(filters)} target="_blank" rel="noreferrer">
+            <Button>
+              <FileDown className="h-4 w-4" /> Export PDF
+            </Button>
+          </a>
+        </div>
       </div>
 
       {/* filters */}
@@ -128,6 +138,17 @@ export default function PoliceReports() {
       </div>
 
       <IncidentDialog incident={selected} onClose={() => setSelected(null)} />
+
+      {/* Driver Identity Verification — the existing IdentityPanel (capability
+          C2) inside a centered modal. Verification logic is reused untouched;
+          the shared Dialog provides the scrim, Esc + click-outside close, and
+          the entrance animation. */}
+      <Dialog open={identityOpen} onOpenChange={setIdentityOpen}>
+        <DialogContent className="max-w-xl p-3">
+          <DialogTitle className="sr-only">Driver Identity Verification</DialogTitle>
+          <IdentityPanel />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

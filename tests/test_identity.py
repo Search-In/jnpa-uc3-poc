@@ -104,8 +104,12 @@ def client():
 
 
 def test_healthz_reports_synthetic(client):
-    body = client.get("/healthz").json()
-    assert body["status"] == "ok"
+    resp = client.get("/healthz")
+    body = resp.json()
+    # Dev is always READY (synthetic provider needs no model); prod returns 503
+    # until the ArcFace/liveness models load (rule 4).
+    assert resp.status_code == 200
+    assert body["status"] == "ready"
     assert body["service"] == "identity"
     assert body["enrolled"] > 0
     assert body["synthetic"] is True
@@ -116,7 +120,14 @@ def test_gallery_hides_raw_embeddings(client):
     assert body["enrolled"] == len(body["drivers"])
     assert body["synthetic"] is True
     sample = body["drivers"][0]
-    assert set(sample) == {"driver_id", "name", "license_no", "synthetic", "consented"}
+    assert set(sample) == {
+        "driver_id",
+        "name",
+        "license_no",
+        "synthetic",
+        "consented",
+        "photo_url",
+    }
     assert "embedding" not in sample
 
 
@@ -170,3 +181,78 @@ def test_verification_counter_increments(client):
     metrics = client.get("/metrics/").text
     assert "identity_verifications_total" in metrics
     assert 'decision="VERIFIED"' in metrics
+
+
+# ---------------------------------------------------------------------------
+# Pluggable embedding provider + camera enrolment (production seam)
+# ---------------------------------------------------------------------------
+def test_build_provider_defaults_to_synthetic():
+    from identity.embeddings import (
+        SyntheticEmbeddingProvider,
+        OnnxArcFaceProvider,
+        build_provider,
+    )
+
+    assert isinstance(build_provider(), SyntheticEmbeddingProvider)
+    assert isinstance(build_provider("synthetic"), SyntheticEmbeddingProvider)
+    # onnx WITHOUT a model path falls back to synthetic (never hard-fails).
+    assert isinstance(build_provider("onnx", ""), SyntheticEmbeddingProvider)
+    # onnx WITH a model path constructs the real provider (lazy — no load yet).
+    assert isinstance(build_provider("onnx", "/models/arcface.onnx"), OnnxArcFaceProvider)
+
+
+def test_synthetic_provider_reference_matches_capture():
+    """Synthetic reference (enrolment) vs a genuine capture clears the threshold."""
+    from identity.embeddings import SyntheticEmbeddingProvider, cosine
+
+    p = SyntheticEmbeddingProvider()
+    ref = p.embed_reference(driver_id="DRV-0005")
+    cap = p.embed_capture(driver_id="DRV-0005")
+    assert cosine(ref, cap) >= 0.9
+
+
+def test_verify_with_image_uses_provider_and_reports_it(client):
+    """A captured frame routes through the provider; response names it."""
+    import base64
+
+    img = base64.b64encode(b"\xff\xd8\xff\xfake-jpeg").decode()
+    r = client.post("/verify", json={"driver_id": "DRV-0002", "image": img})
+    body = r.json()
+    # Default synthetic provider ignores pixels but still produces a genuine match.
+    assert body["decision"] == "VERIFIED"
+    assert body["provider"] == "synthetic"
+
+
+def test_enrol_then_verify_roundtrip(client):
+    """Enrolling a reference returns ok; a subsequent verify clears the threshold."""
+    import base64
+
+    img = base64.b64encode(b"\xff\xd8\xff\xfake-reference").decode()
+    e = client.post("/enrol", json={"driver_id": "DRV-0004", "image": img}).json()
+    assert e["enrolled"] is True
+    assert e["driver_id"] == "DRV-0004"
+    assert e["dim"] > 0
+    v = client.post("/verify", json={"driver_id": "DRV-0004", "image": img}).json()
+    assert v["decision"] == "VERIFIED"
+
+
+def test_enrol_new_driver_absent_from_gallery_then_verify(client):
+    """A driver NOT in the synthetic gallery (the admin-approval path) becomes
+    verifiable once a reference template is enrolled — a reference enrolment alone
+    counts as 'enrolled', no gallery row required."""
+    import base64
+
+    img = base64.b64encode(b"\xff\xd8\xff\xfake-ref-new-driver").decode()
+    new_id = "DRV-ENROLLED-9001"
+
+    # Before enrolment: unknown driver -> PROVISIONAL (not enrolled).
+    pre = client.post("/verify", json={"driver_id": new_id, "image": img}).json()
+    assert pre["decision"] == "PROVISIONAL"
+    assert pre["reason"] == "driver_not_enrolled"
+
+    # Enrol a reference template, then verify -> VERIFIED (reference == enrolled).
+    e = client.post("/enrol", json={"driver_id": new_id, "image": img}).json()
+    assert e["enrolled"] is True
+    v = client.post("/verify", json={"driver_id": new_id, "image": img}).json()
+    assert v["decision"] == "VERIFIED"
+    assert v["matched"] is True

@@ -77,6 +77,31 @@ a {
   top: 0;
   z-index: 10;
 }
+.topbar-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.topbar-home {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  font-size: 20px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex: none;
+}
+.topbar-home:active {
+  background: var(--surface-2);
+}
 .topbar h1 {
   font-size: 15px;
   margin: 0;
@@ -105,7 +130,7 @@ a {
   width: 100%;
   max-width: 520px;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   background: var(--surface);
   border-top: 1px solid var(--border);
   padding-bottom: env(safe-area-inset-bottom);
@@ -121,6 +146,8 @@ a {
   text-decoration: none;
   font-size: 10.5px;
   position: relative;
+  white-space: nowrap;
+  min-width: 0;
 }
 .tabbar a.active {
   color: var(--blue);
@@ -552,4 +579,275 @@ a {
 .banner.warn {
   border-color: #e3b884;
   color: var(--orange);
+}
+
+/* ---------------- driver enrolment wizard ---------------- */
+.enrol-steps {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.enrol-step {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  background: var(--surface-2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+.enrol-step.active {
+  background: var(--blue);
+  color: #fff;
+  border-color: var(--blue);
+}
+.enrol-step.done {
+  background: var(--green);
+  color: #fff;
+  border-color: var(--green);
+}
+.enrol-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.enrol-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.enrol-field em {
+  color: var(--red);
+  font-style: normal;
+}
+.enrol-field input {
+  padding: 10px;
+  font-size: 15px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+.enrol-field input:focus {
+  outline: 2px solid var(--blue);
+  border-color: var(--blue);
+}
+.enrol-field.locked input,
+.enrol-field input[readonly] {
+  background: var(--surface-2);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+.enrol-lock {
+  font-size: 10px;
+}
+.enrol-autofill {
+  background: var(--surface-2);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.enrol-consent {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-size: 14px;
+  margin-top: 10px;
+}
+.enrol-consent input {
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+}
+.enrol-cam {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #000;
+}
+.enrol-cam video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+}
+.enrol-faceguide {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 52%;
+  height: 72%;
+  transform: translate(-50%, -50%);
+  border: 2px solid rgba(255, 255, 255, 0.7);
+  border-radius: 50%;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+}
+.enrol-cam-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 16px;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 13px;
+}
+.enrol-cam-chip {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+.enrol-thumbs {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.enrol-thumb {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.enrol-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+}
+.enrol-thumb button {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.enrol-doc {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.enrol-doc span:first-child {
+  flex: 1;
+}
+.enrol-doc img {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+.enrol-doc-btn {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+/* ---------------- home (context landing) ---------------- */
+.home {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.home-hero {
+  background: radial-gradient(120% 80% at 50% 0%, #dceaf7, var(--surface));
+}
+.home-welcome {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.home-avatar {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: var(--blue);
+  color: #fff;
+  font-size: 22px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+.home-eyebrow {
+  font-size: 12px;
+  color: var(--muted);
+}
+.home-name {
+  margin: 2px 0 0;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+}
+.home-status {
+  margin: 12px 0 4px;
+}
+.home-context {
+  margin-top: 6px;
+}
+.home-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.home-action {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+.home-action:active {
+  background: var(--surface-2);
+}
+.home-action.primary {
+  border-color: var(--green);
+  box-shadow: inset 4px 0 0 var(--green);
+}
+.home-action-icon {
+  font-size: 20px;
+  flex: none;
+}
+.home-action-label {
+  flex: 1;
+}
+.home-action-chevron {
+  color: var(--muted);
+  font-size: 22px;
 }

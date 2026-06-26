@@ -7,13 +7,37 @@
     "trip": "प्रवास",
     "reroute": "पुनर्मार्ग",
     "inbox": "इनबॉक्स",
-    "vehicle": "वाहन"
+    "vehicle": "वाहन",
+    "enrol": "नोंदणी"
   },
   "screens": {
+    "home": "होम",
     "trip": "प्रवास",
     "reroute": "पुनर्मार्ग",
     "inbox": "इनबॉक्स",
-    "vehicle": "वाहन"
+    "vehicle": "वाहन",
+    "enrol": "चालक नोंदणी"
+  },
+  "home": {
+    "welcome": "स्वागत आहे,",
+    "driver": "चालक",
+    "driverId": "चालक आयडी",
+    "vehicle": "वाहन",
+    "lastVerified": "शेवटचे सत्यापन",
+    "today": "आज",
+    "startTrip": "प्रवास सुरू करा",
+    "goToEnrol": "नोंदणीकडे जा",
+    "alerts": "अलर्ट",
+    "vehicleInfo": "वाहन माहिती",
+    "completeEnrol": "नोंदणी पूर्ण करा",
+    "viewEnrol": "नोंदणी स्थिती पहा",
+    "status": {
+      "ACTIVE": "सक्रिय",
+      "PENDING": "मंजुरी प्रलंबित",
+      "REJECTED": "नाकारले",
+      "REENROLL": "पुन्हा नोंदणी आवश्यक",
+      "UNVERIFIED": "नोंदणी केलेली नाही"
+    }
   },
   "common": {
     "language": "भाषा",

@@ -14,11 +14,14 @@ import type {
   CarbonRollup,
   CorridorGeometry,
   Decision,
+  DriverEnrollment,
   EmptyAllocation,
   FaultControlResult,
   FaultState,
   Gate,
+  IdentityVerifyArg,
   IdentityVerifyResult,
+  IdentityEnrolResult,
   KpiResult,
   ParkingFacility,
   ParkingSummary,
@@ -108,11 +111,25 @@ export interface DataAdapter {
   carbonRollup(): Promise<CarbonRollup>;
   leoQueue(): Promise<AutoLeoResult[]>;
   customsFlags(): Promise<Alert[]>;
-  identityGallery(): Promise<{ driver_id: string; name: string; license_no: string }[]>;
+  identityGallery(): Promise<
+    { driver_id: string; name: string; license_no: string; photo_url?: string | null }[]
+  >;
+  // `arg` accepts the legacy simulate string OR a { simulate?, image? } payload
+  // (image = captured frame as base64/data-URL) so the camera flow and the old
+  // tests share one method.
   identityVerify(
     driverId: string,
-    simulate: "genuine" | "impostor" | "unknown",
+    arg?: "genuine" | "impostor" | "unknown" | IdentityVerifyArg,
   ): Promise<IdentityVerifyResult>;
+  identityEnrol(driverId: string, image: string): Promise<IdentityEnrolResult>;
+
+  // --- Driver enrolment approval workflow (admin portal) ---
+  enrollments(status?: string): Promise<DriverEnrollment[]>;
+  enrollmentDetail(driverId: string): Promise<DriverEnrollment>;
+  approveEnrollment(driverId: string): Promise<{ approved: boolean }>;
+  rejectEnrollment(driverId: string, reason: string): Promise<{ rejected: boolean }>;
+  reenrollEnrollment(driverId: string, reason?: string): Promise<{ reenroll: boolean }>;
+
   parkingAvailability(minuteOfDay?: number): Promise<ParkingFacility[]>;
   parkingSummary(minuteOfDay?: number): Promise<ParkingSummary>;
 

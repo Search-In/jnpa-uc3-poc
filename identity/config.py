@@ -41,6 +41,14 @@ class IdentityConfig:
     # --- Provisional cure window (hours), mirrors the Vahan PROVISIONAL path ---
     cure_window_h: int = 24
 
+    # --- Embedding provider (pluggable; decision logic is unchanged either way) ---
+    # "synthetic" (default) keeps the deterministic offline behaviour for the demo
+    # and tests; "onnx" runs a real ArcFace CNN over the captured frame when a
+    # model file is supplied (IDENTITY_ARCFACE_MODEL). An ONNX failure degrades
+    # back to synthetic so the service never hard-fails.
+    embedder: str = "synthetic"
+    arcface_model_path: str = ""
+
     # --- Service identity (for jnpa.services registry parity) ---
     service_name: str = "identity"
     service_kind: str = "sim"
@@ -64,6 +72,8 @@ class IdentityConfig:
             verify_threshold=_as_float(os.environ.get("IDENTITY_VERIFY_THRESHOLD"), 0.9),
             provisional_threshold=_as_float(os.environ.get("IDENTITY_PROVISIONAL_THRESHOLD"), 0.5),
             cure_window_h=_as_int(os.environ.get("IDENTITY_CURE_WINDOW_H"), 24),
+            embedder=os.environ.get("IDENTITY_EMBEDDER", "synthetic").strip().lower(),
+            arcface_model_path=os.environ.get("IDENTITY_ARCFACE_MODEL", ""),
             service_name=os.environ.get("IDENTITY_SERVICE_NAME", "identity"),
             service_kind=os.environ.get("IDENTITY_SERVICE_KIND", "sim"),
             base_url=os.environ.get("IDENTITY_BASE_URL", "http://identity:8360"),

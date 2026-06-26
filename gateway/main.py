@@ -24,8 +24,11 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+from .mode import ProductionSafetyError, mode_name, production_mode
 
 from jnpa_shared.schemas import TOPIC_ALERTS, TOPIC_TRAFFIC
 from jnpa_shared import tracing
@@ -79,11 +82,62 @@ tracing.init_tracing(__import__("os").environ.get("OTEL_SERVICE_NAME", "gateway"
 tracing.instrument_httpx()
 
 
+from . import enrollment, objectstore
+
+
+async def _readiness(state: "GatewayState") -> tuple[bool, dict]:
+    """Production readiness of the gateway's REQUIRED dependencies.
+
+    Postgres (enrolment/audit store) and MinIO (reference-photo store) must both be
+    reachable; the identity service must answer /healthz READY. In development the
+    gateway is always READY (fallbacks are allowed). Drives the startup gate AND
+    ``/healthz``."""
+    if not production_mode():
+        return True, {"mode": "development"}
+    checks: dict = {}
+    try:
+        await enrollment.ensure_backend(cfg.postgres_dsn)
+        checks["postgres"] = True
+    except Exception as exc:  # noqa: BLE001
+        checks["postgres"] = False
+        checks["postgres_detail"] = str(exc)
+    minio_ok, minio_detail = objectstore.healthcheck()
+    checks["minio"] = minio_ok
+    if not minio_ok:
+        checks["minio_detail"] = minio_detail
+    # Identity service (ArcFace/liveness) must report READY.
+    try:
+        resp = await state.http.get(cfg.identity_url.rstrip("/") + "/healthz", timeout=5.0)
+        checks["identity"] = resp.status_code == 200
+    except Exception as exc:  # noqa: BLE001
+        checks["identity"] = False
+        checks["identity_detail"] = str(exc)
+    ok = bool(checks.get("postgres") and checks.get("minio") and checks.get("identity"))
+    return ok, checks
+
+
+async def _production_startup_gate(state: "GatewayState") -> None:
+    """FAIL FAST: in production refuse to start unless Postgres + MinIO are up.
+
+    (The identity service guards its own ArcFace/liveness models on its boot.) A
+    no-op in development. Raised from the lifespan so uvicorn aborts the boot."""
+    if not production_mode():
+        return
+    await enrollment.ensure_backend(cfg.postgres_dsn)  # raises ProductionSafetyError if down
+    minio_ok, minio_detail = objectstore.healthcheck()
+    if not minio_ok:
+        raise ProductionSafetyError("minio", minio_detail)
+    log.info("gateway_production_dependencies_ready", postgres=True, minio=True)
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     state = GatewayState(cfg)
     app.state.gw = state
     log.info("gateway_starting", port=cfg.port, surepass_enabled=cfg.surepass_enabled)
+
+    # FAIL FAST: a missing Postgres/MinIO in production aborts the boot.
+    await _production_startup_gate(state)
 
     loop = asyncio.get_running_loop()
     stop = asyncio.Event()
@@ -140,6 +194,21 @@ app.add_middleware(
 # JWT-bearer + per-path role enforcement when on. See gateway/auth.py.
 install_auth(app)
 
+
+# Structured 503 when a REQUIRED production dependency (Postgres / MinIO / identity)
+# is unavailable — fail loud and safe instead of silently degrading. In development
+# these raise paths are not taken (fallbacks are allowed by gateway/mode.py).
+@app.exception_handler(ProductionSafetyError)
+async def _production_safety_handler(_request: Request, exc: ProductionSafetyError):
+    return JSONResponse(
+        status_code=503,
+        content={"error": "service_unavailable", "component": exc.component,
+                 "message": str(exc), "decision_path": "UNAVAILABLE"},
+    )
+
+
+log.info("gateway_runtime_mode", mode=mode_name())
+
 # Routers (order matters only where static paths must beat /{param} — kpi router
 # declares /sources + /cameras before /{view}, so it is safe).
 app.include_router(auth_router.router)
@@ -172,12 +241,24 @@ app.mount("/metrics", metrics_asgi_app())
 
 
 @app.get("/healthz")
-async def healthz() -> dict:
+async def healthz(response: Response) -> dict:
+    """READY (200) only when required dependencies are up; 503 otherwise.
+
+    In production: Postgres, MinIO, and the identity service must all be reachable.
+    In development the gateway is always READY (fallbacks allowed)."""
+    state = getattr(app.state, "gw", None)
+    ready, checks = (True, {"mode": "development"})
+    if state is not None:
+        ready, checks = await _readiness(state)
+    if not ready:
+        response.status_code = 503
     return {
-        "status": "ok",
+        "status": "ready" if ready else "not_ready",
         "service": "jnpa-gateway",
+        "mode": mode_name(),
         "surepass_enabled": cfg.surepass_enabled,
-        "ws_clients": app.state.gw.ws.client_count if hasattr(app.state, "gw") else 0,
+        "ws_clients": state.ws.client_count if state is not None else 0,
+        "checks": checks,
     }
 
 

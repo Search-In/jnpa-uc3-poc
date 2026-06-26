@@ -30,6 +30,9 @@ dependencies = [
     # Server-side PDF rendering for /api/reports/police?format=pdf. The Chromium
     # browser binary is installed in the Dockerfile (`playwright install`).
     "playwright==1.47.*",
+    # S3/MinIO client for driver-enrolment reference photos (gateway/objectstore).
+    # Imported lazily; enrolment degrades to base64-in-Postgres if absent/unreachable.
+    "minio==7.*",
 ]
 
 [project.optional-dependencies]

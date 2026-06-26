@@ -57,7 +57,9 @@ function NotificationBell({ alerts, loading }: { alerts: Alert[]; loading: boole
   const alertStepActive = useMemo(() => {
     if (!tour.scenarioId) return false;
     const tgt = getScript(tour.scenarioId)?.steps[tour.stepIndex]?.target;
-    return tgt?.kind === "dom" && typeof tgt.selector === "string" && tgt.selector.startsWith("alert-");
+    return (
+      tgt?.kind === "dom" && typeof tgt.selector === "string" && tgt.selector.startsWith("alert-")
+    );
   }, [tour.scenarioId, tour.stepIndex]);
 
   const expanded = open || alertStepActive;

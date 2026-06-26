@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from .embeddings import synth_embedding
 
@@ -39,6 +39,9 @@ class EnrolledDriver:
     embedding: List[float] = field(repr=False)
     synthetic: bool = True
     consented: bool = True
+    # Optional reference-photo pointer (object-store URL). None until a consented
+    # reference is enrolled; the raw embedding/template still never leaves.
+    photo_url: Optional[str] = None
 
     def public(self) -> Dict[str, object]:
         """Serialisable view WITHOUT the raw embedding (templates never leave)."""
@@ -48,6 +51,7 @@ class EnrolledDriver:
             "license_no": self.license_no,
             "synthetic": self.synthetic,
             "consented": self.consented,
+            "photo_url": self.photo_url,
         }
 
 

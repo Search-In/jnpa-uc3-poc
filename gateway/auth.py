@@ -78,6 +78,10 @@ class Principal:
 _POLICY: tuple[tuple[str, frozenset[str]], ...] = (
     ("/api/reports", CONTROL_ROOM | {Role.TRAFFIC_POLICE.value, Role.CUSTOMS.value}),
     ("/api/gate-data", CONTROL_ROOM | {Role.CUSTOMS.value}),
+    # Driver self-enrolment from the PWA: a DRIVER may submit/poll its own enrolment
+    # request (longest-prefix wins over the /api/identity admin rule below). The
+    # admin review/approve surface (/api/identity/enrollments) stays customs+admin.
+    ("/api/identity/enrol-request", {Role.DRIVER.value} | CONTROL_ROOM | {Role.CUSTOMS.value, Role.DTCCC_ADMIN.value}),
     ("/api/identity", {Role.CUSTOMS.value, Role.DTCCC_ADMIN.value}),
     ("/api/control", CONTROL_ROOM),
     ("/api/scenarios", CONTROL_ROOM),

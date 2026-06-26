@@ -20,7 +20,15 @@ dependencies = [
     "pydantic==2.*",
 ]
 
+# Real face-recognition path (IDENTITY_EMBEDDER=onnx). Heavy, so it is an opt-in
+# extra installed in the Docker image; the bare install stays slim + synthetic.
+# Imported lazily by OnnxArcFaceProvider, so missing here just degrades to synthetic.
 [project.optional-dependencies]
+onnx = [
+    "onnxruntime==1.*",
+    "opencv-python-headless==4.*",
+    "numpy",
+]
 dev = [
     "pytest==8.3.*",
     "pytest-asyncio==0.24.*",

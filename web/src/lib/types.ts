@@ -165,6 +165,14 @@ export interface AutoLeoResult {
 }
 
 // Identity / face-recognition (/api/identity)
+export type IdentitySimMode = "genuine" | "impostor" | "unknown";
+
+/** Verify input: a captured frame (base64/data-URL) and/or the legacy simulate. */
+export interface IdentityVerifyArg {
+  simulate?: IdentitySimMode;
+  image?: string;
+}
+
 export interface IdentityVerifyResult {
   driver_id: string;
   matched: boolean;
@@ -173,6 +181,42 @@ export interface IdentityVerifyResult {
   provisional_until?: string;
   cure_window_h?: number;
   reason?: string;
+  /** Which embedding provider produced the capture vector ("synthetic" | "onnx"). */
+  provider?: string;
+}
+
+export interface IdentityEnrolResult {
+  enrolled: boolean;
+  driver_id: string;
+  provider?: string;
+}
+
+// Driver enrolment request lifecycle (Driver PWA submit -> admin approve).
+export type EnrollmentStatus = "PENDING" | "ACTIVE" | "REJECTED" | "REENROLL" | string;
+
+export interface DriverEnrollment {
+  driver_id: string;
+  name: string;
+  license_no?: string;
+  mobile?: string;
+  vehicle_no?: string;
+  aadhaar_masked?: string;
+  emergency_contact?: string;
+  status: EnrollmentStatus;
+  consent?: boolean;
+  consent_at?: string | null;
+  /** List thumbnail: MinIO photo URL, else the first captured frame (data-URL). */
+  photo?: string | null;
+  photo_url?: string | null;
+  /** Captured reference frames — only present on the detail fetch. */
+  face_images?: string[];
+  documents?: { kind: string; image: string }[];
+  template_dim?: number | null;
+  provider?: string | null;
+  submitted_at?: string;
+  reviewed_at?: string | null;
+  reviewed_by?: string | null;
+  rejection_reason?: string | null;
 }
 
 // Parking (/api/parking)

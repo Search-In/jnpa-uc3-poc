@@ -9,7 +9,10 @@ ENV PYTHONUNBUFFERED=1 \
     # repo root is on the path so the package imports as `identity`.
     PYTHONPATH=/app
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
+# curl for the healthcheck; libgl1 + libglib2.0-0 are OpenCV runtime libs needed
+# by the ONNX/ArcFace face-recognition path (opencv-python-headless).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -23,7 +26,9 @@ COPY identity/pyproject.toml /app/identity/pyproject.toml
 COPY identity/README.md /app/identity/README.md
 COPY identity/ /app/identity/
 
-RUN pip install -e /app/identity
+# Install with the onnx extra so the real ArcFace face-recognition path is
+# available (onnxruntime + opencv). Degrades to synthetic if no model is mounted.
+RUN pip install -e "/app/identity[onnx]"
 
 # Import guard: fail the build loudly if anything is broken.
 RUN python -c "import identity.app, identity.embeddings, identity.gallery; print('identity import OK')"

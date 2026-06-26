@@ -18,12 +18,14 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Body, Depends, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
+from .. import enrollment, objectstore
 from ..dpdp import audit_identity_access, enforce_dpdp
 from ..logging import get_logger
+from ..mode import allow_base64_image_fallback, allow_synthetic_identity
 from ..metrics import REQUESTS, UPSTREAM_LATENCY
 from ..state import GatewayState, get_state
 
@@ -44,21 +46,57 @@ _PROVISIONAL_THRESHOLD = 0.5
 _CURE_WINDOW_H = 24
 
 
+# Real ArcFace inference (model load + embed) can take several seconds on CPU,
+# well over the 2 s default upstream budget. A short timeout here would make the
+# gateway fall back to the synthetic path mid-verification — which would falsely
+# pass ANY face — so identity calls get a generous timeout instead.
+_IDENTITY_TIMEOUT_S = 20.0
+
+
 async def _upstream(state: GatewayState, method: str, path: str,
-                    json: Dict[str, Any] | None = None) -> Dict[str, Any] | None:
+                    json: Dict[str, Any] | None = None,
+                    timeout: float | None = None) -> Dict[str, Any] | None:
     url = state.cfg.identity_url.rstrip("/") + path
     t0 = time.perf_counter()
     try:
         if method == "GET":
-            resp = await state.http.get(url)
+            resp = await state.http.get(url, timeout=timeout)
         else:
-            resp = await state.http.post(url, json=json or {})
+            resp = await state.http.post(url, json=json or {}, timeout=timeout)
         UPSTREAM_LATENCY.labels("identity", "identity").observe(time.perf_counter() - t0)
         if resp.status_code == 200:
             return resp.json()
     except Exception as exc:  # pragma: no cover - infra-timing dependent
         log.debug("identity_upstream_failed", path=path, error=str(exc))
     return None
+
+
+def _decide_from_score(driver_id: str, score: float) -> dict:
+    """Map a cosine score to the VERIFIED / PROVISIONAL / REJECTED decision."""
+    if score >= _VERIFY_THRESHOLD:
+        return {"driver_id": driver_id, "matched": True, "score": score,
+                "decision": "VERIFIED", "cure_window_h": _CURE_WINDOW_H,
+                "reason": "face_match"}
+    if score >= _PROVISIONAL_THRESHOLD:
+        until = (datetime.now(timezone.utc) + timedelta(hours=_CURE_WINDOW_H)).isoformat()
+        return {"driver_id": driver_id, "matched": False, "score": score,
+                "decision": "PROVISIONAL", "provisional_until": until,
+                "cure_window_h": _CURE_WINDOW_H, "reason": "low_match"}
+    return {"driver_id": driver_id, "matched": False, "score": score,
+            "decision": "REJECTED", "cure_window_h": _CURE_WINDOW_H,
+            "reason": "face_mismatch"}
+
+
+def _local_enrolled_verify(driver_id: str, simulate: str) -> dict:
+    """Deterministic verify for an admin-approved driver that is NOT in the
+    synthetic gallery, used when the identity service is unreachable. Mirrors the
+    synthetic provider: reference == synth_embedding(driver_id), capture ~0.97."""
+    from identity import embeddings  # type: ignore
+
+    genuine = simulate != "impostor"
+    reference = embeddings.synth_embedding(driver_id)
+    capture = embeddings.capture_embedding(driver_id, genuine=genuine)
+    return _decide_from_score(driver_id, round(embeddings.cosine(reference, capture), 6))
 
 
 def _local_verify(driver_id: str, simulate: str) -> dict:
@@ -89,6 +127,29 @@ def _local_verify(driver_id: str, simulate: str) -> dict:
             "decision": "REJECTED", "cure_window_h": _CURE_WINDOW_H}
 
 
+async def _ensure_identity_enrolled(state: GatewayState, driver_id: str) -> bool:
+    """Re-push an approved driver's stored reference template into the identity
+    service. The identity gallery is in-memory, so after a restart an ACTIVE
+    enrolled driver looks "not enrolled"; this self-heals the template from the
+    persisted reference frame so verification keeps working across restarts.
+    Returns True if a reference was (re-)enrolled."""
+    # Prefer the durable master record; fall back to the workflow record (dev).
+    rec = await enrollment.get_driver(state.cfg.postgres_dsn, driver_id)
+    if not rec:
+        wf = await enrollment.get(state.cfg.postgres_dsn, driver_id, include_faces=True)
+        rec = wf if wf and wf.get("status") == enrollment.ACTIVE else None
+    if not rec:
+        return False
+    ref = rec.get("reference_image")
+    if not ref:
+        return False
+    data = await _upstream(state, "POST", "/enrol", {
+        "driver_id": driver_id, "image": ref,
+        "photo_url": rec.get("photo_url"), "is_synthetic": True, "purpose": "ENROLMENT",
+    }, timeout=_IDENTITY_TIMEOUT_S)
+    return data is not None
+
+
 @router.post("/verify")
 async def verify(request: Request, body: Dict[str, Any] = Body(...),
                  state: GatewayState = Depends(get_state)) -> dict:
@@ -99,31 +160,398 @@ async def verify(request: Request, body: Dict[str, Any] = Body(...),
     purpose = enforce_dpdp(purpose=body.get("purpose"), is_synthetic=is_synthetic)
     driver_id = body.get("driver_id", "")
 
-    data = await _upstream(state, "POST", "/verify", body)
+    has_image = bool(body.get("image"))
+    data = await _upstream(state, "POST", "/verify", body, timeout=_IDENTITY_TIMEOUT_S)
+    # Self-heal: an ACTIVE enrolled driver that the (in-memory) identity service no
+    # longer recognises after a restart is re-enrolled from the persisted template,
+    # then verification is retried once so it returns a real match decision.
+    if (data is not None and data.get("decision") == "PROVISIONAL"
+            and str(data.get("reason", "")) in {"driver_not_enrolled", "unknown_driver"}):
+        if await _ensure_identity_enrolled(state, driver_id):
+            retry = await _upstream(state, "POST", "/verify", body, timeout=_IDENTITY_TIMEOUT_S)
+            if retry is not None:
+                data = retry
+
+    if data is not None:
+        path, result = "LIVE", data
+    elif has_image:
+        # Identity service unreachable. CRITICAL: a real captured frame must NEVER be
+        # passed by the deterministic synthetic match (which keys off driver_id and
+        # ignores the face — it would approve any face). When an image was supplied we
+        # cannot confirm the face, so admit PROVISIONALLY (manual check) instead.
+        until = (datetime.now(timezone.utc) + timedelta(hours=_CURE_WINDOW_H)).isoformat()
+        path = "SYNTHETIC"
+        result = {"driver_id": driver_id, "matched": False, "score": 0.0,
+                  "decision": "PROVISIONAL", "provisional_until": until,
+                  "cure_window_h": _CURE_WINDOW_H, "reason": "identity_service_unavailable",
+                  "provider": "unavailable"}
+    else:
+        # No image -> legacy simulate path: deterministic synthetic decision (demo/tests).
+        simulate = body.get("simulate", "genuine")
+        rec = await enrollment.get(state.cfg.postgres_dsn, driver_id, include_faces=False)
+        if rec and rec.get("status") == enrollment.ACTIVE:
+            result = _local_enrolled_verify(driver_id, simulate)
+        else:
+            result = _local_verify(driver_id, simulate)
+        path = "SYNTHETIC"
+
+    actor = _actor(request)
+    REQUESTS.labels("identity", "ok").inc()
+    audit_identity_access(actor=actor, driver_id=driver_id, purpose=purpose,
+                          is_synthetic=is_synthetic, decision=str(result.get("decision", "?")))
+    # Persistent verification audit trail (jnpa.verification_logs).
+    await enrollment.log_verification(
+        state.cfg.postgres_dsn, driver_id=driver_id,
+        decision=str(result.get("decision", "?")), score=result.get("score"),
+        matched=result.get("matched"), provider=result.get("provider"),
+        decision_path=path, actor=actor, purpose=purpose, reason=result.get("reason"))
+    return {"decision_path": path, "is_synthetic": is_synthetic, "purpose": purpose, **result}
+
+
+_IDENTIFY_THRESHOLD = 0.45  # ArcFace cosine; below -> UNKNOWN driver
+
+
+@router.post("/identify")
+async def identify(request: Request, body: Dict[str, Any] = Body(...),
+                   state: GatewayState = Depends(get_state)) -> dict:
+    """1:N identification — captured face -> embedding -> nearest enrolled driver.
+
+    Pipeline: quality + liveness gate (identity /embed) -> ArcFace embedding ->
+    cosine nearest-neighbour over jnpa.driver_faces -> top-1 if >= threshold else
+    UNKNOWN. No manual driver selection. Every attempt is audited.
+    """
+    from identity.embeddings import cosine  # type: ignore
+
+    is_synthetic = bool(body.get("is_synthetic", True))
+    purpose = enforce_dpdp(purpose=body.get("purpose") or "GATE_VERIFICATION",
+                           is_synthetic=is_synthetic)
+    if not body.get("image"):
+        raise HTTPException(status_code=400, detail="image required for identification")
+
+    data = await _upstream(state, "POST", "/embed", {"image": body["image"]},
+                           timeout=_IDENTITY_TIMEOUT_S)
+    actor = _actor(request)
+    if data is None:
+        # Identity service down: a real capture is never matched synthetically.
+        if not allow_synthetic_identity():
+            raise HTTPException(status_code=503, detail={
+                "error": "identity_service_unavailable", "component": "identity",
+                "message": "Identity service required for 1:N identification"})
+        result = {"decision": "PROVISIONAL", "driver_id": None, "score": 0.0,
+                  "reason": "identity_service_unavailable", "provider": "unavailable"}
+        await enrollment.log_verification(
+            state.cfg.postgres_dsn, driver_id="*", decision="PROVISIONAL", score=0.0,
+            matched=False, provider="unavailable", decision_path="SYNTHETIC",
+            actor=actor, purpose=purpose, reason=result["reason"])
+        return {"decision_path": "SYNTHETIC", "purpose": purpose, **result}
+
+    # Quality / liveness gate failed -> stop, no match.
+    if not data.get("ok"):
+        result = {"decision": "REJECTED", "driver_id": None, "score": 0.0,
+                  "matched": False, "reason": data.get("reason"),
+                  "provider": data.get("provider"), "quality": data.get("quality"),
+                  "liveness": data.get("liveness")}
+        await enrollment.log_verification(
+            state.cfg.postgres_dsn, driver_id="*", decision="REJECTED", score=0.0,
+            matched=False, provider=data.get("provider"), decision_path="LIVE",
+            actor=actor, purpose=purpose, reason=data.get("reason"))
+        return {"decision_path": "LIVE", "purpose": purpose, **result}
+
+    # 1:N nearest-neighbour over the biometric template store.
+    probe = data["embedding"]
+    faces = await enrollment.load_faces(state.cfg.postgres_dsn)
+    best_id, best_score = None, -1.0
+    for f in faces:
+        emb = f.get("embedding") or []
+        if len(emb) != len(probe):
+            continue
+        sc = cosine(probe, emb)
+        if sc > best_score:
+            best_id, best_score = f.get("driver_id"), sc
+    matched = best_id is not None and best_score >= _IDENTIFY_THRESHOLD
+    decision = "VERIFIED" if matched else "REJECTED"
+    result = {
+        "decision": decision,
+        "driver_id": best_id if matched else None,
+        "candidate_id": best_id,
+        "score": round(float(best_score), 6) if faces else 0.0,
+        "matched": matched,
+        "reason": "identified" if matched else "unknown_driver",
+        "provider": data.get("provider"),
+        "gallery_size": len(faces),
+        "quality": data.get("quality"),
+        "liveness": data.get("liveness"),
+    }
+    REQUESTS.labels("identity", "ok").inc()
+    audit_identity_access(actor=actor, driver_id=best_id or "*", purpose=purpose,
+                          is_synthetic=is_synthetic, decision=decision)
+    await enrollment.log_verification(
+        state.cfg.postgres_dsn, driver_id=best_id or "*", decision=decision,
+        score=result["score"], matched=matched, provider=data.get("provider"),
+        decision_path="LIVE", actor=actor, purpose=purpose, reason=result["reason"])
+    return {"decision_path": "LIVE", "purpose": purpose, **result}
+
+
+@router.post("/enrol")
+async def enrol(request: Request, body: Dict[str, Any] = Body(...),
+                state: GatewayState = Depends(get_state)) -> dict:
+    """Capture/refresh a driver's reference template (purpose = ENROLMENT).
+
+    DPDP-gated like /verify; proxies the identity service, degrading to an
+    in-process synthetic reference so the demo enrols even if the service is down.
+    """
+    is_synthetic = bool(body.get("is_synthetic", True))
+    purpose = enforce_dpdp(purpose=body.get("purpose") or "ENROLMENT", is_synthetic=is_synthetic)
+    driver_id = body.get("driver_id", "")
+
+    data = await _upstream(state, "POST", "/enrol", body)
     if data is not None:
         REQUESTS.labels("identity", "ok").inc()
         audit_identity_access(actor=_actor(request), driver_id=driver_id, purpose=purpose,
-                              is_synthetic=is_synthetic, decision=str(data.get("decision", "?")))
+                              is_synthetic=is_synthetic, decision="ENROLLED")
         return {"decision_path": "LIVE", "is_synthetic": is_synthetic, "purpose": purpose, **data}
-    simulate = body.get("simulate", "genuine")
-    result = _local_verify(driver_id, simulate)
+    # Identity service down. Production must mint a real template — no synthetic
+    # reference fallback (it would later pass any face).
+    if not allow_synthetic_identity():
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "identity_service_unavailable", "component": "identity",
+                    "message": "Identity service required to mint the enrolment template"})
     REQUESTS.labels("identity", "ok").inc()
     audit_identity_access(actor=_actor(request), driver_id=driver_id, purpose=purpose,
-                          is_synthetic=is_synthetic, decision=str(result.get("decision", "?")))
-    return {"decision_path": "SYNTHETIC", "is_synthetic": is_synthetic, "purpose": purpose, **result}
+                          is_synthetic=is_synthetic, decision="ENROLLED")
+    return {"decision_path": "SYNTHETIC", "is_synthetic": is_synthetic, "purpose": purpose,
+            "enrolled": True, "driver_id": driver_id, "provider": "synthetic",
+            "reason": "synthetic_reference"}
+
+
+async def _merge_enrolled(state: GatewayState, drivers: list) -> list:
+    """Append ACTIVE master drivers (jnpa.drivers — promoted on approval) to the
+    synthetic gallery so the verification dropdown offers real enrolled drivers too.
+    Synthetic ids are kept; enrolled ids are de-duplicated against them."""
+    try:
+        enrolled = await enrollment.list_active_drivers(state.cfg.postgres_dsn)
+    except Exception:  # noqa: BLE001
+        return drivers
+    existing = {d.get("driver_id") for d in drivers}
+    for e in enrolled:
+        if e.get("driver_id") in existing:
+            continue
+        drivers.append({
+            "driver_id": e.get("driver_id"),
+            "name": e.get("name"),
+            "license_no": e.get("license_no") or "",
+            "photo_url": e.get("photo_url"),
+            "enrolled": True,
+        })
+    return drivers
 
 
 @router.get("/gallery")
 async def gallery(state: GatewayState = Depends(get_state)) -> dict:
     data = await _upstream(state, "GET", "/gallery")
     if data is not None:
+        drivers = await _merge_enrolled(state, list(data.get("drivers", [])))
         REQUESTS.labels("identity", "ok").inc()
-        return {"decision_path": "LIVE", **data}
+        return {"decision_path": "LIVE", **data, "drivers": drivers, "count": len(drivers)}
     from identity import gallery as gal_mod  # type: ignore
-    drivers = [d.public() for d in gal_mod.generate_gallery().values()]
+    drivers = await _merge_enrolled(state, [d.public() for d in gal_mod.generate_gallery().values()])
     REQUESTS.labels("identity", "ok").inc()
     return {"decision_path": "SYNTHETIC", "synthetic": True,
             "drivers": drivers, "count": len(drivers)}
+
+
+# --------------------------------------------------------------------------- enrolment workflow
+# Driver PWA submits a profile + consented reference frames -> PENDING; an admin
+# (DTCCC_ADMIN / CUSTOMS) reviews and approves -> the identity template is minted
+# and the driver becomes ACTIVE (verifiable). DPDP-audited at every step.
+
+@router.post("/enrol-request")
+async def enrol_request(request: Request, body: Dict[str, Any] = Body(...),
+                        state: GatewayState = Depends(get_state)) -> dict:
+    """Driver-side enrolment submission (purpose = ENROLMENT). Stores a PENDING
+    request; the driver is NOT activated until an admin approves."""
+    is_synthetic = bool(body.get("is_synthetic", True))
+    purpose = enforce_dpdp(purpose=body.get("purpose") or "ENROLMENT", is_synthetic=is_synthetic)
+    driver_id = str(body.get("driver_id") or "").strip()
+    if not driver_id:
+        raise HTTPException(status_code=400, detail="driver_id required")
+    if not bool(body.get("consent", False)):
+        raise HTTPException(status_code=400, detail="biometric consent is required")
+    images = body.get("images") or ([body["image"]] if body.get("image") else [])
+    images = [i for i in images if i]
+    if not images:
+        raise HTTPException(status_code=400, detail="at least one reference image is required")
+
+    rec = await enrollment.submit(
+        state.cfg.postgres_dsn,
+        driver_id=driver_id,
+        name=str(body.get("name") or "").strip() or driver_id,
+        license_no=str(body.get("license_no") or "").strip(),
+        mobile=str(body.get("mobile") or "").strip(),
+        vehicle_no=str(body.get("vehicle_no") or "").strip(),
+        aadhaar_masked=str(body.get("aadhaar") or body.get("aadhaar_masked") or "").strip(),
+        emergency_contact=str(body.get("emergency_contact") or "").strip(),
+        consent=True,
+        face_images=images,
+        documents=body.get("documents") or [],
+    )
+    REQUESTS.labels("identity", "ok").inc()
+    audit_identity_access(actor=_actor(request), driver_id=driver_id, purpose=purpose,
+                          is_synthetic=is_synthetic, decision="ENROL_REQUESTED")
+    return {"submitted": True, "status": rec.get("status", enrollment.PENDING),
+            "driver_id": driver_id, "enrollment": rec}
+
+
+@router.get("/enrol-request/{driver_id}")
+async def enrol_request_status(driver_id: str,
+                               state: GatewayState = Depends(get_state)) -> dict:
+    """Driver polls their own enrolment status (PENDING / ACTIVE / REJECTED)."""
+    rec = await enrollment.get(state.cfg.postgres_dsn, driver_id, include_faces=False)
+    if not rec:
+        raise HTTPException(status_code=404, detail="no enrolment request for this driver")
+    return rec
+
+
+@router.get("/enrollments")
+async def list_enrollments(status: Optional[str] = Query(default=None),
+                           state: GatewayState = Depends(get_state)) -> dict:
+    """Admin queue of enrolment requests (summary view, newest first)."""
+    items = await enrollment.list_requests(
+        state.cfg.postgres_dsn, status=status.upper() if status else None)
+    REQUESTS.labels("identity", "ok").inc()
+    return {"enrollments": items, "count": len(items)}
+
+
+@router.get("/enrollments/{driver_id}")
+async def enrollment_detail(driver_id: str,
+                            state: GatewayState = Depends(get_state)) -> dict:
+    """Full enrolment record incl. the captured reference frames for admin review."""
+    rec = await enrollment.get(state.cfg.postgres_dsn, driver_id, include_faces=True)
+    if not rec:
+        raise HTTPException(status_code=404, detail="enrolment not found")
+    return rec
+
+
+@router.get("/drivers")
+async def list_drivers(state: GatewayState = Depends(get_state)) -> dict:
+    """Active master drivers (jnpa.drivers) — the canonical enrolled identities."""
+    items = await enrollment.list_active_drivers(state.cfg.postgres_dsn)
+    REQUESTS.labels("identity", "ok").inc()
+    return {"drivers": items, "count": len(items)}
+
+
+@router.get("/verifications")
+async def verification_log(driver_id: Optional[str] = Query(default=None),
+                           limit: int = Query(default=50),
+                           state: GatewayState = Depends(get_state)) -> dict:
+    """Verification audit trail (jnpa.verification_logs) — who/decision/score/when."""
+    items = await enrollment.recent_verifications(
+        state.cfg.postgres_dsn, driver_id=driver_id, limit=min(limit, 500))
+    REQUESTS.labels("identity", "ok").inc()
+    return {"verifications": items, "count": len(items)}
+
+
+@router.post("/enrollments/{driver_id}/approve")
+async def approve_enrollment(driver_id: str, request: Request,
+                             state: GatewayState = Depends(get_state)) -> dict:
+    """Approve: mint the face template (identity /enrol), persist the reference
+    photo to MinIO, and activate the driver for verification."""
+    purpose = enforce_dpdp(purpose="ENROLMENT", is_synthetic=True)
+    rec = await enrollment.get(state.cfg.postgres_dsn, driver_id, include_faces=True)
+    if not rec:
+        raise HTTPException(status_code=404, detail="enrolment not found")
+    faces = rec.get("face_images") or []
+    reference_image = faces[0] if faces else rec.get("reference_image")
+    if not reference_image:
+        raise HTTPException(status_code=400, detail="no reference frame to enrol")
+
+    # Reference photo -> MinIO (drivers/ bucket). In PRODUCTION object storage is
+    # REQUIRED: a failed upload is a hard error (no base64 fallback). In DEV the
+    # base64 frame is kept in the record so the demo works without MinIO.
+    photo_url = objectstore.put_reference_photo(
+        driver_id, enrollment.decode_data_url(reference_image) or b"")
+    if photo_url is None and not allow_base64_image_fallback():
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "object_store_unavailable",
+                    "component": "minio",
+                    "message": "MinIO is required in production to store the reference photo"})
+    # In production the durable pointer is the MinIO URL only; never persist pixels.
+    stored_ref = reference_image if allow_base64_image_fallback() else None
+
+    # Mint + store the template in the identity service (reuses its /enrol).
+    # overwrite=True: admin approval is the authoritative, deliberate (re-)enrolment.
+    data = await _upstream(state, "POST", "/enrol", {
+        "driver_id": driver_id, "image": reference_image, "photo_url": photo_url,
+        "is_synthetic": True, "purpose": "ENROLMENT", "overwrite": True,
+    }, timeout=_IDENTITY_TIMEOUT_S)
+    if data is None and not allow_synthetic_identity():
+        # Production requires the real ArcFace template to be minted on approval.
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "identity_service_unavailable",
+                    "component": "identity",
+                    "message": "Identity service must mint the face template before approval"})
+    # Quality gate: the identity service refuses to enrol a poor reference frame.
+    if data is not None and data.get("enrolled") is False:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "reference_quality_failed",
+                    "reason": data.get("reason"),
+                    "quality": data.get("quality"),
+                    "message": "Reference frame failed the face-quality check; "
+                               "request re-enrolment with a clearer photo"})
+    provider = (data or {}).get("provider", "synthetic")
+    dim = (data or {}).get("dim")
+
+    actor = _actor(request)
+    updated = await enrollment.mark_active(
+        state.cfg.postgres_dsn, driver_id, actor=actor, photo_url=photo_url,
+        reference_image=stored_ref, template_dim=dim, provider=provider)
+    # Promote into the canonical master identity table (jnpa.drivers).
+    await enrollment.promote_to_driver(
+        state.cfg.postgres_dsn, {**rec, "photo_url": photo_url}, actor=actor,
+        photo_url=photo_url, reference_image=stored_ref, template_dim=dim, provider=provider)
+    # Persist the biometric template for 1:N identification (jnpa.driver_faces).
+    emb = (data or {}).get("embedding")
+    if emb:
+        await enrollment.store_face(state.cfg.postgres_dsn, driver_id, emb,
+                                    dim=dim or len(emb), provider=provider)
+    REQUESTS.labels("identity", "ok").inc()
+    audit_identity_access(actor=actor, driver_id=driver_id, purpose=purpose,
+                          is_synthetic=True, decision="APPROVED")
+    return {"approved": True, "enrollment": updated, "identity": data}
+
+
+@router.post("/enrollments/{driver_id}/reject")
+async def reject_enrollment(driver_id: str, request: Request,
+                            body: Dict[str, Any] = Body(default={}),
+                            state: GatewayState = Depends(get_state)) -> dict:
+    """Reject an enrolment. The driver may re-submit from the PWA."""
+    rec = await enrollment.get(state.cfg.postgres_dsn, driver_id, include_faces=False)
+    if not rec:
+        raise HTTPException(status_code=404, detail="enrolment not found")
+    updated = await enrollment.set_status(
+        state.cfg.postgres_dsn, driver_id, enrollment.REJECTED,
+        actor=_actor(request), reason=str(body.get("reason") or ""))
+    REQUESTS.labels("identity", "ok").inc()
+    return {"rejected": True, "enrollment": updated}
+
+
+@router.post("/enrollments/{driver_id}/reenroll")
+async def request_reenrollment(driver_id: str, request: Request,
+                               body: Dict[str, Any] = Body(default={}),
+                               state: GatewayState = Depends(get_state)) -> dict:
+    """Ask the driver to re-capture and re-submit their reference frames."""
+    rec = await enrollment.get(state.cfg.postgres_dsn, driver_id, include_faces=False)
+    if not rec:
+        raise HTTPException(status_code=404, detail="enrolment not found")
+    updated = await enrollment.set_status(
+        state.cfg.postgres_dsn, driver_id, enrollment.REENROLL,
+        actor=_actor(request), reason=str(body.get("reason") or "re-enrolment requested"))
+    REQUESTS.labels("identity", "ok").inc()
+    return {"reenroll": True, "enrollment": updated}
 
 
 @router.get("/threshold")

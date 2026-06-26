@@ -98,9 +98,12 @@ class ScenarioHandle:
                 """
                 INSERT INTO jnpa.scenario_steps
                     (handle_id, step_no, ts, title, status, trigger, detail)
-                VALUES (:hid, :no, CAST(:ts AS timestamptz), :title, :status, :trigger, CAST(:detail AS jsonb))
+                VALUES (:hid, :no, :ts, :title, :status, :trigger, CAST(:detail AS jsonb))
                 """,
-                {"hid": self.handle_id, "no": s.step_no, "ts": s.ts, "title": s.title,
+                # asyncpg validates the bound type CLIENT-side, so a CAST in the SQL
+                # is not enough — pass a real datetime for the timestamptz column.
+                {"hid": self.handle_id, "no": s.step_no,
+                 "ts": datetime.fromisoformat(s.ts), "title": s.title,
                  "status": s.status, "trigger": s.trigger, "detail": json.dumps(s.detail)},
                 dsn=self.cfg.postgres_dsn,
             )

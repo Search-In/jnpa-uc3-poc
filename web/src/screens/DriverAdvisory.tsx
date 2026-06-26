@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getAdapter } from "@/data";
 import type { TruckDevice } from "@/lib/types";
@@ -15,6 +16,7 @@ const GATES = ["G-NSICT", "G-JNPCT", "G-NSIGT", "G-BMCT"];
 // recommendation picks the least-loaded alternative gate; "Push Re-route" forces
 // it via POST /api/trucks/{id}/route (used in the TFC-3 scenario).
 export default function DriverAdvisory() {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const queued = useQuery({
     queryKey: ["trucks", "AT_GATE_QUEUE", "advisory"],
@@ -38,39 +40,39 @@ export default function DriverAdvisory() {
     <div className="h-full overflow-y-auto p-4">
       <div className="mb-3 flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-semibold">Driver Advisory</h1>
+          <h1 className="text-lg font-semibold">{t("nav.advisory")}</h1>
           <p className="text-sm text-muted-foreground">
-            Trucks in <span className="font-mono">AT_GATE_QUEUE</span> · ETA-to-gate &amp; re-route
-            recommendation
+            {t("advisory.subtitlePrefix")} <span className="font-mono">AT_GATE_QUEUE</span> ·{" "}
+            {t("advisory.subtitleSuffix")}
           </p>
         </div>
-        <Badge colour="#56B4E9">{devices.length} queued</Badge>
+        <Badge colour="#56B4E9">{t("advisory.queuedCount", { count: devices.length })}</Badge>
       </div>
 
       {queued.isLoading ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Spinner /> loading queue…
+          <Spinner /> {t("advisory.loadingQueue")}
         </div>
       ) : devices.length === 0 ? (
         <Card>
-          <EmptyState>No trucks currently in a gate queue.</EmptyState>
+          <EmptyState>{t("advisory.emptyQueue")}</EmptyState>
         </Card>
       ) : (
         <Card data-guided-id="advisory-queue">
           <CardHeader>
-            <CardTitle>Queued trucks</CardTitle>
+            <CardTitle>{t("advisory.queuedTrucks")}</CardTitle>
           </CardHeader>
           <CardContent className="p-0">
             <table className="w-full text-sm">
               <thead className="border-b border-border text-left text-xs text-muted-foreground">
                 <tr>
-                  <th className="px-4 py-2">Device</th>
-                  <th className="px-4 py-2">Plate</th>
-                  <th className="px-4 py-2">Gate</th>
-                  <th className="px-4 py-2">ETA</th>
-                  <th className="px-4 py-2">Remaining</th>
-                  <th className="px-4 py-2">Recommend</th>
-                  <th className="px-4 py-2 text-right">Action</th>
+                  <th className="px-4 py-2">{t("advisory.colDevice")}</th>
+                  <th className="px-4 py-2">{t("advisory.colPlate")}</th>
+                  <th className="px-4 py-2">{t("advisory.colGate")}</th>
+                  <th className="px-4 py-2">{t("advisory.colEta")}</th>
+                  <th className="px-4 py-2">{t("advisory.colRemaining")}</th>
+                  <th className="px-4 py-2">{t("advisory.colRecommend")}</th>
+                  <th className="px-4 py-2 text-right">{t("advisory.colAction")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -100,6 +102,7 @@ function QueueRow({
   recommend: string;
   qc: ReturnType<typeof useQueryClient>;
 }) {
+  const { t } = useTranslation();
   const [done, setDone] = useState(false);
   const reroute = useMutation({
     mutationFn: () =>
@@ -126,7 +129,7 @@ function QueueRow({
       <td className="px-4 py-2 text-right">
         {done ? (
           <span className="inline-flex items-center gap-1 text-xs text-severity-ok">
-            <CheckCircle2 className="h-3.5 w-3.5" /> re-routed
+            <CheckCircle2 className="h-3.5 w-3.5" /> {t("advisory.rerouted")}
           </span>
         ) : (
           <Button
@@ -137,7 +140,7 @@ function QueueRow({
             disabled={reroute.isPending}
           >
             {reroute.isPending ? <Spinner /> : <Navigation className="h-3.5 w-3.5" />}
-            Push Re-route
+            {t("advisory.pushReroute")}
           </Button>
         )}
       </td>

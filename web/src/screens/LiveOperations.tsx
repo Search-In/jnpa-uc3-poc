@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { Info } from "lucide-react";
 import type MapView from "@arcgis/core/views/MapView";
@@ -25,6 +26,7 @@ import { useAlertFocus } from "@/lib/alertFocus";
 import { useMapSettings } from "@/lib/mapSettings";
 
 export default function LiveOperations() {
+  const { t } = useTranslation();
   const [view, setView] = useState<MapView | null>(null);
   // Operator-chosen basemap (header → Map settings); defaults to satellite.
   const { basemap } = useMapSettings();
@@ -107,7 +109,7 @@ export default function LiveOperations() {
       <div className="border-b border-border px-3 py-2.5">
         <div className="mb-2 flex items-center gap-2">
           <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Corridor KPIs
+            {t("liveOps.corridorKpis")}
           </h2>
           <DecisionPathBadge path={predictQ.data?.decision_path} />
         </div>
@@ -132,11 +134,12 @@ export default function LiveOperations() {
               <div className="text-xl font-semibold tabular-nums">
                 {g.throughput_60min}
                 <span className="ml-1 text-xs font-normal text-muted-foreground">
-                  /{g.target_vph} vph
+                  /{g.target_vph} {t("kpiUnit.vph")}
                 </span>
               </div>
               <div className="text-[11px] text-muted-foreground">
-                queue {queueByGate.get(g.id) ?? 0} · target {g.target_vph}/h
+                {t("liveOps.queue")} {queueByGate.get(g.id) ?? 0} · {t("liveOps.target")}{" "}
+                {g.target_vph}/h
               </div>
             </CardContent>
           </Card>
@@ -144,7 +147,7 @@ export default function LiveOperations() {
         <Card className="col-span-2 md:col-span-1">
           <CardContent className="flex h-full flex-col py-2">
             <span className="mb-1 text-[11px] font-medium text-muted-foreground">
-              Throughput · trend
+              {t("liveOps.throughputTrend")}
             </span>
             <div className="min-h-[64px] flex-1">
               <ThroughputChart />
@@ -153,7 +156,7 @@ export default function LiveOperations() {
         </Card>
         {gatesQ.isLoading && (
           <div className="col-span-full flex items-center gap-2 text-sm text-muted-foreground">
-            <Spinner /> loading gate KPIs…
+            <Spinner /> {t("liveOps.loadingGateKpis")}
           </div>
         )}
       </div>
@@ -201,21 +204,22 @@ export default function LiveOperations() {
 // legend card; an outside click (or the icon again) closes it. Contents
 // unchanged from the previous always-on legend.
 function FloatingLegend() {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useClickOutside(ref, () => setOpen(false), open);
   const items = [
-    { c: STATUS.ok, l: "free flow / on-target" },
-    { c: STATUS.warning, l: "moderate" },
-    { c: STATUS.critical, l: "congested / over-cap" },
-    { c: MAP_TOKENS.truckFill, l: "trucks (1:50)" },
+    { c: STATUS.ok, l: t("map.legendItem.freeFlow") },
+    { c: STATUS.warning, l: t("map.legendItem.moderate") },
+    { c: STATUS.critical, l: t("map.legendItem.congested") },
+    { c: MAP_TOKENS.truckFill, l: t("map.legendItem.trucks") },
   ];
   return (
     <div ref={ref} className="absolute bottom-3 left-3 z-10">
       {open && (
         <div className="mb-2 rounded-md border border-border bg-card/95 p-2 text-[11px] shadow-lg backdrop-blur">
           <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Legend
+            {t("map.legend")}
           </div>
           {items.map((i) => (
             <div key={i.l} className="flex items-center gap-2">
@@ -228,9 +232,9 @@ function FloatingLegend() {
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        aria-label="Toggle legend"
+        aria-label={t("map.toggleLegend")}
         aria-expanded={open}
-        title="Legend"
+        title={t("map.legend")}
         className="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-card/90 text-foreground shadow-md backdrop-blur transition hover:bg-muted"
       >
         <Info className="h-4 w-4" />

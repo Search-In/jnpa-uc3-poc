@@ -255,7 +255,7 @@ function EnrollmentDetail({
               <img
                 key={i}
                 src={src}
-                alt={`frame ${i + 1}`}
+                alt={`${t("enrollments.frame", "Frame")} ${i + 1}`}
                 className="h-24 w-24 rounded-lg border border-border object-cover"
               />
             ))}
@@ -263,7 +263,7 @@ function EnrollmentDetail({
         ) : rec.photo ? (
           <img
             src={rec.photo}
-            alt="reference"
+            alt={t("enrollments.referenceAlt", "Reference")}
             className="h-24 w-24 rounded-lg border border-border object-cover"
           />
         ) : (

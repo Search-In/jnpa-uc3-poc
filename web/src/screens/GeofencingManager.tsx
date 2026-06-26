@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import maplibregl, { Map as MlMap } from "maplibre-gl";
 import { TerraDraw, TerraDrawPolygonMode, TerraDrawSelectMode } from "terra-draw";
 import { TerraDrawMapLibreGLAdapter } from "terra-draw-maplibre-gl-adapter";
@@ -17,6 +18,7 @@ import { Pencil, MousePointer2, Save, Trash2 } from "lucide-react";
 // to /api/zones (Postgres) which the anomaly service then reads live. The
 // escalation timeline (5/15/30 min) is editable per zone.
 export default function GeofencingManager() {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const mapEl = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
@@ -161,14 +163,14 @@ export default function GeofencingManager() {
             variant={mode === "select" ? "default" : "ghost"}
             onClick={() => setDrawMode("select")}
           >
-            <MousePointer2 className="h-3.5 w-3.5" /> Select / edit
+            <MousePointer2 className="h-3.5 w-3.5" /> {t("geofencing.selectEdit")}
           </Button>
           <Button
             size="sm"
             variant={mode === "polygon" ? "default" : "ghost"}
             onClick={() => setDrawMode("polygon")}
           >
-            <Pencil className="h-3.5 w-3.5" /> Draw zone
+            <Pencil className="h-3.5 w-3.5" /> {t("geofencing.drawZone")}
           </Button>
         </div>
       </div>
@@ -176,25 +178,25 @@ export default function GeofencingManager() {
       <aside className="flex w-96 shrink-0 flex-col border-l border-border bg-card/40">
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <div>
-            <h2 className="text-sm font-semibold">Geo-fence zones</h2>
+            <h2 className="text-sm font-semibold">{t("geofencing.zonesTitle")}</h2>
             <p className="text-[11px] text-muted-foreground">
-              {zones.length} zones · anomaly service reads live
+              {t("geofencing.zonesSubtitle", { count: zones.length })}
             </p>
           </div>
           <Button size="sm" onClick={() => save.mutate()} disabled={!dirty || save.isPending}>
             {save.isPending ? <Spinner /> : <Save className="h-3.5 w-3.5" />}
-            Save
+            {t("common.save")}
           </Button>
         </div>
         {save.isSuccess && !dirty && (
           <div className="bg-severity-ok/15 px-4 py-1.5 text-xs text-severity-ok">
-            Saved to Postgres.
+            {t("geofencing.savedToPostgres")}
           </div>
         )}
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
           {zonesQ.isLoading && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Spinner /> loading…
+              <Spinner /> {t("common.loading")}
             </div>
           )}
           {zones.map((z) => (
@@ -228,16 +230,21 @@ function ZoneCard({
   onPatch: (p: Partial<Zone>) => void;
   onDelete: () => void;
 }) {
+  const { t } = useTranslation();
   const esc = zone.escalation || { warn_min: 5, notice_min: 15, challan_min: 30 };
   return (
     <Card>
       <CardHeader className="flex-row items-center justify-between">
         <CardTitle className="truncate">{zone.name}</CardTitle>
         <div className="flex items-center gap-2">
-          <Badge colour={zone.kind === "restricted" ? "#D55E00" : "#56B4E9"}>{zone.kind}</Badge>
+          <Badge colour={zone.kind === "restricted" ? "#D55E00" : "#56B4E9"}>
+            {zone.kind === "restricted"
+              ? t("geofencing.kindRestricted")
+              : t("geofencing.kindNoParking")}
+          </Badge>
           <button
             onClick={onDelete}
-            aria-label="delete zone"
+            aria-label={t("geofencing.deleteZone")}
             className="text-muted-foreground hover:text-severity-critical"
           >
             <Trash2 className="h-3.5 w-3.5" />
@@ -246,36 +253,36 @@ function ZoneCard({
       </CardHeader>
       <CardContent className="space-y-3">
         <label className="block text-[11px] text-muted-foreground">
-          Kind
+          {t("geofencing.kind")}
           <select
             value={zone.kind}
             onChange={(e) => onPatch({ kind: e.target.value })}
             className="mt-1 w-full rounded-md border border-border bg-background px-2 py-1 text-xs"
           >
-            <option value="no_parking">no_parking</option>
-            <option value="restricted">restricted</option>
+            <option value="no_parking">{t("geofencing.kindNoParking")}</option>
+            <option value="restricted">{t("geofencing.kindRestricted")}</option>
           </select>
         </label>
 
         <div>
           <div className="mb-1 text-[11px] text-muted-foreground">
-            Escalation timeline (minutes)
+            {t("geofencing.escalationTimeline")}
           </div>
           <div className="grid grid-cols-3 gap-2">
             <EscInput
-              label="Warn"
+              label={t("geofencing.warn")}
               colour="#E69F00"
               value={esc.warn_min}
               onChange={(v) => onPatch({ escalation: { ...esc, warn_min: v } })}
             />
             <EscInput
-              label="Notice"
+              label={t("geofencing.notice")}
               colour="#D55E00"
               value={esc.notice_min}
               onChange={(v) => onPatch({ escalation: { ...esc, notice_min: v } })}
             />
             <EscInput
-              label="Challan"
+              label={t("geofencing.challan")}
               colour="#D55E00"
               value={esc.challan_min}
               onChange={(v) => onPatch({ escalation: { ...esc, challan_min: v } })}

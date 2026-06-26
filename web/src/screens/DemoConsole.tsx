@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CalciteSegmentedControl,
@@ -47,6 +48,7 @@ function severityColour(sev?: FaultSeverity | null): string {
 }
 
 export default function DemoConsole() {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const { operatorBanner: wsBanner } = useSocket();
 
@@ -102,10 +104,8 @@ export default function DemoConsole() {
         <div className="flex items-center gap-2">
           <SlidersHorizontal className="h-5 w-5 text-primary" />
           <div>
-            <h1 className="text-lg font-semibold">Demo Console</h1>
-            <p className="text-sm text-muted-foreground">
-              Force fallback rungs, watch realism status, reset to clean baseline.
-            </p>
+            <h1 className="text-lg font-semibold">{t("nav.demo")}</h1>
+            <p className="text-sm text-muted-foreground">{t("demo.subtitle")}</p>
           </div>
         </div>
         <CalciteButton
@@ -116,7 +116,9 @@ export default function DemoConsole() {
           disabled={!anyForced || clear.isPending || undefined}
           onClick={() => clear.mutate(undefined)}
         >
-          {clear.isPending && clear.variables === undefined ? "Resetting…" : "Reset all faults"}
+          {clear.isPending && clear.variables === undefined
+            ? t("demo.resetting")
+            : t("demo.resetAllFaults")}
         </CalciteButton>
       </div>
 
@@ -128,11 +130,13 @@ export default function DemoConsole() {
           icon="exclamation-mark-triangle"
           scale="m"
         >
-          <div slot="title">Operator banner — fault injection active</div>
+          <div slot="title">{t("demo.operatorBannerTitle")}</div>
           <div slot="message">
             {banner && banner.domains.length > 0
-              ? `Forced chains: ${banner.domains.join(", ")} · severity ${banner.severity ?? "—"}`
-              : "No faults forced."}
+              ? `${t("demo.forcedChains")}: ${banner.domains.join(", ")} · ${t("demo.severity")} ${
+                  banner.severity ?? "—"
+                }`
+              : t("demo.noFaultsForced")}
           </div>
         </CalciteNotice>
       </div>
@@ -161,7 +165,7 @@ export default function DemoConsole() {
 
                 {faultsQ.isLoading ? (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Spinner /> loading rungs…
+                    <Spinner /> {t("demo.loadingRungs")}
                   </div>
                 ) : (
                   <CalciteSegmentedControl
@@ -188,7 +192,10 @@ export default function DemoConsole() {
 
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] text-muted-foreground">
-                    Forced: <span className="font-medium text-foreground">{forced ?? "none"}</span>
+                    {t("demo.forced")}:{" "}
+                    <span className="font-medium text-foreground">
+                      {forced ?? t("demo.none")}
+                    </span>
                   </span>
                   <CalciteButton
                     appearance="outline"
@@ -197,7 +204,7 @@ export default function DemoConsole() {
                     disabled={!forced || clear.isPending || undefined}
                     onClick={() => clear.mutate(chain.domain)}
                   >
-                    Clear
+                    {t("demo.clear")}
                   </CalciteButton>
                 </div>
               </CardContent>
@@ -210,12 +217,12 @@ export default function DemoConsole() {
       <div className="grid grid-cols-1 gap-3 px-4 md:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>ANPR / OCR accuracy</CardTitle>
+            <CardTitle>{t("demo.ocrTitle")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
             {ocrQ.isLoading ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Spinner /> probing…
+                <Spinner /> {t("demo.probing")}
               </div>
             ) : ocrQ.data ? (
               (() => {
@@ -233,17 +240,17 @@ export default function DemoConsole() {
                         {(acc * 100).toFixed(1)}%
                       </span>
                       <span className="text-xs text-muted-foreground">
-                        OCR accuracy · CLEAR · target ≥{(target * 100).toFixed(0)}%
+                        {t("demo.ocrAccuracyClear")} · {t("demo.target")} ≥
+                        {(target * 100).toFixed(0)}%
                       </span>
                     </div>
                     {degraded ? (
                       <CalciteNotice open kind="danger" icon="exclamation-mark-triangle" scale="s">
-                        <div slot="title">DEGRADED MODEL — fallback OCR active</div>
+                        <div slot="title">{t("demo.degradedModelTitle")}</div>
                         <div slot="message">
-                          No CRNN weights loaded; this is the deterministic fallback (~
-                          {(acc * 100).toFixed(0)}%), <strong>not</strong> the committed ≥
-                          {(target * 100).toFixed(0)}%. The CRNN architecture is proven; ≥95% is a
-                          post-award real-data/weights tuning item.
+                          {t("demo.degradedModelMsgPre")} (~{(acc * 100).toFixed(0)}%),{" "}
+                          <strong>{t("demo.not")}</strong> {t("demo.degradedModelMsgCommitted")} ≥
+                          {(target * 100).toFixed(0)}%. {t("demo.degradedModelMsgPost")}
                         </div>
                       </CalciteNotice>
                     ) : null}
@@ -252,9 +259,9 @@ export default function DemoConsole() {
               })()
             ) : (
               <p className="text-sm text-muted-foreground">
-                Eval endpoint not exposed — target is{" "}
-                <span className="font-medium text-foreground">≥95% in CLEAR</span> per the
-                per-condition spec.
+                {t("demo.ocrNoEndpointPre")}{" "}
+                <span className="font-medium text-foreground">{t("demo.ocrNoEndpointTarget")}</span>{" "}
+                {t("demo.ocrNoEndpointPost")}
               </p>
             )}
           </CardContent>
@@ -262,12 +269,12 @@ export default function DemoConsole() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Congestion forecaster F1</CardTitle>
+            <CardTitle>{t("demo.f1Title")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
             {f1Q.isLoading ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Spinner /> probing…
+                <Spinner /> {t("demo.probing")}
               </div>
             ) : f1Q.data ? (
               (() => {
@@ -284,16 +291,16 @@ export default function DemoConsole() {
                         {f1.toFixed(4)}
                       </span>
                       <span className="text-xs text-muted-foreground">
-                        F1 · NH-348 build-up forecast · target ≥{target.toFixed(2)}
+                        {t("demo.f1ForecastLabel")} · {t("demo.target")} ≥{target.toFixed(2)}
                       </span>
                     </div>
                     {!met ? (
                       <CalciteNotice open kind="warning" icon="exclamation-mark-triangle" scale="s">
-                        <div slot="title">Below target — tuning item</div>
+                        <div slot="title">{t("demo.belowTargetTitle")}</div>
                         <div slot="message">
-                          F1 {f1.toFixed(4)} is under the {target.toFixed(2)} commitment. The
-                          GNN+LSTM architecture is proven; closing the gap is a retrain/retune item,
-                          not an architecture gap.
+                          {t("demo.belowTargetMsgPre")} {f1.toFixed(4)}{" "}
+                          {t("demo.belowTargetMsgMid")} {target.toFixed(2)}{" "}
+                          {t("demo.belowTargetMsgPost")}
                         </div>
                       </CalciteNotice>
                     ) : null}
@@ -302,8 +309,9 @@ export default function DemoConsole() {
               })()
             ) : (
               <p className="text-sm text-muted-foreground">
-                Metrics endpoint not exposed — the forecast remains{" "}
-                <span className="font-medium text-foreground">advisory</span> only.
+                {t("demo.f1NoEndpointPre")}{" "}
+                <span className="font-medium text-foreground">{t("demo.f1NoEndpointAdvisory")}</span>{" "}
+                {t("demo.f1NoEndpointPost")}
               </p>
             )}
           </CardContent>
@@ -312,7 +320,7 @@ export default function DemoConsole() {
 
       {/* ---- KPI strip deltas (reuse existing component + adapter) ---- */}
       <div className="px-4 pt-4">
-        <h2 className="mb-2 text-sm font-semibold">KPI strip — deltas vs baseline</h2>
+        <h2 className="mb-2 text-sm font-semibold">{t("demo.kpiStripTitle")}</h2>
         <KpiStrip />
       </div>
 
@@ -320,9 +328,9 @@ export default function DemoConsole() {
       <div className="px-4 pt-4">
         <Card>
           <CardHeader className="flex-row items-center justify-between">
-            <CardTitle>Mode & decision-path legend</CardTitle>
+            <CardTitle>{t("demo.modeLegendTitle")}</CardTitle>
             <CalciteChip scale="s" kind={DATA_MODE === "live" ? "brand" : "neutral"}>
-              {DATA_MODE.toUpperCase()} MODE
+              {DATA_MODE.toUpperCase()} {t("demo.mode")}
             </CalciteChip>
           </CardHeader>
           <CardContent className="flex flex-wrap items-center gap-3">
@@ -330,7 +338,7 @@ export default function DemoConsole() {
               <DecisionPathBadge key={p} path={p} />
             ))}
             <span className="text-[11px] text-muted-foreground">
-              Provenance badges follow the same CB-safe palette as the chains above.
+              {t("demo.provenanceBadgesNote")}
             </span>
           </CardContent>
         </Card>
@@ -339,13 +347,10 @@ export default function DemoConsole() {
       {/* ---- Scenario triggers live in the What-If Console (wired) ---- */}
       <div className="px-4 pt-4">
         <CalciteNotice open kind="brand" icon="lightbulb" scale="s">
-          <div slot="title">Run scenarios from the What-If Console</div>
+          <div slot="title">{t("demo.runScenariosTitle")}</div>
           <div slot="message">
-            TFC-1 (gate closure), TFC-2 (wrong-way @ Karal Phata) and TFC-3 (cross-twin DPD release)
-            are fully wired and fireable from the <strong>What-If Console</strong> screen. The
-            fault-injection chains above are the live presenter controls here. The roadmap controls
-            below (feed/clock/fleet) are <strong>not wired</strong> and are disabled so nothing dead
-            can be clicked on stage.
+            {t("demo.runScenariosMsgPre")} <strong>{t("demo.whatIfConsole")}</strong>{" "}
+            {t("demo.runScenariosMsgPost")}
           </div>
         </CalciteNotice>
       </div>
@@ -354,15 +359,12 @@ export default function DemoConsole() {
       <div className="p-4">
         <CalciteBlock
           collapsible
-          heading="Roadmap controls (not wired)"
-          description="Disabled placeholders for the intended presenter surface — no backend yet."
+          heading={t("demo.roadmapControlsHeading")}
+          description={t("demo.roadmapControlsDescription")}
         >
           <div className="flex items-center gap-2 px-1 pb-2">
             <Joystick className="h-4 w-4 text-muted-foreground" aria-hidden />
-            <span className="text-[11px] text-muted-foreground">
-              Shown as a roadmap only; controls are disabled. Use the What-If Console to drive a
-              demo.
-            </span>
+            <span className="text-[11px] text-muted-foreground">{t("demo.roadmapControlsNote")}</span>
           </div>
           <PreviewControls />
         </CalciteBlock>
@@ -379,25 +381,26 @@ function PreviewControls() {
   // Static, NON-interactive placeholders. These controls are not wired to any
   // backend; they are disabled so nothing dead can be clicked during a demo.
   // Drive an actual demo from the What-If Console (TFC-1/2/3 are wired there).
+  const { t } = useTranslation();
   return (
     <div className="grid grid-cols-1 gap-4 opacity-60 md:grid-cols-3" aria-disabled>
       <div className="space-y-1.5">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-medium">Feeds</span>
+          <span className="text-xs font-medium">{t("demo.feeds")}</span>
           <CalciteChip scale="s" kind="neutral">
-            not wired
+            {t("demo.notWired")}
           </CalciteChip>
         </div>
         <CalciteButton appearance="outline" kind="neutral" scale="s" iconStart="play" disabled>
-          Start / stop feeds
+          {t("demo.startStopFeeds")}
         </CalciteButton>
       </div>
 
       <div className="space-y-1.5">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-medium">Demo clock</span>
+          <span className="text-xs font-medium">{t("demo.demoClock")}</span>
           <CalciteChip scale="s" kind="neutral">
-            not wired
+            {t("demo.notWired")}
           </CalciteChip>
         </div>
         <input
@@ -409,16 +412,18 @@ function PreviewControls() {
           readOnly
           disabled
           className="w-full"
-          aria-label="Demo clock speed multiplier (disabled)"
+          aria-label={t("demo.demoClockAria")}
         />
-        <span className="text-[11px] text-muted-foreground tabular-nums">1×–60× (roadmap)</span>
+        <span className="text-[11px] text-muted-foreground tabular-nums">
+          1×–60× ({t("demo.roadmap")})
+        </span>
       </div>
 
       <div className="space-y-1.5">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-medium">Fleet size</span>
+          <span className="text-xs font-medium">{t("demo.fleetSize")}</span>
           <CalciteChip scale="s" kind="neutral">
-            not wired
+            {t("demo.notWired")}
           </CalciteChip>
         </div>
         <input
@@ -430,10 +435,10 @@ function PreviewControls() {
           readOnly
           disabled
           className="w-full"
-          aria-label="Fleet size (disabled)"
+          aria-label={t("demo.fleetSizeAria")}
         />
         <span className="text-[11px] text-muted-foreground tabular-nums">
-          20,000–30,000 (roadmap)
+          20,000–30,000 ({t("demo.roadmap")})
         </span>
       </div>
     </div>

@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { getAdapter } from "@/data";
 import { useScenario, SCENARIO_LABELS, type ScenarioId } from "@/hooks/ScenarioContext";
@@ -45,6 +46,7 @@ const SCENARIOS: {
 ];
 
 export default function WhatIfConsole() {
+  const { t } = useTranslation();
   const { scenario, setScenario, reset: resetBanner } = useScenario();
   const { scenarioSteps } = useSocket();
   const [guided, setGuided] = useState(true);
@@ -113,10 +115,8 @@ export default function WhatIfConsole() {
         <div className="flex items-center gap-2">
           <FlaskConical className="h-5 w-5 text-primary" />
           <div>
-            <h1 className="text-lg font-semibold">What-If Console</h1>
-            <p className="text-sm text-muted-foreground">
-              Trigger a scenario, watch the reactive chain, reset to baseline.
-            </p>
+            <h1 className="text-lg font-semibold">{t("nav.whatIf")}</h1>
+            <p className="text-sm text-muted-foreground">{t("whatIf.subtitle")}</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -124,10 +124,10 @@ export default function WhatIfConsole() {
             variant={guided ? "default" : "outline"}
             size="sm"
             onClick={() => setGuided((g) => !g)}
-            title="Show the step-by-step guided narration while a scenario runs"
+            title={t("whatIf.guidedTooltip")}
           >
             <Sparkles className="h-3.5 w-3.5" />
-            Guided {guided ? "on" : "off"}
+            {guided ? t("whatIf.guidedOn") : t("whatIf.guidedOff")}
           </Button>
           <Button
             variant="outline"
@@ -136,7 +136,7 @@ export default function WhatIfConsole() {
             disabled={resetRun.isPending || !activeRunner}
           >
             {resetRun.isPending ? <Spinner /> : <RotateCcw className="h-3.5 w-3.5" />}
-            Reset to baseline
+            {t("whatIf.resetToBaseline")}
           </Button>
         </div>
       </div>
@@ -148,10 +148,10 @@ export default function WhatIfConsole() {
             <Card key={s.id} className={active ? "border-primary" : ""}>
               <CardHeader className="flex-row items-center justify-between">
                 <CardTitle>{SCENARIO_LABELS[s.id]}</CardTitle>
-                {active && <Badge colour="#56B4E9">running</Badge>}
+                {active && <Badge colour="#56B4E9">{t("whatIf.running")}</Badge>}
               </CardHeader>
               <CardContent className="space-y-3">
-                <p className="text-xs text-muted-foreground">{s.blurb}</p>
+                <p className="text-xs text-muted-foreground">{t(`whatIf.blurb.${s.id}`)}</p>
                 <div className="flex flex-wrap gap-1.5">
                   {Object.entries(s.params).map(([key, value]) => (
                     <span
@@ -169,7 +169,7 @@ export default function WhatIfConsole() {
                   ) : (
                     <Play className="h-3.5 w-3.5" />
                   )}
-                  Run {s.id}
+                  {t("whatIf.run", { id: s.id })}
                 </Button>
               </CardContent>
             </Card>
@@ -184,7 +184,7 @@ export default function WhatIfConsole() {
       >
         <div className="mb-2 flex items-center justify-between">
           <h2 className="text-sm font-semibold">
-            Reactive timeline {activeRunner ? `· ${activeRunner.toUpperCase()}` : ""}
+            {t("whatIf.reactiveTimeline")} {activeRunner ? `· ${activeRunner.toUpperCase()}` : ""}
           </h2>
           {traceId && (
             <a
@@ -194,18 +194,16 @@ export default function WhatIfConsole() {
               className="inline-flex items-center gap-1 text-xs text-severity-info hover:underline"
               title={traceId}
             >
-              <ExternalLink className="h-3.5 w-3.5" /> Open trace in Jaeger
+              <ExternalLink className="h-3.5 w-3.5" /> {t("whatIf.openTrace")}
             </a>
           )}
         </div>
 
         {!activeHandle ? (
-          <p className="text-sm text-muted-foreground">
-            Run a scenario to see its step-by-step storyline.
-          </p>
+          <p className="text-sm text-muted-foreground">{t("whatIf.emptyTimeline")}</p>
         ) : steps.length === 0 ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Spinner /> waiting for steps…
+            <Spinner /> {t("whatIf.waitingForSteps")}
           </div>
         ) : (
           <ol className="relative space-y-3 pl-6">

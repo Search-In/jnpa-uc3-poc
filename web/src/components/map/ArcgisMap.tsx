@@ -18,6 +18,7 @@
 // Colours come exclusively from src/lib/tokens.ts (single source of truth).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 // Register the <arcgis-map> custom element + bundle its runtime locally. The
 // React wrapper below only creates the React→element binding; this side-effect
 // import is what actually defines the element (otherwise it never upgrades).
@@ -144,6 +145,7 @@ export function ArcgisMap({
   onViewReady,
   className,
 }: ArcgisMapProps) {
+  const { t } = useTranslation();
   const viewRef = useRef<MapView | null>(null);
   // Flips true once the MapView is ready. Because /live remounts each time the
   // guided tour navigates to it, the spotlight effect must (re)run after the view
@@ -678,9 +680,9 @@ export function ArcgisMap({
         <button
           type="button"
           onClick={() => setLayersOpen((o) => !o)}
-          aria-label="Toggle map layers"
+          aria-label={t("map.toggleLayers")}
           aria-expanded={layersOpen}
-          title="Layers"
+          title={t("map.layersTitle")}
           className="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-card/90 text-foreground shadow-md backdrop-blur transition hover:bg-muted"
         >
           <LayersIcon className="h-4 w-4" />
@@ -689,12 +691,12 @@ export function ArcgisMap({
           <div className="mt-2 w-52 rounded-md border border-border bg-card/95 p-2 shadow-lg backdrop-blur">
             <div className="mb-1 flex items-center justify-between px-1">
               <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                Layers
+                {t("map.layersTitle")}
               </span>
               <button
                 type="button"
                 onClick={() => setLayersOpen(false)}
-                aria-label="Close layers panel"
+                aria-label={t("map.closeLayers")}
                 className="text-muted-foreground transition hover:text-foreground"
               >
                 <XIcon className="h-3.5 w-3.5" />
@@ -711,7 +713,7 @@ export function ArcgisMap({
                   onChange={() => toggleLayer(d.key)}
                   className="h-3.5 w-3.5 accent-severity-info"
                 />
-                {d.label}
+                {t(`map.layer.${d.key}`)}
               </label>
             ))}
           </div>

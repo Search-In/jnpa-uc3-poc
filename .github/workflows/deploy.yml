@@ -74,6 +74,11 @@ jobs:
             docker image prune -af || true
             docker builder prune -af || true
             docker network prune -f || true
+            # Orphaned anonymous volumes from prior container generations (e.g. the
+            # old Kafka log dir) are NOT removed by image/builder prune and can hold
+            # many GB. Only DANGLING (unattached) volumes are removed, so live data
+            # (pgdata, minio-data, kafka-data, ...) is safe.
+            docker volume prune -f || true
             # Reclaim host-level space too — the in-container build's transient
             # /tmp wheel cache lives on this same root volume, so journal logs and
             # the apt cache compete with it for space.
@@ -184,27 +189,44 @@ jobs:
             fi
             echo "Auth posture OK: enforcement on, non-default secret, dev-tokens off."
 
-            # 2. Build the heavy AI images ONE AT A TIME. Each pulls the CPU torch
-            #    wheel + a multi-hundred-MB ML stack (ultralytics/opencv/scipy/
-            #    torchvision/paddle) and unpacks wheels into a transient /tmp cache
-            #    on this root volume. Building them in parallel (the default for
-            #    `up --build`) spikes peak disk past the volume size -> pip fails
-            #    with "No space left on device". Serialising caps that transient
-            #    peak to one heavy build at a time. Do NOT prune the build cache
-            #    here: the `up --build` below must cache-hit these images instead
-            #    of rebuilding all three in parallel (which re-creates the spike).
-            #    Heaviest first (anpr: torch+torchvision+paddle+paddleocr+ultralytics)
-            #    so it builds with the most free disk, before the others commit.
+            # 2. Build EVERY service ONE AT A TIME. The root volume is too small to
+            #    absorb many concurrent `pip install` /tmp unpacks: the default
+            #    parallel `up --build` exhausts it (Errno 28) even on tiny services
+            #    like asyncpg/setuptools. Serialising caps the transient peak to a
+            #    single build at a time.
+            COMPOSE="docker compose -f docker-compose.yml -f docker-compose.aws.yml"
+
+            # 2a. Heavy AI images first (each pulls torch/torchvision/paddle/
+            #     ultralytics + opencv) — built when the most disk is free, before
+            #     the other images commit their layers.
             for svc in anpr anomaly congestion; do
               echo "== building ${svc} =="
-              docker compose -f docker-compose.yml -f docker-compose.aws.yml build "${svc}"
+              ${COMPOSE} build "${svc}"
               df -h / || true
             done
 
-            # 2b. Start the stack. --build rebuilds the light services with fresh
-            #     code; the heavy AI images above are served from BuildKit cache
-            #     (instant, no torch re-download, no parallel disk spike).
-            docker compose -f docker-compose.yml -f docker-compose.aws.yml up -d --build
+            # 2b. Reclaim the heavy BuildKit cache (torch/paddle wheels, several GB)
+            #     now that those images are committed. The committed images survive;
+            #     we start with `up -d` (NOT --build) below, so the cache is no
+            #     longer needed and is pure reclaimable space for the builds below.
+            docker builder prune -af || true
+            df -h / || true
+
+            # 2c. Build the remaining (light) services one at a time too. Image-only
+            #     services (postgres, redis, kafka, ...) have no build context and
+            #     are skipped by `build`. Prune dangling cache between each to keep
+            #     the transient footprint flat across the whole sweep.
+            for svc in $(${COMPOSE} config --services); do
+              case "${svc}" in anpr|anomaly|congestion) continue;; esac
+              echo "== building ${svc} =="
+              ${COMPOSE} build "${svc}"
+              docker builder prune -f || true
+            done
+
+            # 2d. Start the stack. Everything is already built above, so DO NOT pass
+            #     --build (that would rebuild all services in parallel and re-create
+            #     the disk spike). `up -d` just creates/starts the containers.
+            ${COMPOSE} up -d
 
             # 3. Reclaim space again post-build (old image layers + build cache).
             docker image prune -af || true

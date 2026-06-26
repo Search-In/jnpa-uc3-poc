@@ -75,13 +75,17 @@ export function IdentityPanel() {
 
   const enrol = useMutation({
     mutationFn: (image: string) => getAdapter().identityEnrol(selected, image),
-    onSuccess: () => setNotice({ kind: "ok", text: "Reference template enrolled for this driver." }),
+    onSuccess: () =>
+      setNotice({ kind: "ok", text: "Reference template enrolled for this driver." }),
   });
 
   async function captureValidated(): Promise<string | null> {
     const v = await cam.validate();
     if (!v.ok) {
-      setNotice({ kind: "warn", text: VALIDATION_TEXT[v.reason] ?? "Face check failed — try again." });
+      setNotice({
+        kind: "warn",
+        text: VALIDATION_TEXT[v.reason] ?? "Face check failed — try again.",
+      });
       return null;
     }
     const image = cam.capture();
@@ -197,7 +201,11 @@ export function IdentityPanel() {
             {/* Camera + verify controls */}
             <div className="flex flex-wrap items-center gap-2">
               {!live ? (
-                <Button size="sm" onClick={() => void cam.start()} disabled={cam.status === "requesting"}>
+                <Button
+                  size="sm"
+                  onClick={() => void cam.start()}
+                  disabled={cam.status === "requesting"}
+                >
                   <Camera className="h-4 w-4" /> Start camera
                 </Button>
               ) : (
@@ -206,7 +214,12 @@ export function IdentityPanel() {
                     {verify.isPending ? <Spinner /> : <ScanFace className="h-4 w-4" />}
                     Capture &amp; verify
                   </Button>
-                  <Button size="sm" variant="outline" onClick={() => void onEnrol()} disabled={busy || !selected}>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void onEnrol()}
+                    disabled={busy || !selected}
+                  >
                     {enrol.isPending ? <Spinner /> : <UserCheck className="h-4 w-4" />}
                     Enrol reference
                   </Button>

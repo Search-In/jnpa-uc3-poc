@@ -171,16 +171,13 @@ export function DriverSessionProvider({
     setLoading(false);
   }, [deviceId, plate, commit]);
 
-  const applyEnrolment = useCallback(
-    (patch: Partial<DriverContext>) => {
-      setSession((prev) => {
-        const next = { ...prev, ...patch, deviceId: prev.deviceId };
-        persist(next);
-        return next;
-      });
-    },
-    [],
-  );
+  const applyEnrolment = useCallback((patch: Partial<DriverContext>) => {
+    setSession((prev) => {
+      const next = { ...prev, ...patch, deviceId: prev.deviceId };
+      persist(next);
+      return next;
+    });
+  }, []);
 
   // Load exactly once per device — only when nothing was hydrated from storage.
   useEffect(() => {

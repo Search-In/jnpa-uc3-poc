@@ -53,14 +53,15 @@ export default function Home() {
         <div className="home-context">
           <Row k={t("home.driverId")} v={session.driverId || t("common.noData")} />
           <Row k={t("home.vehicle")} v={session.vehicle || t("common.noData")} />
-          <Row
-            k={t("home.lastVerified")}
-            v={verified ? t("home.today") : t("common.noData")}
-          />
+          <Row k={t("home.lastVerified")} v={verified ? t("home.today") : t("common.noData")} />
         </div>
 
         {session.status !== "ACTIVE" && (
-          <button className="btn primary" style={{ marginTop: 14 }} onClick={() => navigate("/enrol")}>
+          <button
+            className="btn primary"
+            style={{ marginTop: 14 }}
+            onClick={() => navigate("/enrol")}
+          >
             {session.status === "UNVERIFIED" ? t("home.completeEnrol") : t("home.viewEnrol")}
           </button>
         )}

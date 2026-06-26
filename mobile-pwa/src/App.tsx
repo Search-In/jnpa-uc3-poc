@@ -66,7 +66,11 @@ function TopBar() {
     <header className="topbar">
       <div className="topbar-title">
         {!onHome && (
-          <button className="topbar-home" aria-label={t("screens.home")} onClick={() => navigate("/home")}>
+          <button
+            className="topbar-home"
+            aria-label={t("screens.home")}
+            onClick={() => navigate("/home")}
+          >
             ‹
           </button>
         )}

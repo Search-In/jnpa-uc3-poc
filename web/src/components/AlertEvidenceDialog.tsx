@@ -64,9 +64,7 @@ export function AlertEvidenceDialog({
                   <span className="font-medium">{alert.gate_id ?? "—"}</span>
                 </Field>
                 <Field k={t("notifications.zone", { defaultValue: "Zone" })}>
-                  <span className="font-medium">
-                    {(alert.payload?.zone_id as string) ?? "—"}
-                  </span>
+                  <span className="font-medium">{(alert.payload?.zone_id as string) ?? "—"}</span>
                 </Field>
               </div>
 

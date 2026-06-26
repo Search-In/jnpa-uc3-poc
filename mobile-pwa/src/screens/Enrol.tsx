@@ -90,7 +90,10 @@ export default function Enrol({ plate }: { deviceId: string; plate?: string | nu
     if (images.length >= MAX_FACES) return;
     const v = await cam.validate();
     if (!v.ok) {
-      setNotice({ kind: "warn", text: VALIDATION_TEXT[v.reason] ?? "Face check failed — try again." });
+      setNotice({
+        kind: "warn",
+        text: VALIDATION_TEXT[v.reason] ?? "Face check failed — try again.",
+      });
       return;
     }
     const frame = cam.capture();
@@ -207,8 +210,7 @@ export default function Enrol({ plate }: { deviceId: string; plate?: string | nu
     };
   }, [step, profile.driver_id, applyEnrolment]);
 
-  const profileValid =
-    profile.driver_id.trim() && profile.name.trim() && profile.license_no.trim();
+  const profileValid = profile.driver_id.trim() && profile.name.trim() && profile.license_no.trim();
 
   // ---------------------------------------------------------------- submitted view
   if (step === "submitted") {
@@ -276,7 +278,9 @@ export default function Enrol({ plate }: { deviceId: string; plate?: string | nu
         </p>
       </Card>
 
-      {notice && <div className={`banner ${notice.kind === "ok" ? "" : "warn"}`}>{notice.text}</div>}
+      {notice && (
+        <div className={`banner ${notice.kind === "ok" ? "" : "warn"}`}>{notice.text}</div>
+      )}
 
       {step === "profile" && (
         <Card title={t("enrol.completeProfile")}>
@@ -298,13 +302,21 @@ export default function Enrol({ plate }: { deviceId: string; plate?: string | nu
               <input value={profile.name} onChange={set("name")} readOnly={lockName} />
             </Field>
             <Field label={t("enrol.license")} required>
-              <input value={profile.license_no} onChange={set("license_no")} placeholder="MH04 ..." />
+              <input
+                value={profile.license_no}
+                onChange={set("license_no")}
+                placeholder="MH04 ..."
+              />
             </Field>
             <Field label={t("enrol.mobile")}>
               <input value={profile.mobile} onChange={set("mobile")} inputMode="tel" />
             </Field>
             <Field label={t("enrol.vehicle")} locked={lockVehicle}>
-              <input value={profile.vehicle_no} onChange={set("vehicle_no")} readOnly={lockVehicle} />
+              <input
+                value={profile.vehicle_no}
+                onChange={set("vehicle_no")}
+                readOnly={lockVehicle}
+              />
             </Field>
             <Field label={t("enrol.aadhaar")}>
               <input value={profile.aadhaar} onChange={set("aadhaar")} inputMode="numeric" />
@@ -354,7 +366,11 @@ export default function Enrol({ plate }: { deviceId: string; plate?: string | nu
         <Card title={t("enrol.consentTitle")}>
           <div className="banner">{t("enrol.consentBody")}</div>
           <label className="enrol-consent">
-            <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
+            <input
+              type="checkbox"
+              checked={consent}
+              onChange={(e) => setConsent(e.target.checked)}
+            />
             <span>{t("enrol.consentCheckbox")}</span>
           </label>
           <div className="btn-row" style={{ marginTop: 12 }}>
@@ -383,7 +399,7 @@ export default function Enrol({ plate }: { deviceId: string; plate?: string | nu
                   : cam.status === "denied"
                     ? t("enrol.cameraDenied")
                     : cam.status === "error"
-                      ? cam.error ?? t("enrol.cameraError")
+                      ? (cam.error ?? t("enrol.cameraError"))
                       : t("enrol.cameraOff")}
               </div>
             )}
@@ -417,7 +433,11 @@ export default function Enrol({ plate }: { deviceId: string; plate?: string | nu
                 {t("enrol.capture")} ({images.length}/{MAX_FACES})
               </button>
             )}
-            <button className="btn ghost" onClick={() => cam.stop()} disabled={cam.status !== "live"}>
+            <button
+              className="btn ghost"
+              onClick={() => cam.stop()}
+              disabled={cam.status !== "live"}
+            >
               {t("enrol.stopCamera")}
             </button>
           </div>
@@ -499,7 +519,12 @@ function Field({
       <span>
         {label}
         {required ? <em> *</em> : null}
-        {locked ? <span className="enrol-lock" aria-hidden> 🔒</span> : null}
+        {locked ? (
+          <span className="enrol-lock" aria-hidden>
+            {" "}
+            🔒
+          </span>
+        ) : null}
       </span>
       {children}
     </label>

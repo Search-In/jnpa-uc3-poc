@@ -73,7 +73,12 @@ export default function PoliceReports() {
       {/* filters */}
       <div className="grid grid-cols-2 gap-3 border-b border-border p-4 md:grid-cols-5">
         <FilterSelect label={t("reports.kind")} value={kind} onChange={setKind} options={KINDS} />
-        <FilterSelect label={t("notifications.gate")} value={gate} onChange={setGate} options={GATES} />
+        <FilterSelect
+          label={t("notifications.gate")}
+          value={gate}
+          onChange={setGate}
+          options={GATES}
+        />
         <FilterSelect
           label={t("notifications.severity")}
           value={severity}
@@ -127,7 +132,11 @@ export default function PoliceReports() {
                         {inc.rc?.owner_name_masked ?? "—"}
                       </td>
                       <td className="px-4 py-2 text-right">
-                        {inc.evidence_url ? <span className="text-severity-info">{t("reports.photo")}</span> : "—"}
+                        {inc.evidence_url ? (
+                          <span className="text-severity-info">{t("reports.photo")}</span>
+                        ) : (
+                          "—"
+                        )}
                       </td>
                     </tr>
                   ))}

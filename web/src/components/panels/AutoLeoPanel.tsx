@@ -128,7 +128,9 @@ export function AutoLeoPanel() {
                 key={r.container_no}
                 row={r}
                 selected={focus.alert?.id === leoFocusId(r.container_no)}
-                onSelect={() => focusOnMap({ id: leoFocusId(r.container_no), lat: r.lat, lon: r.lon })}
+                onSelect={() =>
+                  focusOnMap({ id: leoFocusId(r.container_no), lat: r.lat, lon: r.lon })
+                }
               />
             ))}
           </div>

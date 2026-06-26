@@ -60,7 +60,11 @@ export function TasWidget() {
         {/* Active / Rescheduled / Pending slot counts */}
         <div className="grid grid-cols-3 gap-2">
           <Stat label={t("tas.active")} value={active} colour={STATUS_COLOUR.BOOKED} />
-          <Stat label={t("tas.rescheduled")} value={rescheduled} colour={STATUS_COLOUR.RESCHEDULED} />
+          <Stat
+            label={t("tas.rescheduled")}
+            value={rescheduled}
+            colour={STATUS_COLOUR.RESCHEDULED}
+          />
           <Stat label={t("tas.pending")} value={pending} colour="#56B4E9" />
         </div>
 

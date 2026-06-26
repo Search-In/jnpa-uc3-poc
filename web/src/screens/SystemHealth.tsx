@@ -197,7 +197,9 @@ function LogDrawer({
         {drawer && (
           <>
             <DialogHeader>
-              <DialogTitle>{t("health.decisionLog")} · {drawer.title}</DialogTitle>
+              <DialogTitle>
+                {t("health.decisionLog")} · {drawer.title}
+              </DialogTitle>
             </DialogHeader>
             <div className="p-4">
               {q.isLoading ? (
@@ -205,9 +207,7 @@ function LogDrawer({
                   <Spinner /> {t("health.loadingDecisions")}
                 </div>
               ) : rows.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  {t("health.noRecentDecisions")}
-                </p>
+                <p className="text-sm text-muted-foreground">{t("health.noRecentDecisions")}</p>
               ) : (
                 <ul className="space-y-1.5">
                   {rows.slice(0, 100).map((d, i) => (

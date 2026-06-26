@@ -62,7 +62,9 @@ function KpiCard({ k }: { k: KpiResult }) {
         </span>
         <div className="flex items-baseline gap-1">
           <span className="text-xl font-semibold tabular-nums">{k.value}</span>
-          <span className="text-[11px] text-muted-foreground">{t(`kpiUnit.${k.unit}`, k.unit)}</span>
+          <span className="text-[11px] text-muted-foreground">
+            {t(`kpiUnit.${k.unit}`, k.unit)}
+          </span>
           <span
             className="ml-auto text-xs font-medium tabular-nums"
             style={{ color: colour }}

@@ -98,7 +98,7 @@ class ScenarioHandle:
                 """
                 INSERT INTO jnpa.scenario_steps
                     (handle_id, step_no, ts, title, status, trigger, detail)
-                VALUES (:hid, :no, :ts, :title, :status, :trigger, CAST(:detail AS jsonb))
+                VALUES (:hid, :no, CAST(:ts AS timestamptz), :title, :status, :trigger, CAST(:detail AS jsonb))
                 """,
                 {"hid": self.handle_id, "no": s.step_no, "ts": s.ts, "title": s.title,
                  "status": s.status, "trigger": s.trigger, "detail": json.dumps(s.detail)},
@@ -134,9 +134,13 @@ class ScenarioHandle:
             "trace_id": self.trace_id,
         }
         url = self.cfg.gateway_url.rstrip("/") + "/api/scenario_step"
+        headers = (
+            {"X-Internal-Token": self.cfg.internal_token}
+            if self.cfg.internal_token else None
+        )
         try:
             async with httpx.AsyncClient(timeout=self.cfg.upstream_timeout_s) as c:
-                await c.post(url, json=payload)
+                await c.post(url, json=payload, headers=headers)
         except httpx.HTTPError as exc:
             log.debug("step_broadcast_failed", error=str(exc))
 

@@ -69,8 +69,16 @@ class Upstreams:
     async def _req(self, method: str, base: str, path: str,
                    json: Any = None, params: Optional[dict] = None) -> Optional[dict]:
         url = base.rstrip("/") + path
+        # Authenticate gateway-bound calls when a shared internal token is set
+        # (the gateway requires auth in production). Harmless on the other
+        # services (truck-sim/congestion/anomaly), which ignore the header.
+        headers = (
+            {"X-Internal-Token": self.cfg.internal_token}
+            if base == self.cfg.gateway_url and self.cfg.internal_token
+            else None
+        )
         try:
-            resp = await self.http.request(method, url, json=json, params=params)
+            resp = await self.http.request(method, url, json=json, params=params, headers=headers)
             if resp.status_code < 400:
                 try:
                     return resp.json()

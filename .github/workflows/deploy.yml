@@ -141,6 +141,10 @@ jobs:
               # the gateway's startup validation (non-default secret) passes.
               AUTH_SEC="$(openssl rand -hex 32)"
               sed -i "s/change-me-auth-secret/${AUTH_SEC}/g" .env
+
+              # Service-to-service shared secret (scenarios-runner -> gateway).
+              INT_TOK="$(openssl rand -hex 32)"
+              sed -i "s/change-me-internal-token/${INT_TOK}/g" .env
             fi
 
             # 1b. Backfill any required keys missing from an existing .env (e.g. a
@@ -165,6 +169,10 @@ jobs:
             ensure_key AUTH_ENABLED "true"
             ensure_key AUTH_DEV_TOKENS "false"
             ensure_key AUTH_JWT_SECRET "$(openssl rand -hex 32)"
+            # Shared secret for service-to-service calls (scenarios-runner -> gateway).
+            # Both services read INTERNAL_SERVICE_TOKEN from this same .env, so one
+            # backfilled value keeps them in lockstep.
+            ensure_key INTERNAL_SERVICE_TOKEN "$(openssl rand -hex 32)"
 
             # 1c. Fail the deploy fast if the auth posture is unsafe. This mirrors
             #     gateway/auth.validate_auth_config() so a misconfigured .env is

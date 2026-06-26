@@ -880,6 +880,9 @@ services:
       AUTH_DEV_TOKENS: ${AUTH_DEV_TOKENS:-true}
       AUTH_RATE_LIMIT_PER_MIN: ${AUTH_RATE_LIMIT_PER_MIN:-600}
       AUTH_USERS: ${AUTH_USERS:-}
+      # Shared secret accepted from trusted internal services (the scenarios-runner)
+      # in place of a user JWT. Same value injected into the scenarios service below.
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-}
       CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-}
       # Fallback / cache knobs (spec defaults).
       GATEWAY_UPSTREAM_TIMEOUT_S: ${GATEWAY_UPSTREAM_TIMEOUT_S:-2.0}
@@ -1090,6 +1093,9 @@ services:
       PYTHONPATH: /app
       PORT: "8400"
       SCENARIOS_GATEWAY_URL: ${SCENARIOS_GATEWAY_URL:-http://gateway:8000}
+      # Must match the gateway's INTERNAL_SERVICE_TOKEN so the runner's callbacks
+      # (scenario_step / routing / tas) authenticate when gateway auth is on.
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-}
       SCENARIOS_TRUCK_URL: ${SCENARIOS_TRUCK_URL:-http://truck-sim:8240}
       SCENARIOS_CONGESTION_URL: ${SCENARIOS_CONGESTION_URL:-http://congestion:8311}
       SCENARIOS_ANOMALY_URL: ${SCENARIOS_ANOMALY_URL:-http://anomaly:8321}

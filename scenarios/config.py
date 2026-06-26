@@ -41,6 +41,13 @@ class ScenarioConfig:
     redis_url: str = ""
     kafka_brokers: str = ""
 
+    # Service-to-service auth: when the gateway runs with AUTH_ENABLED=true, the
+    # runner's callbacks (scenario_step / routing / tas) need to authenticate. It
+    # presents this shared secret as the X-Internal-Token header; the gateway
+    # accepts it for internal calls. Empty in dev (gateway auth off) — calls are
+    # then unauthenticated and still accepted.
+    internal_token: str = ""
+
     # Upstream call timeout. The truck-sim's /devices/list recomputes every
     # device's position/ETA on each call, so listing a large fleet (1000) can take
     # ~9s under load. A short timeout here silently drops the listing (httpx
@@ -71,6 +78,7 @@ class ScenarioConfig:
             forecast_poll_attempts=_int(os.environ.get("SCENARIOS_FORECAST_ATTEMPTS"), 6),
             upstream_timeout_s=_float(os.environ.get("SCENARIOS_UPSTREAM_TIMEOUT"), 20.0),
             log_level=os.environ.get("LOG_LEVEL", "INFO"),
+            internal_token=os.environ.get("INTERNAL_SERVICE_TOKEN", "").strip(),
         )
 
 

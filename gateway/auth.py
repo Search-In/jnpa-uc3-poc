@@ -258,6 +258,13 @@ def _is_public(path: str) -> bool:
     return any(path == p or path.startswith(p + "/") or path == p for p in _PUBLIC)
 
 
+def _internal_token() -> str:
+    """Shared secret for trusted service-to-service callers (e.g. the
+    scenarios-runner posting step/routing/tas callbacks). Empty = disabled, so
+    there is no auth bypass unless an operator explicitly configures one."""
+    return os.environ.get("INTERNAL_SERVICE_TOKEN", "").strip()
+
+
 def auth_enabled() -> bool:
     return os.environ.get("AUTH_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -378,6 +385,19 @@ class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if not self.enabled or request.method == "OPTIONS" or _is_public(request.url.path):
             return await call_next(request)
+
+        # 0. Trusted service-to-service: an internal caller (the scenarios-runner)
+        #    presents the shared INTERNAL_SERVICE_TOKEN instead of a user JWT.
+        #    Constant-time compare; only honoured when the secret is configured, so
+        #    this is a no-op (no bypass) in any env where it is unset.
+        svc_secret = _internal_token()
+        if svc_secret:
+            provided = request.headers.get("x-internal-token", "")
+            if provided and hmac.compare_digest(provided, svc_secret):
+                request.state.principal = Principal(
+                    sub="svc:internal", role=Role.DTCCC_ADMIN.value, device_id=None
+                )
+                return await call_next(request)
 
         # 1. Rate limit per consumer (token sub if present, else client IP).
         auth_header = request.headers.get("authorization", "")

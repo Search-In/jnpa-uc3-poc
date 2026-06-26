@@ -1049,6 +1049,13 @@ export class MockAdapter implements DataAdapter {
     return "/api/reports/police?format=pdf";
   }
 
+  async downloadPolicePdf(_params?: Record<string, string | undefined>): Promise<void> {
+    // No backend in mock mode — open the (no-op) path in a new tab so the button
+    // does something visible without throwing. The live adapter streams the real
+    // PDF with the bearer token attached.
+    window.open(this.policePdfUrl(_params), "_blank", "noreferrer");
+  }
+
   // ---- scenarios ---------------------------------------------------------
   scenarios(): Promise<Scenario[]> {
     const out: Scenario[] = [

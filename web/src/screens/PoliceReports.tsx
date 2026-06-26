@@ -13,6 +13,18 @@ import { severityColour } from "@/lib/palette";
 import { fmtDateTimeIST } from "@/lib/utils";
 import { FileDown, ExternalLink, ReceiptText, ScanFace } from "lucide-react";
 
+// Stream the report PDF with the bearer token attached (a plain <a href>/new-tab
+// navigation can't send the header, so it 401s under auth-enabled builds).
+// Module-level so both the header button and the per-incident dialog can use it.
+async function exportPolicePdf(params: Record<string, string | undefined>) {
+  try {
+    await getAdapter().downloadPolicePdf(params);
+  } catch (err) {
+    console.error("police pdf export failed", err);
+    alert("Could not export the PDF report. Please try again.");
+  }
+}
+
 const KINDS = ["WRONG_WAY", "ILLEGAL_PARKING", "OVERSPEEDING", "ROUTE_DEVIATION"];
 const GATES = ["G-NSICT", "G-JNPCT", "G-NSIGT", "G-BMCT"];
 const SEVERITIES = ["info", "warning", "critical", "REPORT_TO_POLICE"];
@@ -62,11 +74,9 @@ export default function PoliceReports() {
           <Button onClick={() => setIdentityOpen(true)}>
             <ScanFace className="h-4 w-4" /> {t("reports.driverIdentityVerification")}
           </Button>
-          <a href={getAdapter().policePdfUrl(filters)} target="_blank" rel="noreferrer">
-            <Button>
-              <FileDown className="h-4 w-4" /> {t("reports.exportPdf")}
-            </Button>
-          </a>
+          <Button onClick={() => void exportPolicePdf(filters)}>
+            <FileDown className="h-4 w-4" /> {t("reports.exportPdf")}
+          </Button>
         </div>
       </div>
 
@@ -296,14 +306,13 @@ function IncidentDialog({
                 </div>
               )}
 
-              <a
-                href={getAdapter().policePdfUrl({ kind: incident.kind })}
-                target="_blank"
-                rel="noreferrer"
+              <button
+                type="button"
+                onClick={() => void exportPolicePdf({ kind: incident.kind })}
                 className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-severity-info/40 bg-severity-info/10 px-4 py-2.5 text-sm font-semibold text-severity-info transition-colors hover:bg-severity-info/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-severity-info/40"
               >
                 <ExternalLink className="h-4 w-4" /> {t("reports.openPdfForKind")}
-              </a>
+              </button>
             </div>
           </>
         )}

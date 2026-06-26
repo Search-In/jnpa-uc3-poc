@@ -89,6 +89,7 @@ export class LiveAdapter implements DataAdapter {
 
   policeReport = async (params?: any) => (await api.policeReport(params)).incidents;
   policePdfUrl = (params?: any) => api.policePdfUrl(params);
+  downloadPolicePdf = (params?: any) => api.downloadPolicePdf(params);
 
   scenarios = async () => (await api.scenarios()).scenarios;
   runScenario = (name: string, params: any) => api.runScenario(name, params);

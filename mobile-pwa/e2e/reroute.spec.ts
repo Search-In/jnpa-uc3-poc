@@ -30,7 +30,11 @@ test("pair, trigger a TFC-1 re-route, banner appears within 5 s", async ({ page 
   // 1) Pair the device via the web-variant query param.
   await page.goto(`${PWA_BASE}?device=${DEVICE}`);
 
-  // The Trip screen renders once paired (the slot widget label is always there).
+  // Pairing now lands on the Home context screen; open the Trip module from there.
+  await expect(page.getByRole("button", { name: "Start Trip" })).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("button", { name: "Start Trip" }).click();
+
+  // The Trip screen renders (the slot widget label is always there).
   await expect(page.getByText(/Slot at Gate|Slot rescheduled/)).toBeVisible({ timeout: 20_000 });
 
   // 2) Fire the re-route and start the 5 s clock from that instant.
@@ -54,7 +58,10 @@ test("pairing screen renders QR + 6-digit code before pairing", async ({ page })
   await page.goto(PWA_BASE);
   await expect(page.getByTestId("pair-qr")).toBeVisible({ timeout: 15_000 });
   await expect(page.getByTestId("pair-digit-0")).toBeVisible();
-  // The demo-device shortcut pairs and reveals the Trip screen.
+  // The demo-device shortcut pairs and reveals the Home context screen.
   await page.getByTestId("pair-demo").click();
+  await expect(page.getByRole("button", { name: "Start Trip" })).toBeVisible({ timeout: 20_000 });
+  // …from which the Trip module is one tap away.
+  await page.getByRole("button", { name: "Start Trip" }).click();
   await expect(page.getByText(/Slot at Gate|Slot rescheduled/)).toBeVisible({ timeout: 20_000 });
 });

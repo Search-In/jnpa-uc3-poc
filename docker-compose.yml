@@ -844,12 +844,23 @@ services:
       KAFKA_BROKERS: kafka:9092
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
+      # MinIO for driver-enrolment reference photos (gateway/objectstore.py).
+      # Absent creds -> enrolment keeps the base64 frame in Postgres (graceful).
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-}
+      MINIO_SECURE: ${MINIO_SECURE:-false}
+      DRIVER_ENROL_BUCKET: ${DRIVER_ENROL_BUCKET:-driver-enrolment}
+      DRIVER_ENROL_URL_BASE: ${DRIVER_ENROL_URL_BASE:-}
       # Auth + RBAC (SEC-1/SEC-2). APP_ENV drives the fail-fast startup guard in
       # gateway/auth.validate_auth_config(): any non-development APP_ENV must run
       # with AUTH_ENABLED=true, a non-default AUTH_JWT_SECRET, and AUTH_DEV_TOKENS
       # =false or the gateway refuses to start. Defaults below keep the local demo
       # frictionless (development, enforcement off); the prod env-file overrides.
       APP_ENV: ${APP_ENV:-development}
+      # Dev-only resilience fallbacks (in-memory store / base64 photo / synthetic
+      # identity). Production forces strict regardless; set false belt-and-braces.
+      ALLOW_FALLBACK: ${ALLOW_FALLBACK:-true}
       AUTH_ENABLED: ${AUTH_ENABLED:-false}
       AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-}
       AUTH_DEV_TOKENS: ${AUTH_DEV_TOKENS:-true}
@@ -974,10 +985,37 @@ services:
       PORT: "8360"
       LOG_LEVEL: ${IDENTITY_LOG_LEVEL:-INFO}
       TZ: Etc/UTC
+      # Runtime mode (must match the gateway). APP_ENV=production engages the
+      # identity startup safety gate (identity/app.py): ArcFace + liveness models
+      # MUST load or the service FAILS TO START, and no synthetic/per-request
+      # fallback may decide a real capture. ALLOW_FALLBACK is dev-only (prod forces
+      # strict regardless). Defaults keep the local demo frictionless.
+      APP_ENV: ${APP_ENV:-development}
+      ALLOW_FALLBACK: ${ALLOW_FALLBACK:-true}
+      # Real ArcFace face-recognition when a model is mounted at the path below;
+      # degrades to synthetic automatically if the model file is absent.
+      IDENTITY_EMBEDDER: ${IDENTITY_EMBEDDER:-onnx}
+      IDENTITY_ARCFACE_MODEL: ${IDENTITY_ARCFACE_MODEL:-/models/arcface.onnx}
+      # Thresholds tuned for ArcFace cosine (genuine ~0.5-0.9, impostor ~0). The
+      # synthetic default of 0.9 is far too high for a real model.
+      IDENTITY_VERIFY_THRESHOLD: ${IDENTITY_VERIFY_THRESHOLD:-0.45}
+      IDENTITY_PROVISIONAL_THRESHOLD: ${IDENTITY_PROVISIONAL_THRESHOLD:-0.30}
+      # Face-quality gate (blur/lighting/size/single-face) — on by default.
+      IDENTITY_QUALITY_CHECK: ${IDENTITY_QUALITY_CHECK:-true}
+      IDENTITY_QUALITY_BLUR_MIN: ${IDENTITY_QUALITY_BLUR_MIN:-30}
+      IDENTITY_QUALITY_BRIGHTNESS_MIN: ${IDENTITY_QUALITY_BRIGHTNESS_MIN:-40}
+      IDENTITY_QUALITY_BRIGHTNESS_MAX: ${IDENTITY_QUALITY_BRIGHTNESS_MAX:-225}
+      IDENTITY_QUALITY_FACE_FRACTION_MIN: ${IDENTITY_QUALITY_FACE_FRACTION_MIN:-0.10}
+      # Liveness / anti-spoofing — authoritative only when a model is mounted.
+      IDENTITY_LIVENESS: ${IDENTITY_LIVENESS:-false}
+      IDENTITY_LIVENESS_MODEL: ${IDENTITY_LIVENESS_MODEL:-/models/antispoof.onnx}
+      IDENTITY_LIVENESS_THRESHOLD: ${IDENTITY_LIVENESS_THRESHOLD:-0.5}
     ports:
       - "8360:8360"
     volumes:
       - ./identity:/app/identity:ro
+      # ArcFace ONNX model (downloaded to ./data/models/arcface.onnx, git-ignored).
+      - ./data/models:/models:ro
     networks:
       - jnpa
 

@@ -11,6 +11,7 @@ import PoliceReports from "@/screens/PoliceReports";
 import SystemHealth from "@/screens/SystemHealth";
 import WhatIfConsole from "@/screens/WhatIfConsole";
 import DemoConsole from "@/screens/DemoConsole";
+import DriverEnrollments from "@/screens/DriverEnrollments";
 import { GuidedTour } from "@/whatif/GuidedTour";
 
 /** Guard a screen by role. When auth is disabled (demo build) it always renders;
@@ -93,6 +94,14 @@ export default function App() {
             element={
               <Guard path="/demo">
                 <DemoConsole />
+              </Guard>
+            }
+          />
+          <Route
+            path="/enrollments"
+            element={
+              <Guard path="/enrollments">
+                <DriverEnrollments />
               </Guard>
             }
           />

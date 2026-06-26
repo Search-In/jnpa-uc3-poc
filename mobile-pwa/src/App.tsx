@@ -12,11 +12,14 @@ import {
 import { getPairing } from "@/lib/device";
 import { ensureDeviceToken } from "@/lib/api";
 import { RealtimeProvider, useRealtime } from "@/hooks/RealtimeContext";
+import { DriverSessionProvider } from "@/hooks/DriverSession";
 import Pairing from "@/screens/Pairing";
+import Home from "@/screens/Home";
 import Trip from "@/screens/Trip";
 import Reroute from "@/screens/Reroute";
 import Inbox from "@/screens/Inbox";
 import Profile from "@/screens/Profile";
+import Enrol from "@/screens/Enrol";
 
 // Uses hash routing so the PWA works under /pwa from nginx (no server rewrite
 // rules needed) and deep-links from the service worker (#/reroute) just work.
@@ -28,6 +31,7 @@ function TabBar() {
     { to: "/trip", label: t("tabs.trip"), icon: "🛣" },
     { to: "/reroute", label: t("tabs.reroute"), icon: "↻", alert: !!pendingReroute },
     { to: "/inbox", label: t("tabs.inbox"), icon: "✉", badge: unread },
+    { to: "/enrol", label: t("tabs.enrol"), icon: "🪪" },
     { to: "/profile", label: t("tabs.vehicle"), icon: "🚛" },
   ];
   return (
@@ -47,18 +51,29 @@ function TopBar() {
   const { t } = useTranslation();
   const { status } = useRealtime();
   const loc = useLocation();
+  const navigate = useNavigate();
+  const onHome = loc.pathname === "/home";
   const titleKey =
     {
+      "/home": "screens.home",
       "/trip": "screens.trip",
       "/reroute": "screens.reroute",
       "/inbox": "screens.inbox",
+      "/enrol": "screens.enrol",
       "/profile": "screens.vehicle",
     }[loc.pathname] || "screens.trip";
   return (
     <header className="topbar">
-      <div>
-        <h1>{t(titleKey)}</h1>
-        <div className="sub">{t("app.subtitle")}</div>
+      <div className="topbar-title">
+        {!onHome && (
+          <button className="topbar-home" aria-label={t("screens.home")} onClick={() => navigate("/home")}>
+            ‹
+          </button>
+        )}
+        <div>
+          <h1>{t(titleKey)}</h1>
+          <div className="sub">{t("app.subtitle")}</div>
+        </div>
       </div>
       <span style={{ fontSize: 11, color: status === "open" ? "var(--green)" : "var(--muted)" }}>
         {status === "open" ? "● " + t("common.live").toLowerCase() : "○ " + status}
@@ -81,22 +96,26 @@ function RerouteInterrupt() {
 function PairedApp({ deviceId, plate }: { deviceId: string; plate?: string | null }) {
   return (
     <RealtimeProvider deviceId={deviceId} plate={plate}>
-      <HashRouter>
-        <div className="app-shell">
-          <RerouteInterrupt />
-          <TopBar />
-          <main className="content">
-            <Routes>
-              <Route path="/trip" element={<Trip deviceId={deviceId} />} />
-              <Route path="/reroute" element={<Reroute />} />
-              <Route path="/inbox" element={<Inbox />} />
-              <Route path="/profile" element={<Profile deviceId={deviceId} plate={plate} />} />
-              <Route path="*" element={<Navigate to="/trip" replace />} />
-            </Routes>
-          </main>
-          <TabBar />
-        </div>
-      </HashRouter>
+      <DriverSessionProvider deviceId={deviceId} plate={plate}>
+        <HashRouter>
+          <div className="app-shell">
+            <RerouteInterrupt />
+            <TopBar />
+            <main className="content">
+              <Routes>
+                <Route path="/home" element={<Home />} />
+                <Route path="/trip" element={<Trip deviceId={deviceId} />} />
+                <Route path="/reroute" element={<Reroute />} />
+                <Route path="/inbox" element={<Inbox />} />
+                <Route path="/enrol" element={<Enrol deviceId={deviceId} plate={plate} />} />
+                <Route path="/profile" element={<Profile deviceId={deviceId} plate={plate} />} />
+                <Route path="*" element={<Navigate to="/home" replace />} />
+              </Routes>
+            </main>
+            <TabBar />
+          </div>
+        </HashRouter>
+      </DriverSessionProvider>
     </RealtimeProvider>
   );
 }

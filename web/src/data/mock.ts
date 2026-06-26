@@ -23,7 +23,9 @@ import type {
   FaultSeverity,
   FaultState,
   Gate,
+  IdentityVerifyArg,
   IdentityVerifyResult,
+  IdentityEnrolResult,
   KpiResult,
   OperatorBanner,
   ParkingFacility,
@@ -37,6 +39,7 @@ import type {
   Zone,
 } from "@/lib/types";
 import type { TasSlot } from "@/lib/types";
+import type { DriverEnrollment } from "@/lib/types";
 import type { CongestionMetrics, DataAdapter, DataMode, OcrEval } from "./types";
 import { buildKpiResult } from "@/kpi/compute";
 
@@ -216,6 +219,51 @@ const DRIVERS = [
   { driver_id: "DRV-1005", name: "Vijay Kamble", license_no: "MH12 20160033445" },
   { driver_id: "DRV-1006", name: "Prakash More", license_no: "MH14 20210099887" },
 ] as const;
+
+// A tiny placeholder "face" frame (data-URL) so the mock enrolment queue renders
+// review thumbnails without bundling real images.
+const MOCK_FACE =
+  "data:image/svg+xml;base64," +
+  btoa(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160"><rect width="160" height="160" fill="#1f78c2"/><circle cx="80" cy="64" r="34" fill="#cfe3f5"/><rect x="36" y="104" width="88" height="56" rx="28" fill="#cfe3f5"/></svg>',
+  );
+
+// In-memory enrolment queue for mock mode — seeded with two PENDING requests so
+// the admin Driver Enrolment screen has something to review with no backend.
+const MOCK_ENROLLMENTS: DriverEnrollment[] = [
+  {
+    driver_id: "DRV-2001",
+    name: "Santosh Jadhav",
+    license_no: "MH04 20220011223",
+    mobile: "+91 98200 11223",
+    vehicle_no: "MH04 AB 1234",
+    aadhaar_masked: "XXXX XXXX 4821",
+    emergency_contact: "+91 99300 55667",
+    status: "PENDING",
+    consent: true,
+    consent_at: new Date(NOW - 3600 * 1000).toISOString(),
+    photo: MOCK_FACE,
+    face_images: [MOCK_FACE, MOCK_FACE],
+    documents: [],
+    submitted_at: new Date(NOW - 3600 * 1000).toISOString(),
+  },
+  {
+    driver_id: "DRV-2002",
+    name: "Farhan Ansari",
+    license_no: "MH43 20210099001",
+    mobile: "+91 98191 22334",
+    vehicle_no: "MH43 CD 5678",
+    aadhaar_masked: "XXXX XXXX 1190",
+    emergency_contact: "+91 90040 77881",
+    status: "PENDING",
+    consent: true,
+    consent_at: new Date(NOW - 7200 * 1000).toISOString(),
+    photo: MOCK_FACE,
+    face_images: [MOCK_FACE, MOCK_FACE, MOCK_FACE],
+    documents: [],
+    submitted_at: new Date(NOW - 7200 * 1000).toISOString(),
+  },
+];
 
 // --------------------------------------------------------------------------
 // KPI strip — mirrors shared/jnpa_shared/kpi.py KPI_TARGETS exactly. Each value
@@ -1114,8 +1162,13 @@ export class MockAdapter implements DataAdapter {
 
   identityVerify(
     driverId: string,
-    simulate: "genuine" | "impostor" | "unknown",
+    arg?: "genuine" | "impostor" | "unknown" | IdentityVerifyArg,
   ): Promise<IdentityVerifyResult> {
+    // A captured camera frame (image present) is treated as a genuine live match
+    // in mock mode; otherwise honour the legacy simulate selector.
+    const simulate =
+      typeof arg === "string" ? arg : (arg?.simulate ?? (arg?.image ? "genuine" : "genuine"));
+    const provider = typeof arg === "object" && arg?.image ? "onnx" : "synthetic";
     if (simulate === "genuine") {
       return Promise.resolve({
         driver_id: driverId,
@@ -1123,6 +1176,7 @@ export class MockAdapter implements DataAdapter {
         score: 0.96,
         decision: "VERIFIED",
         reason: "Face match above threshold (0.85); Sarathi DL valid.",
+        provider,
       });
     }
     if (simulate === "impostor") {
@@ -1132,6 +1186,7 @@ export class MockAdapter implements DataAdapter {
         score: 0.1,
         decision: "REJECTED",
         reason: "Face match below threshold; gallery mismatch.",
+        provider,
       });
     }
     // unknown -> provisional with a 24h cure window.
@@ -1144,7 +1199,67 @@ export class MockAdapter implements DataAdapter {
       provisional_until,
       cure_window_h: 24,
       reason: "No gallery enrolment; provisional entry granted pending KYC.",
+      provider,
     });
+  }
+
+  identityEnrol(driverId: string, _image: string): Promise<IdentityEnrolResult> {
+    // Mock enrolment — the real reference template is stored server-side; here we
+    // just acknowledge so the camera flow works end-to-end in mock mode.
+    return Promise.resolve({ enrolled: true, driver_id: driverId, provider: "onnx" });
+  }
+
+  // --- Driver enrolment approval workflow (mock store) ---
+  enrollments(status?: string): Promise<DriverEnrollment[]> {
+    const want = status?.toUpperCase();
+    const out = MOCK_ENROLLMENTS.filter((e) => !want || e.status === want)
+      // newest first, mirroring the gateway list ordering
+      .slice()
+      .sort((a, b) => (b.submitted_at ?? "").localeCompare(a.submitted_at ?? ""))
+      .map((e) => ({ ...e, face_images: undefined }));
+    return Promise.resolve(out);
+  }
+
+  enrollmentDetail(driverId: string): Promise<DriverEnrollment> {
+    const rec = MOCK_ENROLLMENTS.find((e) => e.driver_id === driverId);
+    if (!rec) return Promise.reject(new Error("enrolment not found"));
+    return Promise.resolve({ ...rec });
+  }
+
+  approveEnrollment(driverId: string): Promise<{ approved: boolean }> {
+    const rec = MOCK_ENROLLMENTS.find((e) => e.driver_id === driverId);
+    if (rec) {
+      rec.status = "ACTIVE";
+      rec.reviewed_at = new Date(NOW).toISOString();
+      rec.reviewed_by = "admin:mock";
+      rec.template_dim = 128;
+      rec.provider = "onnx";
+      rec.photo_url = rec.photo ?? MOCK_FACE;
+      rec.face_images = [];
+    }
+    return Promise.resolve({ approved: true });
+  }
+
+  rejectEnrollment(driverId: string, reason: string): Promise<{ rejected: boolean }> {
+    const rec = MOCK_ENROLLMENTS.find((e) => e.driver_id === driverId);
+    if (rec) {
+      rec.status = "REJECTED";
+      rec.rejection_reason = reason;
+      rec.reviewed_at = new Date(NOW).toISOString();
+      rec.reviewed_by = "admin:mock";
+    }
+    return Promise.resolve({ rejected: true });
+  }
+
+  reenrollEnrollment(driverId: string, reason?: string): Promise<{ reenroll: boolean }> {
+    const rec = MOCK_ENROLLMENTS.find((e) => e.driver_id === driverId);
+    if (rec) {
+      rec.status = "REENROLL";
+      rec.rejection_reason = reason ?? "re-enrolment requested";
+      rec.reviewed_at = new Date(NOW).toISOString();
+      rec.reviewed_by = "admin:mock";
+    }
+    return Promise.resolve({ reenroll: true });
   }
 
   parkingAvailability(minuteOfDay?: number): Promise<ParkingFacility[]> {

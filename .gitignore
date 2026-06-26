@@ -41,6 +41,9 @@ ai/anpr/resources/rec_indian/
 ai/anpr/resources/datasets/
 ai/anpr/eval/metrics.json
 
+# Face-recognition model weights (large; fetched by scripts/fetch_face_model.sh).
+data/models/*.onnx
+
 node_modules/
 
 # Build / test outputs

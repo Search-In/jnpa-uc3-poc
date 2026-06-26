@@ -7,13 +7,37 @@
     "trip": "Trip",
     "reroute": "Re-route",
     "inbox": "Inbox",
-    "vehicle": "Vehicle"
+    "vehicle": "Vehicle",
+    "enrol": "Enrol"
   },
   "screens": {
+    "home": "Home",
     "trip": "Trip",
     "reroute": "Re-route",
     "inbox": "Inbox",
-    "vehicle": "Vehicle"
+    "vehicle": "Vehicle",
+    "enrol": "Driver Enrolment"
+  },
+  "home": {
+    "welcome": "Welcome,",
+    "driver": "Driver",
+    "driverId": "Driver ID",
+    "vehicle": "Vehicle",
+    "lastVerified": "Last verified",
+    "today": "Today",
+    "startTrip": "Start Trip",
+    "goToEnrol": "Go to Enrol",
+    "alerts": "Alerts",
+    "vehicleInfo": "Vehicle Info",
+    "completeEnrol": "Complete enrolment",
+    "viewEnrol": "View enrolment status",
+    "status": {
+      "ACTIVE": "Active",
+      "PENDING": "Pending approval",
+      "REJECTED": "Rejected",
+      "REENROLL": "Re-enrolment needed",
+      "UNVERIFIED": "Not enrolled"
+    }
   },
   "common": {
     "language": "Language",
@@ -98,5 +122,45 @@
     "ELEVATED_SCRUTINY": "Elevated scrutiny",
     "CUSTOMS_FLAG": "Customs flag",
     "ALERT": "Alert"
+  },
+  "enrol": {
+    "title": "Driver Enrolment",
+    "dpdpNote": "Biometric data is captured with your consent under DPDP and used only for gate identity verification.",
+    "completeProfile": "Complete your profile",
+    "autofillNote": "Your driver ID, name and vehicle are filled from your session and can't be changed here.",
+    "driverId": "Driver ID",
+    "name": "Driver name",
+    "license": "Driving licence number",
+    "mobile": "Mobile number",
+    "vehicle": "Vehicle number",
+    "aadhaar": "Aadhaar / ID number",
+    "emergency": "Emergency contact",
+    "documents": "Documents",
+    "documentsNote": "Optionally attach your licence and ID for verification.",
+    "docLicense": "Driving licence",
+    "docId": "Identity proof",
+    "consentTitle": "Consent",
+    "consentBody": "I consent to the capture and processing of my face image for the sole purpose of driver identity verification at JNPA gates, in line with the DPDP Act.",
+    "consentCheckbox": "I give my explicit consent to biometric capture.",
+    "faceCapture": "Capture reference face",
+    "faceNote": "Capture {{min}}–{{max}} clear photos of your face. Look straight at the camera.",
+    "startCamera": "Start camera",
+    "stopCamera": "Stop",
+    "capture": "Capture",
+    "cameraOff": "Camera is off.",
+    "cameraStarting": "Starting camera…",
+    "cameraDenied": "Camera permission denied. Allow access and retry.",
+    "cameraError": "Camera unavailable.",
+    "review": "Review & submit",
+    "faces": "Face images",
+    "submit": "Submit enrolment",
+    "next": "Next",
+    "back": "Back",
+    "resubmit": "Re-capture & re-submit",
+    "reason": "Reason",
+    "statusPending": "Your enrolment is pending admin approval. You'll be verifiable at the gate once approved.",
+    "statusActive": "Your enrolment is approved and active. You can now be verified at the gate.",
+    "statusRejected": "Your enrolment was rejected. Please re-submit.",
+    "statusReenroll": "Re-enrolment requested. Please re-capture your reference photos and submit again."
   }
 }

@@ -7,10 +7,13 @@ import type {
   Alert,
   AutoLeoResult,
   CarbonRollup,
+  DriverEnrollment,
   EmptyAllocation,
   FaultControlResult,
   FaultState,
+  IdentityVerifyArg,
   IdentityVerifyResult,
+  IdentityEnrolResult,
   KpiResult,
   ParkingFacility,
   ParkingSummary,
@@ -107,8 +110,52 @@ export class LiveAdapter implements DataAdapter {
     (await getJson<{ alerts: Alert[] }>("/api/gate-data/customs/flags")).alerts;
   identityGallery = async () =>
     (await getJson<{ drivers: any[] }>("/api/identity/gallery")).drivers;
-  identityVerify = (driverId: string, simulate: any): Promise<IdentityVerifyResult> =>
-    postJson<IdentityVerifyResult>("/api/identity/verify", { driver_id: driverId, simulate });
+  identityVerify = (
+    driverId: string,
+    arg?: "genuine" | "impostor" | "unknown" | IdentityVerifyArg,
+  ): Promise<IdentityVerifyResult> => {
+    const body = typeof arg === "string" ? { simulate: arg } : (arg ?? {});
+    // is_synthetic=true + a lawful purpose satisfy the gateway DPDP guard (PoC
+    // posture: consented/synthetic faces only).
+    return postJson<IdentityVerifyResult>("/api/identity/verify", {
+      driver_id: driverId,
+      is_synthetic: true,
+      purpose: "GATE_VERIFICATION",
+      ...body,
+    });
+  };
+  identityEnrol = (driverId: string, image: string): Promise<IdentityEnrolResult> =>
+    postJson<IdentityEnrolResult>("/api/identity/enrol", {
+      driver_id: driverId,
+      image,
+      is_synthetic: true,
+      purpose: "ENROLMENT",
+    });
+
+  // --- Driver enrolment approval workflow ---
+  enrollments = async (status?: string): Promise<DriverEnrollment[]> =>
+    (
+      await getJson<{ enrollments: DriverEnrollment[] }>(
+        `/api/identity/enrollments${status ? `?status=${encodeURIComponent(status)}` : ""}`,
+      )
+    ).enrollments;
+  enrollmentDetail = (driverId: string): Promise<DriverEnrollment> =>
+    getJson<DriverEnrollment>(`/api/identity/enrollments/${encodeURIComponent(driverId)}`);
+  approveEnrollment = (driverId: string) =>
+    postJson<{ approved: boolean }>(
+      `/api/identity/enrollments/${encodeURIComponent(driverId)}/approve`,
+      {},
+    );
+  rejectEnrollment = (driverId: string, reason: string) =>
+    postJson<{ rejected: boolean }>(
+      `/api/identity/enrollments/${encodeURIComponent(driverId)}/reject`,
+      { reason },
+    );
+  reenrollEnrollment = (driverId: string, reason?: string) =>
+    postJson<{ reenroll: boolean }>(
+      `/api/identity/enrollments/${encodeURIComponent(driverId)}/reenroll`,
+      { reason: reason ?? "re-enrolment requested" },
+    );
   parkingAvailability = async (minuteOfDay?: number): Promise<ParkingFacility[]> =>
     (
       await getJson<{ facilities: ParkingFacility[] }>(

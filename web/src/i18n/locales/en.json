@@ -12,7 +12,8 @@
     "reports": "Traffic-Police Reports",
     "health": "System Health",
     "whatIf": "What-If Console",
-    "demo": "Demo Console"
+    "demo": "Demo Console",
+    "enrollments": "Driver Enrolment"
   },
   "common": {
     "resetToBaseline": "Reset to baseline",

@@ -38,6 +38,7 @@ const ROUTES = [
   { to: "/advisory", i18nKey: "nav.advisory", icon: "route-from" },
   { to: "/geofencing", i18nKey: "nav.geofencing", icon: "shapes" },
   { to: "/reports", i18nKey: "nav.reports", icon: "file-report" },
+  { to: "/enrollments", i18nKey: "nav.enrollments", icon: "user-plus" },
   { to: "/health", i18nKey: "nav.health", icon: "heart" },
   { to: "/what-if", i18nKey: "nav.whatIf", icon: "beaker" },
   { to: "/demo", i18nKey: "nav.demo", icon: "sliders-horizontal" },

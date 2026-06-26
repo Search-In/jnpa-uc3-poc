@@ -72,6 +72,110 @@ CREATE TABLE jnpa.services (
 );
 
 -- --------------------------------------------------------------------------
+-- Driver enrolment (UC-III Identity / face-recognition, Appendix C #2).
+-- The Driver PWA submits a profile + consented reference face frames; an admin
+-- (DTCCC_ADMIN / CUSTOMS) reviews and approves, at which point the identity
+-- service generates + stores the face template and the reference photo is
+-- persisted to MinIO. DPDP: PoC frames are synthetic/consented only; raw pixels
+-- are kept only until approval (then the template + an object-store pointer
+-- remain). `reference_image` keeps one approved frame so the template can be
+-- rebuilt if the in-memory identity service restarts.
+-- --------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS jnpa.driver_enrollments (
+    driver_id         text PRIMARY KEY,
+    name              text NOT NULL,
+    license_no        text,
+    mobile            text,
+    vehicle_no        text,
+    aadhaar_masked    text,
+    emergency_contact text,
+    status            text NOT NULL DEFAULT 'PENDING'
+                      CHECK (status IN ('PENDING', 'ACTIVE', 'REJECTED', 'REENROLL')),
+    consent           boolean NOT NULL DEFAULT false,
+    consent_at        timestamptz,
+    face_images       jsonb NOT NULL DEFAULT '[]'::jsonb,  -- captured frames pending review
+    reference_image   text,                                -- approved canonical frame (base64)
+    photo_url         text,                                -- MinIO object URL after approval
+    documents         jsonb NOT NULL DEFAULT '[]'::jsonb,  -- uploaded id/licence docs
+    template_dim      int,
+    provider          text,
+    submitted_at      timestamptz NOT NULL DEFAULT now(),
+    reviewed_at       timestamptz,
+    reviewed_by       text,
+    rejection_reason  text,
+    updated_at        timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_driver_enrol_status
+    ON jnpa.driver_enrollments (status, submitted_at DESC);
+
+-- Append-only DPDP audit of every enrolment lifecycle event (who, what, when).
+CREATE TABLE IF NOT EXISTS jnpa.enrollment_audit (
+    id        bigserial PRIMARY KEY,
+    driver_id text NOT NULL,
+    event     text NOT NULL,   -- SUBMITTED|APPROVED|REJECTED|REENROLL_REQUESTED|CONSENT
+    actor     text,
+    detail    jsonb NOT NULL DEFAULT '{}'::jsonb,
+    ts        timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_enrollment_audit_driver
+    ON jnpa.enrollment_audit (driver_id, ts DESC);
+
+-- Master driver identity (production data model). `driver_enrollments` above is the
+-- WORKFLOW/request table (PENDING→ACTIVE…); this `drivers` table is the canonical
+-- identity record an enrolment is PROMOTED into on admin approval. Verification
+-- reads the active driver from here. Embeddings live in the identity service; this
+-- holds the durable profile + the reference-photo pointer + template metadata.
+CREATE TABLE IF NOT EXISTS jnpa.drivers (
+    driver_id         text PRIMARY KEY,
+    name              text NOT NULL,
+    license_no        text,
+    mobile            text,
+    vehicle_no        text,
+    aadhaar_masked    text,
+    emergency_contact text,
+    status            text NOT NULL DEFAULT 'ACTIVE'
+                      CHECK (status IN ('ACTIVE', 'SUSPENDED')),
+    photo_url         text,                -- MinIO object URL (drivers/ bucket)
+    reference_image   text,                -- base64 reference frame (dev fallback only)
+    template_dim      int,
+    provider          text,                -- onnx | synthetic
+    enrolled_at       timestamptz NOT NULL DEFAULT now(),
+    approved_by       text,
+    updated_at        timestamptz NOT NULL DEFAULT now()
+);
+
+-- Biometric template store for 1:N identification. One unit-norm ArcFace
+-- embedding per active driver; a captured face is matched by nearest cosine
+-- across this set (no pgvector in this image, so the search is in-app — fine for
+-- thousands of drivers; swap to pgvector/FAISS for larger fleets).
+CREATE TABLE IF NOT EXISTS jnpa.driver_faces (
+    driver_id     text PRIMARY KEY,
+    embedding     jsonb NOT NULL,        -- L2-normalised vector (length = dim)
+    dim           int NOT NULL,
+    provider      text,
+    model_version text,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    updated_at    timestamptz NOT NULL DEFAULT now()
+);
+
+-- Append-only verification audit trail (every /verify decision, who/score/path).
+CREATE TABLE IF NOT EXISTS jnpa.verification_logs (
+    id            bigserial PRIMARY KEY,
+    driver_id     text NOT NULL,
+    decision      text NOT NULL,          -- VERIFIED | PROVISIONAL | REJECTED
+    score         double precision,
+    matched       boolean,
+    provider      text,                   -- onnx | synthetic | unavailable
+    decision_path text,                   -- LIVE | SYNTHETIC
+    actor         text,
+    purpose       text,
+    reason        text,
+    ts            timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_verification_logs_driver
+    ON jnpa.verification_logs (driver_id, ts DESC);
+
+-- --------------------------------------------------------------------------
 -- Time-series (hypertables)
 -- --------------------------------------------------------------------------
 CREATE TABLE jnpa.anpr_reads (

@@ -54,12 +54,15 @@ function KpiCard({ k }: { k: KpiResult }) {
   return (
     <Card>
       <CardContent className="flex flex-col gap-1.5 py-3">
-        <span className="truncate text-[11px] font-medium text-muted-foreground" title={k.label}>
-          {k.label}
+        <span
+          className="truncate text-[11px] font-medium text-muted-foreground"
+          title={t(`kpiLabel.${k.key}`, k.label)}
+        >
+          {t(`kpiLabel.${k.key}`, k.label)}
         </span>
         <div className="flex items-baseline gap-1">
           <span className="text-xl font-semibold tabular-nums">{k.value}</span>
-          <span className="text-[11px] text-muted-foreground">{k.unit}</span>
+          <span className="text-[11px] text-muted-foreground">{t(`kpiUnit.${k.unit}`, k.unit)}</span>
           <span
             className="ml-auto text-xs font-medium tabular-nums"
             style={{ color: colour }}

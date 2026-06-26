@@ -22,6 +22,7 @@ const SEVERITIES = ["info", "warning", "critical", "REPORT_TO_POLICE"];
 // Playwright) in a new tab — a one-page-per-incident report with evidence + a
 // pre-filled e-Challan payload.
 export default function PoliceReports() {
+  const { t } = useTranslation();
   const [kind, setKind] = useState<string>("");
   const [gate, setGate] = useState<string>("");
   const [severity, setSeverity] = useState<string>("");
@@ -51,7 +52,7 @@ export default function PoliceReports() {
     <div className="flex h-full flex-col">
       <div className="flex flex-wrap items-end justify-between gap-3 border-b border-border p-4">
         <div>
-          <h1 className="text-lg font-semibold">Traffic-Police Reports</h1>
+          <h1 className="text-lg font-semibold">{t("nav.reports")}</h1>
           <p className="text-sm text-muted-foreground">
             WRONG_WAY · ILLEGAL_PARKING · OVERSPEEDING · ROUTE_DEVIATION
           </p>
@@ -59,11 +60,11 @@ export default function PoliceReports() {
         {/* Header actions — Driver Identity Verification before Export, same style. */}
         <div className="flex items-center gap-2">
           <Button onClick={() => setIdentityOpen(true)}>
-            <ScanFace className="h-4 w-4" /> Driver Identity Verification
+            <ScanFace className="h-4 w-4" /> {t("reports.driverIdentityVerification")}
           </Button>
           <a href={getAdapter().policePdfUrl(filters)} target="_blank" rel="noreferrer">
             <Button>
-              <FileDown className="h-4 w-4" /> Export PDF
+              <FileDown className="h-4 w-4" /> {t("reports.exportPdf")}
             </Button>
           </a>
         </div>
@@ -71,16 +72,16 @@ export default function PoliceReports() {
 
       {/* filters */}
       <div className="grid grid-cols-2 gap-3 border-b border-border p-4 md:grid-cols-5">
-        <FilterSelect label="Kind" value={kind} onChange={setKind} options={KINDS} />
-        <FilterSelect label="Gate" value={gate} onChange={setGate} options={GATES} />
+        <FilterSelect label={t("reports.kind")} value={kind} onChange={setKind} options={KINDS} />
+        <FilterSelect label={t("notifications.gate")} value={gate} onChange={setGate} options={GATES} />
         <FilterSelect
-          label="Severity"
+          label={t("notifications.severity")}
           value={severity}
           onChange={setSeverity}
           options={SEVERITIES}
         />
-        <FilterDate label="From" value={since} onChange={setSince} />
-        <FilterDate label="To" value={until} onChange={setUntil} />
+        <FilterDate label={t("reports.from")} value={since} onChange={setSince} />
+        <FilterDate label={t("reports.to")} value={until} onChange={setUntil} />
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
@@ -88,21 +89,21 @@ export default function PoliceReports() {
           <CardContent className="p-0">
             {q.isLoading ? (
               <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
-                <Spinner /> loading incidents…
+                <Spinner /> {t("reports.loadingIncidents")}
               </div>
             ) : incidents.length === 0 ? (
-              <EmptyState>No incidents match these filters.</EmptyState>
+              <EmptyState>{t("reports.noIncidents")}</EmptyState>
             ) : (
               <table className="w-full text-sm">
                 <thead className="border-b border-border text-left text-xs text-muted-foreground">
                   <tr>
-                    <th className="px-4 py-2">Time (IST)</th>
-                    <th className="px-4 py-2">Kind</th>
-                    <th className="px-4 py-2">Severity</th>
-                    <th className="px-4 py-2">Plate</th>
-                    <th className="px-4 py-2">Gate</th>
-                    <th className="px-4 py-2">Owner</th>
-                    <th className="px-4 py-2 text-right">Evidence</th>
+                    <th className="px-4 py-2">{t("notifications.time")}</th>
+                    <th className="px-4 py-2">{t("reports.kind")}</th>
+                    <th className="px-4 py-2">{t("notifications.severity")}</th>
+                    <th className="px-4 py-2">{t("reports.plate")}</th>
+                    <th className="px-4 py-2">{t("notifications.gate")}</th>
+                    <th className="px-4 py-2">{t("reports.owner")}</th>
+                    <th className="px-4 py-2 text-right">{t("reports.evidence")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -126,7 +127,7 @@ export default function PoliceReports() {
                         {inc.rc?.owner_name_masked ?? "—"}
                       </td>
                       <td className="px-4 py-2 text-right">
-                        {inc.evidence_url ? <span className="text-severity-info">photo</span> : "—"}
+                        {inc.evidence_url ? <span className="text-severity-info">{t("reports.photo")}</span> : "—"}
                       </td>
                     </tr>
                   ))}
@@ -145,7 +146,7 @@ export default function PoliceReports() {
           the entrance animation. */}
       <Dialog open={identityOpen} onOpenChange={setIdentityOpen}>
         <DialogContent className="max-w-xl p-3">
-          <DialogTitle className="sr-only">Driver Identity Verification</DialogTitle>
+          <DialogTitle className="sr-only">{t("reports.driverIdentityVerification")}</DialogTitle>
           <IdentityPanel />
         </DialogContent>
       </Dialog>
@@ -164,6 +165,7 @@ function FilterSelect({
   onChange: (v: string) => void;
   options: string[];
 }) {
+  const { t } = useTranslation();
   return (
     <label className="text-[11px] text-muted-foreground">
       {label}
@@ -172,7 +174,7 @@ function FilterSelect({
         onChange={(e) => onChange(e.target.value)}
         className="mt-1 w-full rounded-md border border-border bg-background px-2 py-1.5 text-xs"
       >
-        <option value="">All</option>
+        <option value="">{t("reports.all")}</option>
         {options.map((o) => (
           <option key={o} value={o}>
             {o}
@@ -238,20 +240,20 @@ function IncidentDialog({
             </DialogHeader>
             <div className="space-y-4 p-5">
               <div className="grid grid-cols-2 gap-x-4 gap-y-3.5">
-                <KV k="Incident ID" v={incident.id} />
-                <KV k="Time (IST)" v={fmtDateTimeIST(incident.ts)} />
-                <KV k="Owner (masked)" v={incident.rc?.owner_name_masked ?? "—"} />
-                <KV k="Vehicle class" v={incident.rc?.vehicle_class ?? "—"} />
+                <KV k={t("reports.incidentId")} v={incident.id} />
+                <KV k={t("notifications.time")} v={fmtDateTimeIST(incident.ts)} />
+                <KV k={t("reports.ownerMasked")} v={incident.rc?.owner_name_masked ?? "—"} />
+                <KV k={t("reports.vehicleClass")} v={incident.rc?.vehicle_class ?? "—"} />
                 <KV
-                  k="RTO / State"
+                  k={t("reports.rtoState")}
                   v={`${incident.rc?.rto_code ?? "—"} / ${incident.rc?.state ?? "—"}`}
                 />
-                <KV k="FASTag" v={incident.rc?.fastag_status ?? "—"} />
+                <KV k={t("reports.fastag")} v={incident.rc?.fastag_status ?? "—"} />
               </div>
               {incident.evidence_url && (
                 <img
                   src={incident.evidence_url}
-                  alt="evidence"
+                  alt={t("reports.evidenceAlt")}
                   className="w-full rounded-lg border border-border shadow-sm"
                   onError={(e) => ((e.target as HTMLImageElement).style.display = "none")}
                 />
@@ -262,7 +264,7 @@ function IncidentDialog({
                 <div className="overflow-hidden rounded-lg border border-severity-warning/40">
                   <div className="flex items-center gap-1.5 border-b border-severity-warning/30 bg-severity-warning/10 px-3.5 py-2.5 text-xs font-semibold">
                     <ReceiptText className="h-4 w-4 text-severity-warning" aria-hidden />
-                    Recommended action — e-Challan
+                    {t("reports.recommendedAction")}
                   </div>
                   <dl>
                     {Object.entries(challan).map(([key, value]) => (
@@ -291,7 +293,7 @@ function IncidentDialog({
                 rel="noreferrer"
                 className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-severity-info/40 bg-severity-info/10 px-4 py-2.5 text-sm font-semibold text-severity-info transition-colors hover:bg-severity-info/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-severity-info/40"
               >
-                <ExternalLink className="h-4 w-4" /> Open PDF for this kind
+                <ExternalLink className="h-4 w-4" /> {t("reports.openPdfForKind")}
               </a>
             </div>
           </>

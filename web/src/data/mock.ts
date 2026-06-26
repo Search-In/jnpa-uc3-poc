@@ -380,12 +380,21 @@ function buildLeoQueue(): LeoRow[] {
       leo_present: !(blocked && flag === "LEO_MISSING"),
       rfid_match: true,
     };
+    // Gate-out containers are spread ALONG the JNPA -> Karal Phata corridor
+    // (~22 km) at distinct fractions, so clicking different queue/feed rows
+    // visibly flies the map to clearly separated locations (not one cluster).
+    // gate_id keeps the origin gate for the customs label.
+    const gate = pick(seed + "-gate", GATE_DEFS);
+    const [lat, lon] = pointAlong(0.08 + i * 0.16);
     rows.push({
       container_no,
       vehicle_plate: plate,
       leo_ready: !blocked,
       checks,
       customs_flags: blocked ? [flag] : [],
+      gate_id: gate.id,
+      lat,
+      lon,
       _ts: iso(-i * 47),
     });
   }
@@ -1148,9 +1157,15 @@ export class MockAdapter implements DataAdapter {
       ts: r._ts,
       kind: "CUSTOMS_FLAG",
       severity: "warning",
-      gate_id: pick(`cf-gate-${i}`, GATE_DEFS).id,
+      gate_id: r.gate_id ?? null,
       plate: r.vehicle_plate ?? null,
-      payload: { container_no: r.container_no, customs_flags: r.customs_flags, checks: r.checks },
+      payload: {
+        container_no: r.container_no,
+        customs_flags: r.customs_flags,
+        checks: r.checks,
+        lat: r.lat,
+        lon: r.lon,
+      },
       ack: false,
     }));
     return Promise.resolve(out);

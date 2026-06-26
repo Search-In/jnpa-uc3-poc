@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { getAdapter } from "@/data";
 import type { CameraHealth, Decision, SourceHealth } from "@/lib/types";
@@ -39,6 +40,7 @@ const EXPECTED: { label: string; match: (s: string) => boolean; api?: string }[]
 ];
 
 export default function SystemHealth() {
+  const { t } = useTranslation();
   const sourcesQ = useQuery({
     queryKey: ["sources"],
     queryFn: () => getAdapter().sources(),
@@ -68,13 +70,13 @@ export default function SystemHealth() {
   return (
     <div className="h-full overflow-y-auto p-4">
       <div className="mb-3 flex items-center justify-between gap-3">
-        <h1 className="text-lg font-semibold">System Health</h1>
+        <h1 className="text-lg font-semibold">{t("nav.health")}</h1>
         <AssumptionsPanel />
       </div>
 
       {sourcesQ.isLoading ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Spinner /> loading source health…
+          <Spinner /> {t("health.loadingSourceHealth")}
         </div>
       ) : (
         <>
@@ -91,7 +93,7 @@ export default function SystemHealth() {
 
           <Card className="mt-5">
             <CardHeader>
-              <CardTitle>ANPR cameras (per-camera feed level)</CardTitle>
+              <CardTitle>{t("health.anprCamerasTitle")}</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-5">
@@ -130,7 +132,8 @@ function SourceChip({
   row?: SourceHealth;
   onClick: () => void;
 }) {
-  const state = row?.state ?? "no data";
+  const { t } = useTranslation();
+  const state = row?.state ?? t("health.noData");
   const colour = sourceStateColour(row?.state);
   return (
     <button onClick={onClick} className="text-left">
@@ -142,13 +145,13 @@ function SourceChip({
           </div>
           <Badge colour={colour}>{state}</Badge>
           <dl className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
-            <dt>last ok</dt>
+            <dt>{t("health.lastOk")}</dt>
             <dd className="text-right text-foreground">{relativeAge(row?.last_ok)}</dd>
-            <dt>p95</dt>
+            <dt>{t("health.p95")}</dt>
             <dd className="text-right text-foreground tabular-nums">
               {row?.latency_p95_ms != null ? `${Math.round(row.latency_p95_ms)} ms` : "—"}
             </dd>
-            <dt>path</dt>
+            <dt>{t("health.path")}</dt>
             <dd className="text-right text-foreground">{row?.last_decision_path ?? "—"}</dd>
           </dl>
         </CardContent>
@@ -177,6 +180,7 @@ function LogDrawer({
   drawer: { title: string; api?: string; source?: string } | null;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   const q = useQuery({
     queryKey: ["decisions", drawer?.api],
     queryFn: () => getAdapter().decisions(drawer?.api, 200),
@@ -193,16 +197,16 @@ function LogDrawer({
         {drawer && (
           <>
             <DialogHeader>
-              <DialogTitle>Decision log · {drawer.title}</DialogTitle>
+              <DialogTitle>{t("health.decisionLog")} · {drawer.title}</DialogTitle>
             </DialogHeader>
             <div className="p-4">
               {q.isLoading ? (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Spinner /> loading decisions…
+                  <Spinner /> {t("health.loadingDecisions")}
                 </div>
               ) : rows.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
-                  No recent decisions for this source.
+                  {t("health.noRecentDecisions")}
                 </p>
               ) : (
                 <ul className="space-y-1.5">

@@ -18,6 +18,7 @@
 // Colours come exclusively from src/lib/tokens.ts (single source of truth).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 // Register the <arcgis-map> custom element + bundle its runtime locally. The
 // React wrapper below only creates the React→element binding; this side-effect
 // import is what actually defines the element (otherwise it never upgrades).
@@ -144,6 +145,7 @@ export function ArcgisMap({
   onViewReady,
   className,
 }: ArcgisMapProps) {
+  const { t } = useTranslation();
   const viewRef = useRef<MapView | null>(null);
   // Flips true once the MapView is ready. Because /live remounts each time the
   // guided tour navigates to it, the spotlight effect must (re)run after the view
@@ -157,6 +159,7 @@ export function ArcgisMap({
     trucks: GraphicsLayer;
     gates: GraphicsLayer;
     highlight: GraphicsLayer;
+    pulse: GraphicsLayer;
   } | null>(null);
   const clickHandle = useRef<ViewHandle | null>(null);
   // Snapped road geometry for the corridor (OSRM, render-time only). Null until
@@ -173,6 +176,8 @@ export function ArcgisMap({
   // Last spotlight id-set we framed, so we only re-zoom when it changes — exactly
   // the reference PortMap's lastZoomKey guard.
   const lastZoomKey = useRef<string>("");
+  // requestAnimationFrame id for the focus-marker pulse, so it can be cancelled.
+  const pulseRaf = useRef<number | null>(null);
   const onGateClickRef = useRef(onGateClick);
   onGateClickRef.current = onGateClick;
 
@@ -202,6 +207,9 @@ export function ArcgisMap({
         gates: mk("uc3-gates"),
         // Spotlight halos sit on top so the ring is never occluded.
         highlight: mk("uc3-highlight"),
+        // Animated focus-pulse ring on its own layer (never cleared by the
+        // spotlight redraw), drawn topmost.
+        pulse: mk("uc3-pulse"),
       };
       layers.current = set;
       view.map.addMany([
@@ -212,6 +220,7 @@ export function ArcgisMap({
         set.trucks,
         set.gates,
         set.highlight,
+        set.pulse,
       ]);
 
       // Gate click → callback.
@@ -568,6 +577,50 @@ export function ArcgisMap({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [highlights, gates, corridor, viewReady, focusPoint]);
 
+  // Pulsing ring on the focused queue/feed item (spec: "marker pulse
+  // animation"). On its own layer so the spotlight redraw never clears it; the
+  // graphic geometry is the focus point, so it tracks the map during pan/zoom.
+  useEffect(() => {
+    const layer = layers.current?.pulse;
+    if (!layer) return;
+    if (pulseRaf.current != null) {
+      cancelAnimationFrame(pulseRaf.current);
+      pulseRaf.current = null;
+    }
+    layer.removeAll();
+    if (!focusPoint || typeof focusPoint.lon !== "number" || typeof focusPoint.lat !== "number") {
+      return;
+    }
+    const graphic = new Graphic({
+      geometry: new Point({
+        longitude: focusPoint.lon,
+        latitude: focusPoint.lat,
+        spatialReference: WGS84,
+      }),
+      attributes: { pulse: true },
+    });
+    layer.add(graphic);
+    const PERIOD = 1400; // ms per pulse cycle
+    let start: number | null = null;
+    const tick = (ts: number) => {
+      if (start == null) start = ts;
+      const phase = ((ts - start) % PERIOD) / PERIOD; // 0 → 1
+      graphic.symbol = new SimpleMarkerSymbol({
+        style: "circle",
+        color: [0, 0, 0, 0],
+        size: 26 + phase * 36, // expands outward
+        outline: { color: hexToRgba(FOCUS_COLOUR, 0.85 * (1 - phase)), width: 3 }, // fades as it grows
+      });
+      pulseRaf.current = requestAnimationFrame(tick);
+    };
+    pulseRaf.current = requestAnimationFrame(tick);
+    return () => {
+      if (pulseRaf.current != null) cancelAnimationFrame(pulseRaf.current);
+      pulseRaf.current = null;
+      layer.removeAll();
+    };
+  }, [focusPoint]);
+
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => renderZones(), [zones]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -627,9 +680,9 @@ export function ArcgisMap({
         <button
           type="button"
           onClick={() => setLayersOpen((o) => !o)}
-          aria-label="Toggle map layers"
+          aria-label={t("map.toggleLayers")}
           aria-expanded={layersOpen}
-          title="Layers"
+          title={t("map.layersTitle")}
           className="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-card/90 text-foreground shadow-md backdrop-blur transition hover:bg-muted"
         >
           <LayersIcon className="h-4 w-4" />
@@ -638,12 +691,12 @@ export function ArcgisMap({
           <div className="mt-2 w-52 rounded-md border border-border bg-card/95 p-2 shadow-lg backdrop-blur">
             <div className="mb-1 flex items-center justify-between px-1">
               <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                Layers
+                {t("map.layersTitle")}
               </span>
               <button
                 type="button"
                 onClick={() => setLayersOpen(false)}
-                aria-label="Close layers panel"
+                aria-label={t("map.closeLayers")}
                 className="text-muted-foreground transition hover:text-foreground"
               >
                 <XIcon className="h-3.5 w-3.5" />
@@ -660,7 +713,7 @@ export function ArcgisMap({
                   onChange={() => toggleLayer(d.key)}
                   className="h-3.5 w-3.5 accent-severity-info"
                 />
-                {d.label}
+                {t(`map.layer.${d.key}`)}
               </label>
             ))}
           </div>

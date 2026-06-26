@@ -32,20 +32,21 @@ function decisionColour(decision?: string): string {
   }
 }
 
-function confidenceBand(score: number): { label: string; colour: string } {
-  if (score >= 0.9) return { label: "High", colour: STATUS.ok };
-  if (score >= 0.5) return { label: "Medium", colour: STATUS.warning };
-  return { label: "Low", colour: STATUS.critical };
+function confidenceBand(score: number): { labelKey: string; colour: string } {
+  if (score >= 0.9) return { labelKey: "identityPanel.confidenceHigh", colour: STATUS.ok };
+  if (score >= 0.5) return { labelKey: "identityPanel.confidenceMedium", colour: STATUS.warning };
+  return { labelKey: "identityPanel.confidenceLow", colour: STATUS.critical };
 }
 
 // Friendly text for an alignment/liveness validation failure.
+// Values are translation keys resolved with t() inside the component.
 const VALIDATION_TEXT: Record<string, string> = {
-  no_face_detected: "No face detected — look straight at the camera.",
-  multiple_faces: "Multiple faces in frame — only the driver should be visible.",
-  face_not_centered: "Center your face within the guide.",
-  move_closer: "Move a little closer to the camera.",
-  move_back: "Move back slightly from the camera.",
-  camera_not_ready: "Camera is not ready yet.",
+  no_face_detected: "identityPanel.validationNoFace",
+  multiple_faces: "identityPanel.validationMultipleFaces",
+  face_not_centered: "identityPanel.validationNotCentered",
+  move_closer: "identityPanel.validationMoveCloser",
+  move_back: "identityPanel.validationMoveBack",
+  camera_not_ready: "identityPanel.validationCameraNotReady",
 };
 
 export function IdentityPanel() {
@@ -76,21 +77,22 @@ export function IdentityPanel() {
   const enrol = useMutation({
     mutationFn: (image: string) => getAdapter().identityEnrol(selected, image),
     onSuccess: () =>
-      setNotice({ kind: "ok", text: "Reference template enrolled for this driver." }),
+      setNotice({ kind: "ok", text: t("identityPanel.enrolSuccess") }),
   });
 
   async function captureValidated(): Promise<string | null> {
     const v = await cam.validate();
     if (!v.ok) {
+      const key = VALIDATION_TEXT[v.reason];
       setNotice({
         kind: "warn",
-        text: VALIDATION_TEXT[v.reason] ?? "Face check failed — try again.",
+        text: key ? t(key) : t("identityPanel.faceCheckFailed"),
       });
       return null;
     }
     const image = cam.capture();
     if (!image) {
-      setNotice({ kind: "warn", text: "Could not capture a frame — try again." });
+      setNotice({ kind: "warn", text: t("identityPanel.captureFailed") });
       return null;
     }
     return image;
@@ -168,22 +170,22 @@ export function IdentityPanel() {
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-center text-xs text-white/80">
                   {cam.status === "requesting" ? (
                     <>
-                      <Spinner /> Starting camera…
+                      <Spinner /> {t("identityPanel.startingCamera")}
                     </>
                   ) : cam.status === "denied" ? (
                     <>
                       <CameraOff className="h-7 w-7 opacity-70" />
-                      Camera permission denied. Allow access and retry.
+                      {t("identityPanel.permissionDenied")}
                     </>
                   ) : cam.status === "error" ? (
                     <>
                       <CameraOff className="h-7 w-7 opacity-70" />
-                      {cam.error ?? "Camera unavailable."}
+                      {cam.error ?? t("identityPanel.cameraUnavailable")}
                     </>
                   ) : (
                     <>
                       <Camera className="h-7 w-7 opacity-70" />
-                      Camera is off.
+                      {t("identityPanel.cameraOff")}
                     </>
                   )}
                 </div>
@@ -194,7 +196,7 @@ export function IdentityPanel() {
                   className="h-1.5 w-1.5 rounded-full"
                   style={{ backgroundColor: live ? STATUS.ok : STATUS.unknown }}
                 />
-                {live ? "Live" : "Off"}
+                {live ? t("identityPanel.live") : t("identityPanel.off")}
               </span>
             </div>
 
@@ -206,13 +208,13 @@ export function IdentityPanel() {
                   onClick={() => void cam.start()}
                   disabled={cam.status === "requesting"}
                 >
-                  <Camera className="h-4 w-4" /> Start camera
+                  <Camera className="h-4 w-4" /> {t("identityPanel.startCamera")}
                 </Button>
               ) : (
                 <>
                   <Button size="sm" onClick={() => void onVerify()} disabled={busy || !selected}>
                     {verify.isPending ? <Spinner /> : <ScanFace className="h-4 w-4" />}
-                    Capture &amp; verify
+                    {t("identityPanel.captureVerify")}
                   </Button>
                   <Button
                     size="sm"
@@ -221,10 +223,10 @@ export function IdentityPanel() {
                     disabled={busy || !selected}
                   >
                     {enrol.isPending ? <Spinner /> : <UserCheck className="h-4 w-4" />}
-                    Enrol reference
+                    {t("identityPanel.enrolReference")}
                   </Button>
                   <Button size="sm" variant="outline" onClick={() => cam.stop()} disabled={busy}>
-                    <CameraOff className="h-4 w-4" /> Stop
+                    <CameraOff className="h-4 w-4" /> {t("identityPanel.stop")}
                   </Button>
                 </>
               )}
@@ -270,10 +272,11 @@ function VerifyResult({
   vehicle?: string;
   at: string | null;
 }) {
+  const { t } = useTranslation();
   const colour = decisionColour(result.decision);
   const matchPct = `${(result.score * 100).toFixed(1)}%`;
   const conf = confidenceBand(result.score);
-  const providerLabel = result.provider === "onnx" ? "ArcFace (ONNX)" : "Synthetic";
+  const providerLabel = result.provider === "onnx" ? "ArcFace (ONNX)" : t("identityPanel.synthetic");
 
   return (
     <div className="space-y-2.5 rounded-lg border border-border bg-background p-3">
@@ -285,18 +288,18 @@ function VerifyResult({
       </div>
 
       <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
-        <Field k="Driver name" v={driverName ?? "—"} />
-        <Field k="Driver ID" v={result.driver_id} mono />
-        <Field k="Vehicle number" v={vehicle ?? "—"} mono />
-        <Field k="Match score" v={matchPct} />
-        <Field k="Confidence">
+        <Field k={t("identityPanel.driverName")} v={driverName ?? "—"} />
+        <Field k={t("identityPanel.driverId")} v={result.driver_id} mono />
+        <Field k={t("identityPanel.vehicleNumber")} v={vehicle ?? "—"} mono />
+        <Field k={t("identityPanel.matchScore")} v={matchPct} />
+        <Field k={t("identityPanel.confidence")}>
           <span className="inline-flex items-center gap-1.5 font-medium">
             <span className="h-2 w-2 rounded-full" style={{ backgroundColor: conf.colour }} />
-            {conf.label}
+            {t(conf.labelKey)}
           </span>
         </Field>
-        <Field k="Status" v={result.decision} />
-        <Field k="Timestamp" v={at ? fmtDateTimeIST(at) : "—"} />
+        <Field k={t("identityPanel.status")} v={result.decision} />
+        <Field k={t("identityPanel.timestamp")} v={at ? fmtDateTimeIST(at) : "—"} />
       </dl>
 
       {result.reason && <p className="text-[11px] text-muted-foreground">{result.reason}</p>}
@@ -306,10 +309,10 @@ function VerifyResult({
           className="rounded-md border px-2 py-1.5 text-[11px]"
           style={{ borderColor: `${STATUS.warning}80` }}
         >
-          Cure window: {result.cure_window_h ?? 24} h
+          {t("identityPanel.cureWindow")} {result.cure_window_h ?? 24} {t("identityPanel.hoursShort")}
           {result.provisional_until && (
             <span className="block text-muted-foreground">
-              provisional until {fmtDateTimeIST(result.provisional_until)}
+              {t("identityPanel.provisionalUntil")} {fmtDateTimeIST(result.provisional_until)}
             </span>
           )}
         </div>

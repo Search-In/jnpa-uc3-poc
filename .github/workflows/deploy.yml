@@ -74,6 +74,12 @@ jobs:
             docker image prune -af || true
             docker builder prune -af || true
             docker network prune -f || true
+            # Reclaim host-level space too — the in-container build's transient
+            # /tmp wheel cache lives on this same root volume, so journal logs and
+            # the apt cache compete with it for space.
+            sudo journalctl --vacuum-size=50M 2>/dev/null || true
+            sudo apt-get clean 2>/dev/null || true
+            rm -rf /tmp/pip-* 2>/dev/null || true
             # Drop stale rsync temp files from any prior failed run.
             find /home/ec2-user/jnpa-uc3-poc -name '.*.??????' -type f -delete 2>/dev/null || true
             echo "== disk after cleanup =="; df -h / || true
@@ -178,7 +184,26 @@ jobs:
             fi
             echo "Auth posture OK: enforcement on, non-default secret, dev-tokens off."
 
-            # 2. Build + restart the stack.
+            # 2. Build the heavy AI images ONE AT A TIME. Each pulls the CPU torch
+            #    wheel + a multi-hundred-MB ML stack (ultralytics/opencv/scipy/
+            #    torchvision/paddle) and unpacks wheels into a transient /tmp cache
+            #    on this root volume. Building them in parallel (the default for
+            #    `up --build`) spikes peak disk past the volume size -> pip fails
+            #    with "No space left on device". Serialising caps that transient
+            #    peak to one heavy build at a time. Do NOT prune the build cache
+            #    here: the `up --build` below must cache-hit these images instead
+            #    of rebuilding all three in parallel (which re-creates the spike).
+            #    Heaviest first (anpr: torch+torchvision+paddle+paddleocr+ultralytics)
+            #    so it builds with the most free disk, before the others commit.
+            for svc in anpr anomaly congestion; do
+              echo "== building ${svc} =="
+              docker compose -f docker-compose.yml -f docker-compose.aws.yml build "${svc}"
+              df -h / || true
+            done
+
+            # 2b. Start the stack. --build rebuilds the light services with fresh
+            #     code; the heavy AI images above are served from BuildKit cache
+            #     (instant, no torch re-download, no parallel disk spike).
             docker compose -f docker-compose.yml -f docker-compose.aws.yml up -d --build
 
             # 3. Reclaim space again post-build (old image layers + build cache).

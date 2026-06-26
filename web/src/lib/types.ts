@@ -162,6 +162,11 @@ export interface AutoLeoResult {
   leo_ready: boolean;
   checks: Record<string, any>;
   customs_flags: string[];
+  // Optional map anchor (mock fills these; live may omit) so a clicked queue
+  // row can pan/zoom the map to the container's gate location.
+  gate_id?: string | null;
+  lat?: number;
+  lon?: number;
 }
 
 // Identity / face-recognition (/api/identity)

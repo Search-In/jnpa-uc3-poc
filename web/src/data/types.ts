@@ -95,6 +95,9 @@ export interface DataAdapter {
   // police reports
   policeReport(params?: Record<string, string | undefined>): Promise<PoliceIncident[]>;
   policePdfUrl(params?: Record<string, string | undefined>): string;
+  // Download the report PDF (auth-aware — see LiveAdapter). Async because it
+  // streams the file with the bearer token rather than navigating to a URL.
+  downloadPolicePdf(params?: Record<string, string | undefined>): Promise<void>;
 
   // scenarios
   scenarios(): Promise<Scenario[]>;

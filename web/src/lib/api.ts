@@ -29,6 +29,36 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
+// Authenticated file download. A plain <a href>/new-tab navigation can NOT carry
+// the bearer token, so it 401s ("missing bearer token") on auth-enabled builds.
+// Fetch the file with the token attached, then save the response blob via a
+// temporary object URL.
+async function downloadFile(path: string, filename: string): Promise<void> {
+  const token = getToken();
+  const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+  const res = await fetch(path, { headers: { ...authHeader } });
+  if (!res.ok) {
+    let detail: any = undefined;
+    try {
+      detail = await res.json();
+    } catch {
+      /* non-json error body */
+    }
+    throw new Error(
+      `${res.status} ${res.statusText}${detail ? ` — ${JSON.stringify(detail)}` : ""}`,
+    );
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 export const api = {
   // --- geometry ---
   gates: () => http<{ gates: import("./types").Gate[] }>("/api/gates"),
@@ -94,6 +124,13 @@ export const api = {
     const q = new URLSearchParams({ format: "pdf" });
     Object.entries(params || {}).forEach(([k, v]) => v && q.set(k, v));
     return `/api/reports/police?${q.toString()}`;
+  },
+  // Download the report PDF with auth attached (the bare URL above can't be used
+  // for a browser navigation under auth-enabled builds — it 401s).
+  downloadPolicePdf: (params?: Record<string, string | undefined>) => {
+    const q = new URLSearchParams({ format: "pdf" });
+    Object.entries(params || {}).forEach(([k, v]) => v && q.set(k, v));
+    return downloadFile(`/api/reports/police?${q.toString()}`, "police-report.pdf");
   },
 
   // --- scenarios (What-If Console) ---

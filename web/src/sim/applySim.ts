@@ -84,7 +84,7 @@ const FALLBACK_POINT = { lat: 18.95, lon: 72.95 };
 function jitter(seed: number, scale = 0.01): number {
   // Deterministic pseudo-jitter in [-scale, +scale] from an integer seed.
   const x = Math.sin(seed * 12.9898) * 43758.5453;
-  return ((x - Math.floor(x)) - 0.5) * 2 * scale;
+  return (x - Math.floor(x) - 0.5) * 2 * scale;
 }
 
 /**
@@ -134,7 +134,10 @@ export function applyTrucks(base: TruckDevice[], sim: SimState, state?: string):
         plate: null,
         gate_id: null,
         state: "EN_ROUTE_TO_PORT",
-        position: { lat: FALLBACK_POINT.lat + jitter(i, 0.05), lon: FALLBACK_POINT.lon + jitter(i + 3, 0.05) },
+        position: {
+          lat: FALLBACK_POINT.lat + jitter(i, 0.05),
+          lon: FALLBACK_POINT.lon + jitter(i + 3, 0.05),
+        },
         speed_kmh: 24 + Math.round(jitter(i, 8)),
         heading: 135,
         remaining_km: 6,
@@ -280,7 +283,8 @@ export function applyParking(base: ParkingFacility[], sim: SimState): ParkingFac
     const available = Math.max(0, Math.min(p.capacity, p.available + share));
     const occupied = Math.max(0, p.capacity - available);
     const utilisation_pct = p.capacity > 0 ? Math.round((occupied / p.capacity) * 100) : 0;
-    const status = utilisation_pct >= 100 ? "FULL" : utilisation_pct >= 80 ? "FILLING" : "AVAILABLE";
+    const status =
+      utilisation_pct >= 100 ? "FULL" : utilisation_pct >= 80 ? "FILLING" : "AVAILABLE";
     return { ...p, available, occupied, utilisation_pct, status };
   });
 }

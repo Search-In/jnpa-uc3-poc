@@ -132,9 +132,7 @@ export const api = {
     Object.entries(params || {}).forEach(([k, v]) => v && q.set(k, v));
     // Name the file by what it contains: a single incident when an id is given,
     // otherwise the filtered batch. Keeps "this report" vs "all reports" distinct.
-    const filename = params?.id
-      ? `police-report-${params.id}.pdf`
-      : "police-report.pdf";
+    const filename = params?.id ? `police-report-${params.id}.pdf` : "police-report.pdf";
     return downloadFile(`/api/reports/police?${q.toString()}`, filename);
   },
 

@@ -121,9 +121,15 @@ export const SCENARIO_SCRIPTS: ScenarioScript[] = [
           "The NSICT gate closes for an incident. Inbound trucks have nowhere to go, so the queue at the gate begins to climb.",
         view: "/live",
         spotlight: [G_NSICT],
-        valueTargets: [{ kind: "asset", id: G_NSICT }, { kind: "kpi", key: "queue_length" }],
+        valueTargets: [
+          { kind: "asset", id: G_NSICT },
+          { kind: "kpi", key: "queue_length" },
+        ],
         metrics: [{ label: "Gate NSICT queue", from: 8, to: 34, unit: "trucks", tone: "worse" }],
-        patch: { gates: { [G_NSICT]: { queueLength: 34, utilisation: 1.15 } }, vehicleInjection: 40 },
+        patch: {
+          gates: { [G_NSICT]: { queueLength: 34, utilisation: 1.15 } },
+          vehicleInjection: 40,
+        },
       },
       {
         title: "Spillover congests the approach corridor",
@@ -153,9 +159,19 @@ export const SCENARIO_SCRIPTS: ScenarioScript[] = [
           },
           segments: Object.fromEntries(SEG_SPILL.map((s) => [s, { jamFactor: 5.5, speedKmh: 14 }])),
           vehicleInjection: 40,
-          incidents: [{ kind: "CONGESTION", severity: "critical", gate_id: G_NSICT, segment_id: SEG_SPILL[0] }],
+          incidents: [
+            {
+              kind: "CONGESTION",
+              severity: "critical",
+              gate_id: G_NSICT,
+              segment_id: SEG_SPILL[0],
+            },
+          ],
         },
-        action: { kind: "REROUTE", detail: "Best-alt-gate advisory pushed to inbound trucks → Gate JNPCT" },
+        action: {
+          kind: "REROUTE",
+          detail: "Best-alt-gate advisory pushed to inbound trucks → Gate JNPCT",
+        },
       },
       {
         title: "Queues drain, corridor recovers",
@@ -163,7 +179,10 @@ export const SCENARIO_SCRIPTS: ScenarioScript[] = [
           "With trucks diverted and TAS slots rescheduled, the NSICT queue drains and corridor speeds recover. The queue-length KPI eases back toward target.",
         view: "/live",
         spotlight: [G_NSICT, G_ALT],
-        valueTargets: [{ kind: "kpi", key: "queue_length" }, { kind: "asset", id: G_NSICT }],
+        valueTargets: [
+          { kind: "kpi", key: "queue_length" },
+          { kind: "asset", id: G_NSICT },
+        ],
         metrics: [{ label: "Gate NSICT queue", from: 30, to: 12, unit: "trucks", tone: "better" }],
         patch: {
           gates: {
@@ -173,7 +192,10 @@ export const SCENARIO_SCRIPTS: ScenarioScript[] = [
           segments: Object.fromEntries(SEG_SPILL.map((s) => [s, { jamFactor: 3.0, speedKmh: 26 }])),
           vehicleInjection: 10,
         },
-        action: { kind: "RECOMMENDATION", detail: "Reschedule TAS slots to GTI; drain NSICT queue first" },
+        action: {
+          kind: "RECOMMENDATION",
+          detail: "Reschedule TAS slots to GTI; drain NSICT queue first",
+        },
       },
     ],
   },
@@ -193,7 +215,9 @@ export const SCENARIO_SCRIPTS: ScenarioScript[] = [
         metrics: [{ label: "Heading", from: "135°", to: "315° (wrong-way)", tone: "worse" }],
         patch: {
           segments: { [SEG_SURGE[0]]: { jamFactor: 6.0, speedKmh: 12 } },
-          incidents: [{ kind: "WRONG_WAY", severity: "critical", gate_id: G_ALT, segment_id: SEG_SURGE[0] }],
+          incidents: [
+            { kind: "WRONG_WAY", severity: "critical", gate_id: G_ALT, segment_id: SEG_SURGE[0] },
+          ],
         },
       },
       {
@@ -205,9 +229,19 @@ export const SCENARIO_SCRIPTS: ScenarioScript[] = [
         metrics: [{ label: "Alert", from: "—", to: "WRONG_WAY → POLICE", tone: "worse" }],
         patch: {
           segments: { [SEG_SURGE[0]]: { jamFactor: 6.0, speedKmh: 12 } },
-          incidents: [{ kind: "WRONG_WAY", severity: "REPORT_TO_POLICE", gate_id: G_ALT, segment_id: SEG_SURGE[0] }],
+          incidents: [
+            {
+              kind: "WRONG_WAY",
+              severity: "REPORT_TO_POLICE",
+              gate_id: G_ALT,
+              segment_id: SEG_SURGE[0],
+            },
+          ],
         },
-        action: { kind: "NOTIFICATION", detail: "Critical WRONG_WAY alert escalated to TRAFFIC_POLICE" },
+        action: {
+          kind: "NOTIFICATION",
+          detail: "Critical WRONG_WAY alert escalated to TRAFFIC_POLICE",
+        },
       },
       {
         title: "An e-challan is issued",
@@ -218,9 +252,14 @@ export const SCENARIO_SCRIPTS: ScenarioScript[] = [
         metrics: [{ label: "e-Challan", from: "—", to: "ECH issued (MVA s.184)", tone: "neutral" }],
         patch: {
           segments: { [SEG_SURGE[0]]: { jamFactor: 3.5, speedKmh: 22 } },
-          incidents: [{ kind: "WRONG_WAY", severity: "warning", gate_id: G_ALT, segment_id: SEG_SURGE[0] }],
+          incidents: [
+            { kind: "WRONG_WAY", severity: "warning", gate_id: G_ALT, segment_id: SEG_SURGE[0] },
+          ],
         },
-        action: { kind: "E_CHALLAN", detail: "e-Challan issued via Vahan chain; evidence clip attached" },
+        action: {
+          kind: "E_CHALLAN",
+          detail: "e-Challan issued via Vahan chain; evidence clip attached",
+        },
       },
     ],
   },
@@ -270,7 +309,10 @@ export const SCENARIO_SCRIPTS: ScenarioScript[] = [
           segments: Object.fromEntries(SEG_SURGE.map((s) => [s, { jamFactor: 3.5, speedKmh: 24 }])),
           gates: { [G_NSICT]: { queueLength: 14, utilisation: 0.82 } },
         },
-        action: { kind: "CROSS_TWIN_PUSH", detail: "Gate-slot windows reissued to the UC-III driver app" },
+        action: {
+          kind: "CROSS_TWIN_PUSH",
+          detail: "Gate-slot windows reissued to the UC-III driver app",
+        },
       },
     ],
   },

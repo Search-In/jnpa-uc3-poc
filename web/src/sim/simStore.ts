@@ -19,14 +19,7 @@
 
 import { getScript, type StepPatch } from "./scenarioPlayer";
 
-export type Faction =
-  | "gates"
-  | "segments"
-  | "flow"
-  | "vehicles"
-  | "scan"
-  | "parking"
-  | "incidents";
+export type Faction = "gates" | "segments" | "flow" | "vehicles" | "scan" | "parking" | "incidents";
 
 /** Per-gate live override. Optional lat/lon let applySim place injected
  *  queue-trucks on the map at the gate; the Simulator page fills them from the

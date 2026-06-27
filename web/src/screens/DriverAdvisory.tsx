@@ -144,11 +144,7 @@ function QueueRow({
       <td className="px-4 py-2 tabular-nums">{fmtEta(truck.eta_s)}</td>
       <td className="px-4 py-2 tabular-nums">{truck.remaining_km.toFixed(1)} km</td>
       <td className="px-4 py-2">
-        <Select
-          value={gate}
-          onValueChange={onGateChange}
-          disabled={reroute.isPending}
-        >
+        <Select value={gate} onValueChange={onGateChange} disabled={reroute.isPending}>
           <SelectTrigger
             className="w-[140px]"
             data-guided-id="advisory-reroute"

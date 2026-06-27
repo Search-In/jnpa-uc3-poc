@@ -53,7 +53,10 @@ export default function App() {
         />
 
         {/* Everything else lives inside the dashboard Shell. */}
-        <Route path="*" element={<DashboardShell scenario={scenario} reset={reset} navigate={navigate} />} />
+        <Route
+          path="*"
+          element={<DashboardShell scenario={scenario} reset={reset} navigate={navigate} />}
+        />
       </Routes>
 
       {/* Simulator → dashboard bridge: invalidates the sim-affected React Query

@@ -37,11 +37,11 @@ SPILLOVER_GATES = ["G-JNPCT", "G-NSIGT"]
 SYNTH_QUEUE = 80  # injected AT_GATE_QUEUE trucks for the first 20 min
 
 
-async def run(params: Dict[str, Any]) -> ScenarioHandle:
+async def run(params: Dict[str, Any], handle_id: str | None = None) -> ScenarioHandle:
     cfg = ScenarioConfig.from_env()
     gate_id = params.get("gate_id", "G-NSICT")
     duration = int(params.get("duration_minutes", 120))
-    h = ScenarioHandle(handle_id=new_handle_id(NAME), name=NAME,
+    h = ScenarioHandle(handle_id=handle_id or new_handle_id(NAME), name=NAME,
                        params={"gate_id": gate_id, "duration_minutes": duration}, cfg=cfg)
     up = Upstreams(cfg)
     tag = f"TFC-1:{h.handle_id}"

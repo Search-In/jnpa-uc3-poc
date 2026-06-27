@@ -197,6 +197,13 @@ jobs:
             fi
             echo "Auth posture OK: enforcement on, non-default secret, dev-tokens off."
 
+            # 1d. Fetch the identity face models (ArcFace + anti-spoof). They are
+            #     git-ignored (~166 MB) so they are NOT in the checkout/rsync — the
+            #     identity service's production gate hard-fails to boot without them.
+            #     Idempotent: the script skips any model already present.
+            bash scripts/fetch_face_model.sh || \
+              echo "WARN: face model fetch failed (no egress?) — identity will crash-loop until models are placed in data/models/"
+
             # 2. Build EVERY service ONE AT A TIME. The root volume is too small to
             #    absorb many concurrent `pip install` /tmp unpacks: the default
             #    parallel `up --build` exhausts it (Errno 28) even on tiny services

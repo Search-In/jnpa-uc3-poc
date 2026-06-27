@@ -44,11 +44,19 @@ class SourceManager:
             "here": cfg.here_api_key,
             "tomtom": cfg.tomtom_api_key,
         }
+        # Only activate a source that actually has an API key. A keyless external
+        # source (the PoC default — no Google/HERE/TomTom credentials) can never
+        # succeed; including it makes every /predict cascade block on unreachable
+        # external APIs until they time out (~tens of seconds), so the gateway gives
+        # up and shows SYNTHETIC. With no keys, self.sources is empty and get()
+        # falls straight through to the cached/synthetic reading — fast.
         self.sources = [
-            _FACTORY[name](api_key=keys.get(name, ""), free_flow_kmh=cfg.free_flow_speed_kmh)
+            _FACTORY[name](api_key=keys[name], free_flow_kmh=cfg.free_flow_speed_kmh)
             for name in cfg.source_order
-            if name in _FACTORY
+            if name in _FACTORY and keys.get(name)
         ]
+        if not self.sources:
+            log.info("no_live_traffic_sources", reason="no_api_keys_configured")
 
     def _cache_key(self, seg_id: str) -> str:
         return f"traffic:speed:{seg_id}"

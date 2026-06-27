@@ -43,11 +43,11 @@ SURGE_SEGMENTS = ["SEG-07", "SEG-08", "SEG-09", "SEG-10", "SEG-11", "SEG-12"]
 MAX_INJECT = 300
 
 
-async def run(params: Dict[str, Any]) -> ScenarioHandle:
+async def run(params: Dict[str, Any], handle_id: str | None = None) -> ScenarioHandle:
     cfg = ScenarioConfig.from_env()
     spike = float(params.get("dpd_release_spike", 2.5))
     window_min = int(params.get("window_min", 40))
-    h = ScenarioHandle(handle_id=new_handle_id(NAME), name=NAME,
+    h = ScenarioHandle(handle_id=handle_id or new_handle_id(NAME), name=NAME,
                        params={"dpd_release_spike": spike, "window_min": window_min}, cfg=cfg)
     up = Upstreams(cfg)
     tag = f"TFC-3:{h.handle_id}"

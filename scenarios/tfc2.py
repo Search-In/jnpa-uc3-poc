@@ -44,10 +44,10 @@ PING_COUNT = 6
 PING_DT_S = 0.6  # 6 pings * 0.6s ~= 3s span > the 2s wrong-way hold window
 
 
-async def run(params: Dict[str, Any]) -> ScenarioHandle:
+async def run(params: Dict[str, Any], handle_id: str | None = None) -> ScenarioHandle:
     cfg = ScenarioConfig.from_env()
     camera_id = params.get("camera_id", "C-KARAL-EXIT")
-    h = ScenarioHandle(handle_id=new_handle_id(NAME), name=NAME,
+    h = ScenarioHandle(handle_id=handle_id or new_handle_id(NAME), name=NAME,
                        params={"camera_id": camera_id}, cfg=cfg)
     up = Upstreams(cfg)
     device_id = f"SYN-TFC2-{h.handle_id}"

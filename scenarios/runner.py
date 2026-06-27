@@ -16,6 +16,7 @@ Run with ``scenarios-runner`` (console script) or ``uvicorn scenarios.runner:app
 """
 from __future__ import annotations
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional
@@ -27,7 +28,7 @@ from jnpa_shared import tracing
 
 from . import get_scenario, scenario_names
 from .config import ScenarioConfig
-from .handle import ScenarioHandle
+from .handle import ScenarioHandle, new_handle_id
 
 cfg = ScenarioConfig.from_env()
 configure_logging(cfg.log_level)
@@ -73,11 +74,23 @@ async def run_scenario(name: str, params: Dict[str, Any] = Body(default_factory=
         raise HTTPException(status_code=404,
                             detail={"error": "unknown_scenario", "name": name,
                                     "known": scenario_names()})
-    with tracing.span(f"scenario.{name}.request", {"scenario": name}):
-        handle: ScenarioHandle = await module.run(params or {})
-    _HANDLES[handle.handle_id] = handle
-    return {"handle_id": handle.handle_id, "name": handle.name, "status": handle.status,
-            "steps": len(handle.steps), "trace_id": handle.trace_id}
+    # A full run takes minutes (truck injection, forecaster polling, advisories).
+    # Run it in the BACKGROUND and return the handle immediately — otherwise the
+    # gateway's proxy call blocks for the whole run and times out, surfacing as
+    # 502 "scenarios_runner_unreachable" even though the scenario completes. The
+    # dashboard tracks progress live via the scenario_step WS frames + timeline.
+    handle_id = new_handle_id(name)
+
+    async def _execute() -> None:
+        try:
+            with tracing.span(f"scenario.{name}.request", {"scenario": name}):
+                handle = await module.run(params or {}, handle_id=handle_id)
+            _HANDLES[handle.handle_id] = handle
+        except Exception as exc:  # noqa: BLE001 - background task must not crash the loop
+            log.warning("scenario_run_failed", name=name, handle_id=handle_id, error=str(exc))
+
+    asyncio.create_task(_execute())
+    return {"handle_id": handle_id, "name": name, "status": "RUNNING", "steps": 0}
 
 
 @app.post("/scenarios/{name}/reset")

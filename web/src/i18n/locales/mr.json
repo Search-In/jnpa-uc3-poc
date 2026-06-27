@@ -331,7 +331,8 @@
     "fastag": "फास्टॅग",
     "evidenceAlt": "पुरावा",
     "recommendedAction": "शिफारस केलेली कृती — ई-चलन",
-    "openPdfForKind": "या प्रकारासाठी PDF उघडा"
+    "openPdfForKind": "या प्रकारासाठी PDF उघडा",
+    "downloadThisReport": "हा अहवाल डाउनलोड करा (PDF)"
   },
   "enrollments": {
     "title": "ड्रायव्हर नोंदणी विनंत्या",

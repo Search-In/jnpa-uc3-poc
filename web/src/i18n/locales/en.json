@@ -335,7 +335,8 @@
     "fastag": "FASTag",
     "evidenceAlt": "evidence",
     "recommendedAction": "Recommended action — e-Challan",
-    "openPdfForKind": "Open PDF for this kind"
+    "openPdfForKind": "Open PDF for this kind",
+    "downloadThisReport": "Download this report (PDF)"
   },
   "enrollments": {
     "title": "Driver Enrolment Requests",

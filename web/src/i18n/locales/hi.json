@@ -331,7 +331,8 @@
     "fastag": "फास्टैग",
     "evidenceAlt": "साक्ष्य",
     "recommendedAction": "अनुशंसित कार्रवाई — ई-चालान",
-    "openPdfForKind": "इस प्रकार के लिए PDF खोलें"
+    "openPdfForKind": "इस प्रकार के लिए PDF खोलें",
+    "downloadThisReport": "यह रिपोर्ट डाउनलोड करें (PDF)"
   },
   "enrollments": {
     "title": "ड्राइवर नामांकन अनुरोध",

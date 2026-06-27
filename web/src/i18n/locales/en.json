@@ -27,7 +27,8 @@
     "close": "Close",
     "open": "Open",
     "save": "Save",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "retry": "Retry"
   },
   "header": {
     "moreOptions": "More options",
@@ -262,10 +263,13 @@
     "colGate": "Gate",
     "colEta": "ETA",
     "colRemaining": "Remaining",
-    "colRecommend": "Recommend",
+    "colRecommend": "Recommended gate",
     "colAction": "Action",
     "rerouted": "re-routed",
-    "pushReroute": "Push Re-route"
+    "pushReroute": "Push Re-route",
+    "selectGateAria": "Recommended gate for {{device}}",
+    "saving": "saving…",
+    "gateUpdated": "updated"
   },
   "geofencing": {
     "selectEdit": "Select / edit",

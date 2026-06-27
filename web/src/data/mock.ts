@@ -700,6 +700,12 @@ const MOCK_ADAPTER_SENTINEL = "JNPA_MOCK_ADAPTER_PRESENT_DO_NOT_SHIP";
 export class MockAdapter implements DataAdapter {
   readonly mode: DataMode = "mock";
 
+  // Per-device gate overrides applied by reroute(). The fixture generator is
+  // deterministic, so without this a re-routed truck would snap back to its
+  // seeded gate on the next poll. Persisting the override here lets the UI
+  // reflect an updated recommended gate immediately after a successful save.
+  private gateOverrides = new Map<string, string>();
+
   constructor() {
     // Defence in depth: a live build never constructs this (the branch is
     // DCE'd), but if one ever did, fail loudly instead of silently serving
@@ -795,7 +801,8 @@ export class MockAdapter implements DataAdapter {
       else if (st === "EN_ROUTE_TO_ECD") f = randRange(seed + "-f", 0.3, 1.0);
       else f = randRange(seed + "-f", 0.0, 0.08); // queue / inside / gate-out hug the port
       const [lat, lon] = pointAlong(f);
-      const gate = pick(seed + "-gate", GATE_DEFS).id;
+      const deviceId = `TRK-${(1000 + i).toString()}`;
+      const gate = this.gateOverrides.get(deviceId) ?? pick(seed + "-gate", GATE_DEFS).id;
       const remaining_km = round(f * CORRIDOR_LENGTH_KM, 2);
       const moving = st === "EN_ROUTE_TO_PORT" || st === "EN_ROUTE_TO_ECD";
       const speed = moving ? randRange(seed + "-spd", 22, 48) : randRange(seed + "-spd", 0, 4);
@@ -805,7 +812,7 @@ export class MockAdapter implements DataAdapter {
           Math.min(Math.floor(f * SEGMENTS_LATLON.length), SEGMENTS_LATLON.length - 1)
         ].id;
       out.push({
-        device_id: `TRK-${(1000 + i).toString()}`,
+        device_id: deviceId,
         plate: `MH${randInt(seed + "-rto", 1, 48)
           .toString()
           .padStart(
@@ -827,9 +834,12 @@ export class MockAdapter implements DataAdapter {
   }
 
   reroute(
-    _deviceId: string,
-    _body: { gate_id?: string; lat?: number; lon?: number; force_state?: string },
+    deviceId: string,
+    body: { gate_id?: string; lat?: number; lon?: number; force_state?: string },
   ): Promise<{ rerouted: boolean }> {
+    // Persist the new gate so the next trucks() poll returns it (see
+    // gateOverrides above). Mirrors the live POST /api/trucks/{id}/route.
+    if (body.gate_id) this.gateOverrides.set(deviceId, body.gate_id);
     return Promise.resolve({ rerouted: true });
   }
 

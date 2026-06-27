@@ -277,6 +277,11 @@ async def override_route(device_id: str, body: RouteOverride) -> dict:
     if not ok:
         raise HTTPException(status_code=404, detail={"error": "unknown_device", "device_id": device_id})
     truck = fleet.trucks[device_id]
+    # Bind the new gate to the truck so GET /devices/list (which reports
+    # profile.gate_id) and ETA-to-gate reflect the re-route. Without this the
+    # route polyline changes but the dashboard's Gate column keeps the old gate.
+    if body.gate_id is not None:
+        truck.profile.gate_id = body.gate_id
     return {
         "rerouted": True,
         "device_id": device_id,

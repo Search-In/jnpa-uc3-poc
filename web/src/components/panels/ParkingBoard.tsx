@@ -2,7 +2,7 @@ import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { getAdapter } from "@/data";
 import type { ParkingFacility } from "@/lib/types";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { CollapsibleCard } from "@/components/ui/CollapsibleCard";
 import { Badge } from "@/components/ui/badge";
 import { Spinner, EmptyState } from "@/components/ui/misc";
 import { parkingStatusColour } from "@/lib/tokens";
@@ -52,13 +52,13 @@ export function ParkingBoard() {
   const s = sumQ.data;
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t("panels.parking.title")}</CardTitle>
-        <p className="text-[11px] text-muted-foreground">{t("panels.parking.subtitle")}</p>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {s && (
+    <CollapsibleCard
+      id="parking"
+      title={t("panels.parking.title")}
+      subtitle={t("panels.parking.subtitle")}
+      bodyClassName="space-y-3"
+    >
+      {s && (
           <div className="flex items-end justify-between rounded-md border border-border bg-background px-3 py-2">
             <div>
               <div className="text-[11px] text-muted-foreground">
@@ -95,8 +95,7 @@ export function ParkingBoard() {
             ))}
           </div>
         )}
-      </CardContent>
-    </Card>
+    </CollapsibleCard>
   );
 }
 

@@ -2,7 +2,7 @@ import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { getAdapter } from "@/data";
 import type { Alert, AutoLeoResult } from "@/lib/types";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { CollapsibleCard } from "@/components/ui/CollapsibleCard";
 import { Badge } from "@/components/ui/badge";
 import { StatusDot, Spinner, EmptyState } from "@/components/ui/misc";
 import { STATUS } from "@/lib/tokens";
@@ -109,13 +109,14 @@ export function AutoLeoPanel() {
   const rows = queueQ.data ?? [];
 
   return (
-    <Card className="flex h-full flex-col">
-      <CardHeader>
-        <CardTitle>{t("panels.leo.title")}</CardTitle>
-        <p className="text-[11px] text-muted-foreground">{t("panels.leo.subtitle")}</p>
-      </CardHeader>
-      <CardContent className="flex-1">
-        {queueQ.isLoading ? (
+    <CollapsibleCard
+      id="auto-leo"
+      className="flex h-full flex-col"
+      title={t("panels.leo.title")}
+      subtitle={t("panels.leo.subtitle")}
+      bodyClassName="flex-1"
+    >
+      {queueQ.isLoading ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Spinner /> {t("common.loading")}
           </div>
@@ -135,8 +136,7 @@ export function AutoLeoPanel() {
             ))}
           </div>
         )}
-      </CardContent>
-    </Card>
+    </CollapsibleCard>
   );
 }
 
@@ -151,13 +151,14 @@ export function CustomsFeedPanel() {
   const flags = flagsQ.data ?? [];
 
   return (
-    <Card className="flex h-full flex-col">
-      <CardHeader>
-        <CardTitle>{t("panels.leo.customsTitle")}</CardTitle>
-        <p className="text-[11px] text-muted-foreground">{t("panels.leo.customsSubtitle")}</p>
-      </CardHeader>
-      <CardContent className="flex-1">
-        <div className="rounded-md border border-border">
+    <CollapsibleCard
+      id="customs-feed"
+      className="flex h-full flex-col"
+      title={t("panels.leo.customsTitle")}
+      subtitle={t("panels.leo.customsSubtitle")}
+      bodyClassName="flex-1"
+    >
+      <div className="rounded-md border border-border">
           {flagsQ.isLoading ? (
             <div className="flex items-center gap-2 p-3 text-sm text-muted-foreground">
               <Spinner /> {t("common.loading")}
@@ -214,8 +215,7 @@ export function CustomsFeedPanel() {
             </ul>
           )}
         </div>
-      </CardContent>
-    </Card>
+    </CollapsibleCard>
   );
 }
 

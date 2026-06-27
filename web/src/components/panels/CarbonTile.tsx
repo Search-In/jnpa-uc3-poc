@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { getAdapter } from "@/data";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { CollapsibleCard } from "@/components/ui/CollapsibleCard";
 import { Spinner, EmptyState } from "@/components/ui/misc";
 import { STATUS, OKABE_ITO } from "@/lib/tokens";
 
@@ -24,13 +24,13 @@ export function CarbonTile() {
   const c = q.data;
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t("panels.carbon.title")}</CardTitle>
-        <p className="text-[11px] text-muted-foreground">{t("panels.carbon.subtitle")}</p>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {q.isLoading ? (
+    <CollapsibleCard
+      id="carbon"
+      title={t("panels.carbon.title")}
+      subtitle={t("panels.carbon.subtitle")}
+      bodyClassName="space-y-3"
+    >
+      {q.isLoading ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Spinner /> {t("common.loading")}
           </div>
@@ -111,8 +111,7 @@ export function CarbonTile() {
             </div>
           </>
         )}
-      </CardContent>
-    </Card>
+    </CollapsibleCard>
   );
 }
 

@@ -2,7 +2,7 @@ import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { getAdapter } from "@/data";
 import type { KpiResult } from "@/lib/types";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { CollapsibleCard } from "@/components/ui/CollapsibleCard";
 import { Badge } from "@/components/ui/badge";
 import { Spinner, EmptyState } from "@/components/ui/misc";
 import { STATUS } from "@/lib/tokens";
@@ -42,13 +42,13 @@ export function EmptyContainerBoard({ limit = 8 }: { limit?: number }) {
   const allocations = (allocQ.data ?? []).slice(0, limit);
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t("panels.empty.title")}</CardTitle>
-        <p className="text-[11px] text-muted-foreground">{t("panels.empty.subtitle")}</p>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {kpiQ.data && <TrtKpiCard kpi={kpiQ.data} />}
+    <CollapsibleCard
+      id="empty-containers"
+      title={t("panels.empty.title")}
+      subtitle={t("panels.empty.subtitle")}
+      bodyClassName="space-y-3"
+    >
+      {kpiQ.data && <TrtKpiCard kpi={kpiQ.data} />}
         {allocQ.isLoading ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Spinner /> {t("common.loading")}
@@ -87,8 +87,7 @@ export function EmptyContainerBoard({ limit = 8 }: { limit?: number }) {
             </table>
           </div>
         )}
-      </CardContent>
-    </Card>
+    </CollapsibleCard>
   );
 }
 

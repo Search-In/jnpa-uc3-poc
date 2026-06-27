@@ -29,7 +29,9 @@
     "open": "Open",
     "save": "Save",
     "cancel": "Cancel",
-    "retry": "Retry"
+    "retry": "Retry",
+    "collapse": "Collapse",
+    "expand": "Expand"
   },
   "header": {
     "moreOptions": "More options",

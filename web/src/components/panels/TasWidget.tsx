@@ -8,7 +8,7 @@
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { getAdapter } from "@/data";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { CollapsibleCard } from "@/components/ui/CollapsibleCard";
 import { Badge } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/misc";
 import { fmtTimeIST } from "@/lib/utils";
@@ -49,15 +49,19 @@ export function TasWidget() {
   const updatedTs = q.dataUpdatedAt ? new Date(q.dataUpdatedAt).toISOString() : undefined;
 
   return (
-    <Card data-guided-id="tas-widget" className="flex h-full flex-col">
-      <CardHeader className="flex-row items-center justify-between">
-        <CardTitle>{t("tas.title")}</CardTitle>
+    <CollapsibleCard
+      id="tas"
+      data-guided-id="tas-widget"
+      className="flex h-full flex-col"
+      title={t("tas.title")}
+      headerRight={
         <Badge colour="#56B4E9" dot={false}>
           {t("tas.gate")} {GATE.replace("G-", "")}
         </Badge>
-      </CardHeader>
-      <CardContent className="flex-1 space-y-3">
-        {/* Active / Rescheduled / Pending slot counts */}
+      }
+      bodyClassName="flex-1 space-y-3"
+    >
+      {/* Active / Rescheduled / Pending slot counts */}
         <div className="grid grid-cols-3 gap-2">
           <Stat label={t("tas.active")} value={active} colour={STATUS_COLOUR.BOOKED} />
           <Stat
@@ -117,8 +121,7 @@ export function TasWidget() {
           {slots.length} {t("tas.slotsCount")} · {t("tas.lastUpdated")}{" "}
           {updatedTs ? fmtTimeIST(updatedTs) : "—"}
         </div>
-      </CardContent>
-    </Card>
+    </CollapsibleCard>
   );
 }
 

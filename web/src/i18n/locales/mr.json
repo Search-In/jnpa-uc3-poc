@@ -12,6 +12,7 @@
     "reports": "वाहतूक-पोलीस अहवाल",
     "health": "प्रणाली स्थिती",
     "whatIf": "व्हॉट-इफ कन्सोल",
+    "simulator": "सिम्युलेटर",
     "demo": "डेमो कन्सोल",
     "enrollments": "चालक नोंदणी"
   },
@@ -331,7 +332,8 @@
     "fastag": "फास्टॅग",
     "evidenceAlt": "पुरावा",
     "recommendedAction": "शिफारस केलेली कृती — ई-चलन",
-    "openPdfForKind": "या प्रकारासाठी PDF उघडा"
+    "openPdfForKind": "या प्रकारासाठी PDF उघडा",
+    "downloadThisReport": "हा अहवाल डाउनलोड करा (PDF)"
   },
   "enrollments": {
     "title": "ड्रायव्हर नोंदणी विनंत्या",

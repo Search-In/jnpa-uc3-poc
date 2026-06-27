@@ -1,0 +1,221 @@
+/* Simulator control-room styling + subtle motion. Scoped under .sim-root so it
+   never leaks into the rest of the dashboard. Calcite components render in
+   shadow DOM; these rules target the plain-DOM wrappers, value chips, rows and
+   scenario cards we author around them. */
+
+.sim-root {
+  --sim-gap: 16px;
+}
+
+.sim-canvas {
+  max-width: 1140px;
+  margin: 0 auto;
+  padding: 16px;
+  display: grid;
+  gap: var(--sim-gap);
+}
+
+/* Header actions: one vertically-centred row (status · clock · button). */
+.sim-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 100%;
+  padding-inline: 14px;
+}
+.sim-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  color: #6a7686;
+  white-space: nowrap;
+}
+.sim-status.is-running {
+  color: #009e73;
+}
+.sim-clock {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: #4a4a4a;
+  white-space: nowrap;
+}
+
+/* Section blocks breathe a little and lift on hover. */
+.sim-root calcite-block {
+  transition: box-shadow 0.2s ease;
+}
+.sim-root calcite-block:hover {
+  box-shadow: 0 1px 8px rgba(0, 0, 0, 0.06);
+}
+
+/* A control row: label · slider · value, vertically centred with even rhythm. */
+.sim-row {
+  display: grid;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0;
+}
+.sim-row + .sim-row {
+  border-top: 1px solid var(--sim-border, #ececec);
+}
+
+.sim-row-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+/* Live numeric readouts ease their colour/scale when the value changes, so a
+   growing queue or rising jam factor animates rather than jumping. */
+.sim-value {
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  text-align: right;
+  transition:
+    color 0.3s ease,
+    transform 0.18s ease;
+}
+.sim-value--bump {
+  transform: scale(1.12);
+}
+
+/* Guided-scenario launcher cards. */
+.sim-scenario-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+.sim-scenario-card {
+  border: 1px solid #d9dee5;
+  border-radius: 10px;
+  padding: 14px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    transform 0.2s ease;
+}
+.sim-scenario-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+}
+.sim-scenario-card.is-active {
+  border-color: #007ac2;
+  box-shadow: 0 0 0 2px rgba(0, 122, 194, 0.18);
+  background: #f3f9fd;
+}
+.sim-scenario-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #15233b;
+}
+.sim-scenario-blurb {
+  font-size: 12px;
+  line-height: 1.45;
+  color: #5b6573;
+  margin: 0;
+  flex: 1;
+}
+
+/* Active-step narration panel + auto-advance progress bar. */
+.sim-step {
+  margin-top: 14px;
+  border: 1px solid #d9dee5;
+  border-radius: 10px;
+  padding: 14px;
+  background: #f7fafc;
+  animation: sim-fade-in 0.25s ease;
+}
+.sim-step-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.sim-step-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #15233b;
+}
+.sim-step-explain {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #3b4757;
+  margin: 8px 0 10px;
+}
+.sim-progress {
+  height: 3px;
+  border-radius: 3px;
+  background: #e2e8f0;
+  overflow: hidden;
+  margin-top: 12px;
+}
+.sim-progress > span {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: #007ac2;
+  animation: sim-progress-fill linear forwards;
+}
+
+/* Running indicator dot. */
+.sim-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #009e73;
+  margin-inline-end: 6px;
+}
+.sim-dot--running {
+  animation: sim-pulse 1.4s ease-in-out infinite;
+}
+
+.sim-meta {
+  font-size: 12px;
+  color: #6a7686;
+  text-align: center;
+}
+
+@keyframes sim-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes sim-progress-fill {
+  from {
+    width: 0;
+  }
+  to {
+    width: 100%;
+  }
+}
+@keyframes sim-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(0, 158, 115, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(0, 158, 115, 0);
+  }
+}
+
+@media (max-width: 860px) {
+  .sim-scenario-grid {
+    grid-template-columns: 1fr;
+  }
+}

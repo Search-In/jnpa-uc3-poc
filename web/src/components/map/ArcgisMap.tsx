@@ -33,6 +33,7 @@ import Polygon from "@arcgis/core/geometry/Polygon";
 import SimpleMarkerSymbol from "@arcgis/core/symbols/SimpleMarkerSymbol";
 import SimpleLineSymbol from "@arcgis/core/symbols/SimpleLineSymbol";
 import SimpleFillSymbol from "@arcgis/core/symbols/SimpleFillSymbol";
+import TextSymbol from "@arcgis/core/symbols/TextSymbol";
 import type MapView from "@arcgis/core/views/MapView";
 import esriConfig from "@arcgis/core/config";
 
@@ -95,9 +96,16 @@ export interface ArcgisMapProps {
    */
   highlights?: string[];
   /**
+   * Optional live value labels per highlighted asset id (e.g. "NSICT • 60").
+   * Drawn as a chip next to each highlight ring so the operator reads the exact
+   * value the simulator is driving without leaving the map.
+   */
+  highlightLabels?: Record<string, string>;
+  /**
    * A single incident location to ring + frame (the header notification drawer
-   * publishes this when an operator clicks an alert). Drawn as a distinct amber
-   * halo on the highlight layer; null clears it.
+   * publishes this when an operator clicks an alert, or the simulator publishes
+   * the asset just changed). Drawn as a distinct amber halo + animated pulse on
+   * the highlight layer; null clears it.
    */
   focusPoint?: { lat: number; lon: number } | null;
   /** Override basemap (default "dark-gray-vector" — no API key needed in dev). */
@@ -137,6 +145,7 @@ export function ArcgisMap({
   trucks = [],
   parkingFacilities = [],
   highlights = [],
+  highlightLabels = {},
   focusPoint = null,
   basemap = DEFAULT_BASEMAP,
   center = JNPA_CENTER,
@@ -491,6 +500,25 @@ export function ArcgisMap({
           attributes: { id },
         }),
       );
+      // Live value chip (e.g. "NSICT • 60") pinned just above the ring so the
+      // operator reads the exact simulated value on the map.
+      const label = highlightLabels[id];
+      if (label) {
+        layer.add(
+          new Graphic({
+            geometry: geom,
+            symbol: new TextSymbol({
+              text: label,
+              color: "#ffffff",
+              haloColor: "#0b1f33",
+              haloSize: 1.5,
+              font: { size: 11, weight: "bold" },
+              yoffset: 22,
+            }),
+            attributes: { id, label: true },
+          }),
+        );
+      }
     }
     // Alert-focus halo (from the header notification drawer). Drawn after the
     // tour spotlights and in a distinct colour so the two never read as one.
@@ -575,7 +603,7 @@ export function ArcgisMap({
       lastZoomKey.current = "";
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [highlights, gates, corridor, viewReady, focusPoint]);
+  }, [highlights, highlightLabels, gates, corridor, viewReady, focusPoint]);
 
   // Pulsing ring on the focused queue/feed item (spec: "marker pulse
   // animation"). On its own layer so the spotlight redraw never clears it; the

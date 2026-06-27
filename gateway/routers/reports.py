@@ -67,6 +67,7 @@ _CHALLAN: Dict[str, Dict[str, Any]] = {
 async def _police_alerts(
     state: GatewayState,
     *,
+    incident_id: Optional[str] = None,
     kind: Optional[str],
     gate_id: Optional[str],
     severity: Optional[str],
@@ -81,6 +82,12 @@ async def _police_alerts(
         "kinds": list(POLICE_KINDS) if not kind else [kind],
         "limit": limit,
     }
+    # Single-incident export ("Download this report"): pin to one alert so the
+    # PDF holds exactly the clicked incident, not every incident of its kind.
+    # Cast id::text so this works whether the column is uuid or text.
+    if incident_id:
+        clauses.append("id::text = :incident_id")
+        params["incident_id"] = incident_id
     if gate_id:
         clauses.append("gate_id = :gate_id")
         params["gate_id"] = gate_id
@@ -142,6 +149,7 @@ async def _enrich_rc(state: GatewayState, plates: List[str]) -> Dict[str, dict]:
 @router.get("/police")
 async def police_report(
     format: str = Query(default="json", pattern="^(json|pdf|html)$"),
+    id: Optional[str] = Query(default=None, description="single incident id"),
     kind: Optional[str] = Query(default=None),
     gate: Optional[str] = Query(default=None, alias="gate"),
     severity: Optional[str] = Query(default=None),
@@ -151,7 +159,7 @@ async def police_report(
     state: GatewayState = Depends(get_state),
 ):
     alerts = await _police_alerts(
-        state, kind=kind, gate_id=gate, severity=severity,
+        state, incident_id=id, kind=kind, gate_id=gate, severity=severity,
         since=since, until=until, limit=limit,
     )
     plates = sorted({a["plate"] for a in alerts if a.get("plate")})

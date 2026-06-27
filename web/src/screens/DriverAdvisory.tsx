@@ -6,9 +6,16 @@ import type { TruckDevice } from "@/lib/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Spinner, EmptyState } from "@/components/ui/misc";
 import { fmtEta } from "@/lib/utils";
-import { Navigation, CheckCircle2 } from "lucide-react";
+import { Navigation, CheckCircle2, AlertCircle } from "lucide-react";
 
 const GATES = ["G-NSICT", "G-JNPCT", "G-NSIGT", "G-BMCT"];
 
@@ -103,18 +110,31 @@ function QueueRow({
   qc: ReturnType<typeof useQueryClient>;
 }) {
   const { t } = useTranslation();
+  // The dropdown shows the suggested gate by default, but stays editable. Once
+  // the operator picks a gate we keep their choice (`selected`) regardless of
+  // how the auto-recommendation shifts as the queue rebalances.
+  const [selected, setSelected] = useState<string | null>(null);
+  const gate = selected ?? recommend;
   const [done, setDone] = useState(false);
+
   const reroute = useMutation({
-    mutationFn: () =>
+    mutationFn: (gateId: string) =>
       getAdapter().reroute(truck.device_id, {
-        gate_id: recommend,
+        gate_id: gateId,
         force_state: "EN_ROUTE_TO_PORT",
       }),
-    onSuccess: () => {
+    onSuccess: async () => {
       setDone(true);
-      qc.invalidateQueries({ queryKey: ["trucks"] });
+      // Refetch so the Gate column reflects the persisted change immediately.
+      await qc.invalidateQueries({ queryKey: ["trucks"] });
     },
   });
+
+  const onGateChange = (gateId: string) => {
+    setSelected(gateId);
+    setDone(false);
+    reroute.mutate(gateId);
+  };
 
   return (
     <tr className="border-b border-border/50 hover:bg-muted/40">
@@ -124,22 +144,48 @@ function QueueRow({
       <td className="px-4 py-2 tabular-nums">{fmtEta(truck.eta_s)}</td>
       <td className="px-4 py-2 tabular-nums">{truck.remaining_km.toFixed(1)} km</td>
       <td className="px-4 py-2">
-        <Badge colour="#009E73">→ {recommend.replace("G-", "")}</Badge>
+        <Select value={gate} onValueChange={onGateChange} disabled={reroute.isPending}>
+          <SelectTrigger
+            className="w-[140px]"
+            data-guided-id="advisory-reroute"
+            aria-label={t("advisory.selectGateAria", { device: truck.device_id })}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {GATES.map((g) => (
+              <SelectItem key={g} value={g}>
+                → {g.replace("G-", "")}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </td>
       <td className="px-4 py-2 text-right">
-        {done ? (
+        {reroute.isPending ? (
+          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+            <Spinner /> {t("advisory.saving")}
+          </span>
+        ) : reroute.isError ? (
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 text-xs text-severity-crit"
+            onClick={() => reroute.mutate(gate)}
+          >
+            <AlertCircle className="h-3.5 w-3.5" /> {t("common.retry")}
+          </button>
+        ) : done ? (
           <span className="inline-flex items-center gap-1 text-xs text-severity-ok">
-            <CheckCircle2 className="h-3.5 w-3.5" /> {t("advisory.rerouted")}
+            <CheckCircle2 className="h-3.5 w-3.5" /> {t("advisory.gateUpdated")}
           </span>
         ) : (
           <Button
             size="sm"
             variant="outline"
-            data-guided-id="advisory-reroute"
-            onClick={() => reroute.mutate()}
+            onClick={() => reroute.mutate(gate)}
             disabled={reroute.isPending}
           >
-            {reroute.isPending ? <Spinner /> : <Navigation className="h-3.5 w-3.5" />}
+            <Navigation className="h-3.5 w-3.5" />
             {t("advisory.pushReroute")}
           </Button>
         )}

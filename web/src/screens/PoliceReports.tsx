@@ -308,10 +308,10 @@ function IncidentDialog({
 
               <button
                 type="button"
-                onClick={() => void exportPolicePdf({ kind: incident.kind })}
+                onClick={() => void exportPolicePdf({ id: incident.id })}
                 className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-severity-info/40 bg-severity-info/10 px-4 py-2.5 text-sm font-semibold text-severity-info transition-colors hover:bg-severity-info/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-severity-info/40"
               >
-                <ExternalLink className="h-4 w-4" /> {t("reports.openPdfForKind")}
+                <ExternalLink className="h-4 w-4" /> {t("reports.downloadThisReport")}
               </button>
             </div>
           </>

@@ -12,6 +12,7 @@
     "reports": "Traffic-Police Reports",
     "health": "System Health",
     "whatIf": "What-If Console",
+    "simulator": "Simulator",
     "demo": "Demo Console",
     "enrollments": "Driver Enrolment"
   },

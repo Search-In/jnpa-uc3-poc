@@ -9,6 +9,7 @@
 import type { DataAdapter, DataMode } from "./types";
 import { LiveAdapter } from "./live";
 import { MockAdapter } from "./mock";
+import { makeSimAdapter } from "@/sim/SimAdapter";
 
 export type { DataAdapter, DataMode } from "./types";
 
@@ -24,11 +25,12 @@ export function getAdapter(): DataAdapter {
   if (_adapter) return _adapter;
   // The condition is a compile-time constant -> the false branch and its
   // import are eliminated by the bundler in production (no MockAdapter shipped).
-  if (__JNPA_DATA_MODE__ === "live") {
-    _adapter = new LiveAdapter();
-  } else {
-    _adapter = new MockAdapter();
-  }
+  const base = __JNPA_DATA_MODE__ === "live" ? new LiveAdapter() : new MockAdapter();
+  // Wrap with the simulator overlay: when no sim lever is engaged every read is
+  // a straight pass-through (the overlays early-return base), so existing
+  // behaviour is unchanged; when the Simulator page drives a value, the whole
+  // dashboard reflects it without any per-screen changes. See sim/SimAdapter.ts.
+  _adapter = makeSimAdapter(base);
   return _adapter;
 }
 

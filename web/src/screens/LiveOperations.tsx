@@ -6,6 +6,7 @@ import type MapView from "@arcgis/core/views/MapView";
 import { getAdapter } from "@/data";
 import { useTourStore } from "@/whatif/useTourStore";
 import { getScript } from "@/whatif/scenarioScripts";
+import { useSimStore } from "@/sim/useSimStore";
 import type { Gate, TrafficSnapshot } from "@/lib/types";
 import { ArcgisMap } from "@/components/map/ArcgisMap";
 import { Card, CardContent } from "@/components/ui/card";
@@ -103,6 +104,59 @@ export default function LiveOperations() {
     if (t.gate_id) queueByGate.set(t.gate_id, (queueByGate.get(t.gate_id) ?? 0) + 1);
   }
 
+  // --- Simulator-driven map highlighting -----------------------------------
+  // The Simulator page (this tab or another) drives sim overrides; simStore
+  // broadcasts them here. We spotlight every gate/segment the simulator drives,
+  // label each with its live value, and pulse + frame the most-recently changed
+  // asset — so the operator sees exactly what the simulator is acting upon.
+  const sim = useSimStore();
+  const corridor = corridorQ.data;
+
+  const simHighlights = useMemo(() => {
+    const drivenGates = Object.entries(sim.gates)
+      .filter(([, g]) => (g.queueLength ?? 0) > 0)
+      .map(([id]) => id);
+    const drivenSegs = Object.entries(sim.segments)
+      .filter(([, s]) => (s.jamFactor ?? 0) > 0)
+      .map(([id]) => id);
+    return [...new Set([...sim.highlights, ...drivenGates, ...drivenSegs])];
+  }, [sim.highlights, sim.gates, sim.segments]);
+
+  const highlightLabels = useMemo(() => {
+    const labels: Record<string, string> = {};
+    for (const [id, g] of Object.entries(sim.gates)) {
+      if ((g.queueLength ?? 0) > 0) labels[id] = `${id.replace("G-", "")} • ${g.queueLength}`;
+    }
+    for (const [id, s] of Object.entries(sim.segments)) {
+      if ((s.jamFactor ?? 0) > 0) labels[id] = `${id} • jam ${s.jamFactor!.toFixed(1)}`;
+    }
+    return labels;
+  }, [sim.gates, sim.segments]);
+
+  // Resolve the most-recently-touched asset to a point so the map pulses + frames
+  // it. lastTouchedNonce is in the deps so repeat edits re-fire the focus.
+  const simFocusPoint = useMemo(() => {
+    const id = sim.lastTouched;
+    if (!id) return null;
+    const g = gates.find((x) => x.id === id);
+    if (g) return { lat: g.lat, lon: g.lon };
+    const seg = corridor?.segments.find((s) => s.id === id);
+    if (seg) {
+      const a = (seg.start[0] + seg.end[0]) / 2;
+      const b = (seg.start[1] + seg.end[1]) / 2;
+      const lat = Math.abs(a) <= 30 ? a : b;
+      const lon = Math.abs(a) <= 30 ? b : a;
+      return { lat, lon };
+    }
+    return null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sim.lastTouched, sim.lastTouchedNonce, gates, corridor]);
+
+  // Guided-tour spotlight + simulator highlights combine on the map; an actively
+  // focused alert wins the pulse, else the simulator's last-touched asset does.
+  const mapHighlights = useMemo(() => [...spotlight, ...simHighlights], [spotlight, simHighlights]);
+  const effectiveFocus = focusPoint ?? simFocusPoint;
+
   return (
     <div className="flex h-full flex-col overflow-y-auto">
       {/* KPI strip from the adapter (label/value/target/Δ%/sparkline). */}
@@ -173,8 +227,9 @@ export default function LiveOperations() {
           snapshots={snapshots}
           trucks={trucksQ.data}
           parkingFacilities={parkingQ.data}
-          highlights={spotlight}
-          focusPoint={focusPoint}
+          highlights={mapHighlights}
+          highlightLabels={highlightLabels}
+          focusPoint={effectiveFocus}
           onViewReady={setView}
         />
         <FloatingLegend />

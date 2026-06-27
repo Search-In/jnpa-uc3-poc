@@ -12,6 +12,8 @@ import SystemHealth from "@/screens/SystemHealth";
 import WhatIfConsole from "@/screens/WhatIfConsole";
 import DemoConsole from "@/screens/DemoConsole";
 import DriverEnrollments from "@/screens/DriverEnrollments";
+import SimulatorPage from "@/sim/SimulatorPage";
+import { SimBridge } from "@/sim/SimBridge";
 import { GuidedTour } from "@/whatif/GuidedTour";
 
 /** Guard a screen by role. When auth is disabled (demo build) it always renders;
@@ -34,6 +36,47 @@ export default function App() {
     return <LoginGate onAuthed={(r) => setRole(r)} />;
   }
 
+  return (
+    <>
+      <Routes>
+        {/* Standalone, full-page Simulator — rendered OUTSIDE the dashboard Shell
+            (no left nav / app header) so it feels like a separate application,
+            exactly like the jnpa_poc_2 reference. It owns its own CalciteShell +
+            navigation header. */}
+        <Route
+          path="/simulator"
+          element={
+            <Guard path="/simulator">
+              <SimulatorPage />
+            </Guard>
+          }
+        />
+
+        {/* Everything else lives inside the dashboard Shell. */}
+        <Route path="*" element={<DashboardShell scenario={scenario} reset={reset} navigate={navigate} />} />
+      </Routes>
+
+      {/* Simulator → dashboard bridge: invalidates the sim-affected React Query
+          keys whenever a slider/scenario changes the sim state, so the live
+          board reflects the simulator immediately. Mounted at the top level so
+          it stays active for the dashboard tab regardless of the active route.
+          Renders nothing. */}
+      <SimBridge />
+    </>
+  );
+}
+
+/** The dashboard application shell + its routed screens. Separated from the
+ *  standalone Simulator so `/simulator` can render without this chrome. */
+function DashboardShell({
+  scenario,
+  reset,
+  navigate,
+}: {
+  scenario: string;
+  reset: () => void;
+  navigate: (to: string) => void;
+}) {
   return (
     <Shell onResetBaseline={reset} resetDisabled={scenario === "none"}>
       <main className="min-h-0 flex-1 overflow-hidden" style={{ height: "100%" }}>

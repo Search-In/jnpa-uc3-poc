@@ -14,7 +14,7 @@
 // instead, which would break that test.
 
 import type { CSSProperties, ReactNode } from "react";
-import { NavLink } from "react-router-dom";
+import { NavLink, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
   CalciteShell,
@@ -77,6 +77,7 @@ function navLinkStyle(isActive: boolean): CSSProperties {
 
 export function Shell({ children, onResetBaseline, resetDisabled }: ShellProps) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
 
   function onLangChange(e: { target: { value: string } }) {
     void i18n.changeLanguage(e.target.value as LangCode);
@@ -104,6 +105,19 @@ export function Shell({ children, onResetBaseline, resetDisabled }: ShellProps) 
             paddingInlineEnd: "0.75rem",
           }}
         >
+          {/* Simulator launch — a top-level header action (matches the
+              jnpa_poc_2 reference), NOT a left-nav menu item. Opens the
+              dedicated /simulator control room. */}
+          <CalciteButton
+            appearance="solid"
+            kind="brand"
+            iconStart="play"
+            scale="s"
+            onClick={() => navigate("/simulator")}
+          >
+            {t("nav.simulator")}
+          </CalciteButton>
+
           <CalciteSelect
             label={t("common.language")}
             width="auto"

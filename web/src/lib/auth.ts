@@ -39,6 +39,7 @@ export const SCREEN_ROLES: Record<string, Role[]> = {
   "/health": CONTROL_ROOM,
   "/what-if": CONTROL_ROOM,
   "/whatif": CONTROL_ROOM,
+  "/simulator": CONTROL_ROOM,
   "/demo": CONTROL_ROOM,
 };
 

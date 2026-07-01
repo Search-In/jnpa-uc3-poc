@@ -143,7 +143,7 @@ export function ViolationDetectionPanel() {
   const detection = detect.data ?? null;
   const incident = commit.data ?? null;
   const enforced: ViolationEnforceResult | null = enforce.data ?? null;
-  const catalog = detection?.available_violations ?? [];
+  const catalog = useMemo(() => detection?.available_violations ?? [], [detection]);
 
   // Real ANPR (LIVE) vs synthetic fallback — drives the explicit source label.
   const realAnpr = !!(detection?.anpr_real ?? detection?.anpr_decision_path === "LIVE");
@@ -278,7 +278,7 @@ export function ViolationDetectionPanel() {
     if (!target) return;
     try {
       await getAdapter().downloadPolicePdf({ id: target });
-    } catch (e) {
+    } catch {
       setNotice({
         kind: "warn",
         text: t("violations.pdfFailed", {

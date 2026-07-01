@@ -32,6 +32,11 @@ import type {
   TasSlot,
   TrafficSnapshot,
   TruckDevice,
+  ViolationCatalogItem,
+  ViolationCommitInput,
+  ViolationDetectResult,
+  ViolationEnforceResult,
+  ViolationIncident,
   Zone,
 } from "@/lib/types";
 
@@ -94,6 +99,15 @@ export interface DataAdapter {
 
   // police reports
   policeReport(params?: Record<string, string | undefined>): Promise<PoliceIncident[]>;
+  // vehicle violation detection (Reports-page enforcement console)
+  violationCatalog(): Promise<ViolationCatalogItem[]>;
+  violationDetect(image: Blob, gateId?: string): Promise<ViolationDetectResult>;
+  violationCommit(input: ViolationCommitInput): Promise<ViolationIncident>;
+  // Fully-automatic pipeline (upload → ANPR → case → challan → notification).
+  violationEnforce(
+    image: Blob,
+    opts?: { gateId?: string; zoneId?: string; violations?: string },
+  ): Promise<ViolationEnforceResult>;
   policePdfUrl(params?: Record<string, string | undefined>): string;
   // Download the report PDF (auth-aware — see LiveAdapter). Async because it
   // streams the file with the bearer token rather than navigating to a URL.

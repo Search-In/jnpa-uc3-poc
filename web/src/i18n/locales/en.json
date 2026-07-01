@@ -29,7 +29,9 @@
     "open": "Open",
     "save": "Save",
     "cancel": "Cancel",
-    "retry": "Retry"
+    "retry": "Retry",
+    "collapse": "Collapse",
+    "expand": "Expand"
   },
   "header": {
     "moreOptions": "More options",
@@ -328,6 +330,7 @@
     "loadingIncidents": "loading incidents…",
     "noIncidents": "No incidents match these filters.",
     "driverIdentityVerification": "Driver Identity Verification",
+    "vehicleViolationDetection": "Vehicle Violation Detection",
     "exportPdf": "Export PDF",
     "incidentId": "Incident ID",
     "ownerMasked": "Owner (masked)",

@@ -59,6 +59,26 @@ async function downloadFile(path: string, filename: string): Promise<void> {
   URL.revokeObjectURL(url);
 }
 
+// Multipart POST (file upload). Unlike http<>, we must NOT set content-type so
+// the browser adds the multipart boundary; the bearer token is still attached.
+async function postForm<T>(path: string, form: FormData): Promise<T> {
+  const token = getToken();
+  const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+  const res = await fetch(path, { method: "POST", headers: { ...authHeader }, body: form });
+  if (!res.ok) {
+    let detail: any = undefined;
+    try {
+      detail = await res.json();
+    } catch {
+      /* non-json error body */
+    }
+    throw new Error(
+      `${res.status} ${res.statusText}${detail ? ` — ${JSON.stringify(detail)}` : ""}`,
+    );
+  }
+  return (await res.json()) as T;
+}
+
 export const api = {
   // --- geometry ---
   gates: () => http<{ gates: import("./types").Gate[] }>("/api/gates"),
@@ -134,6 +154,33 @@ export const api = {
     // otherwise the filtered batch. Keeps "this report" vs "all reports" distinct.
     const filename = params?.id ? `police-report-${params.id}.pdf` : "police-report.pdf";
     return downloadFile(`/api/reports/police?${q.toString()}`, filename);
+  },
+
+  // --- vehicle violation detection (Reports page enforcement console) ---
+  violationCatalog: () =>
+    http<{ violations: import("./types").ViolationCatalogItem[] }>("/api/violations/catalog"),
+  violationDetect: (image: Blob, gateId?: string) => {
+    const fd = new FormData();
+    fd.append("image", image, "frame.jpg");
+    if (gateId) fd.append("gate_id", gateId);
+    return postForm<import("./types").ViolationDetectResult>("/api/violations/detect", fd);
+  },
+  violationCommit: (input: import("./types").ViolationCommitInput) =>
+    http<import("./types").ViolationIncident>("/api/violations/commit", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  // Fully-automatic pipeline: one upload → ANPR → case → challan → notification.
+  violationEnforce: (
+    image: Blob,
+    opts?: { gateId?: string; zoneId?: string; violations?: string },
+  ) => {
+    const fd = new FormData();
+    fd.append("image", image, "frame.jpg");
+    if (opts?.gateId) fd.append("gate_id", opts.gateId);
+    if (opts?.zoneId) fd.append("zone_id", opts.zoneId);
+    if (opts?.violations) fd.append("violations", opts.violations);
+    return postForm<import("./types").ViolationEnforceResult>("/api/violations/enforce", fd);
   },
 
   // --- scenarios (What-If Console) ---

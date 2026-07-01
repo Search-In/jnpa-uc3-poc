@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSocket } from "@/hooks/SocketContext";
 import { getAdapter } from "@/data";
 import type { PoliceIncident } from "@/lib/types";
 import { Card, CardContent } from "@/components/ui/card";
@@ -9,9 +10,10 @@ import { Badge } from "@/components/ui/badge";
 import { Spinner, EmptyState } from "@/components/ui/misc";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { IdentityPanel } from "@/components/panels/IdentityPanel";
+import { ViolationDetectionPanel } from "@/components/panels/ViolationDetectionPanel";
 import { severityColour } from "@/lib/palette";
 import { fmtDateTimeIST } from "@/lib/utils";
-import { FileDown, ExternalLink, ReceiptText, ScanFace } from "lucide-react";
+import { FileDown, ExternalLink, ReceiptText, ScanFace, ShieldAlert } from "lucide-react";
 
 // Stream the report PDF with the bearer token attached (a plain <a href>/new-tab
 // navigation can't send the header, so it 401s under auth-enabled builds).
@@ -44,6 +46,41 @@ export default function PoliceReports() {
   // Driver Identity Verification opens the existing IdentityPanel in a centered
   // modal — no routing change, verification logic reused as-is.
   const [identityOpen, setIdentityOpen] = useState(false);
+  // Vehicle Violation Detection — the orchestration console (ANPR + lookup +
+  // rule engine + e-Challan) in a centered modal, beside Driver Identity.
+  const [violationOpen, setViolationOpen] = useState(false);
+
+  // Live enforcement toast + row highlight, driven by the gateway's
+  // `violation_enforced` WS frame (the /api/violations/enforce pipeline). Lets
+  // ANY operator's auto-enforced challan surface here in real time.
+  const qc = useQueryClient();
+  const { subscribe } = useSocket();
+  const [flash, setFlash] = useState<{
+    plate?: string | null;
+    challan_no?: string | null;
+    fine: number;
+  } | null>(null);
+  const [highlightPlate, setHighlightPlate] = useState<string | null>(null);
+
+  useEffect(() => {
+    return subscribe((frame) => {
+      if (frame.type !== "violation_enforced") return;
+      const p = frame.payload;
+      void qc.invalidateQueries({ queryKey: ["police"] });
+      setFlash({ plate: p.plate, challan_no: p.challan_no, fine: p.fine });
+      setHighlightPlate(p.plate ?? null);
+    });
+  }, [subscribe, qc]);
+
+  useEffect(() => {
+    if (!flash) return;
+    const t1 = setTimeout(() => setFlash(null), 6000);
+    const t2 = setTimeout(() => setHighlightPlate(null), 6000);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [flash]);
 
   const filters: Record<string, string | undefined> = {
     kind: kind || undefined,
@@ -62,6 +99,22 @@ export default function PoliceReports() {
 
   return (
     <div className="flex h-full flex-col">
+      {/* Real-time enforcement toast — a new auto-enforced challan arrived. */}
+      {flash && (
+        <div className="flex items-center gap-2 border-b border-severity-warning/40 bg-severity-warning/10 px-4 py-2 text-xs">
+          <ShieldAlert className="h-4 w-4 text-severity-warning" />
+          <span className="font-semibold">
+            {t("reports.enforcedToast", { defaultValue: "New challan enforced" })}
+          </span>
+          <span className="font-mono">{flash.plate ?? "—"}</span>
+          {flash.challan_no && (
+            <span className="font-mono text-muted-foreground">· {flash.challan_no}</span>
+          )}
+          <span className="ml-auto font-mono font-semibold text-severity-critical">
+            ₹{flash.fine.toLocaleString("en-IN")}
+          </span>
+        </div>
+      )}
       <div className="flex flex-wrap items-end justify-between gap-3 border-b border-border p-4">
         <div>
           <h1 className="text-lg font-semibold">{t("nav.reports")}</h1>
@@ -73,6 +126,12 @@ export default function PoliceReports() {
         <div className="flex items-center gap-2">
           <Button onClick={() => setIdentityOpen(true)}>
             <ScanFace className="h-4 w-4" /> {t("reports.driverIdentityVerification")}
+          </Button>
+          <Button onClick={() => setViolationOpen(true)}>
+            <ShieldAlert className="h-4 w-4" />{" "}
+            {t("reports.vehicleViolationDetection", {
+              defaultValue: "Vehicle Violation Detection",
+            })}
           </Button>
           <Button onClick={() => void exportPolicePdf(filters)}>
             <FileDown className="h-4 w-4" /> {t("reports.exportPdf")}
@@ -129,7 +188,11 @@ export default function PoliceReports() {
                       key={inc.id}
                       data-guided-id={`report-${inc.kind}`}
                       onClick={() => setSelected(inc)}
-                      className="cursor-pointer border-b border-border/50 hover:bg-muted/40"
+                      className={`cursor-pointer border-b border-border/50 hover:bg-muted/40 ${
+                        inc.plate && inc.plate === highlightPlate
+                          ? "animate-pulse bg-severity-warning/10"
+                          : ""
+                      }`}
                     >
                       <td className="px-4 py-2 tabular-nums">{fmtDateTimeIST(inc.ts)}</td>
                       <td className="px-4 py-2">{inc.kind}</td>
@@ -167,6 +230,20 @@ export default function PoliceReports() {
         <DialogContent className="max-w-xl p-3">
           <DialogTitle className="sr-only">{t("reports.driverIdentityVerification")}</DialogTitle>
           <IdentityPanel />
+        </DialogContent>
+      </Dialog>
+
+      {/* Vehicle Violation Detection — orchestration console. Same Dialog
+          chrome; the panel reuses ANPR + vehicle/driver lookup + the e-Challan
+          schedule and files incidents into jnpa.alerts (this very table). */}
+      <Dialog open={violationOpen} onOpenChange={setViolationOpen}>
+        <DialogContent className="max-w-xl p-3">
+          <DialogTitle className="sr-only">
+            {t("reports.vehicleViolationDetection", {
+              defaultValue: "Vehicle Violation Detection",
+            })}
+          </DialogTitle>
+          <ViolationDetectionPanel />
         </DialogContent>
       </Dialog>
     </div>

@@ -2,7 +2,7 @@ import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { getAdapter } from "@/data";
 import type { ParkingFacility } from "@/lib/types";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { CollapsibleCard } from "@/components/ui/CollapsibleCard";
 import { Badge } from "@/components/ui/badge";
 import { Spinner, EmptyState } from "@/components/ui/misc";
 import { parkingStatusColour } from "@/lib/tokens";
@@ -52,51 +52,50 @@ export function ParkingBoard() {
   const s = sumQ.data;
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t("panels.parking.title")}</CardTitle>
-        <p className="text-[11px] text-muted-foreground">{t("panels.parking.subtitle")}</p>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {s && (
-          <div className="flex items-end justify-between rounded-md border border-border bg-background px-3 py-2">
-            <div>
-              <div className="text-[11px] text-muted-foreground">
-                {t("panels.parking.totalAvailable")}
-              </div>
-              <div className="text-2xl font-semibold tabular-nums">
-                {s.total_available}
-                <span className="ml-1 text-xs font-normal text-muted-foreground">
-                  / {s.total_capacity}
-                </span>
-              </div>
+    <CollapsibleCard
+      id="parking"
+      title={t("panels.parking.title")}
+      subtitle={t("panels.parking.subtitle")}
+      bodyClassName="space-y-3"
+    >
+      {s && (
+        <div className="flex items-end justify-between rounded-md border border-border bg-background px-3 py-2">
+          <div>
+            <div className="text-[11px] text-muted-foreground">
+              {t("panels.parking.totalAvailable")}
             </div>
-            <div className="text-right text-[11px] text-muted-foreground">
-              <div className="tabular-nums">
-                {s.facilities} {t("panels.parking.facilities")}
-              </div>
-              <div className="tabular-nums">
-                {s.full_count} {t("panels.parking.full")}
-              </div>
+            <div className="text-2xl font-semibold tabular-nums">
+              {s.total_available}
+              <span className="ml-1 text-xs font-normal text-muted-foreground">
+                / {s.total_capacity}
+              </span>
             </div>
           </div>
-        )}
+          <div className="text-right text-[11px] text-muted-foreground">
+            <div className="tabular-nums">
+              {s.facilities} {t("panels.parking.facilities")}
+            </div>
+            <div className="tabular-nums">
+              {s.full_count} {t("panels.parking.full")}
+            </div>
+          </div>
+        </div>
+      )}
 
-        {facQ.isLoading ? (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Spinner /> {t("common.loading")}
-          </div>
-        ) : facilities.length === 0 ? (
-          <EmptyState>{t("panels.parking.empty")}</EmptyState>
-        ) : (
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {facilities.map((f) => (
-              <FacilityCard key={f.facility_id} f={f} />
-            ))}
-          </div>
-        )}
-      </CardContent>
-    </Card>
+      {facQ.isLoading ? (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Spinner /> {t("common.loading")}
+        </div>
+      ) : facilities.length === 0 ? (
+        <EmptyState>{t("panels.parking.empty")}</EmptyState>
+      ) : (
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {facilities.map((f) => (
+            <FacilityCard key={f.facility_id} f={f} />
+          ))}
+        </div>
+      )}
+    </CollapsibleCard>
   );
 }
 

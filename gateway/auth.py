@@ -77,6 +77,9 @@ class Principal:
 #   * identity (biometrics)   -> customs + admin (DPDP-sensitive)
 _POLICY: tuple[tuple[str, frozenset[str]], ...] = (
     ("/api/reports", CONTROL_ROOM | {Role.TRAFFIC_POLICE.value, Role.CUSTOMS.value}),
+    # Vehicle Violation Detection lives on the Reports page — same audience as
+    # the police reports it writes into.
+    ("/api/violations", CONTROL_ROOM | {Role.TRAFFIC_POLICE.value, Role.CUSTOMS.value}),
     ("/api/gate-data", CONTROL_ROOM | {Role.CUSTOMS.value}),
     # Driver self-enrolment from the PWA: a DRIVER may submit/poll its own enrolment
     # request (longest-prefix wins over the /api/identity admin rule below). The

@@ -196,6 +196,132 @@ export interface IdentityEnrolResult {
   provider?: string;
 }
 
+// --- Vehicle Violation Detection (/api/violations) ---
+// Orchestration-only enforcement console on the Reports page: ANPR + vehicle/
+// driver lookup -> operator-confirmed violations -> jnpa.alerts incidents.
+
+/** One selectable violation kind + its e-Challan fine (reports._CHALLAN). */
+export interface ViolationCatalogItem {
+  kind: string;
+  label: string;
+  section?: string | null;
+  fine_inr?: number | null;
+}
+
+/** Mapped driver for a detected plate (jnpa.drivers / driver_enrollments). */
+export interface ViolationDriver {
+  driver_id: string;
+  name?: string | null;
+  status?: string | null;
+  vehicle_no?: string | null;
+}
+
+/** Result of POST /api/violations/detect — no incident persisted yet. */
+export interface ViolationDetectResult {
+  case_id: string;
+  plate?: string | null;
+  confidence?: number | null;
+  anpr_decision_path: string; // LIVE | SYNTHETIC
+  /** True only when the real ANPR service produced the read (LIVE). */
+  anpr_real?: boolean;
+  /** [x1,y1,x2,y2] plate box in the uploaded image's pixels; null if synthetic. */
+  bbox?: number[] | null;
+  degraded: boolean;
+  vehicle?: Record<string, any> | null;
+  vehicle_class?: string | null;
+  driver?: ViolationDriver | null;
+  evidence_url?: string | null;
+  evidence_sha256?: string | null;
+  gate_id?: string | null;
+  available_violations: ViolationCatalogItem[];
+}
+
+/** Body for POST /api/violations/commit. */
+export interface ViolationCommitInput {
+  case_id?: string;
+  plate?: string | null;
+  gate_id?: string | null;
+  evidence_url?: string | null;
+  evidence_sha256?: string | null;
+  confidence?: number | null;
+  driver_id?: string | null;
+  vehicle_class?: string | null;
+  zone_id?: string | null;
+  /** false = stop at CONFIRMED (Save Case); true (default) = issue challan. */
+  issue_challan?: boolean;
+  violations: string[];
+}
+
+/** Case lifecycle states (mirrors the gateway state machine). */
+export type CaseStatus =
+  | "DETECTED"
+  | "REVIEWED"
+  | "CONFIRMED"
+  | "CHALLAN_ISSUED"
+  | "PAID"
+  | "CLOSED";
+
+/** Committed incident — case + (optional) immutable challan. */
+export interface ViolationIncident {
+  case_id: string;
+  challan_id?: string | null;
+  challan_no?: string | null;
+  status?: CaseStatus | string;
+  vehicle_number?: string | null;
+  driver_id?: string | null;
+  violations: ViolationCatalogItem[];
+  confidence?: number | null;
+  fine_total: number;
+  total_fine?: number;
+  evidence_url?: string | null;
+  evidence_sha256?: string | null;
+  timestamp: string;
+  gate_id?: string | null;
+  alert_ids: string[];
+  skipped?: string[];
+}
+
+/** Result of the fully-automatic POST /api/violations/enforce pipeline. */
+export interface ViolationEnforceResult {
+  case_id: string;
+  plate?: string | null;
+  confidence?: number | null;
+  anpr_decision_path?: string;
+  anpr_real?: boolean;
+  bbox?: number[] | null;
+  degraded?: boolean;
+  vehicle?: Record<string, any> | null;
+  vehicle_class?: string | null;
+  driver?: ViolationDriver | null;
+  violations: ViolationCatalogItem[];
+  total_fine: number;
+  fine_total?: number;
+  challan_id?: string | null;
+  challan_no?: string | null;
+  status?: CaseStatus | string;
+  evidence_url?: string | null;
+  evidence_sha256?: string | null;
+  alert_ids: string[];
+  skipped?: string[];
+  notification_sent: boolean;
+}
+
+/** Payload of the `violation_enforced` WS frame (real-time enforcement event). */
+export interface ViolationEnforcedEvent {
+  type: "VIOLATION_ENFORCED";
+  case_id: string;
+  plate?: string | null;
+  vehicle?: Record<string, any> | null;
+  driver?: ViolationDriver | null;
+  violations: ViolationCatalogItem[];
+  fine: number;
+  challan_no?: string | null;
+  status?: string;
+  evidence_url?: string | null;
+  alert_ids: string[];
+  ts: string;
+}
+
 // Driver enrolment request lifecycle (Driver PWA submit -> admin approve).
 export type EnrollmentStatus = "PENDING" | "ACTIVE" | "REJECTED" | "REENROLL" | string;
 
@@ -305,4 +431,5 @@ export type WsFrame =
     }
   | { type: "decision"; payload: Decision }
   | { type: "scenario_step"; payload: ScenarioStep }
-  | { type: "operator_banner"; payload: OperatorBanner };
+  | { type: "operator_banner"; payload: OperatorBanner }
+  | { type: "violation_enforced"; payload: ViolationEnforcedEvent };

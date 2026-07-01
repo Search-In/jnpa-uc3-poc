@@ -55,9 +55,11 @@ export default function PoliceReports() {
   // ANY operator's auto-enforced challan surface here in real time.
   const qc = useQueryClient();
   const { subscribe } = useSocket();
-  const [flash, setFlash] = useState<
-    { plate?: string | null; challan_no?: string | null; fine: number } | null
-  >(null);
+  const [flash, setFlash] = useState<{
+    plate?: string | null;
+    challan_no?: string | null;
+    fine: number;
+  } | null>(null);
   const [highlightPlate, setHighlightPlate] = useState<string | null>(null);
 
   useEffect(() => {
@@ -127,7 +129,9 @@ export default function PoliceReports() {
           </Button>
           <Button onClick={() => setViolationOpen(true)}>
             <ShieldAlert className="h-4 w-4" />{" "}
-            {t("reports.vehicleViolationDetection", { defaultValue: "Vehicle Violation Detection" })}
+            {t("reports.vehicleViolationDetection", {
+              defaultValue: "Vehicle Violation Detection",
+            })}
           </Button>
           <Button onClick={() => void exportPolicePdf(filters)}>
             <FileDown className="h-4 w-4" /> {t("reports.exportPdf")}
@@ -235,7 +239,9 @@ export default function PoliceReports() {
       <Dialog open={violationOpen} onOpenChange={setViolationOpen}>
         <DialogContent className="max-w-xl p-3">
           <DialogTitle className="sr-only">
-            {t("reports.vehicleViolationDetection", { defaultValue: "Vehicle Violation Detection" })}
+            {t("reports.vehicleViolationDetection", {
+              defaultValue: "Vehicle Violation Detection",
+            })}
           </DialogTitle>
           <ViolationDetectionPanel />
         </DialogContent>

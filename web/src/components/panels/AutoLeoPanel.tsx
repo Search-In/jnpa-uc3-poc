@@ -117,25 +117,25 @@ export function AutoLeoPanel() {
       bodyClassName="flex-1"
     >
       {queueQ.isLoading ? (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Spinner /> {t("common.loading")}
-          </div>
-        ) : rows.length === 0 ? (
-          <EmptyState>{t("panels.leo.empty")}</EmptyState>
-        ) : (
-          <div className="rounded-md border border-border">
-            {rows.map((r) => (
-              <LeoRow
-                key={r.container_no}
-                row={r}
-                selected={focus.alert?.id === leoFocusId(r.container_no)}
-                onSelect={() =>
-                  focusOnMap({ id: leoFocusId(r.container_no), lat: r.lat, lon: r.lon })
-                }
-              />
-            ))}
-          </div>
-        )}
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Spinner /> {t("common.loading")}
+        </div>
+      ) : rows.length === 0 ? (
+        <EmptyState>{t("panels.leo.empty")}</EmptyState>
+      ) : (
+        <div className="rounded-md border border-border">
+          {rows.map((r) => (
+            <LeoRow
+              key={r.container_no}
+              row={r}
+              selected={focus.alert?.id === leoFocusId(r.container_no)}
+              onSelect={() =>
+                focusOnMap({ id: leoFocusId(r.container_no), lat: r.lat, lon: r.lon })
+              }
+            />
+          ))}
+        </div>
+      )}
     </CollapsibleCard>
   );
 }
@@ -159,62 +159,62 @@ export function CustomsFeedPanel() {
       bodyClassName="flex-1"
     >
       <div className="rounded-md border border-border">
-          {flagsQ.isLoading ? (
-            <div className="flex items-center gap-2 p-3 text-sm text-muted-foreground">
-              <Spinner /> {t("common.loading")}
-            </div>
-          ) : flags.length === 0 ? (
-            <EmptyState>{t("panels.leo.customsEmpty")}</EmptyState>
-          ) : (
-            <ul className="divide-y divide-border/50">
-              {flags.map((a) => {
-                const lat = a.payload?.lat as number | undefined;
-                const lon = a.payload?.lon as number | undefined;
-                const focusable = typeof lat === "number" && typeof lon === "number";
-                return (
-                  <li
-                    key={a.id}
-                    role={focusable ? "button" : undefined}
-                    tabIndex={focusable ? 0 : undefined}
-                    onClick={focusable ? () => focusOnMap({ id: a.id, alert: a }) : undefined}
-                    onKeyDown={
-                      focusable
-                        ? (e) => {
-                            if (e.key === "Enter" || e.key === " ") {
-                              e.preventDefault();
-                              focusOnMap({ id: a.id, alert: a });
-                            }
+        {flagsQ.isLoading ? (
+          <div className="flex items-center gap-2 p-3 text-sm text-muted-foreground">
+            <Spinner /> {t("common.loading")}
+          </div>
+        ) : flags.length === 0 ? (
+          <EmptyState>{t("panels.leo.customsEmpty")}</EmptyState>
+        ) : (
+          <ul className="divide-y divide-border/50">
+            {flags.map((a) => {
+              const lat = a.payload?.lat as number | undefined;
+              const lon = a.payload?.lon as number | undefined;
+              const focusable = typeof lat === "number" && typeof lon === "number";
+              return (
+                <li
+                  key={a.id}
+                  role={focusable ? "button" : undefined}
+                  tabIndex={focusable ? 0 : undefined}
+                  onClick={focusable ? () => focusOnMap({ id: a.id, alert: a }) : undefined}
+                  onKeyDown={
+                    focusable
+                      ? (e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            focusOnMap({ id: a.id, alert: a });
                           }
-                        : undefined
-                    }
-                    className={`flex items-center justify-between gap-2 px-3 py-2 ${
-                      focusable ? ROW_BASE : ""
-                    } ${focus.alert?.id === a.id ? SELECTED_ITEM : ""}`}
-                  >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <Badge colour={STATUS.warning}>{a.kind}</Badge>
-                        <span className="truncate font-mono text-[11px]">
-                          {(a.payload?.container_no as string) ?? a.plate ?? "—"}
-                        </span>
-                      </div>
-                      <div className="mt-0.5 flex flex-wrap gap-1">
-                        {((a.payload?.customs_flags as string[]) ?? []).map((f) => (
-                          <span key={f} className="font-mono text-[10px] text-muted-foreground">
-                            {f}
-                          </span>
-                        ))}
-                      </div>
+                        }
+                      : undefined
+                  }
+                  className={`flex items-center justify-between gap-2 px-3 py-2 ${
+                    focusable ? ROW_BASE : ""
+                  } ${focus.alert?.id === a.id ? SELECTED_ITEM : ""}`}
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <Badge colour={STATUS.warning}>{a.kind}</Badge>
+                      <span className="truncate font-mono text-[11px]">
+                        {(a.payload?.container_no as string) ?? a.plate ?? "—"}
+                      </span>
                     </div>
-                    <span className="shrink-0 text-[10px] text-muted-foreground">
-                      {relativeAge(a.ts)}
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </div>
+                    <div className="mt-0.5 flex flex-wrap gap-1">
+                      {((a.payload?.customs_flags as string[]) ?? []).map((f) => (
+                        <span key={f} className="font-mono text-[10px] text-muted-foreground">
+                          {f}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <span className="shrink-0 text-[10px] text-muted-foreground">
+                    {relativeAge(a.ts)}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
     </CollapsibleCard>
   );
 }

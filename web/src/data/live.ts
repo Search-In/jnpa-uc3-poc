@@ -95,8 +95,10 @@ export class LiveAdapter implements DataAdapter {
   violationCatalog = async () => (await api.violationCatalog()).violations;
   violationDetect = (image: Blob, gateId?: string) => api.violationDetect(image, gateId);
   violationCommit = (input: any) => api.violationCommit(input);
-  violationEnforce = (image: Blob, opts?: { gateId?: string; zoneId?: string; violations?: string }) =>
-    api.violationEnforce(image, opts);
+  violationEnforce = (
+    image: Blob,
+    opts?: { gateId?: string; zoneId?: string; violations?: string },
+  ) => api.violationEnforce(image, opts);
 
   scenarios = async () => (await api.scenarios()).scenarios;
   runScenario = (name: string, params: any) => api.runScenario(name, params);

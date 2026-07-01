@@ -171,7 +171,10 @@ export const api = {
       body: JSON.stringify(input),
     }),
   // Fully-automatic pipeline: one upload → ANPR → case → challan → notification.
-  violationEnforce: (image: Blob, opts?: { gateId?: string; zoneId?: string; violations?: string }) => {
+  violationEnforce: (
+    image: Blob,
+    opts?: { gateId?: string; zoneId?: string; violations?: string },
+  ) => {
     const fd = new FormData();
     fd.append("image", image, "frame.jpg");
     if (opts?.gateId) fd.append("gate_id", opts.gateId);

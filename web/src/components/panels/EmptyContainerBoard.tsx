@@ -49,44 +49,44 @@ export function EmptyContainerBoard({ limit = 8 }: { limit?: number }) {
       bodyClassName="space-y-3"
     >
       {kpiQ.data && <TrtKpiCard kpi={kpiQ.data} />}
-        {allocQ.isLoading ? (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Spinner /> {t("common.loading")}
-          </div>
-        ) : allocations.length === 0 ? (
-          <EmptyState>{t("panels.empty.empty")}</EmptyState>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead className="border-b border-border text-left text-[10px] uppercase tracking-wide text-muted-foreground">
-                <tr>
-                  <th className="px-2 py-1.5">{t("panels.empty.demand")}</th>
-                  <th className="px-2 py-1.5">{t("panels.empty.depot")}</th>
-                  <th className="px-2 py-1.5">{t("panels.empty.containerType")}</th>
-                  <th className="px-2 py-1.5">{t("panels.empty.cargoType")}</th>
-                  <th className="px-2 py-1.5 text-right">{t("panels.empty.distance")}</th>
-                  <th className="px-2 py-1.5 text-right">{t("panels.empty.estTrt")}</th>
-                  <th className="px-2 py-1.5 text-right">{t("panels.empty.confidence")}</th>
+      {allocQ.isLoading ? (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Spinner /> {t("common.loading")}
+        </div>
+      ) : allocations.length === 0 ? (
+        <EmptyState>{t("panels.empty.empty")}</EmptyState>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="border-b border-border text-left text-[10px] uppercase tracking-wide text-muted-foreground">
+              <tr>
+                <th className="px-2 py-1.5">{t("panels.empty.demand")}</th>
+                <th className="px-2 py-1.5">{t("panels.empty.depot")}</th>
+                <th className="px-2 py-1.5">{t("panels.empty.containerType")}</th>
+                <th className="px-2 py-1.5">{t("panels.empty.cargoType")}</th>
+                <th className="px-2 py-1.5 text-right">{t("panels.empty.distance")}</th>
+                <th className="px-2 py-1.5 text-right">{t("panels.empty.estTrt")}</th>
+                <th className="px-2 py-1.5 text-right">{t("panels.empty.confidence")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {allocations.map((a) => (
+                <tr key={a.demand_id} className="border-b border-border/50 hover:bg-muted/40">
+                  <td className="px-2 py-1.5 font-mono">{a.demand_id}</td>
+                  <td className="px-2 py-1.5">{a.supply_depot}</td>
+                  <td className="px-2 py-1.5 font-mono">{a.container_type}</td>
+                  <td className="px-2 py-1.5">{a.cargo_type}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">{a.distance_km} km</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">{a.est_trt_min} min</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">
+                    {a.confidence != null ? `${Math.round(a.confidence * 100)}%` : "—"}
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {allocations.map((a) => (
-                  <tr key={a.demand_id} className="border-b border-border/50 hover:bg-muted/40">
-                    <td className="px-2 py-1.5 font-mono">{a.demand_id}</td>
-                    <td className="px-2 py-1.5">{a.supply_depot}</td>
-                    <td className="px-2 py-1.5 font-mono">{a.container_type}</td>
-                    <td className="px-2 py-1.5">{a.cargo_type}</td>
-                    <td className="px-2 py-1.5 text-right tabular-nums">{a.distance_km} km</td>
-                    <td className="px-2 py-1.5 text-right tabular-nums">{a.est_trt_min} min</td>
-                    <td className="px-2 py-1.5 text-right tabular-nums">
-                      {a.confidence != null ? `${Math.round(a.confidence * 100)}%` : "—"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </CollapsibleCard>
   );
 }

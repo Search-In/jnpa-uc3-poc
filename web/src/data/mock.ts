@@ -215,10 +215,30 @@ const SOURCE_NAMES = [
 // Violation catalog — mirrors the gateway reports._CHALLAN fine schedule so the
 // enforcement console shows identical fines in mock and live mode.
 const VIOLATION_CATALOG: ViolationCatalogItem[] = [
-  { kind: "WRONG_WAY", label: "Wrong-way driving", section: "MVA s.184 (dangerous driving)", fine_inr: 5000 },
-  { kind: "ILLEGAL_PARKING", label: "Illegal parking", section: "MVA s.122/177 (obstruction)", fine_inr: 1000 },
-  { kind: "OVERSPEEDING", label: "Over-speeding", section: "MVA s.183 (over-speeding)", fine_inr: 2000 },
-  { kind: "ROUTE_DEVIATION", label: "Route deviation", section: "JNPA corridor SOP / MVA s.177", fine_inr: 500 },
+  {
+    kind: "WRONG_WAY",
+    label: "Wrong-way driving",
+    section: "MVA s.184 (dangerous driving)",
+    fine_inr: 5000,
+  },
+  {
+    kind: "ILLEGAL_PARKING",
+    label: "Illegal parking",
+    section: "MVA s.122/177 (obstruction)",
+    fine_inr: 1000,
+  },
+  {
+    kind: "OVERSPEEDING",
+    label: "Over-speeding",
+    section: "MVA s.183 (over-speeding)",
+    fine_inr: 2000,
+  },
+  {
+    kind: "ROUTE_DEVIATION",
+    label: "Route deviation",
+    section: "JNPA corridor SOP / MVA s.177",
+    fine_inr: 500,
+  },
 ];
 
 const DEPOTS = ["ECD-DRONAGIRI", "ECD-PANVEL", "CFS-URAN", "CFS-JNPT"] as const;
@@ -1147,11 +1167,11 @@ export class MockAdapter implements DataAdapter {
     // Deterministic auto-classification (mirrors the gateway's hash-derived pick).
     const seed = `enforce-${this.violationSeq}`;
     const primary = VIOLATION_CATALOG[fnv1a(seed) % VIOLATION_CATALOG.length];
-    const maybe = fnv1a(`${seed}-2`) % 3 === 0
-      ? VIOLATION_CATALOG[fnv1a(`${seed}-k`) % VIOLATION_CATALOG.length]
-      : null;
-    const chosen =
-      maybe && maybe.kind !== primary.kind ? [primary, maybe] : [primary];
+    const maybe =
+      fnv1a(`${seed}-2`) % 3 === 0
+        ? VIOLATION_CATALOG[fnv1a(`${seed}-k`) % VIOLATION_CATALOG.length]
+        : null;
+    const chosen = maybe && maybe.kind !== primary.kind ? [primary, maybe] : [primary];
     const total = chosen.reduce((a, v) => a + (v.fine_inr ?? 0), 0);
     return Promise.resolve({
       case_id,

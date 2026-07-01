@@ -81,10 +81,12 @@ export function ViolationDetectionPanel() {
       setSelected(new Set());
       setNotice(
         res.degraded
-          ? { kind: "warn", text: t("violations.degradedNote", {
-              defaultValue:
-                "ANPR ran in fallback mode — verify the plate before filing.",
-            }) }
+          ? {
+              kind: "warn",
+              text: t("violations.degradedNote", {
+                defaultValue: "ANPR ran in fallback mode — verify the plate before filing.",
+              }),
+            }
           : null,
       );
     },
@@ -119,8 +121,7 @@ export function ViolationDetectionPanel() {
       // The Reports table polls every 10 s; invalidate so it refreshes instantly.
       void qc.invalidateQueries({ queryKey: ["police"] });
     },
-    onError: (e: any) =>
-      setNotice({ kind: "warn", text: String(e?.message ?? "commit failed") }),
+    onError: (e: any) => setNotice({ kind: "warn", text: String(e?.message ?? "commit failed") }),
   });
 
   // Fully-automatic pipeline: one click → ANPR → case → challan → notification.
@@ -136,8 +137,7 @@ export function ViolationDetectionPanel() {
       });
       void qc.invalidateQueries({ queryKey: ["police"] });
     },
-    onError: (e: any) =>
-      setNotice({ kind: "warn", text: String(e?.message ?? "enforce failed") }),
+    onError: (e: any) => setNotice({ kind: "warn", text: String(e?.message ?? "enforce failed") }),
   });
 
   const detection = detect.data ?? null;
@@ -150,10 +150,7 @@ export function ViolationDetectionPanel() {
   const enforcedReal = !!(enforced?.anpr_real ?? enforced?.anpr_decision_path === "LIVE");
 
   const fineTotal = useMemo(
-    () =>
-      catalog
-        .filter((v) => selected.has(v.kind))
-        .reduce((a, v) => a + (v.fine_inr ?? 0), 0),
+    () => catalog.filter((v) => selected.has(v.kind)).reduce((a, v) => a + (v.fine_inr ?? 0), 0),
     [catalog, selected],
   );
 
@@ -244,9 +241,13 @@ export function ViolationDetectionPanel() {
     if (!v) return;
     const blob = await frameToBlob(v);
     if (blob) setCaptured(blob);
-    else setNotice({ kind: "warn", text: t("violations.frameFailed", {
-      defaultValue: "Could not grab a frame — let the video load and try again.",
-    }) });
+    else
+      setNotice({
+        kind: "warn",
+        text: t("violations.frameFailed", {
+          defaultValue: "Could not grab a frame — let the video load and try again.",
+        }),
+      });
   }
 
   async function grabFromCamera() {
@@ -254,9 +255,13 @@ export function ViolationDetectionPanel() {
     if (!v) return;
     const blob = await frameToBlob(v);
     if (blob) setCaptured(blob);
-    else setNotice({ kind: "warn", text: t("violations.frameFailed", {
-      defaultValue: "Could not grab a frame from the camera.",
-    }) });
+    else
+      setNotice({
+        kind: "warn",
+        text: t("violations.frameFailed", {
+          defaultValue: "Could not grab a frame from the camera.",
+        }),
+      });
   }
 
   function toggle(kind: string) {
@@ -274,9 +279,12 @@ export function ViolationDetectionPanel() {
     try {
       await getAdapter().downloadPolicePdf({ id: target });
     } catch (e) {
-      setNotice({ kind: "warn", text: t("violations.pdfFailed", {
-        defaultValue: "Could not export the evidence PDF.",
-      }) });
+      setNotice({
+        kind: "warn",
+        text: t("violations.pdfFailed", {
+          defaultValue: "Could not export the evidence PDF.",
+        }),
+      });
     }
   }
 
@@ -302,13 +310,25 @@ export function ViolationDetectionPanel() {
       <CardContent className="space-y-3">
         {/* ---- Upload section ---- */}
         <div className="flex flex-wrap items-center gap-2">
-          <ModeButton active={mode === "image"} onClick={() => onPickMode("image")} icon={<ImageIcon className="h-4 w-4" />}>
+          <ModeButton
+            active={mode === "image"}
+            onClick={() => onPickMode("image")}
+            icon={<ImageIcon className="h-4 w-4" />}
+          >
             {t("violations.uploadImage", { defaultValue: "Upload Image" })}
           </ModeButton>
-          <ModeButton active={mode === "video"} onClick={() => onPickMode("video")} icon={<VideoIcon className="h-4 w-4" />}>
+          <ModeButton
+            active={mode === "video"}
+            onClick={() => onPickMode("video")}
+            icon={<VideoIcon className="h-4 w-4" />}
+          >
             {t("violations.uploadVideo", { defaultValue: "Upload Video" })}
           </ModeButton>
-          <ModeButton active={mode === "camera"} onClick={() => onPickMode("camera")} icon={<Camera className="h-4 w-4" />}>
+          <ModeButton
+            active={mode === "camera"}
+            onClick={() => onPickMode("camera")}
+            icon={<Camera className="h-4 w-4" />}
+          >
             {t("violations.liveCamera", { defaultValue: "Live Camera" })}
           </ModeButton>
 
@@ -340,11 +360,22 @@ export function ViolationDetectionPanel() {
               {!live && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-center text-xs text-white/80">
                   {cam.status === "requesting" ? (
-                    <><Spinner /> {t("violations.startingCamera", { defaultValue: "Starting camera…" })}</>
+                    <>
+                      <Spinner />{" "}
+                      {t("violations.startingCamera", { defaultValue: "Starting camera…" })}
+                    </>
                   ) : cam.status === "denied" ? (
-                    <><CameraOff className="h-7 w-7 opacity-70" /> {t("violations.permissionDenied", { defaultValue: "Camera permission denied" })}</>
+                    <>
+                      <CameraOff className="h-7 w-7 opacity-70" />{" "}
+                      {t("violations.permissionDenied", {
+                        defaultValue: "Camera permission denied",
+                      })}
+                    </>
                   ) : (
-                    <><Camera className="h-7 w-7 opacity-70" /> {t("violations.cameraOff", { defaultValue: "Camera is off" })}</>
+                    <>
+                      <Camera className="h-7 w-7 opacity-70" />{" "}
+                      {t("violations.cameraOff", { defaultValue: "Camera is off" })}
+                    </>
                   )}
                 </div>
               )}
@@ -373,39 +404,55 @@ export function ViolationDetectionPanel() {
         <div className="flex flex-wrap items-center gap-2">
           {mode === "image" && (
             <Button size="sm" variant="outline" onClick={() => imageInputRef.current?.click()}>
-              <ImageIcon className="h-4 w-4" /> {t("violations.chooseFile", { defaultValue: "Choose image" })}
+              <ImageIcon className="h-4 w-4" />{" "}
+              {t("violations.chooseFile", { defaultValue: "Choose image" })}
             </Button>
           )}
           {mode === "video" && (
             <>
               <Button size="sm" variant="outline" onClick={() => videoInputRef.current?.click()}>
-                <VideoIcon className="h-4 w-4" /> {t("violations.chooseVideo", { defaultValue: "Choose video" })}
+                <VideoIcon className="h-4 w-4" />{" "}
+                {t("violations.chooseVideo", { defaultValue: "Choose video" })}
               </Button>
               <Button size="sm" variant="outline" onClick={() => void grabFromUploadedVideo()}>
-                <ScanLine className="h-4 w-4" /> {t("violations.grabFrame", { defaultValue: "Capture frame" })}
+                <ScanLine className="h-4 w-4" />{" "}
+                {t("violations.grabFrame", { defaultValue: "Capture frame" })}
               </Button>
             </>
           )}
           {mode === "camera" && (
             <>
               {!live ? (
-                <Button size="sm" variant="outline" onClick={() => void cam.start()} disabled={cam.status === "requesting"}>
-                  <Camera className="h-4 w-4" /> {t("violations.startCamera", { defaultValue: "Start camera" })}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void cam.start()}
+                  disabled={cam.status === "requesting"}
+                >
+                  <Camera className="h-4 w-4" />{" "}
+                  {t("violations.startCamera", { defaultValue: "Start camera" })}
                 </Button>
               ) : (
                 <>
                   <Button size="sm" variant="outline" onClick={() => void grabFromCamera()}>
-                    <ScanLine className="h-4 w-4" /> {t("violations.grabFrame", { defaultValue: "Capture frame" })}
+                    <ScanLine className="h-4 w-4" />{" "}
+                    {t("violations.grabFrame", { defaultValue: "Capture frame" })}
                   </Button>
                   <Button size="sm" variant="outline" onClick={() => cam.stop()}>
-                    <CameraOff className="h-4 w-4" /> {t("violations.stop", { defaultValue: "Stop" })}
+                    <CameraOff className="h-4 w-4" />{" "}
+                    {t("violations.stop", { defaultValue: "Stop" })}
                   </Button>
                 </>
               )}
             </>
           )}
 
-          <Button size="sm" variant="outline" onClick={() => captureBlob && detect.mutate(captureBlob)} disabled={!canDetect}>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => captureBlob && detect.mutate(captureBlob)}
+            disabled={!canDetect}
+          >
             {detect.isPending ? <Spinner /> : <ScanLine className="h-4 w-4" />}
             {t("violations.detect", { defaultValue: "Run detection" })}
           </Button>
@@ -515,7 +562,9 @@ export function ViolationDetectionPanel() {
               </label>
               <Field
                 k={t("violations.confidence", { defaultValue: "OCR confidence" })}
-                v={detection.confidence != null ? `${(detection.confidence * 100).toFixed(1)}%` : "—"}
+                v={
+                  detection.confidence != null ? `${(detection.confidence * 100).toFixed(1)}%` : "—"
+                }
               />
               {detection.vehicle ? (
                 <>
@@ -555,7 +604,9 @@ export function ViolationDetectionPanel() {
                         {detection.driver.driver_id}
                       </span>
                     </span>
-                    <Badge colour={detection.driver.status === "ACTIVE" ? STATUS.ok : STATUS.warning}>
+                    <Badge
+                      colour={detection.driver.status === "ACTIVE" ? STATUS.ok : STATUS.warning}
+                    >
                       {detection.driver.status ?? "—"}
                     </Badge>
                   </div>
@@ -589,7 +640,9 @@ export function ViolationDetectionPanel() {
                       <span>{v.label}</span>
                       <span className="font-mono text-[10px] text-muted-foreground">{v.kind}</span>
                     </span>
-                    <span className="font-mono text-xs text-muted-foreground">{fmtInr(v.fine_inr)}</span>
+                    <span className="font-mono text-xs text-muted-foreground">
+                      {fmtInr(v.fine_inr)}
+                    </span>
                   </label>
                 ))}
               </div>
@@ -616,13 +669,16 @@ export function ViolationDetectionPanel() {
               {t("violations.generateChallan", { defaultValue: "Generate Challan" })}
             </Button>
             <Button variant="outline" onClick={() => commit.mutate(false)} disabled={!canCommit}>
-              <CheckCircle2 className="h-4 w-4" /> {t("violations.saveCase", { defaultValue: "Save Case" })}
+              <CheckCircle2 className="h-4 w-4" />{" "}
+              {t("violations.saveCase", { defaultValue: "Save Case" })}
             </Button>
             <Button variant="outline" onClick={() => commit.mutate(true)} disabled={!canCommit}>
-              <Send className="h-4 w-4" /> {t("violations.sendToPolice", { defaultValue: "Send to Police" })}
+              <Send className="h-4 w-4" />{" "}
+              {t("violations.sendToPolice", { defaultValue: "Send to Police" })}
             </Button>
             <Button variant="outline" onClick={() => void exportEvidencePdf()} disabled={!incident}>
-              <FileDown className="h-4 w-4" /> {t("violations.exportEvidence", { defaultValue: "Export Evidence PDF" })}
+              <FileDown className="h-4 w-4" />{" "}
+              {t("violations.exportEvidence", { defaultValue: "Export Evidence PDF" })}
             </Button>
           </div>
         )}
@@ -639,27 +695,36 @@ export function ViolationDetectionPanel() {
             </div>
 
             <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5">
-              <Field k={t("violations.caseId", { defaultValue: "Case ID" })} v={
-                <span className="font-mono text-[11px]">{incident.case_id}</span>
-              } />
+              <Field
+                k={t("violations.caseId", { defaultValue: "Case ID" })}
+                v={<span className="font-mono text-[11px]">{incident.case_id}</span>}
+              />
               {incident.challan_no && (
-                <Field k={t("violations.challanNo", { defaultValue: "Challan No." })} v={
-                  <span className="font-mono text-[11px]">{incident.challan_no}</span>
-                } />
+                <Field
+                  k={t("violations.challanNo", { defaultValue: "Challan No." })}
+                  v={<span className="font-mono text-[11px]">{incident.challan_no}</span>}
+                />
               )}
               <Field
                 k={t("violations.totalFine", { defaultValue: "Total fine" })}
                 v={fmtInr(incident.fine_total)}
               />
-              <Field k={t("violations.filedAt", { defaultValue: "Filed at" })} v={fmtDateTimeIST(incident.timestamp)} />
+              <Field
+                k={t("violations.filedAt", { defaultValue: "Filed at" })}
+                v={fmtDateTimeIST(incident.timestamp)}
+              />
             </dl>
 
             {/* Lifecycle stepper — highlights the case's current state. */}
             <CaseLifecycle status={incident.status} />
 
             {incident.evidence_sha256 && (
-              <div className="truncate font-mono text-[10px] text-muted-foreground" title={incident.evidence_sha256}>
-                {t("violations.evidenceHash", { defaultValue: "evidence sha256" })}: {incident.evidence_sha256}
+              <div
+                className="truncate font-mono text-[10px] text-muted-foreground"
+                title={incident.evidence_sha256}
+              >
+                {t("violations.evidenceHash", { defaultValue: "evidence sha256" })}:{" "}
+                {incident.evidence_sha256}
               </div>
             )}
             {incident.skipped && incident.skipped.length > 0 && (
@@ -679,7 +744,9 @@ export function ViolationDetectionPanel() {
             <div className="flex items-center justify-between">
               <span className="flex items-center gap-1.5 font-semibold text-severity-info">
                 <CheckCircle2 className="h-4 w-4" />
-                {t("violations.challanGenerated", { defaultValue: "Challan Generated Successfully" })}
+                {t("violations.challanGenerated", {
+                  defaultValue: "Challan Generated Successfully",
+                })}
               </span>
               <span className="flex items-center gap-2">
                 <Badge colour={enforcedReal ? STATUS.ok : STATUS.warning}>
@@ -689,7 +756,10 @@ export function ViolationDetectionPanel() {
               </span>
             </div>
 
-            <div className="text-[10px]" style={{ color: enforcedReal ? STATUS.ok : STATUS.warning }}>
+            <div
+              className="text-[10px]"
+              style={{ color: enforcedReal ? STATUS.ok : STATUS.warning }}
+            >
               {enforcedReal
                 ? t("violations.sourceReal", { defaultValue: "Source: Real ANPR pipeline" })
                 : t("violations.sourceSynthetic", {
@@ -698,40 +768,61 @@ export function ViolationDetectionPanel() {
             </div>
 
             <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5">
-              <Field k={t("violations.plate", { defaultValue: "Vehicle number" })} v={
-                <span className="font-mono">{enforced.plate ?? "—"}</span>
-              } />
+              <Field
+                k={t("violations.plate", { defaultValue: "Vehicle number" })}
+                v={<span className="font-mono">{enforced.plate ?? "—"}</span>}
+              />
               <Field
                 k={t("violations.confidence", { defaultValue: "Confidence" })}
                 v={enforced.confidence != null ? `${(enforced.confidence * 100).toFixed(1)}%` : "—"}
               />
               {enforced.vehicle ? (
                 <>
-                  <Field k={t("violations.owner", { defaultValue: "Owner (masked)" })} v={enforced.vehicle.owner_name_masked ?? "—"} />
-                  <Field k={t("violations.driverInfo", { defaultValue: "Driver" })} v={enforced.driver?.name ?? "—"} />
+                  <Field
+                    k={t("violations.owner", { defaultValue: "Owner (masked)" })}
+                    v={enforced.vehicle.owner_name_masked ?? "—"}
+                  />
+                  <Field
+                    k={t("violations.driverInfo", { defaultValue: "Driver" })}
+                    v={enforced.driver?.name ?? "—"}
+                  />
                 </>
               ) : (
                 <div className="col-span-2 text-[11px] font-medium text-severity-warning">
                   {enforcedReal
-                    ? t("violations.vehicleNotFound", { defaultValue: "Vehicle Not Found — plate not in vehicle_master" })
-                    : t("violations.vehicleSyntheticSkip", { defaultValue: "Vehicle lookup skipped — synthetic read" })}
+                    ? t("violations.vehicleNotFound", {
+                        defaultValue: "Vehicle Not Found — plate not in vehicle_master",
+                      })
+                    : t("violations.vehicleSyntheticSkip", {
+                        defaultValue: "Vehicle lookup skipped — synthetic read",
+                      })}
                 </div>
               )}
-              <Field k={t("violations.caseId", { defaultValue: "Case ID" })} v={
-                <span className="font-mono text-[11px]">{enforced.case_id}</span>
-              } />
+              <Field
+                k={t("violations.caseId", { defaultValue: "Case ID" })}
+                v={<span className="font-mono text-[11px]">{enforced.case_id}</span>}
+              />
               {enforced.challan_no && (
-                <Field k={t("violations.challanNo", { defaultValue: "Challan No." })} v={
-                  <span className="font-mono text-[11px]">{enforced.challan_no}</span>
-                } />
+                <Field
+                  k={t("violations.challanNo", { defaultValue: "Challan No." })}
+                  v={<span className="font-mono text-[11px]">{enforced.challan_no}</span>}
+                />
               )}
             </dl>
 
             <div className="space-y-1">
               {enforced.violations.map((v) => (
-                <div key={v.kind} className="flex items-center justify-between rounded-md border border-border/70 px-3 py-1.5">
-                  <span>{v.label} <span className="font-mono text-[10px] text-muted-foreground">{v.kind}</span></span>
-                  <span className="font-mono text-xs text-muted-foreground">{fmtInr(v.fine_inr)}</span>
+                <div
+                  key={v.kind}
+                  className="flex items-center justify-between rounded-md border border-border/70 px-3 py-1.5"
+                >
+                  <span>
+                    {v.label}{" "}
+                    <span className="font-mono text-[10px] text-muted-foreground">{v.kind}</span>
+                  </span>
+                  <span className="font-mono text-xs text-muted-foreground">
+                    {fmtInr(v.fine_inr)}
+                  </span>
                 </div>
               ))}
             </div>
@@ -755,12 +846,15 @@ export function ViolationDetectionPanel() {
                 onClick={() => void exportEvidencePdf(enforced.alert_ids[0])}
                 disabled={!enforced.alert_ids[0]}
               >
-                <FileDown className="h-4 w-4" /> {t("violations.exportEvidence", { defaultValue: "Export Evidence PDF" })}
+                <FileDown className="h-4 w-4" />{" "}
+                {t("violations.exportEvidence", { defaultValue: "Export Evidence PDF" })}
               </Button>
               <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
                 <span
                   className="h-1.5 w-1.5 rounded-full"
-                  style={{ backgroundColor: enforced.notification_sent ? STATUS.ok : STATUS.unknown }}
+                  style={{
+                    backgroundColor: enforced.notification_sent ? STATUS.ok : STATUS.unknown,
+                  }}
                 />
                 {enforced.notification_sent
                   ? t("violations.notified", { defaultValue: "real-time notification sent" })
@@ -814,7 +908,9 @@ function CaseLifecycle({ status }: { status?: string }) {
             >
               {s}
             </span>
-            {i < LIFECYCLE.length - 1 && <span className="text-[9px] text-muted-foreground">›</span>}
+            {i < LIFECYCLE.length - 1 && (
+              <span className="text-[9px] text-muted-foreground">›</span>
+            )}
           </span>
         );
       })}

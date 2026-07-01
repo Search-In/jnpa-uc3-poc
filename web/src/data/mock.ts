@@ -36,6 +36,11 @@ import type {
   SourceHealth,
   TrafficSnapshot,
   TruckDevice,
+  ViolationCatalogItem,
+  ViolationCommitInput,
+  ViolationDetectResult,
+  ViolationEnforceResult,
+  ViolationIncident,
   Zone,
 } from "@/lib/types";
 import type { TasSlot } from "@/lib/types";
@@ -206,6 +211,15 @@ const SOURCE_NAMES = [
   "ULIP",
   "Anomaly",
 ] as const;
+
+// Violation catalog — mirrors the gateway reports._CHALLAN fine schedule so the
+// enforcement console shows identical fines in mock and live mode.
+const VIOLATION_CATALOG: ViolationCatalogItem[] = [
+  { kind: "WRONG_WAY", label: "Wrong-way driving", section: "MVA s.184 (dangerous driving)", fine_inr: 5000 },
+  { kind: "ILLEGAL_PARKING", label: "Illegal parking", section: "MVA s.122/177 (obstruction)", fine_inr: 1000 },
+  { kind: "OVERSPEEDING", label: "Over-speeding", section: "MVA s.183 (over-speeding)", fine_inr: 2000 },
+  { kind: "ROUTE_DEVIATION", label: "Route deviation", section: "JNPA corridor SOP / MVA s.177", fine_inr: 500 },
+];
 
 const DEPOTS = ["ECD-DRONAGIRI", "ECD-PANVEL", "CFS-URAN", "CFS-JNPT"] as const;
 const CARGO_TYPES = ["container", "oil_tanker", "break_bulk", "cement_bowser"] as const;
@@ -1064,6 +1078,107 @@ export class MockAdapter implements DataAdapter {
     // does something visible without throwing. The live adapter streams the real
     // PDF with the bearer token attached.
     window.open(this.policePdfUrl(_params), "_blank", "noreferrer");
+  }
+
+  // ---- vehicle violation detection --------------------------------------
+  // Deterministic, backend-free. detect() returns a seeded plate that exists in
+  // the vehicle_master/driver fixtures; commit() echoes a filed incident. A
+  // per-instance counter keeps case ids unique without Math.random.
+  private violationSeq = 0;
+
+  violationCatalog(): Promise<ViolationCatalogItem[]> {
+    return Promise.resolve(VIOLATION_CATALOG.map((v) => ({ ...v })));
+  }
+
+  violationDetect(_image: Blob, gateId?: string): Promise<ViolationDetectResult> {
+    const case_id = `case-mock-${++this.violationSeq}`;
+    // Mock mode has no real ANPR service, so this is a SYNTHETIC fallback read
+    // and is flagged as such. It NEVER substitutes a synthetic/mock vehicle:
+    // vehicle + driver are null so the UI shows "Vehicle Not Found". Live mode
+    // runs the real /api/anpr/infer pipeline.
+    return Promise.resolve({
+      case_id,
+      plate: null,
+      confidence: null,
+      anpr_decision_path: "SYNTHETIC",
+      anpr_real: false,
+      bbox: null,
+      degraded: true,
+      vehicle: null,
+      vehicle_class: null,
+      driver: null,
+      evidence_url: null,
+      evidence_sha256: `sha256:mock-${this.violationSeq}`,
+      gate_id: gateId ?? null,
+      available_violations: VIOLATION_CATALOG.map((v) => ({ ...v })),
+    });
+  }
+
+  violationCommit(input: ViolationCommitInput): Promise<ViolationIncident> {
+    const chosen = VIOLATION_CATALOG.filter((v) => input.violations.includes(v.kind));
+    const fine_total = chosen.reduce((a, v) => a + (v.fine_inr ?? 0), 0);
+    const case_id = input.case_id ?? `case-mock-${++this.violationSeq}`;
+    const issue = input.issue_challan !== false;
+    return Promise.resolve({
+      case_id,
+      challan_id: issue ? `chl-${case_id}` : null,
+      challan_no: issue ? `ECH-2026-${String(1000 + this.violationSeq).padStart(6, "0")}` : null,
+      status: issue ? "CHALLAN_ISSUED" : "CONFIRMED",
+      vehicle_number: input.plate ?? null,
+      driver_id: input.driver_id ?? null,
+      violations: chosen.map((v) => ({ ...v })),
+      confidence: input.confidence ?? null,
+      fine_total,
+      total_fine: fine_total,
+      evidence_url: input.evidence_url ?? null,
+      evidence_sha256: input.evidence_sha256 ?? null,
+      timestamp: new Date(NOW).toISOString(),
+      gate_id: input.gate_id ?? null,
+      alert_ids: chosen.map((_v, i) => `alt-${case_id}-${i}`),
+      skipped: [],
+    });
+  }
+
+  violationEnforce(
+    _image: Blob,
+    opts?: { gateId?: string; zoneId?: string; violations?: string },
+  ): Promise<ViolationEnforceResult> {
+    const case_id = `case-mock-${++this.violationSeq}`;
+    // Deterministic auto-classification (mirrors the gateway's hash-derived pick).
+    const seed = `enforce-${this.violationSeq}`;
+    const primary = VIOLATION_CATALOG[fnv1a(seed) % VIOLATION_CATALOG.length];
+    const maybe = fnv1a(`${seed}-2`) % 3 === 0
+      ? VIOLATION_CATALOG[fnv1a(`${seed}-k`) % VIOLATION_CATALOG.length]
+      : null;
+    const chosen =
+      maybe && maybe.kind !== primary.kind ? [primary, maybe] : [primary];
+    const total = chosen.reduce((a, v) => a + (v.fine_inr ?? 0), 0);
+    return Promise.resolve({
+      case_id,
+      plate: null,
+      confidence: null,
+      anpr_decision_path: "SYNTHETIC",
+      anpr_real: false,
+      bbox: null,
+      degraded: true,
+      // No synthetic/mock vehicle substitution — real enrichment only happens in
+      // live mode from a real OCR plate.
+      vehicle: null,
+      vehicle_class: null,
+      driver: null,
+      violations: chosen.map((v) => ({ ...v })),
+      total_fine: total,
+      fine_total: total,
+      challan_id: `chl-${case_id}`,
+      challan_no: `ECH-2026-${String(1000 + this.violationSeq).padStart(6, "0")}`,
+      status: "CHALLAN_ISSUED",
+      evidence_url: null,
+      evidence_sha256: `sha256:mock-${this.violationSeq}`,
+      alert_ids: chosen.map((_v, i) => `alt-${case_id}-${i}`),
+      skipped: [],
+      notification_sent: true,
+      gate_id: opts?.gateId ?? null,
+    } as ViolationEnforceResult);
   }
 
   // ---- scenarios ---------------------------------------------------------

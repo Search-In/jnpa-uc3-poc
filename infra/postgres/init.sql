@@ -442,3 +442,70 @@ INSERT INTO jnpa.geofence_zones (id, name, kind, polygon) VALUES
     ('NPZ-KARAL-JUNCTION', 'Karal Phata junction', 'no_parking',
      '[[73.079471,18.7795],[73.080529,18.7795],[73.080529,18.7805],[73.079471,18.7805],[73.079471,18.7795]]'::jsonb)
 ON CONFLICT (id) DO NOTHING;
+
+-- ===========================================================================
+-- Enforcement system-of-record (additive; gateway/enforcement.py applies the
+-- same idempotent DDL at runtime so existing volumes gain these without a
+-- re-init). These NEVER alter jnpa.alerts data — the alerts feed is unchanged.
+--   violation_cases : lifecycle anchor (DETECTED..CLOSED), one row per case.
+--   challans        : immutable-after-issue, sequenced legal record (1 per case).
+--   case_audit      : append-only, hash-chained transition log (tamper-evident).
+-- ===========================================================================
+CREATE SEQUENCE IF NOT EXISTS jnpa.challan_seq START 1001;
+
+CREATE TABLE IF NOT EXISTS jnpa.violation_cases (
+    case_id           uuid PRIMARY KEY,
+    vehicle_number    text,
+    driver_id         text,
+    first_detected_at timestamptz NOT NULL DEFAULT now(),
+    last_updated_at   timestamptz NOT NULL DEFAULT now(),
+    status            text NOT NULL DEFAULT 'DETECTED'
+                      CHECK (status IN ('DETECTED','REVIEWED','CONFIRMED',
+                                        'CHALLAN_ISSUED','PAID','CLOSED')),
+    total_fine        integer NOT NULL DEFAULT 0,
+    evidence_url      text,
+    evidence_sha256   text,
+    gate_id           text,
+    confidence        double precision
+);
+CREATE INDEX IF NOT EXISTS idx_violation_cases_status
+    ON jnpa.violation_cases (status, last_updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_violation_cases_plate
+    ON jnpa.violation_cases (vehicle_number, first_detected_at DESC);
+
+CREATE TABLE IF NOT EXISTS jnpa.challans (
+    challan_id      uuid PRIMARY KEY,
+    challan_no      text UNIQUE,
+    case_id         uuid NOT NULL UNIQUE,
+    vehicle_number  text,
+    total_fine      integer NOT NULL DEFAULT 0,
+    status          text NOT NULL DEFAULT 'ISSUED'
+                    CHECK (status IN ('ISSUED','PAID','DISPUTED','CLOSED')),
+    mva_section     text,
+    issued_at       timestamptz NOT NULL DEFAULT now(),
+    payment_ref     text,
+    pdf_url         text,
+    evidence_sha256 text,
+    created_by      text
+);
+CREATE INDEX IF NOT EXISTS idx_challans_case ON jnpa.challans (case_id);
+
+CREATE TABLE IF NOT EXISTS jnpa.case_audit (
+    id          bigserial PRIMARY KEY,
+    case_id     uuid NOT NULL,
+    event       text NOT NULL,
+    from_status text,
+    to_status   text,
+    actor       text,
+    detail      jsonb NOT NULL DEFAULT '{}'::jsonb,
+    prev_hash   text,
+    hash        text,
+    ts          timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_case_audit_case ON jnpa.case_audit (case_id, id);
+
+-- Defence-in-depth idempotency: at most one console-issued alert per (case,kind).
+-- Partial index, so other alert sources (anomaly/customs/...) are unaffected.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_alerts_case_kind
+    ON jnpa.alerts ((payload->>'case_id'), kind)
+    WHERE payload->>'source' = 'violation-console';

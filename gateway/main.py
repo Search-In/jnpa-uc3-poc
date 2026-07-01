@@ -60,6 +60,7 @@ from .routers import (
     trucks,
     ulip,
     vahan,
+    violations,
     ws,
 )
 from .state import GatewayState
@@ -223,6 +224,11 @@ app.include_router(kpi.router)
 app.include_router(push.router)
 app.include_router(geo.router)
 app.include_router(reports.router)
+# Vehicle Violation Detection — orchestration-only enforcement console. Reuses
+# ANPR + vehicle_master + driver store + the reports e-Challan schedule + MinIO
+# evidence and writes incidents to jnpa.alerts (so they appear on the Reports
+# page). Mounted after reports because it imports its fine schedule.
+app.include_router(violations.router)
 app.include_router(scenario_ext.router)
 # Appendix-C capability services (Empty-Container, Carbon, Gate-Data/Auto-LEO,
 # Identity/face-recognition, Parking) — each proxies its upstream and degrades

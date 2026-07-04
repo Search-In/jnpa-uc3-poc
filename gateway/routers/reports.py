@@ -190,6 +190,15 @@ async def police_report(
     if format == "json":
         return {"incidents": incidents, "count": len(incidents)}
 
+    if format == "pdf":
+        # Playwright renders inside the gateway container and can't resolve the
+        # relative /api/evidence path, so point it at the gateway itself (same
+        # container) — the route is public, so the image embeds without a token.
+        for inc in incidents:
+            ev = inc.get("evidence_url")
+            if isinstance(ev, str) and ev.startswith("/api/evidence/"):
+                inc["evidence_url"] = f"http://localhost:8000{ev}"
+
     html_doc = _render_html(incidents)
     if format == "html":
         return Response(content=html_doc, media_type="text/html")

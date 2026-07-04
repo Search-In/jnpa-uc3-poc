@@ -222,7 +222,6 @@ def _store_evidence(case_id: str, jpeg: bytes) -> Optional[str]:
         return None
     endpoint = os.environ.get("MINIO_ENDPOINT", "minio:9000").strip()
     bucket = os.environ.get("ANOMALY_EVIDENCE_BUCKET", "evidence").strip()
-    base = os.environ.get("ANOMALY_EVIDENCE_URL_BASE", "").strip() or f"http://{endpoint}/{bucket}"
     object_name = f"violations/{case_id}.jpg"
     try:
         from minio import Minio  # lazy import — optional dependency
@@ -238,7 +237,10 @@ def _store_evidence(case_id: str, jpeg: bytes) -> Optional[str]:
             bucket, object_name, data=io.BytesIO(jpeg), length=len(jpeg),
             content_type="image/jpeg",
         )
-        url = f"{base.rstrip('/')}/{object_name}"
+        # Return the gateway proxy path (same origin as the app), NOT the internal
+        # minio:9000 URL — the browser can't reach minio directly. /api/evidence
+        # streams the object back with MinIO staying private. See routers/evidence.py.
+        url = f"/api/evidence/{object_name}"
         log.info("violations_evidence_stored", case_id=case_id, bytes=len(jpeg))
         return url
     except Exception as exc:  # noqa: BLE001

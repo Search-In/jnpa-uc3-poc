@@ -47,6 +47,7 @@ from .routers import (
     control,
     debug,
     empty_container,
+    evidence,
     gate_data,
     geo,
     identity,
@@ -224,6 +225,9 @@ app.include_router(kpi.router)
 app.include_router(push.router)
 app.include_router(geo.router)
 app.include_router(reports.router)
+# Evidence proxy — streams private-MinIO evidence objects to the browser same-origin
+# (so <img>/<video> load without exposing MinIO). Public (no bearer) — see router.
+app.include_router(evidence.router)
 # Vehicle Violation Detection — orchestration-only enforcement console. Reuses
 # ANPR + vehicle_master + driver store + the reports e-Challan schedule + MinIO
 # evidence and writes incidents to jnpa.alerts (so they appear on the Reports

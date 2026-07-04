@@ -108,6 +108,9 @@ _PUBLIC: tuple[str, ...] = (
     "/docs",
     "/openapi.json",
     "/redoc",
+    # Evidence images are loaded by <img>/<video>, which cannot send a bearer
+    # token; the route only streams objects already stored in the evidence bucket.
+    "/api/evidence",
 )
 
 

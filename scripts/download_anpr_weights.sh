@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # ===========================================================================
-# One-time downloader for the YOLOv8 license-plate detector weights.
+# One-time downloader for the YOLO license-plate detector weights.
 #
-# Pulls the publicly-released license_plate_detector.pt from the
-# computervisioneng ANPR repo (the author ships it as a GitHub release asset /
-# Google-Drive link). If the download fails (offline / moved), the ANPR service
-# still runs in degraded mode (classical detector) — see ai/anpr/src/anpr/detect.py.
+# Pulls a public YOLOv8/YOLO11 license-plate detector .pt (Hugging Face by
+# default; see CANDIDATE_URLS) and saves it as license_plate_detector.pt. If the
+# download fails (offline / moved), the ANPR service still runs in degraded mode
+# (classical contour detector) — see ai/anpr/src/anpr/detect.py.
 #
 # Output: ai/anpr/resources/license_plate_detector.pt
 #
@@ -21,11 +21,15 @@ DEST_DIR="${REPO_ROOT}/ai/anpr/resources"
 DEST="${DEST_DIR}/license_plate_detector.pt"
 mkdir -p "${DEST_DIR}"
 
-# Candidate direct URLs (first that responds 200 wins). The author has published
-# the weights as a release asset; mirrors are listed as fallbacks. Operators can
-# always supply a direct URL via ANPR_WEIGHTS_URL.
+# Candidate direct URLs (first that responds 200 wins). Operators can always
+# supply their own via ANPR_WEIGHTS_URL. The primary sources are public
+# Hugging Face YOLO license-plate detectors (curl -L follows the CDN redirect);
+# the legacy computervisioneng GitHub release is kept last as a mirror but its
+# asset was removed upstream (404 as of 2026), so it is no longer relied upon.
 CANDIDATE_URLS=(
   "${ANPR_WEIGHTS_URL:-}"
+  "https://huggingface.co/Koushim/yolov8-license-plate-detection/resolve/main/best.pt"
+  "https://huggingface.co/morsetechlab/yolov11-license-plate-detection/resolve/main/license-plate-finetune-v1m.pt"
   "https://github.com/computervisioneng/automatic-number-plate-recognition-python-yolov8/releases/download/v1.0/license_plate_detector.pt"
 )
 

@@ -60,12 +60,22 @@ RUN pip uninstall -y opencv-python opencv-contrib-python \
         opencv-python-headless opencv-contrib-python-headless 2>/dev/null; \
     pip install --force-reinstall "opencv-python-headless==4.10.*"
 
-# Build-time guard: the core (always-on) stack must import. The heavy OCR stack
-# (paddle) is allowed to be absent at build time on some arch/wheel combos — the
-# service degrades gracefully — so we don't hard-fail the build on it.
-RUN python -c "import cv2, numpy, fastapi; print('core ok | cv2', cv2.__version__)" \
+# PaddleOCR 2.x / paddlepaddle 2.6 use np.sctypes, which was REMOVED in NumPy 2.0
+# — with NumPy 2.x the real recogniser fails to import ("paddleocr_unavailable_
+# fallback") and OCR silently degrades to the weak template matcher. The opencv
+# --force-reinstall above can re-pull NumPy 2.x, so this MUST be the last
+# dependency step: pin NumPy back down so real PaddleOCR loads at runtime.
+RUN pip install "numpy>=1.26,<2"
+
+# Build-time guard: the core stack must import AND NumPy must be <2 (a regression
+# that re-introduces NumPy 2.x — which would silently degrade OCR — fails the
+# build loudly here instead). The heavy OCR stack (paddle) is still allowed to be
+# absent on some arch/wheel combos, so its import is checked but non-fatal.
+RUN python -c "import numpy; assert numpy.__version__[:2] == '1.', 'NumPy must be <2 for PaddleOCR, got '+numpy.__version__; print('numpy', numpy.__version__)" \
+    && python -c "import cv2, fastapi; print('core ok | cv2', cv2.__version__)" \
     && python -c "import anpr.app, anpr.pipeline, anpr.postprocess, anpr.evaluator; print('anpr import OK')" \
-    && python -c "import anpr.detect, anpr.ocr; print('detect+ocr import OK')"
+    && python -c "import anpr.detect, anpr.ocr; print('detect+ocr import OK')" \
+    && (python -c "from paddleocr import PaddleOCR; print('paddleocr import OK')" || echo "WARN: paddleocr not importable at build (arch/wheel) — will run degraded")
 
 EXPOSE 8301
 

@@ -21,7 +21,11 @@ dependencies = [
     "uvicorn[standard]==0.30.*",
     "python-multipart==0.0.*",
     "opencv-python-headless==4.10.*",
-    "numpy>=1.26,<3",
+    # NumPy MUST stay <2: PaddleOCR 2.8 / paddlepaddle 2.6 use np.sctypes, which
+    # was removed in NumPy 2.0 — installing 2.x makes PaddleOCR fail to import at
+    # runtime ("paddleocr_unavailable_fallback: np.sctypes was removed") so OCR
+    # silently degrades to the weak template matcher. Pin <2 so real OCR loads.
+    "numpy>=1.26,<2",
     "pillow>=10,<13",
     "pydantic==2.*",
     "prometheus-client==0.21.*",

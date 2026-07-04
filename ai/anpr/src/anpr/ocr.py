@@ -82,12 +82,21 @@ class PlateOCR:
                 use_angle_cls=False,
                 use_gpu=self.use_gpu,
                 show_log=False,
-                rec_char_dict_path=str(self.char_dict_path),
             )
             # Use the fine-tuned Indian adapter when it has actually been trained
             # (inference.pdmodel present). Otherwise fall back to stock PP-OCRv4.
+            #
+            # CRITICAL: the custom 36-char plate dict (indian_plate_chars.txt)
+            # ONLY matches the fine-tuned adapter's output layer. Pairing it with
+            # the STOCK PP-OCRv4 recogniser — whose model emits indices into its
+            # own ~96-char `en` dict — makes Paddle raise "list index out of range"
+            # on EVERY read (it looks up an index >= 36 in a 36-entry dict) and
+            # silently fall back to the template matcher. So the char-dict override
+            # must be set ONLY alongside the matching adapter; with the stock model
+            # we keep Paddle's native dict and filter to A-Z0-9 in _recognise_paddle.
             if (self.rec_model_dir / "inference.pdmodel").is_file():
                 kwargs["rec_model_dir"] = str(self.rec_model_dir)
+                kwargs["rec_char_dict_path"] = str(self.char_dict_path)
                 log.info("paddleocr_using_finetuned_adapter", dir=str(self.rec_model_dir))
             self._engine = PaddleOCR(**kwargs)
             self._ml_ok = True

@@ -8,6 +8,7 @@ import LiveOperations from "@/screens/LiveOperations";
 import DriverAdvisory from "@/screens/DriverAdvisory";
 import GeofencingManager from "@/screens/GeofencingManager";
 import PoliceReports from "@/screens/PoliceReports";
+import Fastag from "@/screens/Fastag";
 import SystemHealth from "@/screens/SystemHealth";
 import WhatIfConsole from "@/screens/WhatIfConsole";
 import DemoConsole from "@/screens/DemoConsole";
@@ -107,6 +108,14 @@ function DashboardShell({
             element={
               <Guard path="/reports">
                 <PoliceReports />
+              </Guard>
+            }
+          />
+          <Route
+            path="/fastag"
+            element={
+              <Guard path="/fastag">
+                <Fastag />
               </Guard>
             }
           />

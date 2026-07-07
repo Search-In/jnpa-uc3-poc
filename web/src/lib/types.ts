@@ -433,3 +433,74 @@ export type WsFrame =
   | { type: "scenario_step"; payload: ScenarioStep }
   | { type: "operator_banner"; payload: OperatorBanner }
   | { type: "violation_enforced"; payload: ViolationEnforcedEvent };
+
+// --- FASTag (ULIP) — mirrors gateway/routers/fastag.py response models ---
+export interface FastagBalance {
+  rc_number?: string | null;
+  tag_id?: string | null;
+  available_balance?: string | null;
+  tag_status?: string | null;
+  updated?: boolean;
+  correlation_id: string;
+  provider_name?: string | null;
+  provider_code?: string | null;
+  customer_name?: string | null;
+  available_recharge_limit?: string | null;
+  vehicle_class?: string | null;
+  vehicle_class_desc?: string | null;
+  model_name?: string | null;
+}
+
+export interface TollPlaza {
+  name?: string | null;
+  cost?: string | null;
+  lat?: number | null;
+  lng?: number | null;
+}
+
+export interface TollEnroute {
+  id: string;
+  source?: string | null;
+  destination?: string | null;
+  distance?: string | null;
+  duration?: string | null;
+  plaza_count: number;
+  toll_plaza_details: TollPlaza[];
+  correlation_id: string;
+}
+
+export interface TollEnrouteInput {
+  source_state: string;
+  source_name: string;
+  destination_state: string;
+  destination_name: string;
+  vehicle_type: string;
+}
+
+export interface FastagTransactionRow {
+  seq_no?: string | null;
+  transaction_date_time?: string | null;
+  toll_plaza_name?: string | null;
+  toll_plaza_geocode?: string | null;
+  vehicle_type?: string | null;
+  lane_direction?: string | null;
+  bank_name?: string | null;
+  status?: string | null;
+}
+
+export interface FastagTransactions {
+  inserted_count: number;
+  skipped_count: number;
+  failed_count: number;
+  total: number;
+  correlation_id: string;
+  transactions: FastagTransactionRow[];
+}
+
+export interface FastagHealth {
+  module: string;
+  status: string;
+  ulip_configured: boolean;
+  db: string;
+  tables: Record<string, boolean>;
+}

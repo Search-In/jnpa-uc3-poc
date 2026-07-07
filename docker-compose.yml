@@ -850,6 +850,20 @@ services:
       # ULIP relay — empty -> mock relay used for the SECONDARY truck rung.
       GATEWAY_ULIP_URL: ${GATEWAY_ULIP_URL:-}
       ULIP_API_KEY: ${ULIP_API_KEY:-}
+      # FASTag ULIP APIs (/api/fastag/*). All env-driven — NO hardcoded vendor URL.
+      # Empty FASTAG_ULIP_URL -> the client returns a config error (HTTP 500) until
+      # the authorised provider base URL is supplied. Paths + auth scheme stay
+      # configurable because the vendor contract is not yet confirmed.
+      FASTAG_ULIP_URL: ${FASTAG_ULIP_URL:-}
+      FASTAG_ULIP_ENROUTE_PATH: ${FASTAG_ULIP_ENROUTE_PATH:-}
+      FASTAG_ULIP_BALANCE_PATH: ${FASTAG_ULIP_BALANCE_PATH:-}
+      FASTAG_ULIP_TRANSACTION_PATH: ${FASTAG_ULIP_TRANSACTION_PATH:-}
+      # Auth scheme: bearer | apikey | none (default bearer). apikey -> header named
+      # by FASTAG_ULIP_AUTH_HEADER. Credential is ULIP_API_KEY (above).
+      FASTAG_ULIP_AUTH_SCHEME: ${FASTAG_ULIP_AUTH_SCHEME:-bearer}
+      FASTAG_ULIP_AUTH_HEADER: ${FASTAG_ULIP_AUTH_HEADER:-X-API-Key}
+      FASTAG_ULIP_TIMEOUT_S: ${FASTAG_ULIP_TIMEOUT_S:-10}
+      FASTAG_ULIP_RETRIES: ${FASTAG_ULIP_RETRIES:-2}
       # Surepass token drives the LIVE_PRIMARY vahan rung (empty -> LIVE_FALLBACK).
       SUREPASS_API_TOKEN: ${SUREPASS_API_TOKEN:-}
       # Infra.
@@ -907,6 +921,9 @@ services:
       - "8000:8000"
     volumes:
       - ./gateway:/app/gateway:ro
+      # FASTag integration layer — imported by the /api/fastag router. Mounted
+      # read-only so local edits are picked up (matches the ./gateway mount).
+      - ./services:/app/services:ro
     networks:
       - jnpa
 

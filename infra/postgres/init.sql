@@ -509,3 +509,70 @@ CREATE INDEX IF NOT EXISTS idx_case_audit_case ON jnpa.case_audit (case_id, id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_alerts_case_kind
     ON jnpa.alerts ((payload->>'case_id'), kind)
     WHERE payload->>'source' = 'violation-console';
+
+-- ===========================================================================
+-- ULIP FASTag foundation layer (greenfield). Three vendor APIs land here:
+--   * RC -> FASTag Balance     -> jnpa.fastag_balance      (RC-keyed snapshot)
+--   * RC -> FASTag Transaction -> jnpa.fastag_transactions (one row per crossing)
+--   * Toll Enroute             -> jnpa.toll_enroute        (route + plaza JSONB)
+-- Money is NUMERIC(10,2) everywhere (never float); all timestamps are timestamptz.
+-- All DDL is IF NOT EXISTS so a running DB can be topped up by re-applying this
+-- block (init.sql itself only runs on first container start).
+-- ===========================================================================
+
+-- A) RC-based FASTag balance snapshot (latest known state per registration).
+CREATE TABLE IF NOT EXISTS jnpa.fastag_balance (
+    rc_number                 text PRIMARY KEY,
+    tag_id                    text,
+    provider_name             text,
+    provider_code             text,
+    customer_name             text,
+    available_recharge_limit  numeric(10,2),
+    available_balance         numeric(10,2),
+    tag_status                text,
+    vehicle_class             text,
+    vehicle_class_desc        text,
+    model_name                text,              -- nullable per ULIP spec
+    updated_at                timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_fastag_balance_tag
+    ON jnpa.fastag_balance (tag_id);
+
+-- B) FASTag plaza transactions (RC -> Transaction API). seq_no is the vendor's
+-- idempotency key: UNIQUE so a replayed batch cannot double-insert a crossing.
+CREATE TABLE IF NOT EXISTS jnpa.fastag_transactions (
+    id                     uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tag_id                 text,
+    rc_number              text,
+    seq_no                 text UNIQUE,
+    transaction_date_time  timestamptz,
+    lane_direction         text,
+    toll_plaza_name        text,
+    toll_plaza_geocode     text,               -- raw "lat,lng" as returned by vendor
+    vehicle_type           text,
+    bank_name              text,               -- batch-level (provider returns once per lookup)
+    status                 text,               -- batch-level tag status
+    created_at             timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_fastag_txn_rc
+    ON jnpa.fastag_transactions (rc_number, transaction_date_time DESC);
+CREATE INDEX IF NOT EXISTS idx_fastag_txn_tag
+    ON jnpa.fastag_transactions (tag_id, transaction_date_time DESC);
+
+-- C) Toll Enroute route lookups. The full toll_plaza_details array is preserved
+-- verbatim as JSONB (name, cost, lat, lng per plaza) so no array data is lost.
+CREATE TABLE IF NOT EXISTS jnpa.toll_enroute (
+    id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    client_id           text,
+    source_state        text,
+    source_name         text,
+    destination_state   text,
+    destination_name    text,
+    vehicle_type        text,
+    duration            text,
+    distance            numeric(10,2),
+    toll_plaza_details  jsonb NOT NULL DEFAULT '[]'::jsonb,
+    created_at          timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_toll_enroute_route
+    ON jnpa.toll_enroute (source_name, destination_name, created_at DESC);

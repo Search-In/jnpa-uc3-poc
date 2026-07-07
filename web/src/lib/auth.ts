@@ -33,6 +33,8 @@ export const SCREEN_ROLES: Record<string, Role[]> = {
   "/advisory": [...CONTROL_ROOM, "DRIVER"],
   "/geofencing": [...CONTROL_ROOM, "TRAFFIC_POLICE"],
   "/reports": [...CONTROL_ROOM, "TRAFFIC_POLICE", "CUSTOMS"],
+  // FASTag ULIP — mirrors gateway/auth.py /api/fastag policy (control room + customs).
+  "/fastag": [...CONTROL_ROOM, "CUSTOMS"],
   // Driver enrolment approval — biometric-sensitive, mirrors the gateway
   // /api/identity policy (customs + admin only).
   "/enrollments": ["DTCCC_ADMIN", "CUSTOMS"],

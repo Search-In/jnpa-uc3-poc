@@ -30,6 +30,7 @@ import { SUPPORTED_LANGS, LANG_LABELS, type LangCode } from "@/i18n";
 import i18n from "@/i18n";
 import { SHELL } from "@/lib/tokens";
 import { HeaderActions } from "@/components/layout/HeaderActions";
+import { canSeeScreen } from "@/lib/auth";
 
 // Route table — labels resolved through t() at render time. The `i18nKey` maps
 // into the `nav` namespace seeded in src/i18n/locales/*.json.
@@ -38,6 +39,7 @@ const ROUTES = [
   { to: "/advisory", i18nKey: "nav.advisory", icon: "route-from" },
   { to: "/geofencing", i18nKey: "nav.geofencing", icon: "shapes" },
   { to: "/reports", i18nKey: "nav.reports", icon: "file-report" },
+  { to: "/fastag", i18nKey: "nav.fastag", icon: "credit-card" },
   { to: "/enrollments", i18nKey: "nav.enrollments", icon: "user-plus" },
   { to: "/health", i18nKey: "nav.health", icon: "heart" },
   { to: "/what-if", i18nKey: "nav.whatIf", icon: "beaker" },
@@ -154,7 +156,7 @@ export function Shell({ children, onResetBaseline, resetDisabled }: ShellProps) 
           aria-label={t("app.title")}
           style={{ display: "flex", flexDirection: "column", paddingBlock: "0.5rem" }}
         >
-          {ROUTES.map((r) => (
+          {ROUTES.filter((r) => canSeeScreen(r.to)).map((r) => (
             <NavLink key={r.to} to={r.to} style={({ isActive }) => navLinkStyle(isActive)}>
               <CalciteIcon icon={r.icon} scale="s" />
               <span>{t(r.i18nKey)}</span>

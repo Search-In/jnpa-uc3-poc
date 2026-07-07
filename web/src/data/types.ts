@@ -16,6 +16,9 @@ import type {
   Decision,
   DriverEnrollment,
   EmptyAllocation,
+  FastagBalance,
+  FastagHealth,
+  FastagTransactions,
   FaultControlResult,
   FaultState,
   Gate,
@@ -30,6 +33,8 @@ import type {
   ScenarioStep,
   SourceHealth,
   TasSlot,
+  TollEnroute,
+  TollEnrouteInput,
   TrafficSnapshot,
   TruckDevice,
   ViolationCatalogItem,
@@ -152,6 +157,12 @@ export interface DataAdapter {
 
   // --- Terminal Appointment System (TAS) ---
   tasSlots(gateId?: string): Promise<TasSlot[]>;
+
+  // --- FASTag (ULIP) — /api/fastag/* ---
+  fastagBalance(rcNumber: string): Promise<FastagBalance>;
+  fastagTransactions(rcNumber: string): Promise<FastagTransactions>;
+  tollEnroute(body: TollEnrouteInput): Promise<TollEnroute>;
+  fastagHealth(): Promise<FastagHealth>;
 
   // --- Fault-injection control surface (Demo Console) ---
   getFaults(): Promise<FaultState>;

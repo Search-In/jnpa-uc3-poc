@@ -180,6 +180,12 @@ export class LiveAdapter implements DataAdapter {
   // --- Terminal Appointment System (TFC-1) ---
   tasSlots = async (gateId?: string) => (await api.tasSlots(gateId)).slots;
 
+  // --- FASTag (ULIP) — /api/fastag/* ---
+  fastagBalance = (rcNumber: string) => api.fastagBalance(rcNumber);
+  fastagTransactions = (rcNumber: string) => api.fastagTransactions(rcNumber);
+  tollEnroute = (body: import("@/lib/types").TollEnrouteInput) => api.tollEnroute(body);
+  fastagHealth = () => api.fastagHealth();
+
   // --- Fault-injection control surface (Demo Console) --------------------
   // The three fallback chains the presenter can force a rung on. The gateway
   // recomputes severity + the operator banner on every force/clear.

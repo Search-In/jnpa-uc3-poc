@@ -205,6 +205,24 @@ export const api = {
       steps: import("./types").ScenarioStep[];
     }>(`/api/scenarios/handle/${handleId}/timeline`),
 
+  // --- FASTag (ULIP) — /api/fastag/* ---
+  fastagBalance: (rcNumber: string) =>
+    http<import("./types").FastagBalance>("/api/fastag/balance", {
+      method: "POST",
+      body: JSON.stringify({ rc_number: rcNumber }),
+    }),
+  fastagTransactions: (rcNumber: string) =>
+    http<import("./types").FastagTransactions>("/api/fastag/transactions", {
+      method: "POST",
+      body: JSON.stringify({ rc_number: rcNumber }),
+    }),
+  tollEnroute: (body: import("./types").TollEnrouteInput) =>
+    http<import("./types").TollEnroute>("/api/fastag/toll-enroute", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  fastagHealth: () => http<import("./types").FastagHealth>("/api/fastag/health"),
+
   // --- Terminal Appointment System (TFC-1) ---
   tasSlots: (gateId?: string) =>
     http<{ slots: import("./types").TasSlot[] }>(

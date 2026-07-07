@@ -10,6 +10,7 @@
     "advisory": "Driver Advisory",
     "geofencing": "Geo-fencing Manager",
     "reports": "Traffic-Police Reports",
+    "fastag": "FASTag",
     "health": "System Health",
     "whatIf": "What-If Console",
     "simulator": "Simulator",

@@ -48,6 +48,7 @@ from .routers import (
     debug,
     empty_container,
     evidence,
+    fastag,
     gate_data,
     geo,
     identity,
@@ -209,6 +210,28 @@ async def _production_safety_handler(_request: Request, exc: ProductionSafetyErr
     )
 
 
+# The FASTag endpoints must surface request-validation failures (missing/empty
+# fields, bad RC/vehicle_type, malformed JSON) as 400 — not FastAPI's default 422.
+# Scoped to /api/fastag/ only; every other route keeps the default 422 behaviour.
+from fastapi.exceptions import RequestValidationError  # noqa: E402
+from fastapi.exception_handlers import request_validation_exception_handler  # noqa: E402
+from fastapi.encoders import jsonable_encoder  # noqa: E402
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_handler(request: Request, exc: RequestValidationError):
+    if request.url.path.startswith("/api/fastag/"):
+        cid = request.headers.get("X-Correlation-ID")
+        return JSONResponse(
+            status_code=400,
+            content={"error": "validation_error",
+                     "detail": jsonable_encoder(exc.errors()),
+                     "correlation_id": cid},
+            headers={"X-Correlation-ID": cid} if cid else None,
+        )
+    return await request_validation_exception_handler(request, exc)
+
+
 log.info("gateway_runtime_mode", mode=mode_name())
 
 # Routers (order matters only where static paths must beat /{param} — kpi router
@@ -233,6 +256,10 @@ app.include_router(evidence.router)
 # evidence and writes incidents to jnpa.alerts (so they appear on the Reports
 # page). Mounted after reports because it imports its fine schedule.
 app.include_router(violations.router)
+# FASTag ULIP surface — /api/fastag/{balance,toll-enroute,transactions}. Thin
+# router: auth+validation at the gateway, then client -> mapper -> FastagService
+# (the single orchestration point). See gateway/routers/fastag.py.
+app.include_router(fastag.router)
 app.include_router(scenario_ext.router)
 # Appendix-C capability services (Empty-Container, Carbon, Gate-Data/Auto-LEO,
 # Identity/face-recognition, Parking) — each proxies its upstream and degrades

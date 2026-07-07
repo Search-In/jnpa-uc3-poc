@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { getAdapter } from "@/data";
-import type { CameraHealth, Decision, SourceHealth } from "@/lib/types";
+import type { CameraHealth, Decision, SourceHealth, FastagHealth } from "@/lib/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { StatusDot, Spinner } from "@/components/ui/misc";
@@ -51,6 +51,14 @@ export default function SystemHealth() {
     queryFn: () => getAdapter().cameras(),
     refetchInterval: 5000,
   });
+  // FASTag ULIP module health (vendor config + DB tables). Separate from the
+  // source chips above because it comes from /api/fastag/health, a different shape.
+  const fastagQ = useQuery({
+    queryKey: ["fastag-health"],
+    queryFn: () => getAdapter().fastagHealth(),
+    refetchInterval: 10000,
+    retry: false,
+  });
   const [drawer, setDrawer] = useState<{ title: string; api?: string; source?: string } | null>(
     null,
   );
@@ -89,6 +97,11 @@ export default function SystemHealth() {
                 onClick={() => setDrawer({ title: e.label, api: e.api, source: e.row?.source })}
               />
             ))}
+            <FastagUlipChip
+              health={fastagQ.data}
+              loading={fastagQ.isLoading}
+              error={fastagQ.isError}
+            />
           </div>
 
           <Card className="mt-5">
@@ -157,6 +170,62 @@ function SourceChip({
         </CardContent>
       </Card>
     </button>
+  );
+}
+
+function FastagUlipChip({
+  health,
+  loading,
+  error,
+}: {
+  health?: FastagHealth;
+  loading: boolean;
+  error: boolean;
+}) {
+  const { t } = useTranslation();
+  // ok -> green (LIVE), degraded/unconfigured -> amber (DEGRADED), unreachable -> red (DOWN).
+  const state = error ? "DOWN" : health?.status === "ok" ? "LIVE" : "DEGRADED";
+  const colour = sourceStateColour(state);
+  const label = error
+    ? t("health.noData")
+    : health?.status === "ok"
+      ? "OK"
+      : health?.ulip_configured === false
+        ? "NOT CONFIGURED"
+        : "DEGRADED";
+  const tables = health?.tables ?? {};
+  return (
+    <Card>
+      <CardContent className="space-y-2 py-3">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-medium">FASTag ULIP</span>
+          <StatusDot colour={colour} pulse={state === "LIVE"} />
+        </div>
+        {loading ? (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Spinner /> …
+          </div>
+        ) : (
+          <>
+            <Badge colour={colour}>{label}</Badge>
+            <dl className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
+              <dt>Vendor URL</dt>
+              <dd className="text-right text-foreground">
+                {health?.ulip_configured ? "configured" : "—"}
+              </dd>
+              <dt>Database</dt>
+              <dd className="text-right text-foreground">{health?.db ?? "—"}</dd>
+              <dt>Tables</dt>
+              <dd className="text-right text-foreground">
+                {Object.keys(tables).length
+                  ? `${Object.values(tables).filter(Boolean).length}/${Object.keys(tables).length}`
+                  : "—"}
+              </dd>
+            </dl>
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

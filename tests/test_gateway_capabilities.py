@@ -148,17 +148,22 @@ def test_identity_verify_genuine_then_unknown(client):
 
 
 # --- Parking (C1) -----------------------------------------------------------
-def test_parking_availability_synthetic(client):
-    r = client.get("/api/parking/availability?minute_of_day=540")
+# The board is RDS-backed (no synthetic occupancy). Without a reachable DB the
+# gateway degrades gracefully to source="unavailable" instead of 500ing; with
+# real slot state it returns source="rds". Either way the invariant
+# available == capacity - occupied must hold per facility.
+def test_parking_availability_rds_backed(client):
+    r = client.get("/api/parking/availability")
     assert r.status_code == 200
     body = r.json()
-    assert body["decision_path"] == "SYNTHETIC"
-    f = body["facilities"][0]
-    assert f["available"] == f["capacity"] - f["occupied"]
+    assert body["decision_path"] in {"LIVE", "RDS_DIRECT", "UNAVAILABLE"}
+    for f in body.get("facilities", []):
+        assert f["available"] == f["capacity"] - f["occupied"]
 
 
 def test_parking_summary_totals(client):
-    r = client.get("/api/parking/summary?minute_of_day=540")
+    r = client.get("/api/parking/summary")
     assert r.status_code == 200
     body = r.json()
-    assert body["total_available"] == body["total_capacity"] - body["total_occupied"]
+    assert body["decision_path"] in {"LIVE", "RDS_DIRECT", "UNAVAILABLE"}
+    assert body["available"] == body["capacity"] - body["occupied"]

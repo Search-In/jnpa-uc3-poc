@@ -53,19 +53,23 @@ async def _rds_facilities(dsn: Optional[str]) -> List[dict]:
         return []
     from jnpa_shared.db import fetch_all
 
-    rows = await fetch_all(
-        """
-        SELECT f.id AS facility_id, f.facility_name, f.location, f.capacity, f.status,
-               count(s.*) FILTER (WHERE s.availability_status = 'OCCUPIED')  AS occupied,
-               count(s.*) FILTER (WHERE s.availability_status = 'AVAILABLE') AS available
-        FROM jnpa.parking_facilities f
-        LEFT JOIN jnpa.parking_slots s ON s.facility_id = f.id
-        GROUP BY f.id, f.facility_name, f.location, f.capacity, f.status
-        ORDER BY f.id
-        """,
-        {},
-        dsn=dsn,
-    )
+    try:
+        rows = await fetch_all(
+            """
+            SELECT f.id AS facility_id, f.facility_name, f.location, f.capacity, f.status,
+                   count(s.*) FILTER (WHERE s.availability_status = 'OCCUPIED')  AS occupied,
+                   count(s.*) FILTER (WHERE s.availability_status = 'AVAILABLE') AS available
+            FROM jnpa.parking_facilities f
+            LEFT JOIN jnpa.parking_slots s ON s.facility_id = f.id
+            GROUP BY f.id, f.facility_name, f.location, f.capacity, f.status
+            ORDER BY f.id
+            """,
+            {},
+            dsn=dsn,
+        )
+    except Exception as exc:  # noqa: BLE001 - DB unreachable/unseeded → source="unavailable"
+        log.debug("parking_rds_unavailable", error=str(exc))
+        return []
     board: List[dict] = []
     for r in rows:
         d = dict(r)

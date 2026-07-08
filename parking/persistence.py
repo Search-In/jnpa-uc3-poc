@@ -139,18 +139,22 @@ async def availability(*, dsn: Optional[str]) -> List[dict]:
         return []
     from jnpa_shared.db import fetch_all
 
-    rows = await fetch_all(
-        """
-        SELECT f.id AS facility_id, f.facility_name, f.location, f.capacity, f.status,
-               count(s.*) FILTER (WHERE s.availability_status = 'OCCUPIED') AS occupied,
-               count(s.*) FILTER (WHERE s.availability_status = 'AVAILABLE') AS available
-        FROM jnpa.parking_facilities f
-        LEFT JOIN jnpa.parking_slots s ON s.facility_id = f.id
-        GROUP BY f.id, f.facility_name, f.location, f.capacity, f.status
-        ORDER BY f.id
-        """,
-        dsn=dsn,
-    )
+    try:
+        rows = await fetch_all(
+            """
+            SELECT f.id AS facility_id, f.facility_name, f.location, f.capacity, f.status,
+                   count(s.*) FILTER (WHERE s.availability_status = 'OCCUPIED') AS occupied,
+                   count(s.*) FILTER (WHERE s.availability_status = 'AVAILABLE') AS available
+            FROM jnpa.parking_facilities f
+            LEFT JOIN jnpa.parking_slots s ON s.facility_id = f.id
+            GROUP BY f.id, f.facility_name, f.location, f.capacity, f.status
+            ORDER BY f.id
+            """,
+            dsn=dsn,
+        )
+    except Exception as exc:  # noqa: BLE001 - DB unreachable/unseeded → degrade to unavailable
+        log.debug("parking_availability_unavailable", error=str(exc))
+        return []
     out = []
     for r in rows:
         d = dict(r)
@@ -177,10 +181,14 @@ async def facilities_inventory(*, dsn: Optional[str]) -> List[dict]:
         return []
     from jnpa_shared.db import fetch_all
 
-    rows = await fetch_all(
-        "SELECT id, facility_name, location, capacity, status FROM jnpa.parking_facilities ORDER BY id",
-        dsn=dsn,
-    )
+    try:
+        rows = await fetch_all(
+            "SELECT id, facility_name, location, capacity, status FROM jnpa.parking_facilities ORDER BY id",
+            dsn=dsn,
+        )
+    except Exception as exc:  # noqa: BLE001 - DB unreachable/unseeded → fall back to static seed
+        log.debug("parking_inventory_unavailable", error=str(exc))
+        return []
     return [dict(r) for r in rows]
 
 

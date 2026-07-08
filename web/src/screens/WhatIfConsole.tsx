@@ -25,15 +25,45 @@ import {
   type Tone,
 } from "@/components/ui/dtccc";
 import { fmtTimeIST } from "@/lib/utils";
-import { FlaskConical, Play, RotateCcw, ArrowRight, ExternalLink, Sparkles, Radio, Film, Clapperboard, GitCompare } from "lucide-react";
+import {
+  FlaskConical,
+  Play,
+  RotateCcw,
+  ArrowRight,
+  ExternalLink,
+  Sparkles,
+  Radio,
+  Film,
+  Clapperboard,
+  GitCompare,
+} from "lucide-react";
 import { tourStore } from "@/whatif/tourStore";
 import { getScript } from "@/whatif/scenarioScripts";
 
-const SCENARIOS: { id: ScenarioId; runner: string; blurb: string; params: Record<string, any> }[] = [
-  { id: "TFC-1", runner: "tfc1", blurb: "Close G-NSICT; forecaster predicts spillover; trucks auto-re-route; TAS slots rescheduled.", params: { gate_id: "G-NSICT", duration_minutes: 120 } },
-  { id: "TFC-2", runner: "tfc2", blurb: "Inject a wrong-way track at Karal Phata; anomaly fires; e-Challan issued with evidence.", params: { camera_id: "C-KARAL-EXIT" } },
-  { id: "TFC-3", runner: "tfc3", blurb: "UC-II DPD release spike (2.5×) → corridor demand surge; forecaster build-up; gate-slot reissue.", params: { dpd_release_spike: 2.5 } },
-];
+const SCENARIOS: { id: ScenarioId; runner: string; blurb: string; params: Record<string, any> }[] =
+  [
+    {
+      id: "TFC-1",
+      runner: "tfc1",
+      blurb:
+        "Close G-NSICT; forecaster predicts spillover; trucks auto-re-route; TAS slots rescheduled.",
+      params: { gate_id: "G-NSICT", duration_minutes: 120 },
+    },
+    {
+      id: "TFC-2",
+      runner: "tfc2",
+      blurb:
+        "Inject a wrong-way track at Karal Phata; anomaly fires; e-Challan issued with evidence.",
+      params: { camera_id: "C-KARAL-EXIT" },
+    },
+    {
+      id: "TFC-3",
+      runner: "tfc3",
+      blurb:
+        "UC-II DPD release spike (2.5×) → corridor demand surge; forecaster build-up; gate-slot reissue.",
+      params: { dpd_release_spike: 2.5 },
+    },
+  ];
 
 function stepTone(status: string): Tone {
   if (status === "failed") return "critical";
@@ -47,14 +77,20 @@ export default function WhatIfConsole() {
   const { scenario, setScenario, reset: resetBanner } = useScenario();
   const { scenarioSteps } = useSocket();
   const [guided, setGuided] = useState(true);
-  const [activeHandle, setActiveHandle] = useState<string | null>(() => tourStore.getState().handleId);
+  const [activeHandle, setActiveHandle] = useState<string | null>(
+    () => tourStore.getState().handleId,
+  );
   const [activeRunner, setActiveRunner] = useState<string | null>(() => {
     const sid = tourStore.getState().scenarioId;
     return sid ? (getScript(sid)?.runner ?? null) : null;
   });
 
-  const run = useMutation({ mutationFn: (s: (typeof SCENARIOS)[number]) => getAdapter().runScenario(s.runner, s.params) });
-  const resetRun = useMutation({ mutationFn: () => getAdapter().resetScenario(activeRunner!, activeHandle ?? undefined) });
+  const run = useMutation({
+    mutationFn: (s: (typeof SCENARIOS)[number]) => getAdapter().runScenario(s.runner, s.params),
+  });
+  const resetRun = useMutation({
+    mutationFn: () => getAdapter().resetScenario(activeRunner!, activeHandle ?? undefined),
+  });
 
   const timelineQ = useQuery({
     queryKey: ["timeline", activeHandle],
@@ -67,7 +103,8 @@ export default function WhatIfConsole() {
     const live = activeHandle ? (scenarioSteps[activeHandle] ?? []) : [];
     const fetched = (timelineQ.data?.steps ?? []) as ScenarioStep[];
     const byNo = new Map<number, ScenarioStep>();
-    for (const s of fetched) byNo.set(s.step_no, { ...s, handle_id: activeHandle!, scenario: activeRunner! });
+    for (const s of fetched)
+      byNo.set(s.step_no, { ...s, handle_id: activeHandle!, scenario: activeRunner! });
     for (const s of live) byNo.set(s.step_no, s);
     return [...byNo.values()].sort((a, b) => a.step_no - b.step_no);
   }, [scenarioSteps, activeHandle, activeRunner, timelineQ.data]);
@@ -87,7 +124,11 @@ export default function WhatIfConsole() {
     resetBanner();
   }
 
-  const handlesQ = useQuery({ queryKey: ["scenario-handles"], queryFn: () => api.scenarioHandles(50), refetchInterval: 15000 });
+  const handlesQ = useQuery({
+    queryKey: ["scenario-handles"],
+    queryFn: () => api.scenarioHandles(50),
+    refetchInterval: 15000,
+  });
   function previewHandle(h: { handle_id: string; name: string }) {
     tourStore.stopScenario();
     setActiveRunner(h.name);
@@ -97,7 +138,8 @@ export default function WhatIfConsole() {
   const allHandles = handlesQ.data?.handles ?? [];
   const demoHandles = allHandles.filter((h) => h.is_demo);
   const recordedHandles = allHandles.filter((h) => !h.is_demo && h.step_count > 0);
-  const blurbFor = (runner: string | null) => SCENARIOS.find((s) => s.runner === runner)?.blurb ?? "";
+  const blurbFor = (runner: string | null) =>
+    SCENARIOS.find((s) => s.runner === runner)?.blurb ?? "";
   const previewingDemo = demoHandles.some((h) => h.handle_id === activeHandle);
 
   return (
@@ -113,14 +155,16 @@ export default function WhatIfConsole() {
               title={t("whatIf.guidedTooltip")}
               className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${guided ? "bg-primary text-primary-foreground" : "border border-border hover:bg-muted"}`}
             >
-              <Sparkles className="h-3.5 w-3.5" /> {guided ? t("whatIf.guidedOn") : t("whatIf.guidedOff")}
+              <Sparkles className="h-3.5 w-3.5" />{" "}
+              {guided ? t("whatIf.guidedOn") : t("whatIf.guidedOff")}
             </button>
             <button
               onClick={onReset}
               disabled={resetRun.isPending || !activeRunner}
               className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-muted disabled:opacity-40"
             >
-              {resetRun.isPending ? <Spinner /> : <RotateCcw className="h-3.5 w-3.5" />} {t("whatIf.resetToBaseline")}
+              {resetRun.isPending ? <Spinner /> : <RotateCcw className="h-3.5 w-3.5" />}{" "}
+              {t("whatIf.resetToBaseline")}
             </button>
           </div>
         }
@@ -130,14 +174,36 @@ export default function WhatIfConsole() {
       <div className="px-4 pt-3">
         <StatGrid className="lg:grid-cols-4">
           <StatCard icon={Radio} label="Live Scenarios" value={SCENARIOS.length} tone="info" />
-          <StatCard icon={Film} label="Recorded Runs" value={recordedHandles.length} tone="info" loading={handlesQ.isLoading} />
-          <StatCard icon={Clapperboard} label="Demo Scenarios" value={demoHandles.length} tone="warn" loading={handlesQ.isLoading} />
-          <StatCard icon={Play} label="Active Run" value={activeRunner ? activeRunner.toUpperCase() : "—"} tone={activeHandle ? "ok" : "neutral"} sub={activeHandle ? `${steps.length} steps` : "idle"} />
+          <StatCard
+            icon={Film}
+            label="Recorded Runs"
+            value={recordedHandles.length}
+            tone="info"
+            loading={handlesQ.isLoading}
+          />
+          <StatCard
+            icon={Clapperboard}
+            label="Demo Scenarios"
+            value={demoHandles.length}
+            tone="warn"
+            loading={handlesQ.isLoading}
+          />
+          <StatCard
+            icon={Play}
+            label="Active Run"
+            value={activeRunner ? activeRunner.toUpperCase() : "—"}
+            tone={activeHandle ? "ok" : "neutral"}
+            sub={activeHandle ? `${steps.length} steps` : "idle"}
+          />
         </StatGrid>
       </div>
 
       {/* Live Scenarios */}
-      <Section title="Live Scenarios" icon={Radio} hint="Trigger a reactive what-if chain (TFC-1/2/3)">
+      <Section
+        title="Live Scenarios"
+        icon={Radio}
+        hint="Trigger a reactive what-if chain (TFC-1/2/3)"
+      >
         <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
           {SCENARIOS.map((s) => {
             const active = scenario === s.id && !!activeHandle;
@@ -150,7 +216,10 @@ export default function WhatIfConsole() {
                 <p className="mb-2 text-xs text-muted-foreground">{t(`whatIf.blurb.${s.id}`)}</p>
                 <div className="mb-3 flex flex-wrap gap-1.5">
                   {Object.entries(s.params).map(([key, value]) => (
-                    <span key={key} className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/50 px-2 py-1 text-[11px]">
+                    <span
+                      key={key}
+                      className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/50 px-2 py-1 text-[11px]"
+                    >
                       <span className="text-muted-foreground">{humanizeParamKey(key)}</span>
                       <span className="font-mono font-medium text-foreground">{String(value)}</span>
                     </span>
@@ -161,7 +230,11 @@ export default function WhatIfConsole() {
                   disabled={run.isPending}
                   className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-[13px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                 >
-                  {run.isPending && run.variables?.id === s.id ? <Spinner className="text-primary-foreground" /> : <Play className="h-3.5 w-3.5" />}
+                  {run.isPending && run.variables?.id === s.id ? (
+                    <Spinner className="text-primary-foreground" />
+                  ) : (
+                    <Play className="h-3.5 w-3.5" />
+                  )}
                   {t("whatIf.run", { id: s.id })}
                 </button>
               </Card>
@@ -178,7 +251,12 @@ export default function WhatIfConsole() {
           <div className="overflow-x-auto">
             <table className="w-full text-left text-[13px]">
               <thead className="bg-muted/60 text-[11px] uppercase tracking-wide text-muted-foreground">
-                <tr><th className="px-3 py-2">Scenario</th><th className="px-3 py-2">Trigger</th><th className="px-3 py-2">Key parameter</th><th className="px-3 py-2">State</th></tr>
+                <tr>
+                  <th className="px-3 py-2">Scenario</th>
+                  <th className="px-3 py-2">Trigger</th>
+                  <th className="px-3 py-2">Key parameter</th>
+                  <th className="px-3 py-2">State</th>
+                </tr>
               </thead>
               <tbody className="divide-y divide-border">
                 {SCENARIOS.map((s) => {
@@ -187,9 +265,18 @@ export default function WhatIfConsole() {
                   return (
                     <tr key={s.id}>
                       <td className="px-3 py-2 font-medium">{SCENARIO_LABELS[s.id]}</td>
-                      <td className="px-3 py-2 font-mono text-xs text-muted-foreground">{s.runner}</td>
-                      <td className="px-3 py-2 font-mono text-xs">{humanizeParamKey(k)} = {String(v)}</td>
-                      <td className="px-3 py-2"><StatusChip label={active ? "RUNNING" : "Idle"} tone={active ? "ok" : "neutral"} /></td>
+                      <td className="px-3 py-2 font-mono text-xs text-muted-foreground">
+                        {s.runner}
+                      </td>
+                      <td className="px-3 py-2 font-mono text-xs">
+                        {humanizeParamKey(k)} = {String(v)}
+                      </td>
+                      <td className="px-3 py-2">
+                        <StatusChip
+                          label={active ? "RUNNING" : "Idle"}
+                          tone={active ? "ok" : "neutral"}
+                        />
+                      </td>
                     </tr>
                   );
                 })}
@@ -201,7 +288,11 @@ export default function WhatIfConsole() {
 
       {/* Demo Scenarios */}
       {demoHandles.length > 0 && (
-        <Section title="Demo Scenarios" icon={Clapperboard} hint="Preview a recorded demo run (read-only — does not start a live simulation)">
+        <Section
+          title="Demo Scenarios"
+          icon={Clapperboard}
+          hint="Preview a recorded demo run (read-only — does not start a live simulation)"
+        >
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {demoHandles.map((h) => (
               <button
@@ -213,9 +304,13 @@ export default function WhatIfConsole() {
                 <span className="flex items-center gap-2">
                   <span className="font-semibold uppercase">{h.name}</span>
                   <StatusChip label="DEMO" tone="warn" />
-                  <span className="text-muted-foreground">{h.step_count} steps · {h.status}</span>
+                  <span className="text-muted-foreground">
+                    {h.step_count} steps · {h.status}
+                  </span>
                 </span>
-                <span className="line-clamp-2 text-[11px] text-muted-foreground">{blurbFor(h.name)}</span>
+                <span className="line-clamp-2 text-[11px] text-muted-foreground">
+                  {blurbFor(h.name)}
+                </span>
               </button>
             ))}
           </div>
@@ -234,7 +329,9 @@ export default function WhatIfConsole() {
                 className={`inline-flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs transition-colors ${activeHandle === h.handle_id ? "border-primary bg-primary/10" : "border-border hover:bg-muted"}`}
               >
                 <span className="font-medium uppercase">{h.name}</span>
-                <span className="text-muted-foreground">{h.step_count} steps · {h.status}</span>
+                <span className="text-muted-foreground">
+                  {h.step_count} steps · {h.status}
+                </span>
               </button>
             ))}
           </div>
@@ -249,33 +346,59 @@ export default function WhatIfConsole() {
               {t("whatIf.reactiveTimeline")} {activeRunner ? `· ${activeRunner.toUpperCase()}` : ""}
               {previewingDemo && <StatusChip label="DEMO PREVIEW" tone="warn" />}
             </h2>
-            {activeRunner && blurbFor(activeRunner) && <p className="mt-0.5 max-w-3xl text-xs text-muted-foreground">{blurbFor(activeRunner)}</p>}
+            {activeRunner && blurbFor(activeRunner) && (
+              <p className="mt-0.5 max-w-3xl text-xs text-muted-foreground">
+                {blurbFor(activeRunner)}
+              </p>
+            )}
           </div>
           {traceId && (
-            <a href="http://localhost:16686" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-severity-info hover:underline" title={traceId}>
+            <a
+              href="http://localhost:16686"
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 text-xs text-severity-info hover:underline"
+              title={traceId}
+            >
               <ExternalLink className="h-3.5 w-3.5" /> {t("whatIf.openTrace")}
             </a>
           )}
         </div>
 
         {!activeHandle ? (
-          <Card className="p-6 text-center text-sm text-muted-foreground">{t("whatIf.emptyTimeline")}</Card>
+          <Card className="p-6 text-center text-sm text-muted-foreground">
+            {t("whatIf.emptyTimeline")}
+          </Card>
         ) : steps.length === 0 ? (
-          <Card className="flex items-center justify-center gap-2 p-6 text-sm text-muted-foreground"><Spinner /> {t("whatIf.waitingForSteps")}</Card>
+          <Card className="flex items-center justify-center gap-2 p-6 text-sm text-muted-foreground">
+            <Spinner /> {t("whatIf.waitingForSteps")}
+          </Card>
         ) : (
           <Card className="p-4">
             <ol className="relative space-y-3 pl-6">
               <span className="absolute left-[5px] top-1.5 bottom-1.5 w-px bg-border" aria-hidden />
               {steps.map((s) => (
                 <li key={s.step_no} className="relative">
-                  <span className="absolute -left-[18px] top-1.5 h-3 w-3 rounded-full border-2 border-card" style={{ backgroundColor: toneColour(stepTone(s.status)) }} aria-hidden />
+                  <span
+                    className="absolute -left-[18px] top-1.5 h-3 w-3 rounded-full border-2 border-card"
+                    style={{ backgroundColor: toneColour(stepTone(s.status)) }}
+                    aria-hidden
+                  />
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-xs font-semibold tabular-nums text-muted-foreground">#{s.step_no}</span>
+                    <span className="text-xs font-semibold tabular-nums text-muted-foreground">
+                      #{s.step_no}
+                    </span>
                     <span className="text-sm font-medium">{s.title}</span>
                     <StatusChip label={s.status} tone={stepTone(s.status)} />
-                    <span className="ml-auto text-[10px] text-muted-foreground">{fmtTimeIST(s.ts)}</span>
+                    <span className="ml-auto text-[10px] text-muted-foreground">
+                      {fmtTimeIST(s.ts)}
+                    </span>
                   </div>
-                  {s.trigger && <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">↳ {s.trigger}</div>}
+                  {s.trigger && (
+                    <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">
+                      ↳ {s.trigger}
+                    </div>
+                  )}
                   <CrossTwinArrow step={s} />
                 </li>
               ))}
@@ -287,7 +410,17 @@ export default function WhatIfConsole() {
   );
 }
 
-function Section({ title, icon: Icon, hint, children }: { title: string; icon: LucideIconType; hint?: string; children: React.ReactNode }) {
+function Section({
+  title,
+  icon: Icon,
+  hint,
+  children,
+}: {
+  title: string;
+  icon: LucideIconType;
+  hint?: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="border-t border-border px-4 py-3">
       <div className="mb-2 flex items-center gap-2">
@@ -306,14 +439,23 @@ function humanizeParamKey(key: string): string {
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 function toneColour(t: Tone): string {
-  return { info: "#56B4E9", ok: "#009E73", warn: "#E69F00", critical: "#D55E00", neutral: "#64748b" }[t];
+  return {
+    info: "#56B4E9",
+    ok: "#009E73",
+    warn: "#E69F00",
+    critical: "#D55E00",
+    neutral: "#64748b",
+  }[t];
 }
 
 function CrossTwinArrow({ step }: { step: ScenarioStep }) {
   const arrow = step.detail?.arrow as { from: string; to: string } | undefined;
   if (!arrow) return null;
   return (
-    <div data-guided-id="crosstwin-link" className="mt-1 inline-flex items-center gap-2 rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-xs">
+    <div
+      data-guided-id="crosstwin-link"
+      className="mt-1 inline-flex items-center gap-2 rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-xs"
+    >
       <span className="font-medium">{arrow.from}</span>
       <ArrowRight className="h-3.5 w-3.5 text-primary" />
       <span className="font-medium">{arrow.to}</span>

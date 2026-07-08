@@ -42,7 +42,10 @@ export default function DriverAdvisory() {
     );
     return ranked[0];
   };
-  const busiest = GATES.reduce((a, b) => ((depth.get(b) ?? 0) > (depth.get(a) ?? 0) ? b : a), GATES[0]);
+  const busiest = GATES.reduce(
+    (a, b) => ((depth.get(b) ?? 0) > (depth.get(a) ?? 0) ? b : a),
+    GATES[0],
+  );
 
   return (
     <PageContainer>
@@ -52,12 +55,20 @@ export default function DriverAdvisory() {
         subtitle={`${t("advisory.subtitlePrefix")} AT_GATE_QUEUE · ${t("advisory.subtitleSuffix")}`}
         updatedAt={queued.dataUpdatedAt}
         isFetching={queued.isFetching && !queued.isLoading}
-        onRefresh={() => qc.invalidateQueries({ queryKey: ["trucks", "AT_GATE_QUEUE", "advisory"] })}
+        onRefresh={() =>
+          qc.invalidateQueries({ queryKey: ["trucks", "AT_GATE_QUEUE", "advisory"] })
+        }
       />
 
       <div className="px-4 pt-3">
         <StatGrid className="lg:grid-cols-5">
-          <StatCard icon={DoorOpen} label={t("advisory.queuedTrucks")} value={devices.length} tone={devices.length > 40 ? "warn" : "info"} loading={queued.isLoading} />
+          <StatCard
+            icon={DoorOpen}
+            label={t("advisory.queuedTrucks")}
+            value={devices.length}
+            tone={devices.length > 40 ? "warn" : "info"}
+            loading={queued.isLoading}
+          />
           {GATES.map((g) => (
             <StatCard
               key={g}
@@ -98,7 +109,12 @@ export default function DriverAdvisory() {
                   </thead>
                   <tbody>
                     {devices.slice(0, 200).map((t) => (
-                      <QueueRow key={t.device_id} truck={t} recommend={recommendFor(t.gate_id)} qc={qc} />
+                      <QueueRow
+                        key={t.device_id}
+                        truck={t}
+                        recommend={recommendFor(t.gate_id)}
+                        qc={qc}
+                      />
                     ))}
                   </tbody>
                 </table>

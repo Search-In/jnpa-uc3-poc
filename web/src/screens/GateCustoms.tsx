@@ -7,7 +7,15 @@
 
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ShieldCheck, PackageCheck, Scale, FileText, Container, Flag, ClipboardCheck } from "lucide-react";
+import {
+  ShieldCheck,
+  PackageCheck,
+  Scale,
+  FileText,
+  Container,
+  Flag,
+  ClipboardCheck,
+} from "lucide-react";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import {
@@ -44,9 +52,18 @@ export default function GateCustoms() {
   const [captureType, setCaptureType] = useState<string>("ESEAL");
 
   const providersQ = useQuery({ queryKey: ["gate-providers"], queryFn: () => api.gateProviders() });
-  const capturesQ = useQuery({ queryKey: ["gate-captures", captureType], queryFn: () => api.gateCaptures(captureType, undefined, 200) });
-  const leoQ = useQuery({ queryKey: ["leo-recon"], queryFn: () => api.gateReconciliations(undefined, 200) });
-  const customsQ = useQuery({ queryKey: ["customs-history"], queryFn: () => api.customsHistory(200) });
+  const capturesQ = useQuery({
+    queryKey: ["gate-captures", captureType],
+    queryFn: () => api.gateCaptures(captureType, undefined, 200),
+  });
+  const leoQ = useQuery({
+    queryKey: ["leo-recon"],
+    queryFn: () => api.gateReconciliations(undefined, 200),
+  });
+  const customsQ = useQuery({
+    queryKey: ["customs-history"],
+    queryFn: () => api.customsHistory(200),
+  });
 
   const sources = providersQ.data?.sources ?? {};
   const captures = capturesQ.data?.captures ?? [];
@@ -56,7 +73,11 @@ export default function GateCustoms() {
   const leoReady = recon.filter((r) => r.leo_ready).length;
   const leoBlocked = recon.length - leoReady;
 
-  const updatedAt = Math.max(capturesQ.dataUpdatedAt || 0, leoQ.dataUpdatedAt || 0, customsQ.dataUpdatedAt || 0);
+  const updatedAt = Math.max(
+    capturesQ.dataUpdatedAt || 0,
+    leoQ.dataUpdatedAt || 0,
+    customsQ.dataUpdatedAt || 0,
+  );
   const anyFetching = capturesQ.isFetching || leoQ.isFetching || customsQ.isFetching;
 
   function refreshAll() {
@@ -80,7 +101,10 @@ export default function GateCustoms() {
       {/* Provider mode strip */}
       <div className="flex flex-wrap gap-2 px-4 pt-3">
         {CAPTURE_TYPES.map(({ key, label, icon: Icon }) => (
-          <div key={key} className="flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1.5">
+          <div
+            key={key}
+            className="flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1.5"
+          >
             <Icon className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
             <span className="text-xs font-medium text-foreground">{label}</span>
             <ModeChip mode={sources[key]?.mode ?? "sim"} />
@@ -91,10 +115,34 @@ export default function GateCustoms() {
       {/* Summary cards */}
       <div className="px-4 pt-3">
         <StatGrid>
-          <StatCard icon={ClipboardCheck} label={`${CAPTURE_TYPES.find((c) => c.key === captureType)?.label} Captures`} value={captures.length} tone="info" loading={capturesQ.isLoading} />
-          <StatCard icon={ShieldCheck} label="LEO Ready" value={leoReady} tone="ok" loading={leoQ.isLoading} />
-          <StatCard icon={Container} label="LEO Blocked" value={leoBlocked} tone={leoBlocked > 0 ? "warn" : "ok"} loading={leoQ.isLoading} />
-          <StatCard icon={Flag} label="Customs Flags" value={customs.length} tone={customs.length > 0 ? "critical" : "ok"} loading={customsQ.isLoading} />
+          <StatCard
+            icon={ClipboardCheck}
+            label={`${CAPTURE_TYPES.find((c) => c.key === captureType)?.label} Captures`}
+            value={captures.length}
+            tone="info"
+            loading={capturesQ.isLoading}
+          />
+          <StatCard
+            icon={ShieldCheck}
+            label="LEO Ready"
+            value={leoReady}
+            tone="ok"
+            loading={leoQ.isLoading}
+          />
+          <StatCard
+            icon={Container}
+            label="LEO Blocked"
+            value={leoBlocked}
+            tone={leoBlocked > 0 ? "warn" : "ok"}
+            loading={leoQ.isLoading}
+          />
+          <StatCard
+            icon={Flag}
+            label="Customs Flags"
+            value={customs.length}
+            tone={customs.length > 0 ? "critical" : "ok"}
+            loading={customsQ.isLoading}
+          />
         </StatGrid>
       </div>
 
@@ -120,7 +168,12 @@ export default function GateCustoms() {
                 tabs={CAPTURE_TYPES.map((c) => ({ key: c.key, label: c.label, icon: c.icon }))}
               />
             </div>
-            <CapturesTable rows={captures} status={capturesQ} onRetry={() => capturesQ.refetch()} type={captureType} />
+            <CapturesTable
+              rows={captures}
+              status={capturesQ}
+              onRetry={() => capturesQ.refetch()}
+              type={captureType}
+            />
           </Card>
         )}
         {tab === "leo" && (
@@ -142,14 +195,43 @@ function captureStatusTone(status?: string | null): Tone {
   return status === "TAMPERED" || status === "PENDING" ? "critical" : "ok";
 }
 
-function CapturesTable({ rows, status, onRetry, type }: { rows: GateCapture[]; status: any; onRetry: () => void; type: string }) {
+function CapturesTable({
+  rows,
+  status,
+  onRetry,
+  type,
+}: {
+  rows: GateCapture[];
+  status: any;
+  onRetry: () => void;
+  type: string;
+}) {
   const columns: Column<GateCapture>[] = useMemo(
     () => [
-      { key: "container", header: "Container", className: "font-mono", render: (c) => c.container_no ?? "—" },
-      { key: "vehicle", header: "Vehicle", className: "font-mono", render: (c) => c.vehicle_plate ?? "—" },
-      { key: "status", header: "Status", render: (c) => <StatusChip label={c.status ?? "—"} tone={captureStatusTone(c.status)} /> },
+      {
+        key: "container",
+        header: "Container",
+        className: "font-mono",
+        render: (c) => c.container_no ?? "—",
+      },
+      {
+        key: "vehicle",
+        header: "Vehicle",
+        className: "font-mono",
+        render: (c) => c.vehicle_plate ?? "—",
+      },
+      {
+        key: "status",
+        header: "Status",
+        render: (c) => <StatusChip label={c.status ?? "—"} tone={captureStatusTone(c.status)} />,
+      },
       { key: "source", header: "Source", render: (c) => <ModeChip mode={c.source_mode} /> },
-      { key: "captured", header: "Captured", className: "text-muted-foreground", render: (c) => (c.captured_at ? fmtDateTimeIST(c.captured_at) : "—") },
+      {
+        key: "captured",
+        header: "Captured",
+        className: "text-muted-foreground",
+        render: (c) => (c.captured_at ? fmtDateTimeIST(c.captured_at) : "—"),
+      },
     ],
     [],
   );
@@ -161,18 +243,49 @@ function CapturesTable({ rows, status, onRetry, type }: { rows: GateCapture[]; s
       status={status}
       onRetry={onRetry}
       emptyLabel={`No ${type} captures in RDS yet.`}
-      search={(c, q) => `${c.container_no ?? ""} ${c.vehicle_plate ?? ""} ${c.status ?? ""}`.toLowerCase().includes(q)}
+      search={(c, q) =>
+        `${c.container_no ?? ""} ${c.vehicle_plate ?? ""} ${c.status ?? ""}`
+          .toLowerCase()
+          .includes(q)
+      }
       searchPlaceholder="Search container / vehicle…"
       pageSize={10}
     />
   );
 }
 
-function LeoTable({ rows, status, onRetry }: { rows: LeoReconciliation[]; status: any; onRetry: () => void }) {
+function LeoTable({
+  rows,
+  status,
+  onRetry,
+}: {
+  rows: LeoReconciliation[];
+  status: any;
+  onRetry: () => void;
+}) {
   const columns: Column<LeoReconciliation>[] = [
-    { key: "container", header: "Container", className: "font-mono", render: (r) => r.container_no ?? "—" },
-    { key: "vehicle", header: "Vehicle", className: "font-mono", render: (r) => r.vehicle_plate ?? "—" },
-    { key: "leo", header: "LEO", render: (r) => <StatusChip label={r.leo_ready ? "READY" : "BLOCKED"} tone={r.leo_ready ? "ok" : "critical"} /> },
+    {
+      key: "container",
+      header: "Container",
+      className: "font-mono",
+      render: (r) => r.container_no ?? "—",
+    },
+    {
+      key: "vehicle",
+      header: "Vehicle",
+      className: "font-mono",
+      render: (r) => r.vehicle_plate ?? "—",
+    },
+    {
+      key: "leo",
+      header: "LEO",
+      render: (r) => (
+        <StatusChip
+          label={r.leo_ready ? "READY" : "BLOCKED"}
+          tone={r.leo_ready ? "ok" : "critical"}
+        />
+      ),
+    },
     {
       key: "flags",
       header: "Customs Flags",
@@ -187,7 +300,12 @@ function LeoTable({ rows, status, onRetry }: { rows: LeoReconciliation[]; status
           <span className="text-muted-foreground">—</span>
         ),
     },
-    { key: "reconciled", header: "Reconciled", className: "text-muted-foreground", render: (r) => fmtDateTimeIST(r.reconciled_at) },
+    {
+      key: "reconciled",
+      header: "Reconciled",
+      className: "text-muted-foreground",
+      render: (r) => fmtDateTimeIST(r.reconciled_at),
+    },
   ];
   return (
     <DataTable
@@ -197,20 +315,53 @@ function LeoTable({ rows, status, onRetry }: { rows: LeoReconciliation[]; status
       status={status}
       onRetry={onRetry}
       emptyLabel="No reconciliations in RDS yet."
-      search={(r, q) => `${r.container_no ?? ""} ${r.vehicle_plate ?? ""} ${r.customs_flags.join(" ")}`.toLowerCase().includes(q)}
+      search={(r, q) =>
+        `${r.container_no ?? ""} ${r.vehicle_plate ?? ""} ${r.customs_flags.join(" ")}`
+          .toLowerCase()
+          .includes(q)
+      }
       searchPlaceholder="Search container / vehicle…"
       pageSize={10}
     />
   );
 }
 
-function CustomsTable({ rows, status, onRetry }: { rows: CustomsAlert[]; status: any; onRetry: () => void }) {
+function CustomsTable({
+  rows,
+  status,
+  onRetry,
+}: {
+  rows: CustomsAlert[];
+  status: any;
+  onRetry: () => void;
+}) {
   const columns: Column<CustomsAlert>[] = [
-    { key: "flag", header: "Flag", className: "font-medium", render: (a) => String(a.payload?.flag ?? "—") },
-    { key: "severity", header: "Severity", render: (a) => <StatusChip label={a.severity} tone={a.severity === "critical" ? "critical" : "warn"} /> },
-    { key: "container", header: "Container", className: "font-mono", render: (a) => String(a.payload?.container_no ?? "—") },
+    {
+      key: "flag",
+      header: "Flag",
+      className: "font-medium",
+      render: (a) => String(a.payload?.flag ?? "—"),
+    },
+    {
+      key: "severity",
+      header: "Severity",
+      render: (a) => (
+        <StatusChip label={a.severity} tone={a.severity === "critical" ? "critical" : "warn"} />
+      ),
+    },
+    {
+      key: "container",
+      header: "Container",
+      className: "font-mono",
+      render: (a) => String(a.payload?.container_no ?? "—"),
+    },
     { key: "vehicle", header: "Vehicle", className: "font-mono", render: (a) => a.plate ?? "—" },
-    { key: "raised", header: "Raised", className: "text-muted-foreground", render: (a) => fmtDateTimeIST(a.ts) },
+    {
+      key: "raised",
+      header: "Raised",
+      className: "text-muted-foreground",
+      render: (a) => fmtDateTimeIST(a.ts),
+    },
   ];
   return (
     <DataTable
@@ -220,7 +371,11 @@ function CustomsTable({ rows, status, onRetry }: { rows: CustomsAlert[]; status:
       status={status}
       onRetry={onRetry}
       emptyLabel="No customs flags in RDS yet."
-      search={(a, q) => `${String(a.payload?.flag ?? "")} ${String(a.payload?.container_no ?? "")} ${a.plate ?? ""} ${a.severity}`.toLowerCase().includes(q)}
+      search={(a, q) =>
+        `${String(a.payload?.flag ?? "")} ${String(a.payload?.container_no ?? "")} ${a.plate ?? ""} ${a.severity}`
+          .toLowerCase()
+          .includes(q)
+      }
       searchPlaceholder="Search flags…"
       pageSize={10}
     />

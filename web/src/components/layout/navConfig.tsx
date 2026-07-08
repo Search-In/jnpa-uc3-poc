@@ -72,10 +72,7 @@ export const NAV_SECTIONS: NavSection[] = [
         id: "traffic",
         i18nKey: "navGroup.traffic",
         icon: Truck,
-        children: [
-          leaf("/live", "nav.live", Radio),
-          leaf("/advisory", "nav.advisory", Route),
-        ],
+        children: [leaf("/live", "nav.live", Radio), leaf("/advisory", "nav.advisory", Route)],
       },
       leaf("/parking", "nav.parking", SquareParking),
       leaf("/gate-customs", "nav.gateCustoms", ShieldCheck),

@@ -62,7 +62,8 @@ export default function Parking({ deviceId, plate }: { deviceId: string; plate?:
   const withDistance = facilities
     .map((f) => ({
       ...f,
-      km: pos && f.lat != null && f.lon != null ? haversineKm(pos, { lat: f.lat, lon: f.lon }) : null,
+      km:
+        pos && f.lat != null && f.lon != null ? haversineKm(pos, { lat: f.lat, lon: f.lon }) : null,
     }))
     .sort((a, b) => (a.km ?? 1e9) - (b.km ?? 1e9));
 
@@ -115,12 +116,20 @@ export default function Parking({ deviceId, plate }: { deviceId: string; plate?:
       <h2 style={{ fontSize: 16, marginBottom: 8 }}>{t("parking.title")}</h2>
 
       {confirm && (
-        <div className="card" style={{ background: "var(--green-bg, #0d3)", padding: 12, marginBottom: 12 }}>
+        <div
+          className="card"
+          style={{ background: "var(--green-bg, #0d3)", padding: 12, marginBottom: 12 }}
+        >
           <div style={{ fontWeight: 600 }}>{t("parking.confirmed")}</div>
           <div style={{ fontSize: 13 }}>
             {confirm.facility} · {t("parking.slot")} <b>{confirm.slot}</b>
           </div>
-          <button className="btn" style={{ marginTop: 8 }} disabled={busy === "release"} onClick={release}>
+          <button
+            className="btn"
+            style={{ marginTop: 8 }}
+            disabled={busy === "release"}
+            onClick={release}
+          >
             {busy === "release" ? "…" : t("parking.release")}
           </button>
         </div>
@@ -133,9 +142,16 @@ export default function Parking({ deviceId, plate }: { deviceId: string; plate?:
       ) : (
         withDistance.map((f) => (
           <div key={f.facility_id} className="card" style={{ padding: 12, marginBottom: 8 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+            <div
+              style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}
+            >
               <div style={{ fontWeight: 600 }}>{f.name || f.facility_id}</div>
-              <div style={{ fontSize: 12, color: f.available > 0 ? "var(--green)" : "var(--red, #c00)" }}>
+              <div
+                style={{
+                  fontSize: 12,
+                  color: f.available > 0 ? "var(--green)" : "var(--red, #c00)",
+                }}
+              >
                 {f.available}/{f.capacity} {t("parking.free")}
               </div>
             </div>

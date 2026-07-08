@@ -6,7 +6,15 @@
 
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { SquareParking, Car, History, TriangleAlert, ParkingCircle, Ban, CheckCircle2 } from "lucide-react";
+import {
+  SquareParking,
+  Car,
+  History,
+  TriangleAlert,
+  ParkingCircle,
+  Ban,
+  CheckCircle2,
+} from "lucide-react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
@@ -25,7 +33,12 @@ import {
 } from "@/components/ui/dtccc";
 import { STATUS } from "@/lib/tokens";
 import { fmtDateTimeIST } from "@/lib/utils";
-import type { ParkingFacility, ParkingFacilityRow, ParkingTransaction, ParkingViolation } from "@/lib/types";
+import type {
+  ParkingFacility,
+  ParkingFacilityRow,
+  ParkingTransaction,
+  ParkingViolation,
+} from "@/lib/types";
 
 type TabKey = "facilities" | "vehicles" | "history" | "violations";
 
@@ -43,8 +56,16 @@ export default function ParkingManagement() {
   // Distinct key from the adapter-shaped ["parking-summary"] used by the Live-Ops
   // ParkingBoard — this one returns the {available,capacity,...} api shape, so a
   // shared key would let one screen read the other's differently-named fields.
-  const sumQ = useQuery({ queryKey: ["parking-summary-mgmt"], queryFn: () => api.parkingSummary(), refetchInterval: 10000 });
-  const availQ = useQuery({ queryKey: ["parking-avail"], queryFn: () => api.parkingAvailability(), refetchInterval: 10000 });
+  const sumQ = useQuery({
+    queryKey: ["parking-summary-mgmt"],
+    queryFn: () => api.parkingSummary(),
+    refetchInterval: 10000,
+  });
+  const availQ = useQuery({
+    queryKey: ["parking-avail"],
+    queryFn: () => api.parkingAvailability(),
+    refetchInterval: 10000,
+  });
   const histQ = useQuery({ queryKey: ["parking-hist"], queryFn: () => api.parkingHistory(200) });
   const violQ = useQuery({ queryKey: ["parking-viol"], queryFn: () => api.parkingViolations(200) });
 
@@ -105,11 +126,42 @@ export default function ParkingManagement() {
       {/* Summary cards */}
       <div className="px-4 pt-3">
         <StatGrid className="lg:grid-cols-5">
-          <StatCard icon={ParkingCircle} label="Total Capacity" value={s?.capacity ?? "—"} tone="info" loading={sumQ.isLoading} />
-          <StatCard icon={Car} label="Occupied" value={s?.occupied ?? "—"} tone="warn" loading={sumQ.isLoading} sub={`${utilPct}% utilised`} />
-          <StatCard icon={CheckCircle2} label="Available" value={s?.available ?? "—"} tone="ok" loading={sumQ.isLoading} />
-          <StatCard icon={Ban} label="Full Facilities" value={s?.full ?? "—"} tone={(s?.full ?? 0) > 0 ? "critical" : "ok"} loading={sumQ.isLoading} />
-          <StatCard icon={TriangleAlert} label="Violations" value={violQ.data?.violations?.length ?? "—"} tone={(violQ.data?.violations?.length ?? 0) > 0 ? "warn" : "ok"} loading={violQ.isLoading} />
+          <StatCard
+            icon={ParkingCircle}
+            label="Total Capacity"
+            value={s?.capacity ?? "—"}
+            tone="info"
+            loading={sumQ.isLoading}
+          />
+          <StatCard
+            icon={Car}
+            label="Occupied"
+            value={s?.occupied ?? "—"}
+            tone="warn"
+            loading={sumQ.isLoading}
+            sub={`${utilPct}% utilised`}
+          />
+          <StatCard
+            icon={CheckCircle2}
+            label="Available"
+            value={s?.available ?? "—"}
+            tone="ok"
+            loading={sumQ.isLoading}
+          />
+          <StatCard
+            icon={Ban}
+            label="Full Facilities"
+            value={s?.full ?? "—"}
+            tone={(s?.full ?? 0) > 0 ? "critical" : "ok"}
+            loading={sumQ.isLoading}
+          />
+          <StatCard
+            icon={TriangleAlert}
+            label="Violations"
+            value={violQ.data?.violations?.length ?? "—"}
+            tone={(violQ.data?.violations?.length ?? 0) > 0 ? "warn" : "ok"}
+            loading={violQ.isLoading}
+          />
         </StatGrid>
       </div>
 
@@ -118,13 +170,22 @@ export default function ParkingManagement() {
         <Card className="p-3">
           <h2 className="mb-2 text-sm font-semibold text-foreground">Occupancy by Facility</h2>
           {chartData.length === 0 ? (
-            <div className="flex h-48 items-center justify-center text-sm text-muted-foreground">No facilities in RDS.</div>
+            <div className="flex h-48 items-center justify-center text-sm text-muted-foreground">
+              No facilities in RDS.
+            </div>
           ) : (
             <div className="h-48">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={chartData} margin={{ top: 4, right: 8, left: -18, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(215 20% 90%)" vertical={false} />
-                  <XAxis dataKey="name" tick={{ fontSize: 10 }} interval={0} angle={-15} textAnchor="end" height={44} />
+                  <XAxis
+                    dataKey="name"
+                    tick={{ fontSize: 10 }}
+                    interval={0}
+                    angle={-15}
+                    textAnchor="end"
+                    height={44}
+                  />
                   <YAxis tick={{ fontSize: 10 }} />
                   <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
                   <Bar dataKey="occupied" stackId="a" fill={STATUS.warning} radius={[0, 0, 0, 0]} />
@@ -146,31 +207,97 @@ export default function ParkingManagement() {
           onChange={setTab}
           className="mb-3"
           tabs={[
-            { key: "facilities", label: "Facilities", icon: SquareParking, count: facilities.length },
+            {
+              key: "facilities",
+              label: "Facilities",
+              icon: SquareParking,
+              count: facilities.length,
+            },
             { key: "vehicles", label: "Vehicles", icon: Car, count: activeVehicles.length },
             { key: "history", label: "Entry / Exit History", icon: History },
-            { key: "violations", label: "Violations", icon: TriangleAlert, count: violQ.data?.violations?.length },
+            {
+              key: "violations",
+              label: "Violations",
+              icon: TriangleAlert,
+              count: violQ.data?.violations?.length,
+            },
           ]}
         />
         <Card className="overflow-hidden">
-          {tab === "facilities" && <FacilitiesTable rows={facilities} status={availQ} onRetry={() => availQ.refetch()} />}
-          {tab === "vehicles" && <VehiclesTable rows={activeVehicles} status={histQ} onRetry={() => histQ.refetch()} />}
-          {tab === "history" && <HistoryTable rows={histQ.data?.transactions ?? []} status={histQ} onRetry={() => histQ.refetch()} />}
-          {tab === "violations" && <ViolationsTable rows={violQ.data?.violations ?? []} status={violQ} onRetry={() => violQ.refetch()} />}
+          {tab === "facilities" && (
+            <FacilitiesTable rows={facilities} status={availQ} onRetry={() => availQ.refetch()} />
+          )}
+          {tab === "vehicles" && (
+            <VehiclesTable rows={activeVehicles} status={histQ} onRetry={() => histQ.refetch()} />
+          )}
+          {tab === "history" && (
+            <HistoryTable
+              rows={histQ.data?.transactions ?? []}
+              status={histQ}
+              onRetry={() => histQ.refetch()}
+            />
+          )}
+          {tab === "violations" && (
+            <ViolationsTable
+              rows={violQ.data?.violations ?? []}
+              status={violQ}
+              onRetry={() => violQ.refetch()}
+            />
+          )}
         </Card>
       </div>
     </PageContainer>
   );
 }
 
-function FacilitiesTable({ rows, status, onRetry }: { rows: ParkingFacilityRow[]; status: any; onRetry: () => void }) {
+function FacilitiesTable({
+  rows,
+  status,
+  onRetry,
+}: {
+  rows: ParkingFacilityRow[];
+  status: any;
+  onRetry: () => void;
+}) {
   const columns: Column<ParkingFacilityRow>[] = [
-    { key: "name", header: "Facility", render: (f) => <span className="font-medium">{f.name ?? f.facility_id}</span> },
-    { key: "capacity", header: "Capacity", align: "right", className: "tabular-nums", render: (f) => f.capacity },
-    { key: "occupied", header: "Occupied", align: "right", className: "tabular-nums", render: (f) => f.occupied },
-    { key: "available", header: "Available", align: "right", className: "tabular-nums", render: (f) => f.available },
-    { key: "free", header: "Free %", align: "right", className: "tabular-nums", render: (f) => `${f.free_pct ?? "—"}%` },
-    { key: "status", header: "Status", render: (f) => <StatusChip label={f.status} tone={statusTone(f.status, f.free_pct)} /> },
+    {
+      key: "name",
+      header: "Facility",
+      render: (f) => <span className="font-medium">{f.name ?? f.facility_id}</span>,
+    },
+    {
+      key: "capacity",
+      header: "Capacity",
+      align: "right",
+      className: "tabular-nums",
+      render: (f) => f.capacity,
+    },
+    {
+      key: "occupied",
+      header: "Occupied",
+      align: "right",
+      className: "tabular-nums",
+      render: (f) => f.occupied,
+    },
+    {
+      key: "available",
+      header: "Available",
+      align: "right",
+      className: "tabular-nums",
+      render: (f) => f.available,
+    },
+    {
+      key: "free",
+      header: "Free %",
+      align: "right",
+      className: "tabular-nums",
+      render: (f) => `${f.free_pct ?? "—"}%`,
+    },
+    {
+      key: "status",
+      header: "Status",
+      render: (f) => <StatusChip label={f.status} tone={statusTone(f.status, f.free_pct)} />,
+    },
   ];
   return (
     <DataTable
@@ -187,12 +314,25 @@ function FacilitiesTable({ rows, status, onRetry }: { rows: ParkingFacilityRow[]
   );
 }
 
-function VehiclesTable({ rows, status, onRetry }: { rows: ParkingTransaction[]; status: any; onRetry: () => void }) {
+function VehiclesTable({
+  rows,
+  status,
+  onRetry,
+}: {
+  rows: ParkingTransaction[];
+  status: any;
+  onRetry: () => void;
+}) {
   const columns: Column<ParkingTransaction>[] = [
     { key: "vehicle", header: "Vehicle", className: "font-mono", render: (t) => t.vehicle_id },
     { key: "driver", header: "Driver", render: (t) => t.driver_id ?? "—" },
     { key: "facility", header: "Facility", render: (t) => t.facility_id },
-    { key: "entry", header: "Entry", className: "text-muted-foreground", render: (t) => (t.entry_time ? fmtDateTimeIST(t.entry_time) : "—") },
+    {
+      key: "entry",
+      header: "Entry",
+      className: "text-muted-foreground",
+      render: (t) => (t.entry_time ? fmtDateTimeIST(t.entry_time) : "—"),
+    },
   ];
   return (
     <DataTable
@@ -202,21 +342,53 @@ function VehiclesTable({ rows, status, onRetry }: { rows: ParkingTransaction[]; 
       status={status}
       onRetry={onRetry}
       emptyLabel="No vehicles currently parked."
-      search={(t, q) => `${t.vehicle_id ?? ""} ${t.driver_id ?? ""} ${t.facility_id ?? ""}`.toLowerCase().includes(q)}
+      search={(t, q) =>
+        `${t.vehicle_id ?? ""} ${t.driver_id ?? ""} ${t.facility_id ?? ""}`
+          .toLowerCase()
+          .includes(q)
+      }
       searchPlaceholder="Search vehicle / driver…"
       pageSize={10}
     />
   );
 }
 
-function HistoryTable({ rows, status, onRetry }: { rows: ParkingTransaction[]; status: any; onRetry: () => void }) {
+function HistoryTable({
+  rows,
+  status,
+  onRetry,
+}: {
+  rows: ParkingTransaction[];
+  status: any;
+  onRetry: () => void;
+}) {
   const columns: Column<ParkingTransaction>[] = [
     { key: "vehicle", header: "Vehicle", className: "font-mono", render: (t) => t.vehicle_id },
     { key: "facility", header: "Facility", render: (t) => t.facility_id },
-    { key: "entry", header: "Entry", className: "text-muted-foreground", render: (t) => (t.entry_time ? fmtDateTimeIST(t.entry_time) : "—") },
-    { key: "exit", header: "Exit", className: "text-muted-foreground", render: (t) => (t.exit_time ? fmtDateTimeIST(t.exit_time) : "—") },
-    { key: "dur", header: "Duration", align: "right", className: "tabular-nums", render: (t) => (t.duration_s != null ? `${Math.round(t.duration_s / 60)}m` : "—") },
-    { key: "status", header: "Status", render: (t) => <StatusChip label={t.status} tone={t.status === "ACTIVE" ? "warn" : "ok"} /> },
+    {
+      key: "entry",
+      header: "Entry",
+      className: "text-muted-foreground",
+      render: (t) => (t.entry_time ? fmtDateTimeIST(t.entry_time) : "—"),
+    },
+    {
+      key: "exit",
+      header: "Exit",
+      className: "text-muted-foreground",
+      render: (t) => (t.exit_time ? fmtDateTimeIST(t.exit_time) : "—"),
+    },
+    {
+      key: "dur",
+      header: "Duration",
+      align: "right",
+      className: "tabular-nums",
+      render: (t) => (t.duration_s != null ? `${Math.round(t.duration_s / 60)}m` : "—"),
+    },
+    {
+      key: "status",
+      header: "Status",
+      render: (t) => <StatusChip label={t.status} tone={t.status === "ACTIVE" ? "warn" : "ok"} />,
+    },
   ];
   return (
     <DataTable
@@ -226,19 +398,43 @@ function HistoryTable({ rows, status, onRetry }: { rows: ParkingTransaction[]; s
       status={status}
       onRetry={onRetry}
       emptyLabel="No parking history in RDS yet."
-      search={(t, q) => `${t.vehicle_id ?? ""} ${t.facility_id ?? ""} ${t.status}`.toLowerCase().includes(q)}
+      search={(t, q) =>
+        `${t.vehicle_id ?? ""} ${t.facility_id ?? ""} ${t.status}`.toLowerCase().includes(q)
+      }
       searchPlaceholder="Search history…"
       pageSize={10}
     />
   );
 }
 
-function ViolationsTable({ rows, status, onRetry }: { rows: ParkingViolation[]; status: any; onRetry: () => void }) {
+function ViolationsTable({
+  rows,
+  status,
+  onRetry,
+}: {
+  rows: ParkingViolation[];
+  status: any;
+  onRetry: () => void;
+}) {
   const columns: Column<ParkingViolation>[] = [
-    { key: "type", header: "Type", render: (v) => <StatusChip label={v.event_type} tone="critical" /> },
-    { key: "vehicle", header: "Vehicle", className: "font-mono", render: (v) => v.vehicle_id ?? "—" },
+    {
+      key: "type",
+      header: "Type",
+      render: (v) => <StatusChip label={v.event_type} tone="critical" />,
+    },
+    {
+      key: "vehicle",
+      header: "Vehicle",
+      className: "font-mono",
+      render: (v) => v.vehicle_id ?? "—",
+    },
     { key: "facility", header: "Facility", render: (v) => v.facility_id ?? "—" },
-    { key: "when", header: "When", className: "text-muted-foreground", render: (v) => fmtDateTimeIST(v.created_at) },
+    {
+      key: "when",
+      header: "When",
+      className: "text-muted-foreground",
+      render: (v) => fmtDateTimeIST(v.created_at),
+    },
   ];
   return (
     <DataTable
@@ -248,7 +444,9 @@ function ViolationsTable({ rows, status, onRetry }: { rows: ParkingViolation[]; 
       status={status}
       onRetry={onRetry}
       emptyLabel="No parking violations in RDS."
-      search={(v, q) => `${v.event_type} ${v.vehicle_id ?? ""} ${v.facility_id ?? ""}`.toLowerCase().includes(q)}
+      search={(v, q) =>
+        `${v.event_type} ${v.vehicle_id ?? ""} ${v.facility_id ?? ""}`.toLowerCase().includes(q)
+      }
       searchPlaceholder="Search violations…"
       pageSize={10}
     />

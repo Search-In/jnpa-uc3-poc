@@ -202,10 +202,16 @@ export const api = {
     }>("/api/parking/availability"),
   // Request a slot for this driver's vehicle. Returns the allocated slot.
   parkingAllocate: (facilityId: string, vehicleId: string, driverId?: string) =>
-    http<{ allocated: boolean; facility_id?: string; slot_number?: string; transaction_id?: number; reason?: string }>(
-      "/api/parking/allocate",
-      { method: "POST", body: JSON.stringify({ facility_id: facilityId, vehicle_id: vehicleId, driver_id: driverId }) },
-    ),
+    http<{
+      allocated: boolean;
+      facility_id?: string;
+      slot_number?: string;
+      transaction_id?: number;
+      reason?: string;
+    }>("/api/parking/allocate", {
+      method: "POST",
+      body: JSON.stringify({ facility_id: facilityId, vehicle_id: vehicleId, driver_id: driverId }),
+    }),
   parkingRelease: (vehicleId: string) =>
     http<{ released: boolean; facility_id?: string; duration_s?: number }>("/api/parking/release", {
       method: "POST",

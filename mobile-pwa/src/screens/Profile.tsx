@@ -27,7 +27,9 @@ export default function Profile({ deviceId, plate }: { deviceId: string; plate?:
   const [push, setPush] = useState<PushState | null>(null);
   const [pushBusy, setPushBusy] = useState(false);
   const [compliance, setCompliance] = useState<{
-    name?: string; dlStatus?: string; violations: number;
+    name?: string;
+    dlStatus?: string;
+    violations: number;
   } | null>(null);
 
   // Driver DL + compliance via the session-bound driver (OTP login) → driver-intel.
@@ -49,7 +51,9 @@ export default function Profile({ deviceId, plate }: { deviceId: string; plate?:
         /* not OTP-bound / offline */
       }
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, [deviceId]);
 
   useEffect(() => {
@@ -185,13 +189,19 @@ export default function Profile({ deviceId, plate }: { deviceId: string; plate?:
 
       {compliance && (
         <Card title={t("profile.compliance", { defaultValue: "Driver & Compliance" })}>
-          <Row k={t("profile.driverName", { defaultValue: "Driver" })} v={compliance.name || t("common.noData")} />
+          <Row
+            k={t("profile.driverName", { defaultValue: "Driver" })}
+            v={compliance.name || t("common.noData")}
+          />
           <div style={{ margin: "6px 0" }}>
             <Chip status={compliance.dlStatus === "VALID" ? "ok" : "warn"}>
               {t("profile.dl", { defaultValue: "DL" })}: {compliance.dlStatus || t("common.noData")}
             </Chip>
           </div>
-          <Row k={t("profile.violations", { defaultValue: "Violations" })} v={String(compliance.violations)} />
+          <Row
+            k={t("profile.violations", { defaultValue: "Violations" })}
+            v={String(compliance.violations)}
+          />
         </Card>
       )}
 

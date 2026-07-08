@@ -99,7 +99,9 @@ export default function Intelligence() {
             value={term}
             onChange={(e) => setTerm(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && run()}
-            placeholder={mode === "vehicle" ? "Vehicle no / RC e.g. MH04AB1234" : "DL number or driver id"}
+            placeholder={
+              mode === "vehicle" ? "Vehicle no / RC e.g. MH04AB1234" : "DL number or driver id"
+            }
             className="h-9 w-full rounded-md border border-border bg-background pl-9 pr-3 text-[13px] outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
           />
         </div>
@@ -111,7 +113,11 @@ export default function Intelligence() {
         </button>
       </div>
 
-      {mode === "vehicle" ? <VehicleProfile plate={submitted} /> : <DriverProfile key={submitted} dl={submitted} />}
+      {mode === "vehicle" ? (
+        <VehicleProfile plate={submitted} />
+      ) : (
+        <DriverProfile key={submitted} dl={submitted} />
+      )}
     </PageContainer>
   );
 }
@@ -122,23 +128,73 @@ function VehicleProfile({ plate }: { plate: string }) {
   const { basemap } = useMapSettings();
   const enabled = !!plate;
 
-  const viQ = useQuery({ queryKey: ["vehicle-intel", plate], queryFn: () => api.vehicleIntel(plate), enabled });
-  const fbQ = useQuery({ queryKey: ["fastag-balance", plate], queryFn: () => api.fastagBalance(plate), enabled, retry: false });
-  const ftQ = useQuery({ queryKey: ["fastag-tx-history", plate], queryFn: () => api.fastagTransactionsHistory(plate, 100), enabled, retry: false });
-  const corridorQ = useQuery({ queryKey: ["corridor"], queryFn: () => getAdapter().corridor(), staleTime: Infinity, enabled });
+  const viQ = useQuery({
+    queryKey: ["vehicle-intel", plate],
+    queryFn: () => api.vehicleIntel(plate),
+    enabled,
+  });
+  const fbQ = useQuery({
+    queryKey: ["fastag-balance", plate],
+    queryFn: () => api.fastagBalance(plate),
+    enabled,
+    retry: false,
+  });
+  const ftQ = useQuery({
+    queryKey: ["fastag-tx-history", plate],
+    queryFn: () => api.fastagTransactionsHistory(plate, 100),
+    enabled,
+    retry: false,
+  });
+  const corridorQ = useQuery({
+    queryKey: ["corridor"],
+    queryFn: () => getAdapter().corridor(),
+    staleTime: Infinity,
+    enabled,
+  });
   // Cross-domain history (existing endpoints; filtered to this plate client-side).
-  const customsQ = useQuery({ queryKey: ["customs-history"], queryFn: () => api.customsHistory(200), enabled });
-  const parkingQ = useQuery({ queryKey: ["parking-hist"], queryFn: () => api.parkingHistory(200), enabled });
-  const geoQ = useQuery({ queryKey: ["geo-events"], queryFn: () => api.geoEvents(undefined, 200), enabled });
-  const aiQ = useQuery({ queryKey: ["ai-events"], queryFn: () => api.aiEvents(undefined, 200), enabled });
+  const customsQ = useQuery({
+    queryKey: ["customs-history"],
+    queryFn: () => api.customsHistory(200),
+    enabled,
+  });
+  const parkingQ = useQuery({
+    queryKey: ["parking-hist"],
+    queryFn: () => api.parkingHistory(200),
+    enabled,
+  });
+  const geoQ = useQuery({
+    queryKey: ["geo-events"],
+    queryFn: () => api.geoEvents(undefined, 200),
+    enabled,
+  });
+  const aiQ = useQuery({
+    queryKey: ["ai-events"],
+    queryFn: () => api.aiEvents(undefined, 200),
+    enabled,
+  });
 
   const vi = viQ.data;
 
   const matchPlate = (v: unknown) => String(v ?? "").toUpperCase() === plate;
-  const customs = useMemo(() => (customsQ.data?.alerts ?? []).filter((a) => matchPlate(a.plate)) as unknown as Row[], [customsQ.data, plate]);
-  const parking = useMemo(() => (parkingQ.data?.transactions ?? []).filter((t) => matchPlate(t.vehicle_id)) as unknown as Row[], [parkingQ.data, plate]);
-  const geo = useMemo(() => (geoQ.data?.events ?? []).filter((e) => matchPlate(e.vehicle_id)) as unknown as Row[], [geoQ.data, plate]);
-  const ai = useMemo(() => (aiQ.data?.events ?? []).filter((e) => matchPlate(e.vehicle_id)) as unknown as Row[], [aiQ.data, plate]);
+  const customs = useMemo(
+    () => (customsQ.data?.alerts ?? []).filter((a) => matchPlate(a.plate)) as unknown as Row[],
+    [customsQ.data, plate],
+  );
+  const parking = useMemo(
+    () =>
+      (parkingQ.data?.transactions ?? []).filter((t) =>
+        matchPlate(t.vehicle_id),
+      ) as unknown as Row[],
+    [parkingQ.data, plate],
+  );
+  const geo = useMemo(
+    () => (geoQ.data?.events ?? []).filter((e) => matchPlate(e.vehicle_id)) as unknown as Row[],
+    [geoQ.data, plate],
+  );
+  const ai = useMemo(
+    () => (aiQ.data?.events ?? []).filter((e) => matchPlate(e.vehicle_id)) as unknown as Row[],
+    [aiQ.data, plate],
+  );
 
   if (!plate) {
     return (
@@ -147,38 +203,88 @@ function VehicleProfile({ plate }: { plate: string }) {
       </div>
     );
   }
-  if (viQ.isLoading) return <div className="p-6"><LoadingState label="Building 360° profile…" /></div>;
-  if (viQ.isError) return <div className="p-6"><ErrorState onRetry={() => viQ.refetch()} detail={(viQ.error as Error)?.message} /></div>;
-  if (!vi) return <div className="p-6"><EmptyState>No record found for {plate}.</EmptyState></div>;
+  if (viQ.isLoading)
+    return (
+      <div className="p-6">
+        <LoadingState label="Building 360° profile…" />
+      </div>
+    );
+  if (viQ.isError)
+    return (
+      <div className="p-6">
+        <ErrorState onRetry={() => viQ.refetch()} detail={(viQ.error as Error)?.message} />
+      </div>
+    );
+  if (!vi)
+    return (
+      <div className="p-6">
+        <EmptyState>No record found for {plate}.</EmptyState>
+      </div>
+    );
 
   const rc = (vi.rc ?? {}) as Row;
   const track = (vi.tracking ?? []) as Row[];
   const last = track[track.length - 1];
   const pseudoTruck: TruckDevice[] = last
-    ? [{
-        device_id: plate,
-        plate,
-        gate_id: null,
-        state: "TRACKED",
-        position: { lat: Number(last.lat), lon: Number(last.lon) },
-        speed_kmh: Number(last.speed_kmh ?? 0),
-        heading: 0,
-        remaining_km: 0,
-        eta_s: null,
-        segment_id: null,
-      }]
+    ? [
+        {
+          device_id: plate,
+          plate,
+          gate_id: null,
+          state: "TRACKED",
+          position: { lat: Number(last.lat), lon: Number(last.lon) },
+          speed_kmh: Number(last.speed_kmh ?? 0),
+          heading: 0,
+          remaining_km: 0,
+          eta_s: null,
+          segment_id: null,
+        },
+      ]
     : [];
 
   return (
     <div className="space-y-3 p-4">
       {/* Summary cards */}
       <StatGrid className="lg:grid-cols-6">
-        <StatCard icon={FileWarning} label="Violations" value={vi.violations.length} tone={vi.violations.length ? "warn" : "ok"} />
-        <StatCard icon={ShieldAlert} label="Challans" value={vi.challans.length} tone={vi.challans.length ? "warn" : "ok"} />
-        <StatCard icon={Bell} label="Alerts" value={vi.alerts.length} tone={vi.alerts.length ? "warn" : "ok"} />
-        <StatCard icon={MapPinned} label="Geo-fence" value={geo.length} tone={geo.length ? "warn" : "ok"} loading={geoQ.isLoading} />
-        <StatCard icon={SquareParking} label="Parking" value={parking.length} tone="info" loading={parkingQ.isLoading} />
-        <StatCard icon={ShieldAlert} label="Customs" value={customs.length} tone={customs.length ? "critical" : "ok"} loading={customsQ.isLoading} />
+        <StatCard
+          icon={FileWarning}
+          label="Violations"
+          value={vi.violations.length}
+          tone={vi.violations.length ? "warn" : "ok"}
+        />
+        <StatCard
+          icon={ShieldAlert}
+          label="Challans"
+          value={vi.challans.length}
+          tone={vi.challans.length ? "warn" : "ok"}
+        />
+        <StatCard
+          icon={Bell}
+          label="Alerts"
+          value={vi.alerts.length}
+          tone={vi.alerts.length ? "warn" : "ok"}
+        />
+        <StatCard
+          icon={MapPinned}
+          label="Geo-fence"
+          value={geo.length}
+          tone={geo.length ? "warn" : "ok"}
+          loading={geoQ.isLoading}
+        />
+        <StatCard
+          icon={SquareParking}
+          label="Parking"
+          value={parking.length}
+          tone="info"
+          loading={parkingQ.isLoading}
+        />
+        <StatCard
+          icon={ShieldAlert}
+          label="Customs"
+          value={customs.length}
+          tone={customs.length ? "critical" : "ok"}
+          loading={customsQ.isLoading}
+        />
       </StatGrid>
 
       {/* Profile + location */}
@@ -202,11 +308,22 @@ function VehicleProfile({ plate }: { plate: string }) {
           ) : (
             <>
               <KV label="Tag status" value={fbQ.data.tag_status} />
-              <KV label="Balance" value={fbQ.data.available_balance != null ? `₹${fbQ.data.available_balance}` : undefined} />
+              <KV
+                label="Balance"
+                value={
+                  fbQ.data.available_balance != null ? `₹${fbQ.data.available_balance}` : undefined
+                }
+              />
               <KV label="Bank" value={fbQ.data.provider_name} />
-              <KV label="Vehicle class" value={fbQ.data.vehicle_class_desc ?? fbQ.data.vehicle_class} />
+              <KV
+                label="Vehicle class"
+                value={fbQ.data.vehicle_class_desc ?? fbQ.data.vehicle_class}
+              />
               <KV label="Customer" value={fbQ.data.customer_name} />
-              <KV label="Transactions" value={ftQ.data?.count ?? ftQ.data?.transactions?.length ?? 0} />
+              <KV
+                label="Transactions"
+                value={ftQ.data?.count ?? ftQ.data?.transactions?.length ?? 0}
+              />
             </>
           )}
         </InfoCard>
@@ -214,14 +331,26 @@ function VehicleProfile({ plate }: { plate: string }) {
         <Card className="overflow-hidden p-0">
           <div className="flex items-center justify-between border-b border-border px-3 py-2">
             <h3 className="text-sm font-semibold text-foreground">Current Location & Route</h3>
-            {last && <span className="text-[11px] text-muted-foreground">{relativeAge(String(last.ts))}</span>}
+            {last && (
+              <span className="text-[11px] text-muted-foreground">
+                {relativeAge(String(last.ts))}
+              </span>
+            )}
           </div>
           {last ? (
             <div className="relative h-[220px]">
-              <ArcgisMap basemap={basemap} corridor={corridorQ.data} trucks={pseudoTruck} center={[Number(last.lon), Number(last.lat)]} zoom={13} />
+              <ArcgisMap
+                basemap={basemap}
+                corridor={corridorQ.data}
+                trucks={pseudoTruck}
+                center={[Number(last.lon), Number(last.lat)]}
+                zoom={13}
+              />
             </div>
           ) : (
-            <div className="flex h-[220px] items-center justify-center text-sm text-muted-foreground">No tracking on record.</div>
+            <div className="flex h-[220px] items-center justify-center text-sm text-muted-foreground">
+              No tracking on record.
+            </div>
           )}
         </Card>
       </div>
@@ -232,7 +361,16 @@ function VehicleProfile({ plate }: { plate: string }) {
   );
 }
 
-type RecTab = "timeline" | "violations" | "challans" | "alerts" | "customs" | "parking" | "geo" | "ai" | "tracking";
+type RecTab =
+  | "timeline"
+  | "violations"
+  | "challans"
+  | "alerts"
+  | "customs"
+  | "parking"
+  | "geo"
+  | "ai"
+  | "tracking";
 
 function VehicleRecords({
   vi,
@@ -251,7 +389,10 @@ function VehicleRecords({
 }) {
   const [tab, setTab] = useState<RecTab>("timeline");
 
-  const timeline = useMemo(() => buildTimeline(vi, customs, parking, geo, ai), [vi, customs, parking, geo, ai]);
+  const timeline = useMemo(
+    () => buildTimeline(vi, customs, parking, geo, ai),
+    [vi, customs, parking, geo, ai],
+  );
 
   return (
     <div>
@@ -273,14 +414,107 @@ function VehicleRecords({
       />
       <Card className="overflow-hidden">
         {tab === "timeline" && <Timeline events={timeline} />}
-        {tab === "violations" && <RecordsTable rows={vi.violations} cols={[["case_id", "Case"], ["status", "Status"], ["total_fine", "Fine"], ["first_detected_at", "Detected"]]} empty="No violations on record." searchKeys={["case_id", "status"]} />}
-        {tab === "challans" && <RecordsTable rows={vi.challans} cols={[["challan_no", "Challan"], ["total_fine", "Fine"], ["status", "Status"], ["issued_at", "Issued"]]} empty="No challans on record." searchKeys={["challan_no", "status"]} />}
-        {tab === "alerts" && <RecordsTable rows={vi.alerts} cols={[["kind", "Kind"], ["severity", "Severity"], ["ts", "When"]]} empty="No alerts on record." searchKeys={["kind", "severity"]} />}
-        {tab === "customs" && <RecordsTable rows={customs} cols={[["_flag", "Flag"], ["severity", "Severity"], ["_container", "Container"], ["ts", "Raised"]]} empty="No customs history for this vehicle." searchKeys={["severity"]} />}
-        {tab === "parking" && <RecordsTable rows={parking} cols={[["facility_id", "Facility"], ["entry_time", "Entry"], ["exit_time", "Exit"], ["status", "Status"]]} empty="No parking history for this vehicle." searchKeys={["facility_id", "status"]} />}
-        {tab === "geo" && <RecordsTable rows={geo} cols={[["event_type", "Event"], ["zone_id", "Zone"], ["violation_type", "Violation"], ["created_at", "When"]]} empty="No geo-fence history for this vehicle." searchKeys={["event_type", "zone_id"]} />}
-        {tab === "ai" && <RecordsTable rows={ai} cols={[["event_type", "AI Event"], ["zone_id", "Zone"], ["created_at", "When"]]} empty="No AI events for this vehicle." searchKeys={["event_type"]} />}
-        {tab === "tracking" && <RecordsTable rows={track} cols={[["ts", "Time"], ["lat", "Lat"], ["lon", "Lon"], ["speed_kmh", "Speed"]]} empty="No tracking on record." />}
+        {tab === "violations" && (
+          <RecordsTable
+            rows={vi.violations}
+            cols={[
+              ["case_id", "Case"],
+              ["status", "Status"],
+              ["total_fine", "Fine"],
+              ["first_detected_at", "Detected"],
+            ]}
+            empty="No violations on record."
+            searchKeys={["case_id", "status"]}
+          />
+        )}
+        {tab === "challans" && (
+          <RecordsTable
+            rows={vi.challans}
+            cols={[
+              ["challan_no", "Challan"],
+              ["total_fine", "Fine"],
+              ["status", "Status"],
+              ["issued_at", "Issued"],
+            ]}
+            empty="No challans on record."
+            searchKeys={["challan_no", "status"]}
+          />
+        )}
+        {tab === "alerts" && (
+          <RecordsTable
+            rows={vi.alerts}
+            cols={[
+              ["kind", "Kind"],
+              ["severity", "Severity"],
+              ["ts", "When"],
+            ]}
+            empty="No alerts on record."
+            searchKeys={["kind", "severity"]}
+          />
+        )}
+        {tab === "customs" && (
+          <RecordsTable
+            rows={customs}
+            cols={[
+              ["_flag", "Flag"],
+              ["severity", "Severity"],
+              ["_container", "Container"],
+              ["ts", "Raised"],
+            ]}
+            empty="No customs history for this vehicle."
+            searchKeys={["severity"]}
+          />
+        )}
+        {tab === "parking" && (
+          <RecordsTable
+            rows={parking}
+            cols={[
+              ["facility_id", "Facility"],
+              ["entry_time", "Entry"],
+              ["exit_time", "Exit"],
+              ["status", "Status"],
+            ]}
+            empty="No parking history for this vehicle."
+            searchKeys={["facility_id", "status"]}
+          />
+        )}
+        {tab === "geo" && (
+          <RecordsTable
+            rows={geo}
+            cols={[
+              ["event_type", "Event"],
+              ["zone_id", "Zone"],
+              ["violation_type", "Violation"],
+              ["created_at", "When"],
+            ]}
+            empty="No geo-fence history for this vehicle."
+            searchKeys={["event_type", "zone_id"]}
+          />
+        )}
+        {tab === "ai" && (
+          <RecordsTable
+            rows={ai}
+            cols={[
+              ["event_type", "AI Event"],
+              ["zone_id", "Zone"],
+              ["created_at", "When"],
+            ]}
+            empty="No AI events for this vehicle."
+            searchKeys={["event_type"]}
+          />
+        )}
+        {tab === "tracking" && (
+          <RecordsTable
+            rows={track}
+            cols={[
+              ["ts", "Time"],
+              ["lat", "Lat"],
+              ["lon", "Lon"],
+              ["speed_kmh", "Speed"],
+            ]}
+            empty="No tracking on record."
+          />
+        )}
       </Card>
     </div>
   );
@@ -290,14 +524,43 @@ function VehicleRecords({
 
 function DriverProfile({ dl }: { dl: string }) {
   const enabled = !!dl;
-  const diQ = useQuery({ queryKey: ["driver-intel", dl], queryFn: () => api.driverIntel(dl), enabled });
-  const dlQ = useQuery({ queryKey: ["dl-lookup", dl], queryFn: () => api.dlLookup(dl), enabled, retry: false });
+  const diQ = useQuery({
+    queryKey: ["driver-intel", dl],
+    queryFn: () => api.driverIntel(dl),
+    enabled,
+  });
+  const dlQ = useQuery({
+    queryKey: ["dl-lookup", dl],
+    queryFn: () => api.dlLookup(dl),
+    enabled,
+    retry: false,
+  });
 
-  if (!dl) return <div className="p-6"><EmptyState>Search a DL number or driver id to see the driver profile.</EmptyState></div>;
-  if (diQ.isLoading) return <div className="p-6"><LoadingState label="Building driver profile…" /></div>;
-  if (diQ.isError) return <div className="p-6"><ErrorState onRetry={() => diQ.refetch()} detail={(diQ.error as Error)?.message} /></div>;
+  if (!dl)
+    return (
+      <div className="p-6">
+        <EmptyState>Search a DL number or driver id to see the driver profile.</EmptyState>
+      </div>
+    );
+  if (diQ.isLoading)
+    return (
+      <div className="p-6">
+        <LoadingState label="Building driver profile…" />
+      </div>
+    );
+  if (diQ.isError)
+    return (
+      <div className="p-6">
+        <ErrorState onRetry={() => diQ.refetch()} detail={(diQ.error as Error)?.message} />
+      </div>
+    );
   const di = diQ.data as DriverIntel | undefined;
-  if (!di) return <div className="p-6"><EmptyState>No driver found for {dl}.</EmptyState></div>;
+  if (!di)
+    return (
+      <div className="p-6">
+        <EmptyState>No driver found for {dl}.</EmptyState>
+      </div>
+    );
 
   const d = (di.driver ?? {}) as Row;
   const dlRec = (dlQ.data?.record ?? {}) as Row;
@@ -305,7 +568,12 @@ function DriverProfile({ dl }: { dl: string }) {
   return (
     <div className="space-y-3 p-4">
       <StatGrid className="lg:grid-cols-4">
-        <StatCard icon={FileWarning} label="Violations" value={di.violations.length} tone={di.violations.length ? "warn" : "ok"} />
+        <StatCard
+          icon={FileWarning}
+          label="Violations"
+          value={di.violations.length}
+          tone={di.violations.length ? "warn" : "ok"}
+        />
         <StatCard icon={IdCard} label="DL Lookups" value={di.dl_history.length} tone="info" />
         <StatCard icon={ScanSearch} label="Verifications" value={di.activity.length} tone="info" />
         <StatCard icon={Car} label="Vehicle" value={di.vehicle_no ?? "—"} tone="neutral" />
@@ -357,9 +625,42 @@ function DriverRecords({ di }: { di: DriverIntel }) {
         ]}
       />
       <Card className="overflow-hidden">
-        {tab === "dl" && <RecordsTable rows={di.dl_history} cols={[["status", "Status"], ["source", "Source"], ["created_at", "When"]]} empty="No DL lookups on record." searchKeys={["status"]} />}
-        {tab === "violations" && <RecordsTable rows={di.violations} cols={[["case_id", "Case"], ["status", "Status"], ["total_fine", "Fine"]]} empty="No violations on record." searchKeys={["case_id", "status"]} />}
-        {tab === "activity" && <RecordsTable rows={di.activity} cols={[["decision", "Decision"], ["score", "Score"], ["ts", "When"]]} empty="No verification activity." searchKeys={["decision"]} />}
+        {tab === "dl" && (
+          <RecordsTable
+            rows={di.dl_history}
+            cols={[
+              ["status", "Status"],
+              ["source", "Source"],
+              ["created_at", "When"],
+            ]}
+            empty="No DL lookups on record."
+            searchKeys={["status"]}
+          />
+        )}
+        {tab === "violations" && (
+          <RecordsTable
+            rows={di.violations}
+            cols={[
+              ["case_id", "Case"],
+              ["status", "Status"],
+              ["total_fine", "Fine"],
+            ]}
+            empty="No violations on record."
+            searchKeys={["case_id", "status"]}
+          />
+        )}
+        {tab === "activity" && (
+          <RecordsTable
+            rows={di.activity}
+            cols={[
+              ["decision", "Decision"],
+              ["score", "Score"],
+              ["ts", "When"],
+            ]}
+            empty="No verification activity."
+            searchKeys={["decision"]}
+          />
+        )}
       </Card>
     </div>
   );
@@ -367,7 +668,15 @@ function DriverRecords({ di }: { di: DriverIntel }) {
 
 // --- Shared bits -------------------------------------------------------------
 
-function InfoCard({ title, icon: Icon, children }: { title: string; icon: typeof Car; children: React.ReactNode }) {
+function InfoCard({
+  title,
+  icon: Icon,
+  children,
+}: {
+  title: string;
+  icon: typeof Car;
+  children: React.ReactNode;
+}) {
   return (
     <Card className="p-0">
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
@@ -383,7 +692,9 @@ function KV({ label, value }: { label: string; value: unknown }) {
   return (
     <div className="flex justify-between gap-3 border-b border-border/40 py-1 text-[13px]">
       <span className="text-muted-foreground">{label}</span>
-      <span className="truncate text-right font-medium">{value == null || value === "" ? "—" : String(value)}</span>
+      <span className="truncate text-right font-medium">
+        {value == null || value === "" ? "—" : String(value)}
+      </span>
     </div>
   );
 }
@@ -404,11 +715,24 @@ function RecordsTable({
   const columns: Column<Row>[] = cols.map(([key, header]) => ({
     key,
     header,
-    className: key === "_container" || key.includes("id") || key === "lat" || key === "lon" ? "font-mono" : undefined,
+    className:
+      key === "_container" || key.includes("id") || key === "lat" || key === "lon"
+        ? "font-mono"
+        : undefined,
     render: (r) => {
-      const raw = key === "_flag" ? (r as any).payload?.flag : key === "_container" ? (r as any).payload?.container_no : r[key];
+      const raw =
+        key === "_flag"
+          ? (r as any).payload?.flag
+          : key === "_container"
+            ? (r as any).payload?.container_no
+            : r[key];
       if (raw == null || raw === "") return "—";
-      if (key === "severity" || key === "status" || key === "event_type" || key === "violation_type") {
+      if (
+        key === "severity" ||
+        key === "status" ||
+        key === "event_type" ||
+        key === "violation_type"
+      ) {
         return <StatusChip label={String(raw)} tone={statusTone(String(raw))} />;
       }
       if (DATE_KEY.test(key)) return fmtDateTimeIST(String(raw));
@@ -423,7 +747,16 @@ function RecordsTable({
       rows={keyed}
       rowKey={(r) => String((r as any).__k)}
       emptyLabel={empty}
-      search={searchKeys ? (r, q) => searchKeys.some((k) => String((r as any)[k] ?? "").toLowerCase().includes(q)) : undefined}
+      search={
+        searchKeys
+          ? (r, q) =>
+              searchKeys.some((k) =>
+                String((r as any)[k] ?? "")
+                  .toLowerCase()
+                  .includes(q),
+              )
+          : undefined
+      }
       searchPlaceholder="Search…"
       pageSize={10}
     />
@@ -448,18 +781,39 @@ interface TLEvent {
   tone: Tone;
 }
 
-function buildTimeline(vi: VehicleIntel, customs: Row[], parking: Row[], geo: Row[], ai: Row[]): TLEvent[] {
+function buildTimeline(
+  vi: VehicleIntel,
+  customs: Row[],
+  parking: Row[],
+  geo: Row[],
+  ai: Row[],
+): TLEvent[] {
   const out: TLEvent[] = [];
   const push = (iso: unknown, kind: string, label: string, tone: Tone) => {
     const t = Date.parse(String(iso));
     if (!Number.isNaN(t)) out.push({ ts: t, iso: String(iso), kind, label, tone });
   };
-  for (const v of vi.violations as Row[]) push(v.first_detected_at ?? v.created_at, "Violation", `Violation ${v.case_id ?? ""} · ${v.status ?? ""}`, "warn");
-  for (const c of vi.challans as Row[]) push(c.issued_at, "Challan", `Challan ${c.challan_no ?? ""} · ₹${c.total_fine ?? ""}`, "warn");
-  for (const a of vi.alerts as Row[]) push(a.ts, "Alert", `${a.kind ?? "Alert"} · ${a.severity ?? ""}`, "critical");
-  for (const g of geo) push(g.created_at, "Geo-fence", `${g.event_type ?? g.violation_type ?? "Geo"} · ${g.zone_id ?? ""}`, "info");
+  for (const v of vi.violations as Row[])
+    push(
+      v.first_detected_at ?? v.created_at,
+      "Violation",
+      `Violation ${v.case_id ?? ""} · ${v.status ?? ""}`,
+      "warn",
+    );
+  for (const c of vi.challans as Row[])
+    push(c.issued_at, "Challan", `Challan ${c.challan_no ?? ""} · ₹${c.total_fine ?? ""}`, "warn");
+  for (const a of vi.alerts as Row[])
+    push(a.ts, "Alert", `${a.kind ?? "Alert"} · ${a.severity ?? ""}`, "critical");
+  for (const g of geo)
+    push(
+      g.created_at,
+      "Geo-fence",
+      `${g.event_type ?? g.violation_type ?? "Geo"} · ${g.zone_id ?? ""}`,
+      "info",
+    );
   for (const p of parking) push(p.entry_time, "Parking", `Parked · ${p.facility_id ?? ""}`, "info");
-  for (const c of customs) push(c.ts, "Customs", `Customs flag · ${(c as any).payload?.flag ?? ""}`, "critical");
+  for (const c of customs)
+    push(c.ts, "Customs", `Customs flag · ${(c as any).payload?.flag ?? ""}`, "critical");
   for (const e of ai) push(e.created_at, "AI", `${e.event_type ?? "AI event"}`, "warn");
   return out.sort((a, b) => b.ts - a.ts);
 }
@@ -471,11 +825,19 @@ function Timeline({ events }: { events: TLEvent[] }) {
       <span className="absolute left-[13px] top-4 bottom-4 w-px bg-border" aria-hidden />
       {events.slice(0, 60).map((e, i) => (
         <li key={i} className="relative flex gap-3 pb-4 last:pb-0">
-          <span className="absolute -left-[11px] mt-1 h-4 w-4 rounded-full ring-4 ring-card" style={{ backgroundColor: toneColour(e.tone) }} />
+          <span
+            className="absolute -left-[11px] mt-1 h-4 w-4 rounded-full ring-4 ring-card"
+            style={{ backgroundColor: toneColour(e.tone) }}
+          />
           <div className="ml-4 flex flex-1 flex-wrap items-center gap-x-2 gap-y-0.5">
             <StatusChip label={e.kind} tone={e.tone} />
             <span className="text-[13px] text-foreground">{e.label}</span>
-            <span className="ml-auto text-[11px] text-muted-foreground" title={fmtDateTimeIST(e.iso)}>{relativeAge(e.iso)}</span>
+            <span
+              className="ml-auto text-[11px] text-muted-foreground"
+              title={fmtDateTimeIST(e.iso)}
+            >
+              {relativeAge(e.iso)}
+            </span>
           </div>
         </li>
       ))}
@@ -484,5 +846,11 @@ function Timeline({ events }: { events: TLEvent[] }) {
 }
 
 function toneColour(t: Tone): string {
-  return { info: "#56B4E9", ok: "#009E73", warn: "#E69F00", critical: "#D55E00", neutral: "#64748b" }[t];
+  return {
+    info: "#56B4E9",
+    ok: "#009E73",
+    warn: "#E69F00",
+    critical: "#D55E00",
+    neutral: "#64748b",
+  }[t];
 }

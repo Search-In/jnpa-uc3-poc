@@ -52,9 +52,7 @@ export function Shell({ children, onResetBaseline, resetDisabled }: ShellProps) 
   const currentLang = (i18n.resolvedLanguage ?? "en") as LangCode;
 
   return (
-    <div
-      className="calcite-mode-light flex h-full flex-col overflow-hidden bg-background text-foreground"
-    >
+    <div className="calcite-mode-light flex h-full flex-col overflow-hidden bg-background text-foreground">
       {/* ---- Header ---------------------------------------------------- */}
       <header className="z-20 flex h-14 shrink-0 items-center gap-3 border-b border-border bg-card px-4 shadow-sm">
         <button
@@ -274,9 +272,7 @@ function SourceBadge() {
         live ? "bg-emerald-500/15 text-emerald-400" : "bg-amber-500/15 text-amber-400",
       )}
     >
-      <span
-        className={cn("h-1.5 w-1.5 rounded-full", live ? "bg-emerald-400" : "bg-amber-400")}
-      />
+      <span className={cn("h-1.5 w-1.5 rounded-full", live ? "bg-emerald-400" : "bg-amber-400")} />
       {live ? "RDS · LIVE" : "SIM"}
     </span>
   );

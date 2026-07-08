@@ -235,9 +235,12 @@ export const api = {
   // vendor call). Used as the display source and as a fallback when the live
   // ULIP fetch is unavailable, so the tab always shows persisted RDS history.
   fastagTransactionsHistory: (rcNumber: string, limit = 100) =>
-    http<{ source: string; rc_number: string; count: number; transactions: import("./types").FastagTransactionRow[] }>(
-      `/api/fastag/transactions/history?rc_number=${encodeURIComponent(rcNumber)}&limit=${limit}`,
-    ),
+    http<{
+      source: string;
+      rc_number: string;
+      count: number;
+      transactions: import("./types").FastagTransactionRow[];
+    }>(`/api/fastag/transactions/history?rc_number=${encodeURIComponent(rcNumber)}&limit=${limit}`),
   tollEnroute: (body: import("./types").TollEnrouteInput) =>
     http<import("./types").TollEnroute>("/api/fastag/toll-enroute", {
       method: "POST",
@@ -311,9 +314,11 @@ export const api = {
     const q = new URLSearchParams();
     if (containerType) q.set("container_type", containerType);
     q.set("limit", String(limit));
-    return http<{ count: number; containers: import("./types").ContainerInventory[]; by_type?: any[] }>(
-      `/api/empty/containers/available?${q.toString()}`,
-    );
+    return http<{
+      count: number;
+      containers: import("./types").ContainerInventory[];
+      by_type?: any[];
+    }>(`/api/empty/containers/available?${q.toString()}`);
   },
   containersAllocate: (body: import("./types").ContainerAllocateInput) =>
     http<import("./types").ContainerAllocation>("/api/empty/containers/allocate", {
@@ -327,9 +332,11 @@ export const api = {
 
   // --- Geo-fence enforcement (RDS-backed: geofence_events, DB-driven engine) ---
   geoZonesActive: () =>
-    http<{ count: number; source: string; zones: { id: string; name: string; kind: string; points: number }[] }>(
-      "/api/geo/zones-active",
-    ),
+    http<{
+      count: number;
+      source: string;
+      zones: { id: string; name: string; kind: string; points: number }[];
+    }>("/api/geo/zones-active"),
   geoVehiclesInZones: () =>
     http<{ count: number; vehicles: import("./types").GeoVehicleInZone[] }>(
       "/api/geo/vehicles-in-zones",

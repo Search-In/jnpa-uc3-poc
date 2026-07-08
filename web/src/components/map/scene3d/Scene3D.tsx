@@ -146,11 +146,19 @@ export function Scene3D({
     const view = new SceneView({
       container: containerRef.current,
       map,
-      camera: { position: { longitude: center[0], latitude: center[1] - 0.14, z: 9000 }, tilt: 62, heading: 0 },
+      camera: {
+        position: { longitude: center[0], latitude: center[1] - 0.14, z: 9000 },
+        tilt: 62,
+        heading: 0,
+      },
       qualityProfile: "high",
       environment: {
         atmosphereEnabled: true,
-        lighting: { type: "sun", date: new Date("2026-06-16T06:30:00Z"), directShadowsEnabled: true },
+        lighting: {
+          type: "sun",
+          date: new Date("2026-06-16T06:30:00Z"),
+          directShadowsEnabled: true,
+        },
       } as never,
       ui: { components: ["zoom", "compass", "navigation-toggle", "attribution"] },
     });
@@ -204,7 +212,9 @@ export function Scene3D({
     if (pts.length < 2) return;
     framedOnce.current = true;
     const target = new Polyline({ paths: [pts], spatialReference: WGS84 });
-    void view.goTo({ target, tilt: 62 } as never, { duration: 900, easing: "ease-in-out" }).catch(() => {});
+    void view
+      .goTo({ target, tilt: 62 } as never, { duration: 900, easing: "ease-in-out" })
+      .catch(() => {});
   }
 
   // ---- render helpers (rebuild the GraphicsLayers from live props) ---------
@@ -232,7 +242,13 @@ export function Scene3D({
           symbol: {
             type: "line-3d",
             symbolLayers: [
-              { type: "line", size: 6, material: { color: jamColour(jf) }, cap: "round", join: "round" },
+              {
+                type: "line",
+                size: 6,
+                material: { color: jamColour(jf) },
+                cap: "round",
+                join: "round",
+              },
             ],
           } as never,
           attributes: { segId: seg.id },
@@ -255,13 +271,21 @@ export function Scene3D({
       const jfRaw = jamBySeg.get(seg.id) ?? 0;
       const ratio = jfRaw > 1 ? jfRaw / 10 : jfRaw;
       if (ratio <= 0) continue;
-      const mid: [number, number] = [(seg.start[0] + seg.end[0]) / 2, (seg.start[1] + seg.end[1]) / 2];
+      const mid: [number, number] = [
+        (seg.start[0] + seg.end[0]) / 2,
+        (seg.start[1] + seg.end[1]) / 2,
+      ];
       const stop =
         MAP_TOKENS.heatStops.find((s) => ratio <= s.ratio) ??
         MAP_TOKENS.heatStops[MAP_TOKENS.heatStops.length - 1];
       layer.add(
         new Graphic({
-          geometry: new Point({ longitude: mid[0], latitude: mid[1], z: 0, spatialReference: WGS84 }),
+          geometry: new Point({
+            longitude: mid[0],
+            latitude: mid[1],
+            z: 0,
+            spatialReference: WGS84,
+          }),
           symbol: {
             type: "point-3d",
             symbolLayers: [
@@ -355,7 +379,12 @@ export function Scene3D({
             type: "point-3d",
             symbolLayers: [
               // Red boom barrier across the lane — the recognisable checkpoint.
-              { type: "object", resource: { href: `${MODELS}/gate-boom.glb` }, height: 9, anchor: "bottom" },
+              {
+                type: "object",
+                resource: { href: `${MODELS}/gate-boom.glb` },
+                height: 9,
+                anchor: "bottom",
+              },
               // Canopy roof slab coloured by live throughput utilisation.
               {
                 type: "object",
@@ -458,13 +487,23 @@ export function Scene3D({
 
   // ---- reactive prop → layer updates -------------------------------------
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { renderCorridor(); renderHeatmap(); frameToData(); }, [corridor, snapshots]);
+  useEffect(() => {
+    renderCorridor();
+    renderHeatmap();
+    frameToData();
+  }, [corridor, snapshots]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => renderZones(), [zones]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { renderParking(); frameToData(); }, [parkingFacilities]);
+  useEffect(() => {
+    renderParking();
+    frameToData();
+  }, [parkingFacilities]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { renderGates(); frameToData(); }, [gates]);
+  useEffect(() => {
+    renderGates();
+    frameToData();
+  }, [gates]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => renderTrucks(), [trucks]);
 
@@ -496,7 +535,9 @@ export function Scene3D({
     const next = lighting === "day" ? "dusk" : "day";
     setLighting(next);
     if (!view) return;
-    const env = view.environment as unknown as { lighting?: { type?: string; date?: Date; directShadowsEnabled?: boolean } };
+    const env = view.environment as unknown as {
+      lighting?: { type?: string; date?: Date; directShadowsEnabled?: boolean };
+    };
     if (env.lighting) {
       env.lighting.type = "sun";
       env.lighting.date =
@@ -513,12 +554,21 @@ export function Scene3D({
       style={{ position: "relative" }}
       data-testid="live-map-3d"
     >
-      <div ref={containerRef} style={{ height: "100%", width: "100%" }} role="application" aria-label="JNPA 3D scene" />
+      <div
+        ref={containerRef}
+        style={{ height: "100%", width: "100%" }}
+        role="application"
+        aria-label="JNPA 3D scene"
+      />
       {/* Day / dusk lighting toggle, mirroring the reference cinematic control. */}
       <button
         type="button"
         onClick={toggleLighting}
-        title={lighting === "day" ? t("map.lightingDusk", "Dusk lighting") : t("map.lightingDay", "Day lighting")}
+        title={
+          lighting === "day"
+            ? t("map.lightingDusk", "Dusk lighting")
+            : t("map.lightingDay", "Day lighting")
+        }
         className="absolute right-[15px] top-[15px] z-10 flex h-9 w-9 items-center justify-center rounded-md border border-border bg-card/90 text-foreground shadow-md backdrop-blur transition hover:bg-muted"
       >
         {lighting === "day" ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
@@ -538,11 +588,18 @@ function truckGraphics(trucks: TruckDevice[]): Graphic[] {
     const heading = typeof tk.heading === "number" ? tk.heading : 0;
     out.push(
       new Graphic({
-        geometry: new Point({ longitude: tk.position.lon, latitude: tk.position.lat, spatialReference: WGS84 }),
+        geometry: new Point({
+          longitude: tk.position.lon,
+          latitude: tk.position.lat,
+          spatialReference: WGS84,
+        }),
         attributes: {
           objectId: stableOid(tk.device_id),
           rot: (heading + TRUCK_MODEL_OFFSET) % 360,
-          model: (tk.device_id.charCodeAt(tk.device_id.length - 1) % 3 === 0) ? "pickup-realistic" : "truck-realistic",
+          model:
+            tk.device_id.charCodeAt(tk.device_id.length - 1) % 3 === 0
+              ? "pickup-realistic"
+              : "truck-realistic",
         },
       }),
     );
@@ -575,7 +632,12 @@ function makeTruckLayer(initial: Graphic[]): FeatureLayer {
         symbol: {
           type: "point-3d",
           symbolLayers: [
-            { type: "object", resource: { href: `${MODELS}/${model}.glb` }, height: h, anchor: "bottom" },
+            {
+              type: "object",
+              resource: { href: `${MODELS}/${model}.glb` },
+              height: h,
+              anchor: "bottom",
+            },
           ],
         },
       })),
@@ -594,7 +656,10 @@ function sample<T>(arr: T[], n: number): T[] {
 }
 
 function closeRing(ring: [number, number][]): [number, number][] {
-  if (ring.length && (ring[0][0] !== ring[ring.length - 1][0] || ring[0][1] !== ring[ring.length - 1][1])) {
+  if (
+    ring.length &&
+    (ring[0][0] !== ring[ring.length - 1][0] || ring[0][1] !== ring[ring.length - 1][1])
+  ) {
     return [...ring, ring[0]];
   }
   return ring;
@@ -603,9 +668,17 @@ function closeRing(ring: [number, number][]): [number, number][] {
 /** hex "#RRGGBB" (or an "rgba(...)"/rgba tuple string) + alpha → [r,g,b,a]. */
 function rgba(color: string, alpha: number): [number, number, number, number] {
   if (color.startsWith("rgba") || color.startsWith("rgb")) {
-    const nums = color.replace(/[^0-9.,]/g, "").split(",").map(Number);
+    const nums = color
+      .replace(/[^0-9.,]/g, "")
+      .split(",")
+      .map(Number);
     return [nums[0] ?? 0, nums[1] ?? 0, nums[2] ?? 0, alpha];
   }
   const h = color.replace("#", "");
-  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16), alpha];
+  return [
+    parseInt(h.slice(0, 2), 16),
+    parseInt(h.slice(2, 4), 16),
+    parseInt(h.slice(4, 6), 16),
+    alpha,
+  ];
 }

@@ -50,24 +50,70 @@ export default function CommandCenter() {
   const { basemap } = useMapSettings();
 
   // --- Data (all via the typed adapter; RDS-backed in live mode) -----------
-  const corridorQ = useQuery({ queryKey: ["corridor"], queryFn: () => getAdapter().corridor(), staleTime: Infinity });
-  const gatesQ = useQuery({ queryKey: ["gates"], queryFn: () => getAdapter().gates(), refetchInterval: 10_000 });
+  const corridorQ = useQuery({
+    queryKey: ["corridor"],
+    queryFn: () => getAdapter().corridor(),
+    staleTime: Infinity,
+  });
+  const gatesQ = useQuery({
+    queryKey: ["gates"],
+    queryFn: () => getAdapter().gates(),
+    refetchInterval: 10_000,
+  });
   const zonesQ = useQuery({ queryKey: ["zones"], queryFn: () => getAdapter().zones() });
-  const snapsQ = useQuery({ queryKey: ["snapshots"], queryFn: () => getAdapter().trafficSnapshots(), refetchInterval: 8_000 });
-  const trucksQ = useQuery({ queryKey: ["trucks", "live-map"], queryFn: () => getAdapter().trucks(undefined, 500), refetchInterval: 5_000 });
-  const queuedQ = useQuery({ queryKey: ["trucks", "AT_GATE_QUEUE"], queryFn: () => getAdapter().trucks("AT_GATE_QUEUE", 500), refetchInterval: 6_000 });
-  const parkingAvailQ = useQuery({ queryKey: ["parking-availability"], queryFn: () => getAdapter().parkingAvailability(), refetchInterval: 10_000 });
+  const snapsQ = useQuery({
+    queryKey: ["snapshots"],
+    queryFn: () => getAdapter().trafficSnapshots(),
+    refetchInterval: 8_000,
+  });
+  const trucksQ = useQuery({
+    queryKey: ["trucks", "live-map"],
+    queryFn: () => getAdapter().trucks(undefined, 500),
+    refetchInterval: 5_000,
+  });
+  const queuedQ = useQuery({
+    queryKey: ["trucks", "AT_GATE_QUEUE"],
+    queryFn: () => getAdapter().trucks("AT_GATE_QUEUE", 500),
+    refetchInterval: 6_000,
+  });
+  const parkingAvailQ = useQuery({
+    queryKey: ["parking-availability"],
+    queryFn: () => getAdapter().parkingAvailability(),
+    refetchInterval: 10_000,
+  });
   // Customs Flags + AI Incidents read the SAME endpoints the Customs / Reports /
   // Geo screens use, so these KPIs match those screens exactly. Alerts share the
   // ["alerts-seed"] cache with the header bell and Alerts Center at ONE limit so
   // the count never diverges between them.
-  const customsQ = useQuery({ queryKey: ["customs-history"], queryFn: () => api.customsHistory(200), refetchInterval: 15_000 });
-  const aiQ = useQuery({ queryKey: ["ai-events"], queryFn: () => api.aiEvents(undefined, 200), refetchInterval: 15_000 });
-  const alertsQ = useQuery({ queryKey: ["alerts-seed"], queryFn: () => getAdapter().alerts({ limit: 100 }), refetchInterval: 15_000 });
+  const customsQ = useQuery({
+    queryKey: ["customs-history"],
+    queryFn: () => api.customsHistory(200),
+    refetchInterval: 15_000,
+  });
+  const aiQ = useQuery({
+    queryKey: ["ai-events"],
+    queryFn: () => api.aiEvents(undefined, 200),
+    refetchInterval: 15_000,
+  });
+  const alertsQ = useQuery({
+    queryKey: ["alerts-seed"],
+    queryFn: () => getAdapter().alerts({ limit: 100 }),
+    refetchInterval: 15_000,
+  });
   const carbonQ = useQuery({ queryKey: ["carbon"], queryFn: () => getAdapter().carbonRollup() });
-  const leoQ = useQuery({ queryKey: ["leo-queue"], queryFn: () => getAdapter().leoQueue(), refetchInterval: 15_000 });
-  const enrollQ = useQuery({ queryKey: ["enrollments"], queryFn: () => getAdapter().enrollments() });
-  const violationsQ = useQuery({ queryKey: ["police-report"], queryFn: () => getAdapter().policeReport() });
+  const leoQ = useQuery({
+    queryKey: ["leo-queue"],
+    queryFn: () => getAdapter().leoQueue(),
+    refetchInterval: 15_000,
+  });
+  const enrollQ = useQuery({
+    queryKey: ["enrollments"],
+    queryFn: () => getAdapter().enrollments(),
+  });
+  const violationsQ = useQuery({
+    queryKey: ["police-report"],
+    queryFn: () => getAdapter().policeReport(),
+  });
 
   const trucks = trucksQ.data ?? [];
   const gates = gatesQ.data ?? [];
@@ -77,12 +123,15 @@ export default function CommandCenter() {
   // plate → driver name, from the enrolment register (real RDS link).
   const driverByPlate = useMemo(() => {
     const m = new Map<string, string>();
-    for (const e of enrollments) if (e.vehicle_no && e.name) m.set(e.vehicle_no.toUpperCase(), e.name);
+    for (const e of enrollments)
+      if (e.vehicle_no && e.name) m.set(e.vehicle_no.toUpperCase(), e.name);
     return m;
   }, [enrollments]);
 
   const avgEtaMin = useMemo(() => {
-    const etas = trucks.map((v) => v.eta_s).filter((s): s is number => typeof s === "number" && s > 0);
+    const etas = trucks
+      .map((v) => v.eta_s)
+      .filter((s): s is number => typeof s === "number" && s > 0);
     if (etas.length === 0) return null;
     return Math.round(etas.reduce((a, b) => a + b, 0) / etas.length / 60);
   }, [trucks]);
@@ -114,7 +163,9 @@ export default function CommandCenter() {
   const todaysViolations = useMemo(() => {
     const list = violationsQ.data ?? [];
     const today = new Date().toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
-    return list.filter((i) => new Date(i.ts).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" }) === today).length;
+    return list.filter(
+      (i) => new Date(i.ts).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" }) === today,
+    ).length;
   }, [violationsQ.data]);
 
   const lastUpdated = Math.max(
@@ -126,16 +177,76 @@ export default function CommandCenter() {
   const anyFetching = trucksQ.isFetching || gatesQ.isFetching || alertsQ.isFetching;
 
   const kpis: { key: string; icon: typeof Truck; value: string; tone: Tone; loading: boolean }[] = [
-    { key: "activeVehicles", icon: Truck, value: fmt(trucks.length), tone: "info", loading: trucksQ.isLoading },
-    { key: "activeDrivers", icon: Users, value: fmt(activeDrivers), tone: "info", loading: enrollQ.isLoading && trucksQ.isLoading },
-    { key: "activeContainers", icon: Container, value: fmt(leoQ.data?.length), tone: "info", loading: leoQ.isLoading },
-    { key: "gateQueue", icon: ArrowLeftRight, value: fmt(queuedQ.data?.length), tone: (queuedQ.data?.length ?? 0) > 40 ? "warn" : "info", loading: queuedQ.isLoading },
-    { key: "avgEta", icon: Timer, value: avgEtaMin != null ? `${avgEtaMin} min` : "—", tone: "info", loading: trucksQ.isLoading },
-    { key: "parkingAvailable", icon: SquareParking, value: fmt(parkingTotals.available), tone: "ok", loading: parkingAvailQ.isLoading },
-    { key: "customsFlags", icon: ShieldAlert, value: fmt(customsFlags), tone: customsFlags > 0 ? "warn" : "ok", loading: customsQ.isLoading },
-    { key: "aiIncidents", icon: ScanEye, value: fmt(aiIncidents), tone: aiIncidents > 0 ? "warn" : "ok", loading: aiQ.isLoading },
-    { key: "todaysViolations", icon: FileWarning, value: fmt(todaysViolations), tone: todaysViolations > 0 ? "warn" : "ok", loading: violationsQ.isLoading },
-    { key: "carbon", icon: Leaf, value: carbon ? fmtTonnes(carbon.total_kg) : "—", tone: "ok", loading: carbonQ.isLoading },
+    {
+      key: "activeVehicles",
+      icon: Truck,
+      value: fmt(trucks.length),
+      tone: "info",
+      loading: trucksQ.isLoading,
+    },
+    {
+      key: "activeDrivers",
+      icon: Users,
+      value: fmt(activeDrivers),
+      tone: "info",
+      loading: enrollQ.isLoading && trucksQ.isLoading,
+    },
+    {
+      key: "activeContainers",
+      icon: Container,
+      value: fmt(leoQ.data?.length),
+      tone: "info",
+      loading: leoQ.isLoading,
+    },
+    {
+      key: "gateQueue",
+      icon: ArrowLeftRight,
+      value: fmt(queuedQ.data?.length),
+      tone: (queuedQ.data?.length ?? 0) > 40 ? "warn" : "info",
+      loading: queuedQ.isLoading,
+    },
+    {
+      key: "avgEta",
+      icon: Timer,
+      value: avgEtaMin != null ? `${avgEtaMin} min` : "—",
+      tone: "info",
+      loading: trucksQ.isLoading,
+    },
+    {
+      key: "parkingAvailable",
+      icon: SquareParking,
+      value: fmt(parkingTotals.available),
+      tone: "ok",
+      loading: parkingAvailQ.isLoading,
+    },
+    {
+      key: "customsFlags",
+      icon: ShieldAlert,
+      value: fmt(customsFlags),
+      tone: customsFlags > 0 ? "warn" : "ok",
+      loading: customsQ.isLoading,
+    },
+    {
+      key: "aiIncidents",
+      icon: ScanEye,
+      value: fmt(aiIncidents),
+      tone: aiIncidents > 0 ? "warn" : "ok",
+      loading: aiQ.isLoading,
+    },
+    {
+      key: "todaysViolations",
+      icon: FileWarning,
+      value: fmt(todaysViolations),
+      tone: todaysViolations > 0 ? "warn" : "ok",
+      loading: violationsQ.isLoading,
+    },
+    {
+      key: "carbon",
+      icon: Leaf,
+      value: carbon ? fmtTonnes(carbon.total_kg) : "—",
+      tone: "ok",
+      loading: carbonQ.isLoading,
+    },
   ];
 
   // Top-20 active vehicles: queued first, then soonest ETA.
@@ -152,7 +263,8 @@ export default function CommandCenter() {
 
   // Top-10 critical alerts by severity rank (highest first).
   const topAlerts = useMemo(
-    () => [...alerts].sort((a, b) => severityRank(b.severity) - severityRank(a.severity)).slice(0, 10),
+    () =>
+      [...alerts].sort((a, b) => severityRank(b.severity) - severityRank(a.severity)).slice(0, 10),
     [alerts],
   );
 
@@ -165,7 +277,9 @@ export default function CommandCenter() {
       {/* Page header ---------------------------------------------------- */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-card px-4 py-3">
         <div>
-          <h1 className="text-lg font-bold tracking-tight text-foreground">{t("commandCenter.title")}</h1>
+          <h1 className="text-lg font-bold tracking-tight text-foreground">
+            {t("commandCenter.title")}
+          </h1>
           <p className="text-xs text-muted-foreground">{t("commandCenter.subtitle")}</p>
         </div>
         <div className="ml-auto flex items-center gap-3">
@@ -184,7 +298,14 @@ export default function CommandCenter() {
       {/* KPI tiles ------------------------------------------------------- */}
       <div className="grid grid-cols-2 gap-2.5 px-4 py-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
         {kpis.map((k) => (
-          <KpiTile key={k.key} icon={k.icon} label={t(`commandCenter.kpi.${k.key}`)} value={k.value} tone={k.tone} loading={k.loading} />
+          <KpiTile
+            key={k.key}
+            icon={k.icon}
+            label={t(`commandCenter.kpi.${k.key}`)}
+            value={k.value}
+            tone={k.tone}
+            loading={k.loading}
+          />
         ))}
       </div>
 
@@ -205,10 +326,15 @@ export default function CommandCenter() {
             <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-background/70 backdrop-blur-sm">
               {corridorQ.isError ? (
                 <div className="pointer-events-auto">
-                  <ErrorState onRetry={() => corridorQ.refetch()} detail={(corridorQ.error as Error)?.message} />
+                  <ErrorState
+                    onRetry={() => corridorQ.refetch()}
+                    detail={(corridorQ.error as Error)?.message}
+                  />
                 </div>
               ) : (
-                <LoadingState label={t("commandCenter.mapLoading", "Waiting for live corridor data…")} />
+                <LoadingState
+                  label={t("commandCenter.mapLoading", "Waiting for live corridor data…")}
+                />
               )}
             </div>
           )}
@@ -240,7 +366,12 @@ export default function CommandCenter() {
           to="/alerts"
           viewAll={t("commandCenter.viewAll")}
         >
-          <AlertsList alerts={topAlerts} loading={alertsQ.isLoading} error={alertsQ.isError} onRetry={() => alertsQ.refetch()} />
+          <AlertsList
+            alerts={topAlerts}
+            loading={alertsQ.isLoading}
+            error={alertsQ.isError}
+            onRetry={() => alertsQ.refetch()}
+          />
         </SectionCard>
       </div>
 
@@ -376,7 +507,10 @@ function VehiclesTable({
           {vehicles.map((v) => {
             const plate = v.plate ?? v.device_id;
             const driver = (v.plate && driverByPlate.get(v.plate.toUpperCase())) || "—";
-            const loc = v.gate_id ?? v.segment_id ?? `${v.position.lat.toFixed(3)}, ${v.position.lon.toFixed(3)}`;
+            const loc =
+              v.gate_id ??
+              v.segment_id ??
+              `${v.position.lat.toFixed(3)}, ${v.position.lon.toFixed(3)}`;
             return (
               <tr key={v.device_id} className="hover:bg-muted/40">
                 <td className="px-3 py-1.5 font-mono font-medium text-foreground">{plate}</td>
@@ -399,7 +533,8 @@ function VehiclesTable({
 }
 
 function StateChip({ state }: { state: string }) {
-  const tone: Tone = state === "AT_GATE_QUEUE" ? "warn" : state === "MOVING" || state === "ENROUTE" ? "ok" : "info";
+  const tone: Tone =
+    state === "AT_GATE_QUEUE" ? "warn" : state === "MOVING" || state === "ENROUTE" ? "ok" : "info";
   const colour = TONE_COLOUR[tone];
   return (
     <span
@@ -413,7 +548,17 @@ function StateChip({ state }: { state: string }) {
 
 // --- Alerts list -------------------------------------------------------------
 
-function AlertsList({ alerts, loading, error, onRetry }: { alerts: Alert[]; loading: boolean; error: boolean; onRetry: () => void }) {
+function AlertsList({
+  alerts,
+  loading,
+  error,
+  onRetry,
+}: {
+  alerts: Alert[];
+  loading: boolean;
+  error: boolean;
+  onRetry: () => void;
+}) {
   const { t } = useTranslation();
   if (loading) return <LoadingState />;
   if (error) return <ErrorState onRetry={onRetry} />;
@@ -425,13 +570,19 @@ function AlertsList({ alerts, loading, error, onRetry }: { alerts: Alert[]; load
         const loc = a.gate_id ?? (a.payload?.zone_id as string) ?? "—";
         return (
           <li key={`${a.id}-${i}`} className="flex items-start gap-2.5 px-3 py-2 hover:bg-muted/40">
-            <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: sev }} aria-hidden />
+            <span
+              className="mt-1.5 h-2 w-2 shrink-0 rounded-full"
+              style={{ backgroundColor: sev }}
+              aria-hidden
+            />
             <div className="min-w-0 flex-1">
               <div className="flex items-center justify-between gap-2">
                 <span className="truncate text-[13px] font-semibold text-foreground">
                   {t(`alertKind.${a.kind}`, { defaultValue: humanize(a.kind) })}
                 </span>
-                <span className="shrink-0 text-[11px] text-muted-foreground">{relativeAge(a.ts)}</span>
+                <span className="shrink-0 text-[11px] text-muted-foreground">
+                  {relativeAge(a.ts)}
+                </span>
               </div>
               <div className="truncate text-[11px] text-muted-foreground">
                 {a.plate ? `${a.plate} · ` : ""}
@@ -447,7 +598,15 @@ function AlertsList({ alerts, loading, error, onRetry }: { alerts: Alert[]; load
 
 // --- Summary cards -----------------------------------------------------------
 
-function SummaryShell({ title, to, children }: { title: string; to: string; children: React.ReactNode }) {
+function SummaryShell({
+  title,
+  to,
+  children,
+}: {
+  title: string;
+  to: string;
+  children: React.ReactNode;
+}) {
   const { t } = useTranslation();
   return (
     <Card className="flex flex-col p-3">
@@ -465,18 +624,33 @@ function SummaryShell({ title, to, children }: { title: string; to: string; chil
 function Stat({ label, value, tone }: { label: string; value: string; tone?: Tone }) {
   return (
     <div className="rounded-md bg-muted/50 px-2.5 py-2">
-      <div className="text-lg font-bold tabular-nums leading-none" style={tone ? { color: TONE_COLOUR[tone] } : undefined}>
+      <div
+        className="text-lg font-bold tabular-nums leading-none"
+        style={tone ? { color: TONE_COLOUR[tone] } : undefined}
+      >
         {value}
       </div>
-      <div className="mt-1 text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="mt-1 text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground">
+        {label}
+      </div>
     </div>
   );
 }
 
-function GateSummary({ gates, queued, loading }: { gates: Gate[]; queued: number; loading: boolean }) {
+function GateSummary({
+  gates,
+  queued,
+  loading,
+}: {
+  gates: Gate[];
+  queued: number;
+  loading: boolean;
+}) {
   const { t } = useTranslation();
   const throughput = gates.reduce((s, g) => s + (g.throughput_60min ?? 0), 0);
-  const avgUtil = gates.length ? Math.round((gates.reduce((s, g) => s + (g.utilisation ?? 0), 0) / gates.length) * 100) : 0;
+  const avgUtil = gates.length
+    ? Math.round((gates.reduce((s, g) => s + (g.utilisation ?? 0), 0) / gates.length) * 100)
+    : 0;
   return (
     <SummaryShell title={t("commandCenter.gateSummary")} to="/gate-customs">
       {loading ? (
@@ -484,8 +658,16 @@ function GateSummary({ gates, queued, loading }: { gates: Gate[]; queued: number
       ) : (
         <div className="grid grid-cols-3 gap-2">
           <Stat label={t("commandCenter.gateThroughput")} value={fmt(throughput)} tone="info" />
-          <Stat label={t("commandCenter.gateQueueShort")} value={fmt(queued)} tone={queued > 40 ? "warn" : "ok"} />
-          <Stat label={t("commandCenter.gateUtil")} value={`${avgUtil}%`} tone={avgUtil >= 100 ? "critical" : "info"} />
+          <Stat
+            label={t("commandCenter.gateQueueShort")}
+            value={fmt(queued)}
+            tone={queued > 40 ? "warn" : "ok"}
+          />
+          <Stat
+            label={t("commandCenter.gateUtil")}
+            value={`${avgUtil}%`}
+            tone={avgUtil >= 100 ? "critical" : "info"}
+          />
         </div>
       )}
     </SummaryShell>
@@ -516,16 +698,26 @@ function ParkingSummaryCard({
           <div className="grid grid-cols-3 gap-2">
             <Stat label={t("panels.parking.capacity")} value={fmt(capacity)} tone="info" />
             <Stat label={t("panels.parking.available")} value={fmt(available)} tone="ok" />
-            <Stat label={t("commandCenter.parkingFull")} value={fmt(full)} tone={(full ?? 0) > 0 ? "warn" : "ok"} />
+            <Stat
+              label={t("commandCenter.parkingFull")}
+              value={fmt(full)}
+              tone={(full ?? 0) > 0 ? "warn" : "ok"}
+            />
           </div>
           <div className="mt-2">
             <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
               <div
                 className="h-full rounded-full"
-                style={{ width: `${Math.min(pct, 100)}%`, backgroundColor: pct >= 90 ? STATUS.critical : pct >= 70 ? STATUS.warning : STATUS.ok }}
+                style={{
+                  width: `${Math.min(pct, 100)}%`,
+                  backgroundColor:
+                    pct >= 90 ? STATUS.critical : pct >= 70 ? STATUS.warning : STATUS.ok,
+                }}
               />
             </div>
-            <div className="mt-1 text-[10.5px] text-muted-foreground">{pct}% {t("commandCenter.occupied")}</div>
+            <div className="mt-1 text-[10.5px] text-muted-foreground">
+              {pct}% {t("commandCenter.occupied")}
+            </div>
           </div>
         </>
       )}
@@ -533,7 +725,15 @@ function ParkingSummaryCard({
   );
 }
 
-function CustomsSummary({ leo, flags, loading }: { leo: { leo_ready: boolean }[]; flags: number; loading: boolean }) {
+function CustomsSummary({
+  leo,
+  flags,
+  loading,
+}: {
+  leo: { leo_ready: boolean }[];
+  flags: number;
+  loading: boolean;
+}) {
   const { t } = useTranslation();
   const ready = leo.filter((x) => x.leo_ready).length;
   const held = leo.length - ready;
@@ -544,8 +744,16 @@ function CustomsSummary({ leo, flags, loading }: { leo: { leo_ready: boolean }[]
       ) : (
         <div className="grid grid-cols-3 gap-2">
           <Stat label={t("commandCenter.leoReady")} value={fmt(ready)} tone="ok" />
-          <Stat label={t("commandCenter.leoHeld")} value={fmt(held)} tone={held > 0 ? "warn" : "ok"} />
-          <Stat label={t("commandCenter.customsFlagsShort")} value={fmt(flags)} tone={flags > 0 ? "critical" : "ok"} />
+          <Stat
+            label={t("commandCenter.leoHeld")}
+            value={fmt(held)}
+            tone={held > 0 ? "warn" : "ok"}
+          />
+          <Stat
+            label={t("commandCenter.customsFlagsShort")}
+            value={fmt(flags)}
+            tone={flags > 0 ? "critical" : "ok"}
+          />
         </div>
       )}
     </SummaryShell>

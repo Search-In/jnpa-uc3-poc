@@ -21,7 +21,14 @@ import { AutoLeoPanel, CustomsFeedPanel } from "@/components/panels/AutoLeoPanel
 import { DecisionPathBadge } from "@/components/DecisionPathBadge";
 import { Badge } from "@/components/ui/badge";
 import { Spinner, ErrorState, LoadingState, EmptyState } from "@/components/ui/misc";
-import { PageContainer, PageHeader, SearchInput, FilterSelect, StatusChip, type Tone } from "@/components/ui/dtccc";
+import {
+  PageContainer,
+  PageHeader,
+  SearchInput,
+  FilterSelect,
+  StatusChip,
+  type Tone,
+} from "@/components/ui/dtccc";
 import { useSocket } from "@/hooks/SocketContext";
 import { severityColour } from "@/lib/palette";
 import { MAP_TOKENS, STATUS } from "@/lib/tokens";
@@ -214,7 +221,10 @@ export default function LiveOperations() {
     [allTrucks],
   );
   const gateOptions = useMemo(
-    () => ["all", ...Array.from(new Set(allTrucks.map((v) => v.gate_id).filter((g): g is string => !!g)))],
+    () => [
+      "all",
+      ...Array.from(new Set(allTrucks.map((v) => v.gate_id).filter((g): g is string => !!g))),
+    ],
     [allTrucks],
   );
   const filteredTrucks = useMemo(() => {
@@ -234,13 +244,18 @@ export default function LiveOperations() {
     enabled: !!selected?.plate,
   });
 
-  const selectedFocus = selected ? { lat: selected.position.lat, lon: selected.position.lon } : null;
+  const selectedFocus = selected
+    ? { lat: selected.position.lat, lon: selected.position.lon }
+    : null;
 
   // Selecting a vehicle pans/zooms the map to it.
   useEffect(() => {
     if (selected && view) {
       void view
-        .goTo({ center: [selected.position.lon, selected.position.lat], zoom: 15 }, { duration: 700, easing: "ease-in-out" })
+        .goTo(
+          { center: [selected.position.lon, selected.position.lat], zoom: 15 },
+          { duration: 700, easing: "ease-in-out" },
+        )
         .catch(() => {});
     }
   }, [selected, view]);
@@ -279,8 +294,12 @@ export default function LiveOperations() {
           <Card key={g.id}>
             <CardContent className="flex flex-col gap-1 py-3">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-medium text-muted-foreground">{g.id.replace("G-", "")}</span>
-                <Badge colour={severityColour(g.utilisation && g.utilisation >= 1 ? "critical" : "ok")}>
+                <span className="text-xs font-medium text-muted-foreground">
+                  {g.id.replace("G-", "")}
+                </span>
+                <Badge
+                  colour={severityColour(g.utilisation && g.utilisation >= 1 ? "critical" : "ok")}
+                >
                   {Math.round((g.utilisation ?? 0) * 100)}%
                 </Badge>
               </div>
@@ -291,14 +310,17 @@ export default function LiveOperations() {
                 </span>
               </div>
               <div className="text-[11px] text-muted-foreground">
-                {t("liveOps.queue")} {queueByGate.get(g.id) ?? 0} · {t("liveOps.target")} {g.target_vph}/h
+                {t("liveOps.queue")} {queueByGate.get(g.id) ?? 0} · {t("liveOps.target")}{" "}
+                {g.target_vph}/h
               </div>
             </CardContent>
           </Card>
         ))}
         <Card className="col-span-2 md:col-span-1">
           <CardContent className="flex h-full flex-col py-2">
-            <span className="mb-1 text-[11px] font-medium text-muted-foreground">{t("liveOps.throughputTrend")}</span>
+            <span className="mb-1 text-[11px] font-medium text-muted-foreground">
+              {t("liveOps.throughputTrend")}
+            </span>
             <div className="min-h-[64px] flex-1">
               <ThroughputChart />
             </div>
@@ -311,7 +333,10 @@ export default function LiveOperations() {
         )}
         {gatesQ.isError && (
           <div className="col-span-full">
-            <ErrorState onRetry={() => gatesQ.refetch()} detail={(gatesQ.error as Error)?.message} />
+            <ErrorState
+              onRetry={() => gatesQ.refetch()}
+              detail={(gatesQ.error as Error)?.message}
+            />
           </div>
         )}
       </div>
@@ -356,7 +381,12 @@ export default function LiveOperations() {
       {/* Selected-vehicle detail (Trip / ETA / Driver / History / Violations). */}
       {selected && (
         <div className="px-4 pb-3">
-          <VehicleDetail truck={selected} intel={intelQ.data} status={intelQ} onClose={() => setSelected(null)} />
+          <VehicleDetail
+            truck={selected}
+            intel={intelQ.data}
+            status={intelQ}
+            onClose={() => setSelected(null)}
+          />
         </div>
       )}
 
@@ -427,13 +457,19 @@ function VehicleRail({
             value={fState}
             onChange={setFState}
             label="Status"
-            options={stateOptions.map((s) => ({ value: s, label: s === "all" ? "All status" : humanizeState(s) }))}
+            options={stateOptions.map((s) => ({
+              value: s,
+              label: s === "all" ? "All status" : humanizeState(s),
+            }))}
           />
           <FilterSelect
             value={fGate}
             onChange={setFGate}
             label="Gate"
-            options={gateOptions.map((g) => ({ value: g, label: g === "all" ? "All gates" : g.replace("G-", "") }))}
+            options={gateOptions.map((g) => ({
+              value: g,
+              label: g === "all" ? "All gates" : g.replace("G-", ""),
+            }))}
           />
         </div>
       </div>
@@ -458,12 +494,18 @@ function VehicleRail({
                     }`}
                   >
                     <div className="min-w-0">
-                      <div className="truncate font-mono text-[13px] font-medium text-foreground">{v.plate ?? v.device_id}</div>
-                      <div className="truncate text-[11px] text-muted-foreground">{v.gate_id ?? v.segment_id ?? "—"}</div>
+                      <div className="truncate font-mono text-[13px] font-medium text-foreground">
+                        {v.plate ?? v.device_id}
+                      </div>
+                      <div className="truncate text-[11px] text-muted-foreground">
+                        {v.gate_id ?? v.segment_id ?? "—"}
+                      </div>
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-1">
                       <StatusChip label={humanizeState(v.state)} tone={stateTone(v.state)} />
-                      <span className="text-[11px] tabular-nums text-muted-foreground">{fmtEta(v.eta_s)}</span>
+                      <span className="text-[11px] tabular-nums text-muted-foreground">
+                        {fmtEta(v.eta_s)}
+                      </span>
                     </div>
                   </button>
                 </li>
@@ -501,10 +543,17 @@ function VehicleDetail({
       <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/40 px-4 py-2.5">
         <div className="flex items-center gap-2">
           <TruckIcon className="h-4 w-4 text-primary" />
-          <span className="font-mono text-sm font-semibold text-foreground">{truck.plate ?? truck.device_id}</span>
+          <span className="font-mono text-sm font-semibold text-foreground">
+            {truck.plate ?? truck.device_id}
+          </span>
           <StatusChip label={humanizeState(truck.state)} tone={stateTone(truck.state)} />
         </div>
-        <button type="button" onClick={onClose} aria-label="Close" className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground">
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
           <X className="h-4 w-4" />
         </button>
       </div>
@@ -519,7 +568,10 @@ function VehicleDetail({
         <DetailGroup title="ETA">
           <DetailRow label="To gate" value={fmtEta(truck.eta_s)} />
           <DetailRow label="Heading" value={`${Math.round(truck.heading)}°`} />
-          <DetailRow label="Position" value={`${truck.position.lat.toFixed(3)}, ${truck.position.lon.toFixed(3)}`} />
+          <DetailRow
+            label="Position"
+            value={`${truck.position.lat.toFixed(3)}, ${truck.position.lon.toFixed(3)}`}
+          />
         </DetailGroup>
         <DetailGroup title="Driver / RC">
           {status.isLoading ? (
@@ -533,18 +585,34 @@ function VehicleDetail({
           )}
         </DetailGroup>
         <DetailGroup title="Enforcement">
-          <DetailRow label="Violations" value={String(violations.length)} tone={violations.length ? "warn" : "ok"} />
-          <DetailRow label="Challans" value={String(challans.length)} tone={challans.length ? "warn" : "ok"} />
+          <DetailRow
+            label="Violations"
+            value={String(violations.length)}
+            tone={violations.length ? "warn" : "ok"}
+          />
+          <DetailRow
+            label="Challans"
+            value={String(challans.length)}
+            tone={challans.length ? "warn" : "ok"}
+          />
           <DetailRow label="Track points" value={String(tracking.length)} />
         </DetailGroup>
       </div>
 
       {violations.length > 0 && (
         <div className="border-t border-border px-4 py-3">
-          <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Recent Violations</h4>
+          <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Recent Violations
+          </h4>
           <div className="flex flex-wrap gap-1.5">
             {violations.slice(0, 12).map((v, i) => (
-              <StatusChip key={i} label={String((v as any).kind ?? (v as any).type ?? (v as any).violation ?? "violation")} tone="warn" />
+              <StatusChip
+                key={i}
+                label={String(
+                  (v as any).kind ?? (v as any).type ?? (v as any).violation ?? "violation",
+                )}
+                tone="warn"
+              />
             ))}
           </div>
         </div>
@@ -561,7 +629,9 @@ function VehicleDetail({
 function DetailGroup({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div>
-      <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{title}</h4>
+      <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        {title}
+      </h4>
       <div className="space-y-1">{children}</div>
     </div>
   );
@@ -571,7 +641,25 @@ function DetailRow({ label, value, tone }: { label: string; value: React.ReactNo
   return (
     <div className="flex items-baseline justify-between gap-2 text-[13px]">
       <span className="text-muted-foreground">{label}</span>
-      <span className="truncate font-medium" style={tone ? { color: STATUS[tone === "ok" ? "ok" : tone === "warn" ? "warning" : tone === "critical" ? "critical" : "info"] } : undefined}>
+      <span
+        className="truncate font-medium"
+        style={
+          tone
+            ? {
+                color:
+                  STATUS[
+                    tone === "ok"
+                      ? "ok"
+                      : tone === "warn"
+                        ? "warning"
+                        : tone === "critical"
+                          ? "critical"
+                          : "info"
+                  ],
+              }
+            : undefined
+        }
+      >
         {value}
       </span>
     </div>
@@ -612,7 +700,9 @@ function FloatingLegend() {
     <div ref={ref} className="absolute bottom-3 left-3 z-10">
       {open && (
         <div className="mb-2 rounded-md border border-border bg-card/95 p-2 text-[11px] shadow-lg backdrop-blur">
-          <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("map.legend")}</div>
+          <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            {t("map.legend")}
+          </div>
           {items.map((i) => (
             <div key={i.l} className="flex items-center gap-2">
               <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: i.c }} />

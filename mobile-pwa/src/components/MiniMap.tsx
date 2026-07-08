@@ -40,7 +40,16 @@ function jamColor(j: number): string {
   return "#009e73"; // green — free-flow
 }
 
-export default function MiniMap({ corridor, gates, truck, targetGateId, jam, fill, roads, routes }: Props) {
+export default function MiniMap({
+  corridor,
+  gates,
+  truck,
+  targetGateId,
+  jam,
+  fill,
+  roads,
+  routes,
+}: Props) {
   const el = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
   const truckMarker = useRef<maplibregl.Marker | null>(null);
@@ -195,7 +204,10 @@ export default function MiniMap({ corridor, gates, truck, targetGateId, jam, fil
         const lons = all.map((p) => p[0]);
         const lats = all.map((p) => p[1]);
         m.fitBounds(
-          [[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]],
+          [
+            [Math.min(...lons), Math.min(...lats)],
+            [Math.max(...lons), Math.max(...lats)],
+          ],
           { padding: 40, animate: true, maxZoom: 13 },
         );
       } catch {

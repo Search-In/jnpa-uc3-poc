@@ -7,7 +7,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Search, CornerDownLeft, Truck, IdCard, Container, CreditCard, BellRing, FileText } from "lucide-react";
+import {
+  Search,
+  CornerDownLeft,
+  Truck,
+  IdCard,
+  Container,
+  CreditCard,
+  BellRing,
+  FileText,
+} from "lucide-react";
 import { useClickOutside } from "@/hooks/useClickOutside";
 import { searchStore, detectEntity, type SearchEntity } from "@/lib/searchStore";
 import { cn } from "@/lib/utils";
@@ -110,9 +119,12 @@ export function GlobalSearch() {
                   >
                     <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
                     <span className="text-foreground">
-                      {t(s.labelKey)} <span className="font-mono font-semibold text-primary">{q.trim()}</span>
+                      {t(s.labelKey)}{" "}
+                      <span className="font-mono font-semibold text-primary">{q.trim()}</span>
                     </span>
-                    {i === active && <CornerDownLeft className="ml-auto h-3.5 w-3.5 text-muted-foreground" />}
+                    {i === active && (
+                      <CornerDownLeft className="ml-auto h-3.5 w-3.5 text-muted-foreground" />
+                    )}
                   </button>
                 </li>
               );

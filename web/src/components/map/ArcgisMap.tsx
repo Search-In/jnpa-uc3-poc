@@ -744,9 +744,7 @@ export function ArcgisMap({
             title={m === "2d" ? t("map.view2d", "2D map") : t("map.view3d", "3D scene")}
             className={
               "px-3 py-1.5 text-xs font-semibold uppercase tracking-wide transition " +
-              (mode === m
-                ? "bg-severity-info text-white"
-                : "text-foreground hover:bg-muted")
+              (mode === m ? "bg-severity-info text-white" : "text-foreground hover:bg-muted")
             }
           >
             {m === "2d" ? "2D" : "3D"}
@@ -758,49 +756,49 @@ export function ArcgisMap({
           Hidden by default, opens on the icon, closes on the icon again or an
           outside click. Positioned just BELOW the native zoom (+/−) widget. */}
       {mode === "2d" && (
-      <div ref={layersCtrlRef} className="absolute left-[15px] top-[92px] z-10">
-        <button
-          type="button"
-          onClick={() => setLayersOpen((o) => !o)}
-          aria-label={t("map.toggleLayers")}
-          aria-expanded={layersOpen}
-          title={t("map.layersTitle")}
-          className="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-card/90 text-foreground shadow-md backdrop-blur transition hover:bg-muted"
-        >
-          <LayersIcon className="h-4 w-4" />
-        </button>
-        {layersOpen && (
-          <div className="mt-2 w-52 rounded-md border border-border bg-card/95 p-2 shadow-lg backdrop-blur">
-            <div className="mb-1 flex items-center justify-between px-1">
-              <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                {t("map.layersTitle")}
-              </span>
-              <button
-                type="button"
-                onClick={() => setLayersOpen(false)}
-                aria-label={t("map.closeLayers")}
-                className="text-muted-foreground transition hover:text-foreground"
-              >
-                <XIcon className="h-3.5 w-3.5" />
-              </button>
+        <div ref={layersCtrlRef} className="absolute left-[15px] top-[92px] z-10">
+          <button
+            type="button"
+            onClick={() => setLayersOpen((o) => !o)}
+            aria-label={t("map.toggleLayers")}
+            aria-expanded={layersOpen}
+            title={t("map.layersTitle")}
+            className="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-card/90 text-foreground shadow-md backdrop-blur transition hover:bg-muted"
+          >
+            <LayersIcon className="h-4 w-4" />
+          </button>
+          {layersOpen && (
+            <div className="mt-2 w-52 rounded-md border border-border bg-card/95 p-2 shadow-lg backdrop-blur">
+              <div className="mb-1 flex items-center justify-between px-1">
+                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  {t("map.layersTitle")}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setLayersOpen(false)}
+                  aria-label={t("map.closeLayers")}
+                  className="text-muted-foreground transition hover:text-foreground"
+                >
+                  <XIcon className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              {LAYER_DEFS.map((d) => (
+                <label
+                  key={d.key}
+                  className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-xs hover:bg-muted"
+                >
+                  <input
+                    type="checkbox"
+                    checked={layerVis[d.key] ?? true}
+                    onChange={() => toggleLayer(d.key)}
+                    className="h-3.5 w-3.5 accent-severity-info"
+                  />
+                  {t(`map.layer.${d.key}`)}
+                </label>
+              ))}
             </div>
-            {LAYER_DEFS.map((d) => (
-              <label
-                key={d.key}
-                className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-xs hover:bg-muted"
-              >
-                <input
-                  type="checkbox"
-                  checked={layerVis[d.key] ?? true}
-                  onChange={() => toggleLayer(d.key)}
-                  className="h-3.5 w-3.5 accent-severity-info"
-                />
-                {t(`map.layer.${d.key}`)}
-              </label>
-            ))}
-          </div>
-        )}
-      </div>
+          )}
+        </div>
       )}
     </div>
   );

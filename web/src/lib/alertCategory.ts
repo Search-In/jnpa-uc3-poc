@@ -31,7 +31,11 @@ export function categoryOf(a: Alert): Exclude<AlertCategory, "all"> {
   if (a.kind === "WRONG_WAY" || a.kind === "ROUTE_DEVIATION") return "traffic";
   if (a.kind === "ABANDONED") return "ai";
   if (a.payload?.zone_id) return "geofence";
-  if (a.kind === "CUSTOMS_FLAG" || a.kind === "ELEVATED_SCRUTINY" || a.kind === "PROVISIONAL_VEHICLE")
+  if (
+    a.kind === "CUSTOMS_FLAG" ||
+    a.kind === "ELEVATED_SCRUTINY" ||
+    a.kind === "PROVISIONAL_VEHICLE"
+  )
     return "customs";
   return "vehicle";
 }

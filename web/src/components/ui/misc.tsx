@@ -50,19 +50,10 @@ export function LoadingState({ label }: { label?: string }) {
 /** Error state shown when a query FAILS (API/DB unavailable) — never conflated
  *  with "empty data". Offers a Retry button and a plain-language reason so an
  *  outage never masquerades as "No records". */
-export function ErrorState({
-  onRetry,
-  detail,
-}: {
-  onRetry?: () => void;
-  detail?: string;
-}) {
+export function ErrorState({ onRetry, detail }: { onRetry?: () => void; detail?: string }) {
   const { t } = useTranslation();
   return (
-    <div
-      role="alert"
-      className="flex flex-col items-center gap-2 p-6 text-center"
-    >
+    <div role="alert" className="flex flex-col items-center gap-2 p-6 text-center">
       <TriangleAlert className="h-6 w-6 text-amber-500" aria-hidden />
       <div className="text-sm font-medium">
         {t("common.errorTitle", "Unable to load live data")}

@@ -13,15 +13,15 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import {
-  ChevronLeft,
-  ChevronRight,
-  RefreshCw,
-  Search,
-  type LucideIcon,
-} from "lucide-react";
+import { ChevronLeft, ChevronRight, RefreshCw, Search, type LucideIcon } from "lucide-react";
 import { Card } from "@/components/ui/card";
-import { ErrorState, LoadingState, EmptyState, LastUpdated, type AsyncStatus } from "@/components/ui/misc";
+import {
+  ErrorState,
+  LoadingState,
+  EmptyState,
+  LastUpdated,
+  type AsyncStatus,
+} from "@/components/ui/misc";
 import { STATUS } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 
@@ -36,8 +36,18 @@ export const TONE_COLOUR: Record<Tone, string> = {
 
 // --- Page chrome -------------------------------------------------------------
 
-export function PageContainer({ children, className }: { children: ReactNode; className?: string }) {
-  return <div className={cn("flex h-full flex-col overflow-y-auto bg-background", className)}>{children}</div>;
+export function PageContainer({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={cn("flex h-full flex-col overflow-y-auto bg-background", className)}>
+      {children}
+    </div>
+  );
 }
 
 export function PageHeader({
@@ -67,13 +77,17 @@ export function PageHeader({
           </span>
         )}
         <div>
-          <h1 className="text-lg font-bold leading-tight tracking-tight text-foreground">{title}</h1>
+          <h1 className="text-lg font-bold leading-tight tracking-tight text-foreground">
+            {title}
+          </h1>
           {subtitle && <p className="text-xs text-muted-foreground">{subtitle}</p>}
         </div>
       </div>
       <div className="ml-auto flex items-center gap-3">
         {actions}
-        {(updatedAt !== undefined || isFetching) && <LastUpdated at={updatedAt || undefined} isFetching={isFetching} />}
+        {(updatedAt !== undefined || isFetching) && (
+          <LastUpdated at={updatedAt || undefined} isFetching={isFetching} />
+        )}
         {onRefresh && (
           <button
             type="button"
@@ -92,7 +106,11 @@ export function PageHeader({
 // --- Summary cards -----------------------------------------------------------
 
 export function StatGrid({ children, className }: { children: ReactNode; className?: string }) {
-  return <div className={cn("grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4", className)}>{children}</div>;
+  return (
+    <div className={cn("grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4", className)}>
+      {children}
+    </div>
+  );
 }
 
 export function StatCard({
@@ -114,7 +132,10 @@ export function StatCard({
   return (
     <Card className="flex items-center gap-3 p-3">
       {Icon && (
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg" style={{ backgroundColor: `${colour}1a`, color: colour }}>
+        <span
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
+          style={{ backgroundColor: `${colour}1a`, color: colour }}
+        >
           <Icon className="h-5 w-5" strokeWidth={2} />
         </span>
       )}
@@ -145,7 +166,12 @@ export function SegmentedTabs<T extends string>({
   className?: string;
 }) {
   return (
-    <div className={cn("inline-flex flex-wrap gap-0.5 rounded-lg border border-border bg-card p-0.5", className)}>
+    <div
+      className={cn(
+        "inline-flex flex-wrap gap-0.5 rounded-lg border border-border bg-card p-0.5",
+        className,
+      )}
+    >
       {tabs.map((tb) => {
         const active = tb.key === value;
         const Icon = tb.icon;
@@ -156,13 +182,20 @@ export function SegmentedTabs<T extends string>({
             onClick={() => onChange(tb.key)}
             className={cn(
               "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[13px] font-medium transition-colors",
-              active ? "bg-primary text-primary-foreground shadow-sm" : "text-foreground hover:bg-muted",
+              active
+                ? "bg-primary text-primary-foreground shadow-sm"
+                : "text-foreground hover:bg-muted",
             )}
           >
             {Icon && <Icon className="h-3.5 w-3.5" aria-hidden />}
             {tb.label}
             {typeof tb.count === "number" && (
-              <span className={cn("rounded-full px-1.5 text-[10px] font-bold tabular-nums", active ? "bg-white/20" : "bg-muted")}>
+              <span
+                className={cn(
+                  "rounded-full px-1.5 text-[10px] font-bold tabular-nums",
+                  active ? "bg-white/20" : "bg-muted",
+                )}
+              >
                 {tb.count}
               </span>
             )}
@@ -328,7 +361,12 @@ export function DataTable<T>({
                   {columns.map((c) => (
                     <th
                       key={c.key}
-                      className={cn("px-3 py-2 font-semibold", c.align === "right" && "text-right", c.align === "center" && "text-center", c.headerClassName)}
+                      className={cn(
+                        "px-3 py-2 font-semibold",
+                        c.align === "right" && "text-right",
+                        c.align === "center" && "text-center",
+                        c.headerClassName,
+                      )}
                     >
                       {c.header}
                     </th>
@@ -350,7 +388,12 @@ export function DataTable<T>({
                       {columns.map((c) => (
                         <td
                           key={c.key}
-                          className={cn("px-3 py-2", c.align === "right" && "text-right", c.align === "center" && "text-center", c.className)}
+                          className={cn(
+                            "px-3 py-2",
+                            c.align === "right" && "text-right",
+                            c.align === "center" && "text-center",
+                            c.className,
+                          )}
                         >
                           {c.render ? c.render(row) : (row as Record<string, ReactNode>)[c.key]}
                         </td>

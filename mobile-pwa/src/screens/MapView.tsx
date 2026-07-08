@@ -47,11 +47,15 @@ export default function MapView({ deviceId }: { deviceId: string }) {
 
   useEffect(() => {
     void cached<{ gates: Gate[] }>("gates", () => api.gates()).then((g) => g && setGates(g.gates));
-    void cached<{ zones: { id: string; name: string; kind: string }[] }>("geo-zones", () => api.geoZones())
-      .then((z) => z && setZones(z.zones || []));
-    void cached<{ total_available?: number }>("parking-sum", () => api.parkingSummary())
-      .then((p) => p && setParkingFree(p.total_available ?? null));
-    void cached<CorridorGeometry>("corridor", () => api.corridor()).then((c) => c && setCorridor(c));
+    void cached<{ zones: { id: string; name: string; kind: string }[] }>("geo-zones", () =>
+      api.geoZones(),
+    ).then((z) => z && setZones(z.zones || []));
+    void cached<{ total_available?: number }>("parking-sum", () => api.parkingSummary()).then(
+      (p) => p && setParkingFree(p.total_available ?? null),
+    );
+    void cached<CorridorGeometry>("corridor", () => api.corridor()).then(
+      (c) => c && setCorridor(c),
+    );
   }, []);
 
   // Live position + destination gate.
@@ -91,7 +95,7 @@ export default function MapView({ deviceId }: { deviceId: string }) {
         setOpts(r);
         setSelected(0);
         setRouteErr(r.length ? null : t("map.noRoute", { defaultValue: "No route found" }));
-      } catch (e) {
+      } catch {
         setRouteErr(t("map.routeErr", { defaultValue: "Routing unavailable" }));
       }
     })();
@@ -124,9 +128,21 @@ export default function MapView({ deviceId }: { deviceId: string }) {
 
         {/* Destination banner (Google-Maps style) */}
         {dest && (
-          <div style={{ position: "absolute", top: 10, left: 10, right: 10, background: "var(--surface,#fff)",
-            borderRadius: 12, padding: "10px 14px", boxShadow: "0 2px 8px rgba(0,0,0,.15)" }}>
-            <div className="muted" style={{ fontSize: 11 }}>{t("map.destination", { defaultValue: "Destination" })}</div>
+          <div
+            style={{
+              position: "absolute",
+              top: 10,
+              left: 10,
+              right: 10,
+              background: "var(--surface,#fff)",
+              borderRadius: 12,
+              padding: "10px 14px",
+              boxShadow: "0 2px 8px rgba(0,0,0,.15)",
+            }}
+          >
+            <div className="muted" style={{ fontSize: 11 }}>
+              {t("map.destination", { defaultValue: "Destination" })}
+            </div>
             <div style={{ fontWeight: 700, fontSize: 15 }}>🏁 {dest.name}</div>
           </div>
         )}
@@ -134,11 +150,18 @@ export default function MapView({ deviceId }: { deviceId: string }) {
 
       {/* Route options — tap to select (like Google Maps). Docks just above the
           fixed tab bar (the content area already reserves that space). */}
-      <div style={{
-        padding: "10px 12px",
-        borderTop: "1px solid var(--border,#ddd)", background: "var(--surface,#fff)",
-      }}>
-        {routeErr && <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>{routeErr}</div>}
+      <div
+        style={{
+          padding: "10px 12px",
+          borderTop: "1px solid var(--border,#ddd)",
+          background: "var(--surface,#fff)",
+        }}
+      >
+        {routeErr && (
+          <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
+            {routeErr}
+          </div>
+        )}
         {opts.length > 0 ? (
           <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 4 }}>
             {opts.map((o, i) => (
@@ -146,30 +169,57 @@ export default function MapView({ deviceId }: { deviceId: string }) {
                 key={o.id}
                 onClick={() => setSelected(i)}
                 style={{
-                  flex: "0 0 auto", textAlign: "left", borderRadius: 12, padding: "8px 14px",
+                  flex: "0 0 auto",
+                  textAlign: "left",
+                  borderRadius: 12,
+                  padding: "8px 14px",
                   border: `2px solid ${i === selected ? "#1a56db" : "var(--border,#ddd)"}`,
-                  background: i === selected ? "rgba(26,86,219,.08)" : "transparent", minWidth: 120,
+                  background: i === selected ? "rgba(26,86,219,.08)" : "transparent",
+                  minWidth: 120,
                 }}
               >
-                <div style={{ fontWeight: 700, fontSize: 16, color: i === selected ? "#1a56db" : undefined }}>
+                <div
+                  style={{
+                    fontWeight: 700,
+                    fontSize: 16,
+                    color: i === selected ? "#1a56db" : undefined,
+                  }}
+                >
                   {o.durationMin} min
                 </div>
                 <div className="muted" style={{ fontSize: 12 }}>
-                  {o.distanceKm} km · {i === 0 ? t("map.fastest", { defaultValue: "Fastest" }) : t("map.alt", { defaultValue: "Alternate" })}
+                  {o.distanceKm} km ·{" "}
+                  {i === 0
+                    ? t("map.fastest", { defaultValue: "Fastest" })
+                    : t("map.alt", { defaultValue: "Alternate" })}
                 </div>
               </button>
             ))}
           </div>
         ) : (
-          !routeErr && <div className="muted" style={{ fontSize: 12 }}>{t("map.computing", { defaultValue: "Computing routes…" })}</div>
+          !routeErr && (
+            <div className="muted" style={{ fontSize: 12 }}>
+              {t("map.computing", { defaultValue: "Computing routes…" })}
+            </div>
+          )
         )}
 
         {/* Legend + quick counts */}
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 8, fontSize: 12 }}>
-          <span><span style={{ color: "#16a34a" }}>●</span> {t("map.normal", { defaultValue: "Normal" })}</span>
-          <span><span style={{ color: "#d97706" }}>●</span> {t("map.medium", { defaultValue: "Medium" })}</span>
-          <span><span style={{ color: "#dc2626" }}>●</span> {t("map.heavy", { defaultValue: "Heavy" })}</span>
-          <span className="muted">🅿 {parkingFree ?? "—"} · ⛔ {noParking} · 🚫 {restricted} · 🏗 {gates?.length ?? 0}</span>
+          <span>
+            <span style={{ color: "#16a34a" }}>●</span>{" "}
+            {t("map.normal", { defaultValue: "Normal" })}
+          </span>
+          <span>
+            <span style={{ color: "#d97706" }}>●</span>{" "}
+            {t("map.medium", { defaultValue: "Medium" })}
+          </span>
+          <span>
+            <span style={{ color: "#dc2626" }}>●</span> {t("map.heavy", { defaultValue: "Heavy" })}
+          </span>
+          <span className="muted">
+            🅿 {parkingFree ?? "—"} · ⛔ {noParking} · 🚫 {restricted} · 🏗 {gates?.length ?? 0}
+          </span>
         </div>
       </div>
     </div>

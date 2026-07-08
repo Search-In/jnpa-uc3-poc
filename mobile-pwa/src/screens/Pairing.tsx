@@ -66,27 +66,42 @@ export default function Pairing({ onPaired }: { onPaired: (deviceId: string) => 
 
   const requestOtp = async () => {
     const m = mobile.replace(/\D/g, "");
-    if (m.length < 10) { setOtpMsg("Enter a valid 10-digit mobile"); return; }
-    setOtpBusy(true); setOtpMsg(null);
+    if (m.length < 10) {
+      setOtpMsg("Enter a valid 10-digit mobile");
+      return;
+    }
+    setOtpBusy(true);
+    setOtpMsg(null);
     try {
       const r = await api.otpRequest(m, mobileToDeviceId(m));
       setOtpStep("code");
       setOtpMsg(r.dev_otp ? `OTP sent (demo: ${r.dev_otp})` : "OTP sent to your mobile");
-    } catch (e) { setOtpMsg(String(e)); } finally { setOtpBusy(false); }
+    } catch (e) {
+      setOtpMsg(String(e));
+    } finally {
+      setOtpBusy(false);
+    }
   };
 
   const verifyOtp = async () => {
     const m = mobile.replace(/\D/g, "");
     const deviceId = mobileToDeviceId(m);
-    setOtpBusy(true); setOtpMsg(null);
+    setOtpBusy(true);
+    setOtpMsg(null);
     try {
       const r = await api.otpVerify(m, otp.replace(/\D/g, ""), deviceId);
       if (r.verified && r.access_token) {
         setToken(r.access_token);
         setPairing(deviceId);
         onPaired(deviceId);
-      } else { setOtpMsg("Invalid OTP"); }
-    } catch (e) { setOtpMsg("Invalid or expired OTP"); } finally { setOtpBusy(false); }
+      } else {
+        setOtpMsg("Invalid OTP");
+      }
+    } catch {
+      setOtpMsg("Invalid or expired OTP");
+    } finally {
+      setOtpBusy(false);
+    }
   };
 
   return (
@@ -102,30 +117,66 @@ export default function Pairing({ onPaired }: { onPaired: (deviceId: string) => 
         {otpStep === "mobile" ? (
           <>
             <input
-              inputMode="numeric" placeholder="Mobile number" value={mobile}
+              inputMode="numeric"
+              placeholder="Mobile number"
+              value={mobile}
               onChange={(e) => setMobile(e.target.value)}
-              style={{ width: "100%", height: 44, fontSize: 18, textAlign: "center", marginBottom: 8 }}
+              style={{
+                width: "100%",
+                height: 44,
+                fontSize: 18,
+                textAlign: "center",
+                marginBottom: 8,
+              }}
             />
-            <button className="btn primary" disabled={otpBusy} onClick={requestOtp} style={{ width: "100%" }}>
+            <button
+              className="btn primary"
+              disabled={otpBusy}
+              onClick={requestOtp}
+              style={{ width: "100%" }}
+            >
               {otpBusy ? "…" : "Send OTP"}
             </button>
           </>
         ) : (
           <>
             <input
-              inputMode="numeric" placeholder="6-digit OTP" value={otp}
-              onChange={(e) => setOtp(e.target.value)} maxLength={6}
-              style={{ width: "100%", height: 44, fontSize: 22, textAlign: "center", letterSpacing: 6, marginBottom: 8 }}
+              inputMode="numeric"
+              placeholder="6-digit OTP"
+              value={otp}
+              onChange={(e) => setOtp(e.target.value)}
+              maxLength={6}
+              style={{
+                width: "100%",
+                height: 44,
+                fontSize: 22,
+                textAlign: "center",
+                letterSpacing: 6,
+                marginBottom: 8,
+              }}
             />
-            <button className="btn primary" disabled={otpBusy} onClick={verifyOtp} style={{ width: "100%" }}>
+            <button
+              className="btn primary"
+              disabled={otpBusy}
+              onClick={verifyOtp}
+              style={{ width: "100%" }}
+            >
               {otpBusy ? "…" : "Verify & Login"}
             </button>
-            <button className="btn ghost" onClick={() => setOtpStep("mobile")} style={{ width: "100%" }}>
+            <button
+              className="btn ghost"
+              onClick={() => setOtpStep("mobile")}
+              style={{ width: "100%" }}
+            >
               Change number
             </button>
           </>
         )}
-        {otpMsg && <div className="muted" style={{ fontSize: 12, textAlign: "center", marginTop: 6 }}>{otpMsg}</div>}
+        {otpMsg && (
+          <div className="muted" style={{ fontSize: 12, textAlign: "center", marginTop: 6 }}>
+            {otpMsg}
+          </div>
+        )}
       </div>
 
       <div className="muted" style={{ textAlign: "center", fontSize: 12, margin: "14px 0 6px" }}>

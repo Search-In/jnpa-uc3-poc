@@ -39,22 +39,44 @@ export default function AlertsCenter() {
   const [category, setCategory] = useState<Category>("all");
   const [range, setRange] = useState<Range>("7d");
 
-  const seedQ = useQuery({ queryKey: ["alerts-seed"], queryFn: () => getAdapter().alerts({ limit: 100 }), refetchInterval: 15_000 });
-  const merged = useMemo(() => mergeAlerts(liveAlerts, seedQ.data ?? [], 200), [liveAlerts, seedQ.data]);
+  const seedQ = useQuery({
+    queryKey: ["alerts-seed"],
+    queryFn: () => getAdapter().alerts({ limit: 100 }),
+    refetchInterval: 15_000,
+  });
+  const merged = useMemo(
+    () => mergeAlerts(liveAlerts, seedQ.data ?? [], 200),
+    [liveAlerts, seedQ.data],
+  );
 
   const now = Date.now();
-  const inRange = useMemo(() => merged.filter((a) => withinRange(a, range, now)), [merged, range, now]);
+  const inRange = useMemo(
+    () => merged.filter((a) => withinRange(a, range, now)),
+    [merged, range, now],
+  );
 
   // Per-category counts (within the selected time range).
   const counts = useMemo(() => {
-    const c: Record<Category, number> = { all: inRange.length, critical: 0, traffic: 0, parking: 0, geofence: 0, customs: 0, ai: 0, vehicle: 0 };
+    const c: Record<Category, number> = {
+      all: inRange.length,
+      critical: 0,
+      traffic: 0,
+      parking: 0,
+      geofence: 0,
+      customs: 0,
+      ai: 0,
+      vehicle: 0,
+    };
     for (const a of inRange) c[categoryOf(a)]++;
     return c;
   }, [inRange]);
 
   const filtered = useMemo(() => {
     const list = category === "all" ? inRange : inRange.filter((a) => categoryOf(a) === category);
-    return [...list].sort((a, b) => severityRank(b.severity) - severityRank(a.severity) || Date.parse(b.ts) - Date.parse(a.ts));
+    return [...list].sort(
+      (a, b) =>
+        severityRank(b.severity) - severityRank(a.severity) || Date.parse(b.ts) - Date.parse(a.ts),
+    );
   }, [inRange, category]);
 
   function focus(a: Alert) {
@@ -67,7 +89,9 @@ export default function AlertsCenter() {
       {/* Header */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-card px-4 py-3">
         <div>
-          <h1 className="text-lg font-bold tracking-tight text-foreground">{t("alertsCenter.title")}</h1>
+          <h1 className="text-lg font-bold tracking-tight text-foreground">
+            {t("alertsCenter.title")}
+          </h1>
           <p className="text-xs text-muted-foreground">{t("alertsCenter.subtitle")}</p>
         </div>
         <div className="ml-auto flex items-center gap-3">
@@ -93,11 +117,18 @@ export default function AlertsCenter() {
               onClick={() => setCategory(c)}
               className={cn(
                 "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors",
-                category === c ? "border-primary bg-primary text-primary-foreground" : "border-border bg-background text-foreground hover:bg-muted",
+                category === c
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-border bg-background text-foreground hover:bg-muted",
               )}
             >
               {t(`alertsCenter.cat.${c}`)}
-              <span className={cn("rounded-full px-1 text-[10px] font-bold tabular-nums", category === c ? "bg-white/20" : "bg-muted")}>
+              <span
+                className={cn(
+                  "rounded-full px-1 text-[10px] font-bold tabular-nums",
+                  category === c ? "bg-white/20" : "bg-muted",
+                )}
+              >
                 {counts[c]}
               </span>
             </button>
@@ -111,7 +142,9 @@ export default function AlertsCenter() {
               onClick={() => setRange(r)}
               className={cn(
                 "rounded px-2.5 py-1 text-xs font-medium transition-colors",
-                range === r ? "bg-primary text-primary-foreground" : "text-foreground hover:bg-muted",
+                range === r
+                  ? "bg-primary text-primary-foreground"
+                  : "text-foreground hover:bg-muted",
               )}
             >
               {t(`alertsCenter.range.${r}`)}
@@ -157,7 +190,11 @@ function AlertCard({ alert: a, onClick }: { alert: Alert; onClick: () => void })
       }}
       className="group relative cursor-pointer overflow-hidden p-3 pl-4 transition-all hover:-translate-y-0.5 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
     >
-      <span className="absolute inset-y-0 left-0 w-1" style={{ backgroundColor: sev }} aria-hidden />
+      <span
+        className="absolute inset-y-0 left-0 w-1"
+        style={{ backgroundColor: sev }}
+        aria-hidden
+      />
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1.5">
           <AlertTriangle className="h-4 w-4 shrink-0" style={{ color: sev }} aria-hidden />
@@ -165,13 +202,18 @@ function AlertCard({ alert: a, onClick }: { alert: Alert; onClick: () => void })
             {t(`alertKind.${a.kind}`, { defaultValue: a.kind })}
           </span>
         </div>
-        <span className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide" style={{ backgroundColor: `${sev}1f`, color: sev }}>
+        <span
+          className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+          style={{ backgroundColor: `${sev}1f`, color: sev }}
+        >
           {a.severity}
         </span>
       </div>
       <div className="mt-2 flex items-center justify-between text-[12px] text-muted-foreground">
         <span className="truncate">
-          {a.plate ? <span className="font-mono font-medium text-foreground">{a.plate}</span> : null}
+          {a.plate ? (
+            <span className="font-mono font-medium text-foreground">{a.plate}</span>
+          ) : null}
           {a.plate ? " · " : ""}
           {loc}
         </span>

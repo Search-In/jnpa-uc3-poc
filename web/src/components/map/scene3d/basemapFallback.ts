@@ -18,18 +18,18 @@
  * The local base is generated in-memory from a single full-extent graphic (no
  * external tiles, no token) — an honest "bundled offline vector basemap".
  */
-import Basemap from '@arcgis/core/Basemap';
-import GraphicsLayer from '@arcgis/core/layers/GraphicsLayer';
-import Graphic from '@arcgis/core/Graphic';
-import Extent from '@arcgis/core/geometry/Extent';
-import SimpleFillSymbol from '@arcgis/core/symbols/SimpleFillSymbol';
-import type MapView from '@arcgis/core/views/MapView';
-import type SceneView from '@arcgis/core/views/SceneView';
+import Basemap from "@arcgis/core/Basemap";
+import GraphicsLayer from "@arcgis/core/layers/GraphicsLayer";
+import Graphic from "@arcgis/core/Graphic";
+import Extent from "@arcgis/core/geometry/Extent";
+import SimpleFillSymbol from "@arcgis/core/symbols/SimpleFillSymbol";
+import type MapView from "@arcgis/core/views/MapView";
+import type SceneView from "@arcgis/core/views/SceneView";
 
 /** True when the operator asked for the offline rehearsal (`?offline=1`). */
 export function isOfflineRequested(): boolean {
   try {
-    return new URLSearchParams(window.location.search).get('offline') === '1';
+    return new URLSearchParams(window.location.search).get("offline") === "1";
   } catch {
     return false;
   }
@@ -41,11 +41,14 @@ export function isOfflineRequested(): boolean {
  * Renders instantly and needs no token — the operational layers draw on top.
  */
 export function makeOfflineBasemap(): Basemap {
-  const bg = new GraphicsLayer({ title: 'Offline base (local, no tiles)' });
+  const bg = new GraphicsLayer({ title: "Offline base (local, no tiles)" });
   bg.add(
     new Graphic({
       geometry: new Extent({
-        xmin: -20037508, ymin: -20037508, xmax: 20037508, ymax: 20037508,
+        xmin: -20037508,
+        ymin: -20037508,
+        xmax: 20037508,
+        ymax: 20037508,
         spatialReference: { wkid: 3857 },
       }),
       symbol: new SimpleFillSymbol({
@@ -56,14 +59,14 @@ export function makeOfflineBasemap(): Basemap {
   );
   return new Basemap({
     baseLayers: [bg],
-    title: 'Offline (bundled, no external tiles)',
-    id: 'jnpa-offline',
+    title: "Offline (bundled, no external tiles)",
+    id: "jnpa-offline",
   });
 }
 
 /** The basemap to start with: local when offline is requested, else the given
  *  online basemap id (defaults to the UC3 dark-gray-vector, no API key needed). */
-export function initialBasemap(online: string = 'dark-gray-vector'): string | Basemap {
+export function initialBasemap(online: string = "dark-gray-vector"): string | Basemap {
   return isOfflineRequested() ? makeOfflineBasemap() : online;
 }
 
@@ -92,7 +95,9 @@ export function installBasemapFallback(
     if (swapped || !view.map) return;
     swapped = true;
     // eslint-disable-next-line no-console
-    console.warn(`[basemapFallback] online basemap unavailable (${reason}); engaging local offline basemap.`);
+    console.warn(
+      `[basemapFallback] online basemap unavailable (${reason}); engaging local offline basemap.`,
+    );
     try {
       view.map.basemap = makeOfflineBasemap();
     } catch {
@@ -107,19 +112,19 @@ export function installBasemapFallback(
       const bm = view.map?.basemap;
       if (!bm) return;
       // 1) Basemap definition itself fails to load (e.g. expired/absent token).
-      if (typeof bm.load === 'function') {
-        bm.load().catch(() => swap('basemap load rejected'));
+      if (typeof bm.load === "function") {
+        bm.load().catch(() => swap("basemap load rejected"));
       }
       // 2) A base tile layer can't create its LayerView (token death / offline).
       //    This is the reliable "tiles genuinely cannot be fetched" signal —
       //    it fires on real failure, never on ordinary tile streaming.
-      const h = view.on('layerview-create-error', (e: __esri.ViewLayerviewCreateErrorEvent) => {
+      const h = view.on("layerview-create-error", (e: __esri.ViewLayerviewCreateErrorEvent) => {
         const inBasemap = bm.baseLayers?.includes(e.layer) || bm.referenceLayers?.includes(e.layer);
-        if (inBasemap) swap('base layerview-create-error');
+        if (inBasemap) swap("base layerview-create-error");
       });
       handles.push(h);
     })
-    .catch(() => swap('view failed to initialise'));
+    .catch(() => swap("view failed to initialise"));
 
   return () => {
     handles.forEach((h) => h.remove());

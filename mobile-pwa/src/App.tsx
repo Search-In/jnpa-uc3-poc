@@ -38,7 +38,12 @@ function TabBar() {
     { to: "/trip", label: t("tabs.trip"), icon: "🛣", alert: !!pendingReroute },
     { to: "/map", label: t("tabs.map", { defaultValue: "Map" }), icon: "🗺" },
     { to: "/parking", label: t("tabs.parking"), icon: "🅿" },
-    { to: "/alerts", label: t("tabs.alerts", { defaultValue: "Alerts" }), icon: "🔔", badge: unread },
+    {
+      to: "/alerts",
+      label: t("tabs.alerts", { defaultValue: "Alerts" }),
+      icon: "🔔",
+      badge: unread,
+    },
     { to: "/profile", label: t("tabs.vehicle"), icon: "🚛" },
   ];
   return (

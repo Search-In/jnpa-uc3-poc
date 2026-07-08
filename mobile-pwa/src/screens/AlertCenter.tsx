@@ -34,9 +34,20 @@ function categoryOf(kind: string): Cat {
   if (k.includes("CUSTOMS")) return "customs";
   if (k.includes("PARKING") || k.includes("OVERFLOW")) return "parking";
   if (k.includes("GEOFENCE") || k.includes("RESTRICTED") || k.includes("ZONE")) return "geofence";
-  if (k.includes("WRONG") || k.includes("QUEUE") || k.includes("DENSITY") || k.includes("ANPR") || k.includes("AI"))
+  if (
+    k.includes("WRONG") ||
+    k.includes("QUEUE") ||
+    k.includes("DENSITY") ||
+    k.includes("ANPR") ||
+    k.includes("AI")
+  )
     return "ai";
-  if (k.includes("PROVISIONAL") || k.includes("VEHICLE") || k.includes("CHALLAN") || k.includes("BLACKLIST"))
+  if (
+    k.includes("PROVISIONAL") ||
+    k.includes("VEHICLE") ||
+    k.includes("CHALLAN") ||
+    k.includes("BLACKLIST")
+  )
     return "vehicle";
   return "traffic";
 }
@@ -44,7 +55,8 @@ function categoryOf(kind: string): Cat {
 // Human "required action" per alert kind — plain language for a driver.
 function actionFor(kind: string): string {
   const k = kind.toUpperCase();
-  if (k.includes("NO_PARKING") || k.includes("ILLEGAL_PARKING")) return "Move your vehicle within 5 minutes";
+  if (k.includes("NO_PARKING") || k.includes("ILLEGAL_PARKING"))
+    return "Move your vehicle within 5 minutes";
   if (k.includes("RESTRICTED")) return "Leave the restricted zone immediately";
   if (k.includes("CUSTOMS")) return "Report to the customs desk";
   if (k.includes("WRONG")) return "Correct your direction of travel";
@@ -61,7 +73,10 @@ export default function AlertCenter() {
   const [loading, setLoading] = useState(true);
 
   const load = async () => {
-    const data = await cached<{ alerts?: Alert[] }>("alerts", () => api.alerts({ limit: 100 }) as any);
+    const data = await cached<{ alerts?: Alert[] }>(
+      "alerts",
+      () => api.alerts({ limit: 100 }) as any,
+    );
     if (data?.alerts) {
       setAlerts(data.alerts);
       setOffline(!navigator.onLine);
@@ -99,23 +114,41 @@ export default function AlertCenter() {
 
   return (
     <div style={{ padding: 12 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: 8,
+        }}
+      >
         <h2 style={{ fontSize: 16 }}>{t("alertCenter.title", { defaultValue: "Alerts" })}</h2>
-        {offline && <span className="muted" style={{ fontSize: 11 }}>◐ offline (cached)</span>}
+        {offline && (
+          <span className="muted" style={{ fontSize: 11 }}>
+            ◐ offline (cached)
+          </span>
+        )}
       </div>
 
-      <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 6, marginBottom: 10 }}>
+      <div
+        style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 6, marginBottom: 10 }}
+      >
         {CATS.map((c) => (
           <button
             key={c.key}
             onClick={() => setCat(c.key)}
             style={{
-              whiteSpace: "nowrap", borderRadius: 999, padding: "6px 12px", fontSize: 13, border: "1px solid var(--border,#ccc)",
+              whiteSpace: "nowrap",
+              borderRadius: 999,
+              padding: "6px 12px",
+              fontSize: 13,
+              border: "1px solid var(--border,#ccc)",
               background: cat === c.key ? "var(--blue,#06c)" : "transparent",
               color: cat === c.key ? "#fff" : "inherit",
             }}
           >
-            {c.icon} {c.label}{c.key !== "all" && counts[c.key] ? ` (${counts[c.key]})` : ""}
+            {c.icon} {c.label}
+            {c.key !== "all" && counts[c.key] ? ` (${counts[c.key]})` : ""}
           </button>
         ))}
       </div>
@@ -123,23 +156,46 @@ export default function AlertCenter() {
       {loading ? (
         <div className="muted">Loading…</div>
       ) : !filtered.length ? (
-        <div className="muted" style={{ padding: 24, textAlign: "center" }}>No alerts in this category.</div>
+        <div className="muted" style={{ padding: 24, textAlign: "center" }}>
+          No alerts in this category.
+        </div>
       ) : (
         filtered.map((a) => {
           const kind = a.kind || "ALERT";
           const crit = (a.severity || "").toLowerCase() === "critical";
           const p = a.payload || {};
           const loc =
-            p.zone_id || p.gate_id || p.container_no || p.segment_id ||
-            a.plate || p.plate || p.device_id || p.vehicle_id || "—";
+            p.zone_id ||
+            p.gate_id ||
+            p.container_no ||
+            p.segment_id ||
+            a.plate ||
+            p.plate ||
+            p.device_id ||
+            p.vehicle_id ||
+            "—";
           return (
-            <div key={a.id} className="card" style={{ padding: 12, marginBottom: 8, borderLeft: `3px solid ${crit ? "var(--red,#c00)" : "var(--amber,#d80)"}` }}>
+            <div
+              key={a.id}
+              className="card"
+              style={{
+                padding: 12,
+                marginBottom: 8,
+                borderLeft: `3px solid ${crit ? "var(--red,#c00)" : "var(--amber,#d80)"}`,
+              }}
+            >
               <div style={{ display: "flex", justifyContent: "space-between" }}>
                 <div style={{ fontWeight: 600 }}>{kind.replace(/_/g, " ")}</div>
-                <div className="muted" style={{ fontSize: 11 }}>{a.ts ? new Date(a.ts).toLocaleTimeString() : ""}</div>
+                <div className="muted" style={{ fontSize: 11 }}>
+                  {a.ts ? new Date(a.ts).toLocaleTimeString() : ""}
+                </div>
               </div>
-              <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>📍 {String(loc)}</div>
-              <div style={{ fontSize: 13, marginTop: 6, color: crit ? "var(--red,#c00)" : undefined }}>
+              <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+                📍 {String(loc)}
+              </div>
+              <div
+                style={{ fontSize: 13, marginTop: 6, color: crit ? "var(--red,#c00)" : undefined }}
+              >
                 → {actionFor(kind)}
               </div>
             </div>

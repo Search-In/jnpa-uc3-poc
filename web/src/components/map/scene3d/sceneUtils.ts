@@ -36,7 +36,9 @@ export async function applyGraphics(layer: FeatureLayer, next: Graphic[]): Promi
     if (!prev) addFeatures.push(g);
     else if (!attrsEqual(prev.attributes, g.attributes)) updateFeatures.push(g);
   }
-  const deleteFeatures = existing.features.filter((g) => !seen.has(g.attributes[oidField] as number));
+  const deleteFeatures = existing.features.filter(
+    (g) => !seen.has(g.attributes[oidField] as number),
+  );
 
   if (!addFeatures.length && !updateFeatures.length && !deleteFeatures.length) return;
   await layer.applyEdits({ addFeatures, updateFeatures, deleteFeatures });

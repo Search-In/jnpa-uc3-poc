@@ -19,12 +19,16 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from typing import Any
+from typing import Any, Awaitable, Callable, Optional
 
 from jnpa_shared import kafka_io
 
 from .logging import get_logger
 from .state import GatewayState
+
+# A persistence sink: given a decoded Kafka message, return a coroutine that
+# writes it to the RDS single-source-of-truth (best-effort, never raises).
+PersistSink = Callable[[Any], Awaitable[None]]
 
 log = get_logger("gateway.pumps")
 
@@ -42,12 +46,19 @@ class KafkaPump:
         topic: str,
         ws_type: str,
         group: str,
+        persist: Optional[PersistSink] = None,
+        broadcast: bool = True,
     ) -> None:
         self.state = state
         self.loop = loop
         self.topic = topic
         self.ws_type = ws_type
         self.group = group
+        # Optional RDS persistence sink (single source of truth). When set, each
+        # decoded message is also written to Postgres. ``broadcast=False`` runs a
+        # persistence-only pump (e.g. anpr.reads) that never touches the WS hub.
+        self.persist = persist
+        self.broadcast = broadcast
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -61,11 +72,20 @@ class KafkaPump:
     def _handle(self, value: Any) -> None:
         # Bounce onto the event loop; ignore if the loop is shutting down.
         try:
-            asyncio.run_coroutine_threadsafe(
-                self.state.ws.broadcast(self.ws_type, value), self.loop
-            )
+            if self.broadcast:
+                asyncio.run_coroutine_threadsafe(
+                    self.state.ws.broadcast(self.ws_type, value), self.loop
+                )
+            if self.persist is not None:
+                asyncio.run_coroutine_threadsafe(self._persist_safe(value), self.loop)
         except RuntimeError:  # loop closed
             pass
+
+    async def _persist_safe(self, value: Any) -> None:
+        try:
+            await self.persist(value)  # type: ignore[misc]
+        except Exception as exc:  # noqa: BLE001 — persistence must not kill the pump
+            log.warning("pump_persist_failed", topic=self.topic, error=str(exc))
 
     def _run(self) -> None:
         try:
@@ -105,6 +125,19 @@ async def mqtt_truck_pump(state: GatewayState, stop: asyncio.Event) -> None:
                     payload = _decode_mqtt(message.payload)
                     if payload is not None:
                         await state.ws.broadcast("truck_position", payload)
+                        # Feed the DB-driven geo-fence engine (real GPS -> zones ->
+                        # enter/exit/dwell/violation -> RDS). Best-effort; never
+                        # breaks the pump. Evaluated on the sampled stream to stay
+                        # light on a memory-tight host.
+                        lat, lon = payload.get("lat"), payload.get("lon")
+                        if lat is not None and lon is not None:
+                            try:
+                                await state.geofence.evaluate_position(
+                                    payload.get("plate") or payload.get("device_id"),
+                                    float(lat), float(lon),
+                                )
+                            except Exception as exc:  # noqa: BLE001
+                                log.debug("geofence_eval_failed", error=str(exc))
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - broker down / reconnect

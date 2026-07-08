@@ -9,8 +9,8 @@ import {
   useLocation,
   useNavigate,
 } from "react-router-dom";
-import { getPairing } from "@/lib/device";
-import { ensureDeviceToken } from "@/lib/api";
+import { getPairing, setPairing } from "@/lib/device";
+import { ensureDeviceToken, api } from "@/lib/api";
 import { RealtimeProvider, useRealtime } from "@/hooks/RealtimeContext";
 import { DriverSessionProvider } from "@/hooks/DriverSession";
 import Pairing from "@/screens/Pairing";
@@ -20,6 +20,10 @@ import Reroute from "@/screens/Reroute";
 import Inbox from "@/screens/Inbox";
 import Profile from "@/screens/Profile";
 import Enrol from "@/screens/Enrol";
+import Parking from "@/screens/Parking";
+import Zones from "@/screens/Zones";
+import MapView from "@/screens/MapView";
+import AlertCenter from "@/screens/AlertCenter";
 
 // Uses hash routing so the PWA works under /pwa from nginx (no server rewrite
 // rules needed) and deep-links from the service worker (#/reroute) just work.
@@ -27,11 +31,14 @@ import Enrol from "@/screens/Enrol";
 function TabBar() {
   const { t } = useTranslation();
   const { unread, pendingReroute } = useRealtime();
+  // Production 6-tab bottom navigation (Phase 3): Home · Trip · Map · Parking ·
+  // Alerts · Profile. Reroute/Inbox/Enrol/Zones remain reachable as routes.
   const tabs = [
-    { to: "/trip", label: t("tabs.trip"), icon: "🛣" },
-    { to: "/reroute", label: t("tabs.reroute"), icon: "↻", alert: !!pendingReroute },
-    { to: "/inbox", label: t("tabs.inbox"), icon: "✉", badge: unread },
-    { to: "/enrol", label: t("tabs.enrol"), icon: "🪪" },
+    { to: "/home", label: t("tabs.home", { defaultValue: "Home" }), icon: "🏠" },
+    { to: "/trip", label: t("tabs.trip"), icon: "🛣", alert: !!pendingReroute },
+    { to: "/map", label: t("tabs.map", { defaultValue: "Map" }), icon: "🗺" },
+    { to: "/parking", label: t("tabs.parking"), icon: "🅿" },
+    { to: "/alerts", label: t("tabs.alerts", { defaultValue: "Alerts" }), icon: "🔔", badge: unread },
     { to: "/profile", label: t("tabs.vehicle"), icon: "🚛" },
   ];
   return (
@@ -57,6 +64,10 @@ function TopBar() {
     {
       "/home": "screens.home",
       "/trip": "screens.trip",
+      "/map": "screens.map",
+      "/alerts": "screens.alerts",
+      "/parking": "screens.parking",
+      "/zones": "screens.zones",
       "/reroute": "screens.reroute",
       "/inbox": "screens.inbox",
       "/enrol": "screens.enrol",
@@ -107,8 +118,12 @@ function PairedApp({ deviceId, plate }: { deviceId: string; plate?: string | nul
             <TopBar />
             <main className="content">
               <Routes>
-                <Route path="/home" element={<Home />} />
+                <Route path="/home" element={<Home deviceId={deviceId} plate={plate} />} />
                 <Route path="/trip" element={<Trip deviceId={deviceId} />} />
+                <Route path="/parking" element={<Parking deviceId={deviceId} plate={plate} />} />
+                <Route path="/map" element={<MapView deviceId={deviceId} />} />
+                <Route path="/alerts" element={<AlertCenter />} />
+                <Route path="/zones" element={<Zones deviceId={deviceId} plate={plate} />} />
                 <Route path="/reroute" element={<Reroute />} />
                 <Route path="/inbox" element={<Inbox />} />
                 <Route path="/enrol" element={<Enrol deviceId={deviceId} plate={plate} />} />
@@ -143,6 +158,19 @@ export default function App() {
       while (alive) {
         const ok = await ensureDeviceToken(pairing.deviceId);
         if (ok) {
+          // Resolve the vehicle plate this device is bound to (robust to the
+          // plate-less SECONDARY truck response) so Home/Parking/Profile show it.
+          if (!pairing.plate) {
+            try {
+              const plate = await api.truckPlate(pairing.deviceId);
+              if (plate && alive) {
+                setPairing(pairing.deviceId, plate);
+                setPairingState({ deviceId: pairing.deviceId, plate });
+              }
+            } catch {
+              /* plate stays null — screens degrade gracefully */
+            }
+          }
           if (alive) setBoot("ready");
           return;
         }

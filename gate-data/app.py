@@ -18,10 +18,11 @@ effort; the API still serves if the DB is not up yet).
 """
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from typing import Dict, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
 from jnpa_shared.backbone import PeriodicPublisher
@@ -31,9 +32,12 @@ from jnpa_shared.vahan_db import ensure_schema, register_service
 
 from .config import GateConfig
 from .leo import customs_alerts, reconcile, reconcile_all
+from .leo import _FLAG_SEVERITY as FLAG_SEVERITY
 from .metrics import CUSTOMS_FLAGS, RECONCILIATIONS, metrics_asgi_app
 from . import seed as seed_mod
 from . import icegate_sim
+from . import persistence
+from . import providers
 
 cfg = GateConfig.from_env()
 configure_logging(cfg.log_level)
@@ -116,6 +120,63 @@ _publisher = PeriodicPublisher(
 )
 
 
+async def _persist_reconciliation(result, *, source_mode: str = "sim") -> None:
+    """Persist one Auto-LEO outcome + raise durable customs alerts for its flags."""
+    await persistence.record_reconciliation(
+        container_no=result.container_no,
+        vehicle_plate=result.vehicle_plate,
+        leo_ready=result.leo_ready,
+        customs_flags=result.customs_flags,
+        checks=result.checks,
+        source_mode=source_mode,
+        dsn=cfg.postgres_dsn,
+    )
+    for flag in result.customs_flags:
+        await persistence.raise_customs_alert(
+            flag=flag,
+            severity=FLAG_SEVERITY.get(flag, "warning"),
+            container_no=result.container_no,
+            vehicle_plate=result.vehicle_plate,
+            payload={"checks": {k: result.checks.get(k) for k in (
+                "weight_discrepancy_pct", "icegate_leo_status", "id_match") if k in result.checks}},
+            dsn=cfg.postgres_dsn,
+        )
+
+
+async def _persist_dataset_once() -> None:
+    """One-shot: land every captured source record + reconciliation in RDS.
+
+    Runs in the background at boot so the service is READY immediately. Idempotent
+    (captures upsert on container+type+captured_at; customs alerts dedup by
+    container+flag) so a restart does not duplicate history. This is what makes
+    the gate/customs domain RDS-backed from the first boot.
+    """
+    if not cfg.postgres_dsn:
+        log.warning("gate_persist_skipped_no_dsn")
+        return
+    await persistence.ensure_gate_schema(cfg.postgres_dsn)
+    captured = 0
+    for cn, rec in _STORE.items():
+        for source in providers.SOURCES:
+            payload, status, captured_at, mode_used = await providers.capture_source(
+                source, cn, rec, dsn=cfg.postgres_dsn
+            )
+            await persistence.upsert_capture(
+                capture_type=source, container_no=cn,
+                vehicle_plate=rec.vehicle_plate, gate_id=None,
+                source_mode=mode_used, status=status,
+                captured_at=captured_at, payload=payload, dsn=cfg.postgres_dsn,
+            )
+            captured += 1
+    results = reconcile_all(dataset=_STORE, weight_tolerance_pct=cfg.weight_tolerance_pct)
+    flagged = 0
+    for result in results:
+        await _persist_reconciliation(result, source_mode="sim")
+        flagged += 1 if result.customs_flags else 0
+    log.info("gate_dataset_persisted", captures=captured, reconciliations=len(results),
+             flagged=flagged)
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     n = _rebuild_store()
@@ -130,10 +191,19 @@ async def _lifespan(_app: FastAPI):
     except Exception as exc:  # pragma: no cover - infra-timing dependent
         log.warning("startup_db_unavailable", error=str(exc))
 
+    # Land the full capture inventory + reconciliations in RDS (background so the
+    # API is READY immediately; best-effort so a DB blip never aborts boot).
+    persist_task = asyncio.create_task(_persist_dataset_once(), name="gate-persist")
+
     _publisher.start()
     try:
         yield
     finally:
+        persist_task.cancel()
+        try:
+            await persist_task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
         await _publisher.stop()
 
 
@@ -145,7 +215,13 @@ app.mount("/metrics", metrics_asgi_app())
 @app.get("/healthz")
 async def healthz() -> dict:
     return {"status": "ok", "service": cfg.service_name, "kind": cfg.service_kind,
-            "containers": len(_STORE)}
+            "containers": len(_STORE), "providers": providers.providers_status()}
+
+
+@app.get("/providers")
+async def provider_status() -> dict:
+    """Per-source SIM|LIVE mode + configured flag (e-Seal/Form-13/Weighbridge/ICEGATE)."""
+    return {"sources": providers.providers_status()}
 
 
 @app.get("/records/{container_no}")
@@ -173,6 +249,8 @@ async def leo(body: LeoRequest) -> dict:
         RECONCILIATIONS.labels("ready" if result.leo_ready else "blocked").inc()
         for flag in result.customs_flags:
             CUSTOMS_FLAGS.labels(flag).inc()
+        # Persist this reconciliation + any customs flags (durable audit trail).
+        await _persist_reconciliation(result, source_mode="sim")
         return result.to_dict()
     raise HTTPException(status_code=422, detail={"error": "missing_container_no"})
 
@@ -205,6 +283,41 @@ async def customs_flags() -> dict:
         "by_flag": by_flag,
         "alerts": alerts,
     }
+
+
+# --------------------------------------------------------------------------
+# RDS-backed history (the dashboards read these — single source of truth).
+# --------------------------------------------------------------------------
+@app.get("/captures")
+async def captures(
+    type: Optional[str] = Query(default=None),
+    container_no: Optional[str] = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=1000),
+) -> dict:
+    """Persisted gate captures (e-Seal/Form-13/Weighbridge/ICEGATE) from RDS."""
+    rows = await persistence.recent_captures(
+        capture_type=type, container_no=container_no, limit=limit, dsn=cfg.postgres_dsn
+    )
+    return {"count": len(rows), "captures": rows}
+
+
+@app.get("/reconciliations")
+async def reconciliations(
+    ready: Optional[bool] = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=1000),
+) -> dict:
+    """Persisted Auto-LEO reconciliation outcomes from RDS."""
+    rows = await persistence.recent_reconciliations(
+        leo_ready=ready, limit=limit, dsn=cfg.postgres_dsn
+    )
+    return {"count": len(rows), "reconciliations": rows}
+
+
+@app.get("/customs/history")
+async def customs_history(limit: int = Query(default=200, ge=1, le=1000)) -> dict:
+    """Durable customs feed from jnpa.alerts (kind=CUSTOMS_FLAG), survives restart."""
+    rows = await persistence.customs_flag_history(limit=limit, dsn=cfg.postgres_dsn)
+    return {"count": len(rows), "alerts": rows}
 
 
 def run() -> None:  # pragma: no cover - container entrypoint

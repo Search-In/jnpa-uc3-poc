@@ -46,3 +46,37 @@ export async function appendAdvisories(incoming: Advisory[]): Promise<Advisory[]
   const existing = await loadAdvisories();
   return saveAdvisories([...existing, ...incoming]);
 }
+
+// --- Generic offline cache (Phase 3) — profile / vehicle / route / parking /
+// alerts survive a cold, network-less open; refreshed opportunistically when
+// online, read from cache when fetch fails. One idb-keyval store, key-namespaced.
+const cacheStore = createStore("jnpa-pwa", "cache");
+
+export async function cacheSet<T>(key: string, value: T): Promise<void> {
+  try {
+    await set(key, { v: value, at: Date.now() }, cacheStore);
+  } catch {
+    /* storage unavailable — best-effort */
+  }
+}
+
+export async function cacheGet<T>(key: string): Promise<T | null> {
+  try {
+    const rec = await get<{ v: T; at: number }>(key, cacheStore);
+    return rec ? rec.v : null;
+  } catch {
+    return null;
+  }
+}
+
+// Fetch-through-cache: try the network; on success cache + return; on failure
+// fall back to the last cached value (offline mode). Never throws.
+export async function cached<T>(key: string, fetcher: () => Promise<T>): Promise<T | null> {
+  try {
+    const fresh = await fetcher();
+    await cacheSet(key, fresh);
+    return fresh;
+  } catch {
+    return cacheGet<T>(key);
+  }
+}

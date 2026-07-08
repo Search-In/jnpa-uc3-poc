@@ -26,6 +26,31 @@ export default function Profile({ deviceId, plate }: { deviceId: string; plate?:
   const [loading, setLoading] = useState(true);
   const [push, setPush] = useState<PushState | null>(null);
   const [pushBusy, setPushBusy] = useState(false);
+  const [compliance, setCompliance] = useState<{
+    name?: string; dlStatus?: string; violations: number;
+  } | null>(null);
+
+  // Driver DL + compliance via the session-bound driver (OTP login) → driver-intel.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const s = await api.sessionStatus(deviceId);
+        if (!s.bound || !s.driver_id) return;
+        const di = await api.driverIntel(s.driver_id);
+        const dl = di.dl_history?.[0]?.status as string | undefined;
+        if (alive)
+          setCompliance({
+            name: (di.driver as any)?.name,
+            dlStatus: dl,
+            violations: di.violations?.length ?? 0,
+          });
+      } catch {
+        /* not OTP-bound / offline */
+      }
+    })();
+    return () => { alive = false; };
+  }, [deviceId]);
 
   useEffect(() => {
     let alive = true;
@@ -158,6 +183,18 @@ export default function Profile({ deviceId, plate }: { deviceId: string; plate?:
         )}
       </Card>
 
+      {compliance && (
+        <Card title={t("profile.compliance", { defaultValue: "Driver & Compliance" })}>
+          <Row k={t("profile.driverName", { defaultValue: "Driver" })} v={compliance.name || t("common.noData")} />
+          <div style={{ margin: "6px 0" }}>
+            <Chip status={compliance.dlStatus === "VALID" ? "ok" : "warn"}>
+              {t("profile.dl", { defaultValue: "DL" })}: {compliance.dlStatus || t("common.noData")}
+            </Chip>
+          </div>
+          <Row k={t("profile.violations", { defaultValue: "Violations" })} v={String(compliance.violations)} />
+        </Card>
+      )}
+
       <Card title={t("profile.notifications")}>
         <button className="btn" disabled={pushBusy || push === "subscribed"} onClick={onEnablePush}>
           {pushBusy
@@ -180,12 +217,19 @@ export default function Profile({ deviceId, plate }: { deviceId: string; plate?:
       <Card title={t("profile.session")}>
         <button
           className="btn ghost"
-          onClick={() => {
+          onClick={async () => {
+            // Real logout: revoke the device binding server-side (session
+            // revocation), then clear local pairing/token.
+            try {
+              await api.otpLogout(deviceId);
+            } catch {
+              /* offline — clear locally anyway */
+            }
             clearPairing();
             location.reload();
           }}
         >
-          {t("profile.unpair")}
+          {t("profile.logout", { defaultValue: "Log out from device" })}
         </button>
       </Card>
     </>

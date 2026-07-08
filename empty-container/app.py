@@ -23,10 +23,11 @@ in ``jnpa.services`` on startup (best-effort; the API stays up if the DB is not)
 """
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from typing import Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from jnpa_shared.backbone import PeriodicPublisher
@@ -38,6 +39,7 @@ from .config import OptimizerConfig
 from .metrics import ALLOCATIONS, OPEN_DEMAND, metrics_asgi_app
 from .optimizer import allocate, mean_est_trt
 from . import seed as seed_mod
+from . import persistence
 
 cfg = OptimizerConfig.from_env()
 configure_logging(cfg.log_level)
@@ -133,10 +135,25 @@ async def _lifespan(_app: FastAPI):
     except Exception as exc:  # pragma: no cover - infra-timing dependent
         log.warning("startup_db_unavailable", error=str(exc))
 
+    # Materialise the empty-container inventory into RDS (background, idempotent).
+    async def _seed() -> None:
+        try:
+            await persistence.ensure_container_schema(cfg.postgres_dsn)
+            await persistence.seed_inventory(_SUPPLY, dsn=cfg.postgres_dsn)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("container_seed_failed", error=str(exc))
+
+    seed_task = asyncio.create_task(_seed(), name="container-seed")
+
     _publisher.start()
     try:
         yield
     finally:
+        seed_task.cancel()
+        try:
+            await seed_task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
         await _publisher.stop()
 
 
@@ -232,6 +249,49 @@ async def demand_inject(payload: InjectDemand) -> dict:
     log.info("demand_injected", demand_id=d.demand_id, cargo_type=d.cargo_type)
     return {"injected": True, "demand": seed_mod.demand_to_dict(d),
             "open_demand": len(_all_demand())}
+
+
+# --------------------------------------------------------------------------
+# RDS-backed inventory + persisted allocation (Phase 2 · Track 2).
+# --------------------------------------------------------------------------
+@app.get("/containers/available")
+async def containers_available(
+    container_type: Optional[str] = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
+) -> dict:
+    """Available empty containers from RDS inventory (+ per-type summary)."""
+    rows = await persistence.available(container_type=container_type, limit=limit, dsn=cfg.postgres_dsn)
+    summary = await persistence.available_summary(dsn=cfg.postgres_dsn)
+    return {"count": len(rows), "containers": rows, **summary}
+
+
+@app.post("/containers/allocate")
+async def containers_allocate(body: dict = Body(...)) -> dict:
+    """Allocate an empty container to a truck/trailer/driver. Persists the
+    allocation + movement history + digital_twin_event + decision_audit.
+
+    Body: {container_type, truck_id?, trailer_id?, driver_id?, shipping_line?,
+    cargo_type?, allocation_reason?}."""
+    container_type = (body.get("container_type") or "").strip()
+    if not container_type:
+        raise HTTPException(status_code=422, detail={"error": "container_type_required"})
+    result = await persistence.allocate_container(
+        container_type=container_type, truck_id=body.get("truck_id"),
+        trailer_id=body.get("trailer_id"), driver_id=body.get("driver_id"),
+        shipping_line=body.get("shipping_line"), cargo_type=body.get("cargo_type"),
+        reason=body.get("allocation_reason"), dsn=cfg.postgres_dsn,
+    )
+    if not result.get("allocated"):
+        # 409 when no stock of the requested type — still a normal, audited outcome.
+        raise HTTPException(status_code=409, detail=result)
+    return result
+
+
+@app.get("/containers/allocation/history")
+async def containers_allocation_history(limit: int = Query(default=100, ge=1, le=1000)) -> dict:
+    """Persisted empty-container allocation history from RDS."""
+    rows = await persistence.allocation_history(limit=limit, dsn=cfg.postgres_dsn)
+    return {"count": len(rows), "allocations": rows}
 
 
 def run() -> None:  # pragma: no cover - container entrypoint

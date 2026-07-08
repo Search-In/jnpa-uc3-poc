@@ -7,7 +7,7 @@ import type { DriverEnrollment } from "@/lib/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Spinner, EmptyState } from "@/components/ui/misc";
+import { Spinner, EmptyState, AsyncBoundary, LastUpdated, ErrorState } from "@/components/ui/misc";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { STATUS } from "@/lib/tokens";
 import { fmtDateTimeIST } from "@/lib/utils";
@@ -70,27 +70,36 @@ export default function DriverEnrollments() {
               )}
             </p>
           </div>
-          <div className="flex gap-1">
-            {FILTERS.map((f) => (
-              <Button
-                key={f}
-                size="sm"
-                variant={filter === f ? "default" : "outline"}
-                onClick={() => setFilter(f)}
-              >
-                {f}
-              </Button>
-            ))}
+          <div className="flex items-center gap-2">
+            <LastUpdated
+              at={listQ.dataUpdatedAt}
+              isFetching={listQ.isFetching && !listQ.isLoading}
+            />
+            <div className="flex gap-1">
+              {FILTERS.map((f) => (
+                <Button
+                  key={f}
+                  size="sm"
+                  variant={filter === f ? "default" : "outline"}
+                  onClick={() => setFilter(f)}
+                >
+                  {f}
+                </Button>
+              ))}
+            </div>
           </div>
         </CardHeader>
         <CardContent>
-          {listQ.isLoading ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Spinner /> {t("common.loading", "Loading…")}
-            </div>
-          ) : rows.length === 0 ? (
-            <EmptyState>{t("enrollments.empty", "No enrolment requests in this view.")}</EmptyState>
-          ) : (
+          <AsyncBoundary
+            status={listQ}
+            isEmpty={rows.length === 0}
+            onRetry={() => listQ.refetch()}
+            empty={
+              <EmptyState>
+                {t("enrollments.empty", "No enrolment requests in this view.")}
+              </EmptyState>
+            }
+          >
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
@@ -115,7 +124,7 @@ export default function DriverEnrollments() {
                 </tbody>
               </table>
             </div>
-          )}
+          </AsyncBoundary>
         </CardContent>
       </Card>
 
@@ -199,6 +208,11 @@ function EnrollmentRow({
             </>
           )}
         </div>
+        {actions.error && (
+          <div className="mt-1 text-right text-[10px] text-red-500" title={actions.error}>
+            {actions.error}
+          </div>
+        )}
       </td>
     </tr>
   );
@@ -223,6 +237,10 @@ function EnrollmentDetail({
     onChanged();
     onClose();
   });
+
+  if (detailQ.isError) {
+    return <ErrorState onRetry={() => detailQ.refetch()} detail={(detailQ.error as Error)?.message} />;
+  }
 
   if (detailQ.isLoading || !rec) {
     return (
@@ -313,6 +331,12 @@ function EnrollmentDetail({
         )}
       </div>
 
+      {actions.error && (
+        <div className="text-right text-xs text-red-500" title={actions.error}>
+          {actions.error}
+        </div>
+      )}
+
       <div className="flex flex-wrap justify-end gap-2">
         {pending ? (
           <>
@@ -363,11 +387,17 @@ function useEnrollmentActions(driverId: string, onDone: () => void) {
     mutationFn: () => getAdapter().reenrollEnrollment(driverId),
     onSuccess: onDone,
   });
+  const error =
+    (approve.error as Error)?.message ??
+    (reject.error as Error)?.message ??
+    (reenroll.error as Error)?.message ??
+    null;
   return {
     approve,
     reject,
     reenroll,
     busy: approve.isPending || reject.isPending || reenroll.isPending,
+    error,
   };
 }
 

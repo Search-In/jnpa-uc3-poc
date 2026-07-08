@@ -211,6 +211,14 @@ class TransactionsResult(BaseModel):
     total: int = 0
     correlation_id: str
     transactions: list[TransactionRow] = Field(default_factory=list)
+    # Which store the returned `transactions` came from: always "RDS" now (the UI
+    # displays the persisted jnpa.fastag_transactions history, not just the raw
+    # fetch batch). `fetch_source` records where the underlying refresh came from
+    # (LIVE = real ULIP vendor, SIM = ULIP simulator). Surfaced as a UI badge.
+    source: str = "RDS"
+    fetch_source: str = "SIM"
+    rc_number: Optional[str] = None
+    stored_count: int = 0
 
     model_config = {
         "json_schema_extra": {
@@ -382,6 +390,12 @@ async def transactions(
         mapper=map_fastag_transactions,
         persist=lambda m, cid: service.process_transactions(m, client_id=cid),
     )
+    # Data-consistency fix: after the fetch has been persisted (dedup) into
+    # jnpa.fastag_transactions, READ BACK the stored history for this RC and
+    # surface THAT — so the UI shows the durable RDS record (all transactions
+    # ever fetched for the RC), not just the transient current fetch batch.
+    rc = _clean_rc(body.rc_number)
+    stored = await _read_transactions_history(request, rc, limit=500)
     rows = [
         TransactionRow(
             seq_no=r.get("seq_no"), transaction_date_time=r.get("transaction_date_time"),
@@ -389,15 +403,82 @@ async def transactions(
             vehicle_type=r.get("vehicle_type"), lane_direction=r.get("lane_direction"),
             bank_name=r.get("bank_name"), status=r.get("status"),
         )
-        for r in (mapped.get("db") or [])
+        for r in stored
     ]
+    # Fall back to the freshly-mapped batch only if the read-back failed (DB down).
+    if not rows:
+        rows = [
+            TransactionRow(
+                seq_no=r.get("seq_no"), transaction_date_time=r.get("transaction_date_time"),
+                toll_plaza_name=r.get("toll_plaza_name"), toll_plaza_geocode=r.get("toll_plaza_geocode"),
+                vehicle_type=r.get("vehicle_type"), lane_direction=r.get("lane_direction"),
+                bank_name=r.get("bank_name"), status=r.get("status"),
+            )
+            for r in (mapped.get("db") or [])
+        ]
     return TransactionsResult(
         inserted_count=int(result.get("inserted_count", 0)),
         skipped_count=int(result.get("skipped_count", 0)),
         failed_count=int(result.get("failed_count", 0)),
         total=int(result.get("total", 0)), correlation_id=cid,
         transactions=rows,
+        source="RDS" if stored else "LIVE_BATCH",
+        fetch_source=_fetch_source(client),
+        rc_number=rc, stored_count=len(stored),
     )
+
+
+@router.get("/transactions/history",
+            summary="Stored FASTag transaction history for an RC (RDS, no vendor call)")
+async def transactions_history(
+    request: Request,
+    rc_number: str,
+    limit: int = 100,
+) -> dict:
+    """Read-only view of the persisted jnpa.fastag_transactions for an RC. Makes
+    no vendor call (no cost) — pure RDS. Used by the UI to re-display stored
+    history on refresh. Always tagged source="RDS"."""
+    rc = _clean_rc(rc_number)
+    rows = await _read_transactions_history(request, rc, limit=limit)
+    return {"source": "RDS", "rc_number": rc, "count": len(rows), "transactions": rows}
+
+
+def _fetch_source(client: "UlipFastagClient") -> str:
+    """LIVE when a real ULIP vendor base URL is configured, else SIM."""
+    return "LIVE" if bool(getattr(client, "_base_url", "")) else "SIM"
+
+
+async def _read_transactions_history(request: Request, rc: str, *, limit: int = 100) -> list[dict]:
+    """Fetch persisted transactions for an RC from jnpa.fastag_transactions."""
+    dsn = getattr(getattr(getattr(request.app.state, "gw", None), "cfg", None),
+                  "postgres_dsn", None)
+    if not dsn:
+        return []
+    from jnpa_shared.db import fetch_all
+
+    try:
+        rows = await fetch_all(
+            """
+            SELECT seq_no, transaction_date_time, toll_plaza_name, toll_plaza_geocode,
+                   vehicle_type, lane_direction, bank_name, status
+            FROM jnpa.fastag_transactions
+            WHERE rc_number = :rc
+            ORDER BY transaction_date_time DESC NULLS LAST, created_at DESC
+            LIMIT :limit
+            """,
+            {"rc": rc, "limit": max(1, min(int(limit), 1000))},
+            dsn=dsn,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.debug("fastag_history_db_unavailable", error=str(exc))
+        return []
+    out: list[dict] = []
+    for r in rows:
+        d = dict(r)
+        if isinstance(d.get("transaction_date_time"), datetime):
+            d["transaction_date_time"] = d["transaction_date_time"].isoformat()
+        out.append(d)
+    return out
 
 
 @router.get("/health", summary="FASTag module health (vendor config + DB reachability)")

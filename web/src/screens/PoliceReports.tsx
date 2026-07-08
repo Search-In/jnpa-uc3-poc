@@ -7,7 +7,7 @@ import type { PoliceIncident } from "@/lib/types";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Spinner, EmptyState } from "@/components/ui/misc";
+import { EmptyState, AsyncBoundary, LastUpdated } from "@/components/ui/misc";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { IdentityPanel } from "@/components/panels/IdentityPanel";
 import { ViolationDetectionPanel } from "@/components/panels/ViolationDetectionPanel";
@@ -117,7 +117,10 @@ export default function PoliceReports() {
       )}
       <div className="flex flex-wrap items-end justify-between gap-3 border-b border-border p-4">
         <div>
-          <h1 className="text-lg font-semibold">{t("nav.reports")}</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-lg font-semibold">{t("nav.reports")}</h1>
+            <LastUpdated at={q.dataUpdatedAt} isFetching={q.isFetching && !q.isLoading} />
+          </div>
           <p className="text-sm text-muted-foreground">
             WRONG_WAY · ILLEGAL_PARKING · OVERSPEEDING · ROUTE_DEVIATION
           </p>
@@ -161,13 +164,12 @@ export default function PoliceReports() {
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         <Card>
           <CardContent className="p-0">
-            {q.isLoading ? (
-              <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
-                <Spinner /> {t("reports.loadingIncidents")}
-              </div>
-            ) : incidents.length === 0 ? (
-              <EmptyState>{t("reports.noIncidents")}</EmptyState>
-            ) : (
+            <AsyncBoundary
+              status={q}
+              isEmpty={incidents.length === 0}
+              onRetry={() => q.refetch()}
+              empty={<EmptyState>{t("reports.noIncidents")}</EmptyState>}
+            >
               <table className="w-full text-sm">
                 <thead className="border-b border-border text-left text-xs text-muted-foreground">
                   <tr>
@@ -215,7 +217,7 @@ export default function PoliceReports() {
                   ))}
                 </tbody>
               </table>
-            )}
+            </AsyncBoundary>
           </CardContent>
         </Card>
       </div>

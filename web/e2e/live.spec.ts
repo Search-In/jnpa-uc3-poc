@@ -23,10 +23,11 @@ test("live operations renders the map and a live alert chip", async ({ page }) =
 
 test("primary navigation reaches every screen", async ({ page }) => {
   await page.goto("/live");
+  // Labels are the accessible-name contract for the grouped sidebar (navConfig).
   for (const name of [
     "Driver Advisory",
     "Geo-fencing Manager",
-    "Traffic-Police Reports",
+    "Reports & Enforcement",
     "System Health",
     "What-If Console",
     "Live Operations",

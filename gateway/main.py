@@ -30,15 +30,17 @@ from fastapi.responses import JSONResponse
 
 from .mode import ProductionSafetyError, mode_name, production_mode
 
-from jnpa_shared.schemas import TOPIC_ALERTS, TOPIC_TRAFFIC
+from jnpa_shared.schemas import TOPIC_ALERTS, TOPIC_ANPR, TOPIC_TRAFFIC
 from jnpa_shared import tracing
 
+from . import audit
 from .config import GatewayConfig
 from .logging import configure_logging, get_logger
 from .metrics import metrics_asgi_app
 from .pumps import KafkaPump, mqtt_truck_pump
 from .auth import install_auth, validate_auth_config
 from .routers import (
+    ai_events,
     alerts,
     anpr,
     auth as auth_router,
@@ -53,6 +55,7 @@ from .routers import (
     geo,
     identity,
     kpi,
+    otp,
     parking,
     push,
     reports,
@@ -142,14 +145,48 @@ async def _lifespan(app: FastAPI):
     # FAIL FAST: a missing Postgres/MinIO in production aborts the boot.
     await _production_startup_gate(state)
 
+    # Apply the idempotent audit/event DDL + register the default DSN the
+    # fire-and-forget writers use. Best-effort: a DB blip never aborts boot.
+    audit.configure(cfg.postgres_dsn or None)
+    try:
+        await audit.ensure_audit_schema(cfg.postgres_dsn or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("audit_schema_boot_failed", error=str(exc))
+
+    # Geo-fence enforcement engine: ensure event columns + warm the DB zone cache.
+    try:
+        await state.geofence.ensure_schema()
+        n = await state.geofence.refresh_zones(force=True)
+        log.info("geofence_engine_ready", zones=n)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("geofence_boot_failed", error=str(exc))
+
+    # Vehicle/Driver intelligence history tables (Vahan/Sarathi).
+    try:
+        from . import vehicle_intel
+        await vehicle_intel.ensure_intel_schema(cfg.postgres_dsn or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("intel_schema_boot_failed", error=str(exc))
+
     loop = asyncio.get_running_loop()
     stop = asyncio.Event()
 
-    # Kafka pumps (blocking consumer threads) — best-effort.
-    alert_pump = KafkaPump(state, loop, TOPIC_ALERTS, "alert", "jnpa-gateway-alerts")
+    # Kafka pumps (blocking consumer threads) — best-effort. The alert pump ALSO
+    # mirrors every alert into jnpa.digital_twin_events (+ geofence_events for
+    # zone-family kinds); a persistence-only pump lands ANPR reads in
+    # jnpa.anpr_reads (finally giving that table its writer) + the event timeline.
+    alert_pump = KafkaPump(
+        state, loop, TOPIC_ALERTS, "alert", "jnpa-gateway-alerts",
+        persist=audit.persist_alert_event,
+    )
     traffic_pump = KafkaPump(state, loop, TOPIC_TRAFFIC, "traffic", "jnpa-gateway-traffic")
+    anpr_pump = KafkaPump(
+        state, loop, TOPIC_ANPR, "anpr", "jnpa-gateway-anpr",
+        persist=audit.persist_anpr_read, broadcast=False,
+    )
     alert_pump.start()
     traffic_pump.start()
+    anpr_pump.start()
 
     # MQTT truck-position pump (async task) — best-effort.
     mqtt_task = asyncio.create_task(mqtt_truck_pump(state, stop), name="mqtt-truck-pump")
@@ -160,6 +197,7 @@ async def _lifespan(app: FastAPI):
         stop.set()
         alert_pump.stop()
         traffic_pump.stop()
+        anpr_pump.stop()
         mqtt_task.cancel()
         try:
             await mqtt_task
@@ -271,6 +309,8 @@ app.include_router(identity.router)
 app.include_router(parking.router)
 app.include_router(debug.router)
 app.include_router(control.router)
+app.include_router(ai_events.router)
+app.include_router(otp.router)
 app.include_router(ws.router)
 app.include_router(checkin.router)
 

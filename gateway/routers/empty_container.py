@@ -14,9 +14,10 @@ and fallback agree to the decimal.
 from __future__ import annotations
 
 import time
-from typing import Any, Dict
+from typing import Any, Dict, Optional
+from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Body, Depends, Query
 
 from ..logging import get_logger
 from ..metrics import REQUESTS, UPSTREAM_LATENCY
@@ -84,6 +85,57 @@ async def demand(state: GatewayState = Depends(get_state)) -> dict:
     REQUESTS.labels("empty", "ok").inc()
     return {"decision_path": "SYNTHETIC",
             "demand": [seed.demand_to_dict(d) for d in seed.demand_book()]}
+
+
+# --- RDS-backed inventory + persisted allocation (Phase 2 · Track 2) -------
+async def _upstream_post(state: GatewayState, path: str,
+                         json: Dict[str, Any]) -> tuple[int, Dict[str, Any] | None]:
+    url = state.cfg.empty_container_url.rstrip("/") + path
+    try:
+        resp = await state.http.post(url, json=json)
+        try:
+            body = resp.json()
+        except Exception:  # noqa: BLE001
+            body = None
+        return resp.status_code, body
+    except Exception as exc:  # pragma: no cover
+        log.debug("empty_upstream_post_failed", path=path, error=str(exc))
+        return 503, None
+
+
+@router.get("/containers/available")
+async def containers_available(
+    container_type: Optional[str] = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
+    state: GatewayState = Depends(get_state),
+) -> dict:
+    """Available empty containers from RDS inventory."""
+    q = {k: v for k, v in {"container_type": container_type, "limit": limit}.items() if v is not None}
+    data = await _upstream(state, "/containers/available?" + urlencode(q))
+    REQUESTS.labels("empty", "ok").inc()
+    return data if data is not None else {"count": 0, "containers": []}
+
+
+@router.post("/containers/allocate")
+async def containers_allocate(body: Dict[str, Any] = Body(...),
+                              state: GatewayState = Depends(get_state)) -> dict:
+    """Allocate an empty container (persists allocation + movement + events)."""
+    status, data = await _upstream_post(state, "/containers/allocate", body)
+    REQUESTS.labels("empty", "ok" if status == 200 else "error").inc()
+    if data is None:
+        return {"allocated": False, "reason": "service_unavailable"}
+    return data
+
+
+@router.get("/containers/allocation/history")
+async def containers_allocation_history(
+    limit: int = Query(default=100, ge=1, le=1000),
+    state: GatewayState = Depends(get_state),
+) -> dict:
+    """Persisted empty-container allocation history from RDS."""
+    data = await _upstream(state, "/containers/allocation/history?" + urlencode({"limit": limit}))
+    REQUESTS.labels("empty", "ok").inc()
+    return data if data is not None else {"count": 0, "allocations": []}
 
 
 @router.get("/kpi")

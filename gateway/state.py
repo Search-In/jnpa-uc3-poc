@@ -20,7 +20,10 @@ from typing import Any, Dict, Optional
 import httpx
 from fastapi import Request
 
+from . import audit
+from .audit_client import AuditingAsyncClient
 from .config import GatewayConfig
+from .geofence import GeofenceEngine
 from .fallback import (
     DecisionPath,
     DecisionRing,
@@ -47,13 +50,21 @@ def _max_severity(domain_values) -> Optional[str]:
 class GatewayState:
     def __init__(self, cfg: GatewayConfig) -> None:
         self.cfg = cfg
-        self.http = httpx.AsyncClient(timeout=cfg.upstream_timeout_s)
+        # Auditing HTTP client: every outbound (external) call is logged to
+        # jnpa.api_audit_log (request/response/status/latency/error). Drop-in for
+        # httpx.AsyncClient — behaviour is unchanged, logging is fire-and-forget.
+        self.http = AuditingAsyncClient(
+            timeout=cfg.upstream_timeout_s, audit_dsn=cfg.postgres_dsn or None
+        )
         self.decisions = DecisionRing(maxlen=cfg.decision_ring_size)
         self.sources = SourceRegistry()
         # Presenter-controllable fault injection (POST /api/control/fault/...).
         # Read at the top of each fallback chain to force a rung on demand.
         self.faults = FaultRegistry()
         self.ws = WsHub()
+        # DB-driven geo-fence enforcement engine (reads jnpa.geofence_zones live).
+        # Fed by the MQTT truck pump + POST /api/geo/evaluate (mobile location).
+        self.geofence = GeofenceEngine(cfg.postgres_dsn or None)
 
     async def aclose(self) -> None:
         await self.http.aclose()
@@ -99,6 +110,18 @@ class GatewayState:
         )
         self.decisions.add(decision)
         DECISIONS.labels(api, decision_path).inc()
+
+        # Durable audit trail (replaces reliance on the in-memory ring). Persisted
+        # fire-and-forget so the decision path is never slowed by the DB write.
+        audit.spawn(
+            audit.record_decision_audit(
+                request_id=key,
+                input_data={"api": api, "source": source, "detail": detail or {}},
+                rule_executed=api,
+                decision=decision_path,
+                action_taken="FALLBACK" if decision.is_fallback else "PRIMARY",
+            )
+        )
 
         # Update per-source health (defaults: source == api, state inferred).
         src = source or api

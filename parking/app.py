@@ -19,11 +19,12 @@ fully reproducible. The service registers itself in ``jnpa.services`` on startup
 """
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query
 
 from jnpa_shared.backbone import PeriodicPublisher
 from jnpa_shared.logging import configure_logging, get_logger
@@ -31,6 +32,7 @@ from jnpa_shared.schemas import TOPIC_PARKING, ParkingState, ServiceRegistration
 from jnpa_shared.vahan_db import ensure_schema, register_service
 
 from . import facilities as fac
+from . import persistence
 from .config import ParkingConfig
 from .metrics import PARKING_AVAILABLE, PARKING_FULL_FACILITIES, metrics_asgi_app
 
@@ -112,10 +114,27 @@ async def _lifespan(_app: FastAPI):
         log.info("service_registered", name=cfg.service_name, kind=cfg.service_kind)
     except Exception as exc:  # pragma: no cover - infra-timing dependent
         log.warning("startup_db_unavailable", error=str(exc))
+
+    # Seed the real inventory (facilities + slots) into RDS — background so the
+    # API is READY immediately; idempotent so a restart never duplicates.
+    async def _seed() -> None:
+        try:
+            await persistence.ensure_parking_schema(cfg.postgres_dsn)
+            await persistence.seed_inventory(fac.FACILITIES, dsn=cfg.postgres_dsn)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("parking_seed_failed", error=str(exc))
+
+    seed_task = asyncio.create_task(_seed(), name="parking-seed")
+
     _publisher.start()
     try:
         yield
     finally:
+        seed_task.cancel()
+        try:
+            await seed_task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
         await _publisher.stop()
 
 
@@ -130,44 +149,105 @@ async def healthz() -> dict:
             "facilities": len(fac.FACILITIES)}
 
 
-@app.get("/availability")
-async def availability(
-    minute_of_day: Optional[int] = Query(
-        default=None, ge=0, lt=fac.MINUTES_PER_DAY,
-        description="Override the minute of day (0..1439) for deterministic demos.",
-    ),
-) -> dict:
-    """Live per-facility availability board for the dashboard.
+def _board_row(r: dict) -> dict:
+    """Shape an RDS availability row for the dashboard board (adds name/lat/lon)."""
+    loc = r.get("location") or {}
+    return {
+        "facility_id": r["facility_id"],
+        "name": r.get("facility_name"),
+        "lat": loc.get("lat"),
+        "lon": loc.get("lon"),
+        "gate_id": loc.get("gate_id"),
+        "capacity": int(r.get("capacity") or 0),
+        "occupied": int(r.get("occupied") or 0),
+        "available": int(r.get("available") or 0),
+        "free_pct": r.get("free_pct"),
+        "status": r.get("status"),
+    }
 
-    Defaults to the current wall-clock minute; pass ``?minute_of_day=NNN`` for a
-    reproducible snapshot. Also refreshes the Prometheus gauges as a side effect.
-    """
-    minute = _resolve_minute(minute_of_day)
-    rows = fac.snapshot(minute)
-    _refresh_metrics(rows)
-    return {"minute_of_day": minute, "facilities": rows}
+
+@app.get("/availability")
+async def availability() -> dict:
+    """Live per-facility availability — computed from REAL slot state in RDS
+    (no sine curve, no synthetic occupancy). If the DB is unreachable / not yet
+    seeded, returns source="unavailable" so the dashboard shows an explicit error
+    state rather than fabricated numbers."""
+    rows = await persistence.availability(dsn=cfg.postgres_dsn)
+    if rows:
+        board = [_board_row(r) for r in rows]
+        _refresh_metrics(board)
+        return {"source": "rds", "facilities": board}
+    return {"source": "unavailable", "facilities": []}
 
 
 @app.get("/facilities")
 async def facilities_inventory() -> dict:
-    """Static facility inventory (capacity + geo), independent of occupancy."""
-    return {"facilities": fac.inventory()}
+    """Facility inventory (capacity + geo) from RDS (fallback to static seed)."""
+    rows = await persistence.facilities_inventory(dsn=cfg.postgres_dsn)
+    if rows:
+        return {"source": "rds", "facilities": rows}
+    return {"source": "fallback", "facilities": fac.inventory()}
 
 
 @app.get("/summary")
-async def summary(
-    minute_of_day: Optional[int] = Query(
-        default=None, ge=0, lt=fac.MINUTES_PER_DAY,
-        description="Override the minute of day (0..1439) for deterministic demos.",
-    ),
-) -> dict:
-    """Roll-up totals for the board header (capacity / occupied / available)."""
-    minute = _resolve_minute(minute_of_day)
-    rows = fac.snapshot(minute)
-    _refresh_metrics(rows)
-    out = fac.summary(minute)
-    out["minute_of_day"] = minute
-    return out
+async def summary() -> dict:
+    """Roll-up totals for the board header (capacity / occupied / available), RDS-backed."""
+    rows = await persistence.availability(dsn=cfg.postgres_dsn)
+    if rows:
+        board = [_board_row(r) for r in rows]
+        _refresh_metrics(board)
+        return {"source": "rds", **await persistence.summary(dsn=cfg.postgres_dsn)}
+    return {"source": "unavailable", "capacity": 0, "occupied": 0,
+            "available": 0, "facilities": 0, "full": 0}
+
+
+# --- allocation / release / history / violations (RDS-backed) --------------
+@app.post("/allocate")
+async def allocate(body: dict = Body(...)) -> dict:
+    """Allocate a free slot to a vehicle. Body: {facility_id, vehicle_id, driver_id?}."""
+    facility_id = (body.get("facility_id") or "").strip()
+    vehicle_id = (body.get("vehicle_id") or "").strip()
+    if not facility_id or not vehicle_id:
+        raise HTTPException(status_code=422, detail={"error": "facility_id_and_vehicle_id_required"})
+    return await persistence.allocate(
+        facility_id=facility_id, vehicle_id=vehicle_id,
+        driver_id=body.get("driver_id"), dsn=cfg.postgres_dsn,
+    )
+
+
+@app.post("/release")
+async def release(body: dict = Body(...)) -> dict:
+    """Release a vehicle's active parking slot. Body: {vehicle_id}."""
+    vehicle_id = (body.get("vehicle_id") or "").strip()
+    if not vehicle_id:
+        raise HTTPException(status_code=422, detail={"error": "vehicle_id_required"})
+    return await persistence.release(vehicle_id=vehicle_id, dsn=cfg.postgres_dsn)
+
+
+@app.post("/violation")
+async def violation(body: dict = Body(...)) -> dict:
+    """Record an ILLEGAL_PARKING / NO_PARKING_VIOLATION event."""
+    return await persistence.raise_violation(
+        event_type=body.get("event_type", "ILLEGAL_PARKING"),
+        vehicle_id=(body.get("vehicle_id") or "").strip() or "UNKNOWN",
+        facility_id=body.get("facility_id"),
+        detail=body.get("detail") or {}, dsn=cfg.postgres_dsn,
+    )
+
+
+@app.get("/history")
+async def history(vehicle_id: Optional[str] = Query(default=None),
+                  limit: int = Query(default=100, ge=1, le=1000)) -> dict:
+    """Entry/exit transaction history from RDS."""
+    rows = await persistence.history(vehicle_id=vehicle_id, limit=limit, dsn=cfg.postgres_dsn)
+    return {"count": len(rows), "transactions": rows}
+
+
+@app.get("/violations")
+async def list_violations(limit: int = Query(default=100, ge=1, le=1000)) -> dict:
+    """Parking violation / overflow events from RDS."""
+    rows = await persistence.violations(limit=limit, dsn=cfg.postgres_dsn)
+    return {"count": len(rows), "violations": rows}
 
 
 def run() -> None:  # pragma: no cover - container entrypoint

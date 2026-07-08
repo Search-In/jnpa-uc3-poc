@@ -5,9 +5,16 @@
 import type { CorridorGeometry, Gate, TasSlot, TruckEnvelope, VahanEnvelope } from "./types";
 import { getToken, setToken, tokenNeedsRefresh } from "./device";
 
+// Gateway base URL. Empty by default (same-origin: the Vite dev proxy or the
+// web/ nginx at /pwa forwards /api -> gateway). Set VITE_GATEWAY_URL at build
+// time (e.g. http://localhost:8000) to hit the gateway DIRECTLY — this is what
+// makes a statically-served build (vite preview / any file server) fetch data
+// without a proxy. The gateway's default CORS is permissive in non-prod.
+export const API_BASE = (import.meta.env.VITE_GATEWAY_URL || "").replace(/\/$/, "");
+
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getToken();
-  const res = await fetch(path, {
+  const res = await fetch(API_BASE + path, {
     headers: {
       "content-type": "application/json",
       ...(token ? { authorization: `Bearer ${token}` } : {}),
@@ -44,7 +51,7 @@ const PAIRING_SECRET: string | undefined = import.meta.env.VITE_PWA_PAIRING_SECR
 // invisible — the app would silently proceed unauthenticated).
 async function mintToken(path: string, body: unknown): Promise<boolean> {
   try {
-    const res = await fetch(path, {
+    const res = await fetch(API_BASE + path, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -115,6 +122,26 @@ export const api = {
 
   // --- live trip / position ---
   truck: (deviceId: string) => http<TruckEnvelope>(`/api/trucks/${encodeURIComponent(deviceId)}`),
+  // Resolve the plate a device is bound to. The single-truck endpoint drops to a
+  // plate-less SECONDARY (ULIP mock) when truck-sim/PRIMARY is down, so fall back
+  // to the fast list endpoint (which always carries the plate).
+  truckPlate: async (deviceId: string): Promise<string | null> => {
+    try {
+      const env = await http<TruckEnvelope>(`/api/trucks/${encodeURIComponent(deviceId)}`);
+      const p = (env as any)?.record?.plate;
+      if (p) return p;
+    } catch {
+      /* fall through to list */
+    }
+    try {
+      const list = await http<{ devices: { device_id: string; plate?: string }[] }>(
+        "/api/trucks?limit=500",
+      );
+      return list.devices.find((d) => d.device_id === deviceId)?.plate ?? null;
+    } catch {
+      return null;
+    }
+  },
 
   // --- geometry for the mini-map ---
   gates: () => http<{ gates: Gate[] }>("/api/gates"),
@@ -157,6 +184,85 @@ export const api = {
     http<{ total_capacity?: number; total_available?: number; facilities?: number }>(
       "/api/parking/summary",
     ),
+  // Per-facility live availability (RDS-backed) — the driver "nearby parking" list.
+  parkingAvailability: () =>
+    http<{
+      source?: string;
+      facilities: {
+        facility_id: string;
+        name?: string | null;
+        lat?: number | null;
+        lon?: number | null;
+        capacity: number;
+        available: number;
+        occupied: number;
+        free_pct?: number | null;
+        status: string;
+      }[];
+    }>("/api/parking/availability"),
+  // Request a slot for this driver's vehicle. Returns the allocated slot.
+  parkingAllocate: (facilityId: string, vehicleId: string, driverId?: string) =>
+    http<{ allocated: boolean; facility_id?: string; slot_number?: string; transaction_id?: number; reason?: string }>(
+      "/api/parking/allocate",
+      { method: "POST", body: JSON.stringify({ facility_id: facilityId, vehicle_id: vehicleId, driver_id: driverId }) },
+    ),
+  parkingRelease: (vehicleId: string) =>
+    http<{ released: boolean; facility_id?: string; duration_s?: number }>("/api/parking/release", {
+      method: "POST",
+      body: JSON.stringify({ vehicle_id: vehicleId }),
+    }),
+
+  // --- OTP login + device binding (Track 5 security) ---
+  otpRequest: (mobile: string, deviceId: string) =>
+    http<{ sent: boolean; expires_in: number; dev_otp?: string }>("/api/auth/otp/request", {
+      method: "POST",
+      body: JSON.stringify({ mobile, device_id: deviceId }),
+    }),
+  otpVerify: (mobile: string, otp: string, deviceId: string) =>
+    http<{ verified: boolean; access_token: string; driver_id: string; role: string }>(
+      "/api/auth/otp/verify",
+      { method: "POST", body: JSON.stringify({ mobile, otp, device_id: deviceId }) },
+    ),
+  otpRefresh: (deviceId: string) =>
+    http<{ access_token: string; expires_in: number }>("/api/auth/otp/refresh", {
+      method: "POST",
+      body: JSON.stringify({ device_id: deviceId }),
+    }),
+  otpLogout: (deviceId: string) =>
+    http<{ logged_out: boolean }>("/api/auth/otp/logout", {
+      method: "POST",
+      body: JSON.stringify({ device_id: deviceId }),
+    }),
+  sessionStatus: (deviceId: string) =>
+    http<{ bound: boolean; active?: boolean; driver_id?: string; mobile?: string }>(
+      `/api/auth/otp/session/${encodeURIComponent(deviceId)}`,
+    ),
+  // Aggregate driver intelligence (profile + DL + violations) for the Profile screen.
+  driverIntel: (key: string) =>
+    http<{
+      driver: Record<string, any> | null;
+      dl_history: Record<string, any>[];
+      vehicle_no: string | null;
+      violations: Record<string, any>[];
+    }>(`/api/vahan/driver-intel/${encodeURIComponent(key)}`),
+
+  // --- Geo-fence (driver zone awareness + alerts) ---
+  // Active enforced zones (from jnpa.geofence_zones).
+  geoZones: () =>
+    http<{ count: number; zones: { id: string; name: string; kind: string }[] }>(
+      "/api/geo/zones-active",
+    ),
+  // Push this vehicle's location; returns the zones it's inside + any events
+  // (ENTER / RESTRICTED_ENTRY / NO_PARKING_VIOLATION) — the driver warning source.
+  geoEvaluate: (vehicleId: string, lat: number, lon: number, driverId?: string) =>
+    http<{
+      vehicle_id: string;
+      inside_zones: { id: string; name: string; kind: string }[];
+      events: { zone_id: string; event: string; dwell_s?: number }[];
+    }>("/api/geo/evaluate", {
+      method: "POST",
+      body: JSON.stringify({ vehicle_id: vehicleId, lat, lon, driver_id: driverId }),
+    }),
 
   // --- profile / vehicle: VahanRecord ---
   vahanRc: (plate: string) => http<VahanEnvelope>(`/api/vahan/rc/${encodeURIComponent(plate)}`),

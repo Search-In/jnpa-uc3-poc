@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { getAdapter } from "@/data";
+import { api } from "@/lib/api";
 import { useScenario, SCENARIO_LABELS, type ScenarioId } from "@/hooks/ScenarioContext";
 import { useSocket } from "@/hooks/SocketContext";
 import type { ScenarioStep } from "@/lib/types";
@@ -109,6 +110,32 @@ export default function WhatIfConsole() {
     resetBanner();
   }
 
+  // --- Demo / past timelines (read-only preview) ----------------------------
+  // Lists recorded run handles from RDS (incl. seeded demo timelines). Selecting
+  // one previews its timeline WITHOUT starting a live run or the guided tour —
+  // so the live simulation flow is untouched.
+  const handlesQ = useQuery({
+    queryKey: ["scenario-handles"],
+    queryFn: () => api.scenarioHandles(50),
+    refetchInterval: 15000,
+  });
+  function previewHandle(h: { handle_id: string; name: string }) {
+    tourStore.stopScenario(); // ensure no guided run is driving the view
+    setActiveRunner(h.name);
+    setActiveHandle(h.handle_id);
+  }
+
+  // Split recorded handles into curated DEMO scenarios (handle_id `demo-*`) and
+  // other recorded live runs. Empty (0-step) recorded runs are hidden — they
+  // carry no timeline to preview and only add noise.
+  const allHandles = handlesQ.data?.handles ?? [];
+  const demoHandles = allHandles.filter((h) => h.is_demo);
+  const recordedHandles = allHandles.filter((h) => !h.is_demo && h.step_count > 0);
+  // Blurb lookup for scenario details, keyed by runner name (tfc1/tfc2/tfc3).
+  const blurbFor = (runner: string | null) =>
+    SCENARIOS.find((s) => s.runner === runner)?.blurb ?? "";
+  const previewingDemo = demoHandles.some((h) => h.handle_id === activeHandle);
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-border p-4">
@@ -177,15 +204,83 @@ export default function WhatIfConsole() {
         })}
       </div>
 
+      {/* Demo scenarios — curated recorded timelines, read-only preview. */}
+      {demoHandles.length > 0 && (
+        <div className="border-t border-border px-4 py-3">
+          <div className="mb-2 flex items-center gap-2">
+            <h2 className="text-sm font-semibold">{t("whatIf.demoScenarios", "Demo scenarios")}</h2>
+            <span className="text-xs text-muted-foreground">
+              {t("whatIf.demoScenariosHint", "Preview a recorded demo run (read-only — does not start a live simulation)")}
+            </span>
+          </div>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {demoHandles.map((h) => (
+              <button
+                key={h.handle_id}
+                onClick={() => previewHandle(h)}
+                className={`flex flex-col items-start gap-1 rounded-md border px-3 py-2 text-left text-xs transition-colors ${
+                  activeHandle === h.handle_id
+                    ? "border-primary bg-primary/10"
+                    : "border-border hover:bg-muted"
+                }`}
+                title={h.handle_id}
+              >
+                <span className="flex items-center gap-2">
+                  <span className="font-semibold uppercase">{h.name}</span>
+                  <Badge colour="#56B4E9">DEMO</Badge>
+                  <span className="text-muted-foreground">{h.step_count} steps · {h.status}</span>
+                </span>
+                <span className="line-clamp-2 text-[11px] text-muted-foreground">{blurbFor(h.name)}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Recorded live runs — non-demo handles with a timeline to replay. */}
+      {recordedHandles.length > 0 && (
+        <div className="border-t border-border px-4 py-3">
+          <div className="mb-2 flex items-center gap-2">
+            <h2 className="text-sm font-semibold">{t("whatIf.recordedRuns", "Recorded runs")}</h2>
+            <span className="text-xs text-muted-foreground">
+              {t("whatIf.recordedRunsHint", "Past live runs — read-only preview")}
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {recordedHandles.map((h) => (
+              <button
+                key={h.handle_id}
+                onClick={() => previewHandle(h)}
+                className={`inline-flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs transition-colors ${
+                  activeHandle === h.handle_id
+                    ? "border-primary bg-primary/10"
+                    : "border-border hover:bg-muted"
+                }`}
+                title={h.handle_id}
+              >
+                <span className="font-medium uppercase">{h.name}</span>
+                <span className="text-muted-foreground">{h.step_count} steps · {h.status}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Storyline */}
       <div
         className="min-h-0 flex-1 overflow-y-auto border-t border-border p-4"
         data-guided-id="whatif-timeline"
       >
         <div className="mb-2 flex items-center justify-between">
-          <h2 className="text-sm font-semibold">
-            {t("whatIf.reactiveTimeline")} {activeRunner ? `· ${activeRunner.toUpperCase()}` : ""}
-          </h2>
+          <div>
+            <h2 className="text-sm font-semibold">
+              {t("whatIf.reactiveTimeline")} {activeRunner ? `· ${activeRunner.toUpperCase()}` : ""}
+              {previewingDemo && <Badge colour="#56B4E9">DEMO PREVIEW</Badge>}
+            </h2>
+            {activeRunner && blurbFor(activeRunner) && (
+              <p className="mt-0.5 max-w-3xl text-xs text-muted-foreground">{blurbFor(activeRunner)}</p>
+            )}
+          </div>
           {traceId && (
             <a
               href="http://localhost:16686"

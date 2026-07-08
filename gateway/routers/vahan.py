@@ -20,7 +20,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from jnpa_shared.schemas import is_valid_plate, normalize_plate
 
-from .. import cache
+from .. import audit, cache
+from .. import vehicle_intel
 from ..fallback import SourceState, VahanPath
 from ..logging import get_logger
 from ..metrics import PROVISIONAL, REQUESTS, UPSTREAM_LATENCY
@@ -194,8 +195,34 @@ async def vahan_rc(plate: str, state: GatewayState = Depends(get_state)) -> dict
         REQUESTS.labels("vahan", "invalid").inc()
         raise HTTPException(status_code=422, detail={"error": "invalid_plate", "plate": plate})
     result = await _orchestrate_rc(state, norm)
+    # Persist verification history + an explicit api_audit_log row (keyed by plate).
+    dpath = result.get("decision_path", "")
+    status = ("PROVISIONAL" if dpath == "PROVISIONAL"
+              else "VERIFIED" if result.get("record") else "NOT_FOUND")
+    audit.spawn(vehicle_intel.record_vehicle_verification(
+        vehicle_number=norm, request={"vehicle_number": norm}, response=result,
+        status=status, source=dpath, dsn=state.cfg.postgres_dsn))
+    audit.spawn(audit.log_api_audit(
+        service_name="vahan", endpoint=f"GET /api/vahan/rc/{norm}", method="GET",
+        request_payload={"vehicle_number": norm}, response_payload=result,
+        status_code=200, transaction_id=norm, dsn=state.cfg.postgres_dsn))
     REQUESTS.labels("vahan", "ok").inc()
     return result
+
+
+def _persist_dl(state: GatewayState, dl: str, record: Optional[dict], source: str) -> None:
+    """Persist a DL lookup: history + api_audit_log + drivers upsert (all reused)."""
+    status = vehicle_intel.dl_status(record) if record else "NOT_FOUND"
+    audit.spawn(vehicle_intel.record_dl_lookup(
+        dl_number=dl, request={"dl_number": dl}, response=record or {},
+        status=status, source=source, dsn=state.cfg.postgres_dsn))
+    audit.spawn(audit.log_api_audit(
+        service_name="sarathi", endpoint=f"GET /api/vahan/dl/{dl}", method="GET",
+        request_payload={"dl_number": dl}, response_payload=record or {},
+        status_code=200 if record else 404, transaction_id=dl, dsn=state.cfg.postgres_dsn))
+    if record:
+        audit.spawn(vehicle_intel.upsert_driver_from_dl(
+            dl_number=dl, record=record, dsn=state.cfg.postgres_dsn))
 
 
 @router.get("/dl/{dl_number}")
@@ -223,17 +250,21 @@ async def sarathi_dl(dl_number: str, state: GatewayState = Depends(get_state)) -
                 api="vahan", key=dl, decision_path=kind,
                 latency_ms=(time.perf_counter() - t0) * 1000, source=target,
             )
+            _persist_dl(state, dl, data, kind)
             REQUESTS.labels("vahan", "ok").inc()
-            return {"dl": dl, "decision_path": kind, "record": data}
+            return {"dl": dl, "decision_path": kind, "record": data,
+                    "status": vehicle_intel.dl_status(data)}
 
     cached = await cache.get("sarathi", dl)
     if cached is not None:
         await state.record_decision(api="vahan", key=dl, decision_path="CACHED",
                                     source="sarathi", source_state=SourceState.DEGRADED, ok=False)
+        _persist_dl(state, dl, cached["value"], "CACHED")
         REQUESTS.labels("vahan", "ok").inc()
         return {"dl": dl, "decision_path": "CACHED", "record": cached["value"],
-                "cache_age_s": cached["age_s"]}
+                "status": vehicle_intel.dl_status(cached["value"]), "cache_age_s": cached["age_s"]}
 
+    _persist_dl(state, dl, None, "NOT_FOUND")
     REQUESTS.labels("vahan", "not_found").inc()
     raise HTTPException(status_code=404, detail={"error": "not_found", "dl": dl})
 
@@ -275,3 +306,39 @@ async def fastag_balance(plate: str, state: GatewayState = Depends(get_state)) -
 
     REQUESTS.labels("vahan", "not_found").inc()
     raise HTTPException(status_code=404, detail={"error": "not_found", "plate": norm})
+
+
+# ---------------------------------------------------------------------------
+# Vehicle & Driver Intelligence (Phase 2 · Track 4) — RDS-backed aggregates.
+# ---------------------------------------------------------------------------
+@router.get("/vehicle-intel/{plate}")
+async def vehicle_intelligence(plate: str, state: GatewayState = Depends(get_state)) -> dict:
+    """Aggregate vehicle intelligence: RC + tracking + violations + challans + alerts."""
+    norm = normalize_plate(plate)
+    data = await vehicle_intel.vehicle_intel(norm, dsn=state.cfg.postgres_dsn)
+    REQUESTS.labels("vahan", "ok").inc()
+    return data
+
+
+@router.get("/driver-intel/{driver_key}")
+async def driver_intelligence(driver_key: str, state: GatewayState = Depends(get_state)) -> dict:
+    """Aggregate driver intelligence: profile + DL history + vehicle + violations + activity."""
+    data = await vehicle_intel.driver_intel(driver_key.strip(), dsn=state.cfg.postgres_dsn)
+    REQUESTS.labels("vahan", "ok").inc()
+    return data
+
+
+@router.get("/verification-history")
+async def verification_history(limit: int = Query(default=100, ge=1, le=1000),
+                               state: GatewayState = Depends(get_state)) -> dict:
+    rows = await vehicle_intel.verification_history(limit=limit, dsn=state.cfg.postgres_dsn)
+    REQUESTS.labels("vahan", "ok").inc()
+    return {"count": len(rows), "history": rows}
+
+
+@router.get("/dl-history")
+async def dl_history(limit: int = Query(default=100, ge=1, le=1000),
+                     state: GatewayState = Depends(get_state)) -> dict:
+    rows = await vehicle_intel.dl_history(limit=limit, dsn=state.cfg.postgres_dsn)
+    REQUESTS.labels("vahan", "ok").inc()
+    return {"count": len(rows), "history": rows}

@@ -17,7 +17,10 @@ from __future__ import annotations
 import time
 from typing import Any, Dict
 
-from fastapi import APIRouter, Body, Depends
+from typing import Optional
+from urllib.parse import urlencode
+
+from fastapi import APIRouter, Body, Depends, Query
 
 from ..logging import get_logger
 from ..metrics import REQUESTS, UPSTREAM_LATENCY
@@ -98,6 +101,53 @@ async def customs_flags(state: GatewayState = Depends(get_state)) -> dict:
         alerts.extend(leo.customs_alerts(r))
     REQUESTS.labels("gate-data", "ok").inc()
     return {"decision_path": "SYNTHETIC", "alerts": alerts, "count": len(alerts)}
+
+
+@router.get("/captures")
+async def captures(
+    type: Optional[str] = Query(default=None),
+    container_no: Optional[str] = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=1000),
+    state: GatewayState = Depends(get_state),
+) -> dict:
+    """RDS-backed gate captures (e-Seal/Form-13/Weighbridge/ICEGATE)."""
+    q = {k: v for k, v in {"type": type, "container_no": container_no, "limit": limit}.items()
+         if v is not None}
+    data = await _upstream(state, "GET", "/captures?" + urlencode(q))
+    REQUESTS.labels("gate-data", "ok").inc()
+    return data if data is not None else {"count": 0, "captures": [], "decision_path": "UNAVAILABLE"}
+
+
+@router.get("/reconciliations")
+async def reconciliations(
+    ready: Optional[bool] = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=1000),
+    state: GatewayState = Depends(get_state),
+) -> dict:
+    """RDS-backed Auto-LEO reconciliation history."""
+    q = {k: v for k, v in {"ready": ready, "limit": limit}.items() if v is not None}
+    data = await _upstream(state, "GET", "/reconciliations?" + urlencode(q))
+    REQUESTS.labels("gate-data", "ok").inc()
+    return data if data is not None else {"count": 0, "reconciliations": [], "decision_path": "UNAVAILABLE"}
+
+
+@router.get("/customs/history")
+async def customs_history(
+    limit: int = Query(default=200, ge=1, le=1000),
+    state: GatewayState = Depends(get_state),
+) -> dict:
+    """Durable customs feed from jnpa.alerts (survives restart)."""
+    data = await _upstream(state, "GET", "/customs/history?" + urlencode({"limit": limit}))
+    REQUESTS.labels("gate-data", "ok").inc()
+    return data if data is not None else {"count": 0, "alerts": [], "decision_path": "UNAVAILABLE"}
+
+
+@router.get("/providers")
+async def providers_status(state: GatewayState = Depends(get_state)) -> dict:
+    """Per-source SIM|LIVE provider mode for the dashboard badge."""
+    data = await _upstream(state, "GET", "/providers")
+    REQUESTS.labels("gate-data", "ok").inc()
+    return data if data is not None else {"sources": {}, "decision_path": "UNAVAILABLE"}
 
 
 @router.get("/records/{container_no}")

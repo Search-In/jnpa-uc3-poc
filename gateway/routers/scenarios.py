@@ -75,15 +75,93 @@ async def reset_scenario(name: str, body: Dict[str, Any] = Body(default_factory=
     return data
 
 
+@router.get("/handles")
+async def list_scenario_handles(limit: int = 50,
+                                state: GatewayState = Depends(get_state)) -> dict:
+    """List recent scenario RUN handles (jnpa.scenario_handles) for the What-If
+    demo picker — including seeded demo timelines. Read-only; does not touch the
+    live simulation flow (which mints its own handles on run)."""
+    from jnpa_shared.db import fetch_all
+
+    try:
+        rows = await fetch_all(
+            """
+            SELECT h.handle_id, h.name, h.status, h.trace_id, h.started_at, h.ended_at,
+                   (SELECT count(*) FROM jnpa.scenario_steps s WHERE s.handle_id = h.handle_id) AS step_count
+            FROM jnpa.scenario_handles h
+            ORDER BY h.started_at DESC NULLS LAST
+            LIMIT :limit
+            """,
+            {"limit": max(1, min(int(limit), 200))},
+            dsn=state.cfg.postgres_dsn,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.debug("scenario_handles_db_unavailable", error=str(exc))
+        return {"count": 0, "handles": []}
+    out = []
+    for r in rows:
+        d = dict(r)
+        for f in ("started_at", "ended_at"):
+            if isinstance(d.get(f), datetime):
+                d[f] = d[f].isoformat()
+        d["is_demo"] = str(d.get("handle_id", "")).startswith("demo-")
+        out.append(d)
+    REQUESTS.labels("scenarios", "ok").inc()
+    return {"count": len(out), "handles": out}
+
+
+async def _db_timeline(state: GatewayState, handle_id: str) -> dict | None:
+    """Read a run timeline straight from RDS (jnpa.scenario_handles + steps).
+    Powers demo/seeded timelines the live service never minted, and backstops a
+    down scenario service. Returns None if the handle isn't in RDS."""
+    from jnpa_shared.db import fetch_all, fetch_one
+
+    try:
+        head = await fetch_one(
+            "SELECT handle_id, name, status, trace_id FROM jnpa.scenario_handles WHERE handle_id = :h",
+            {"h": handle_id}, dsn=state.cfg.postgres_dsn,
+        )
+        rows = await fetch_all(
+            """
+            SELECT handle_id, step_no, ts, title, status, trigger, detail
+            FROM jnpa.scenario_steps WHERE handle_id = :h ORDER BY step_no
+            """,
+            {"h": handle_id}, dsn=state.cfg.postgres_dsn,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.debug("scenario_timeline_db_unavailable", error=str(exc))
+        return None
+    if not head and not rows:
+        return None
+    steps = []
+    for r in rows:
+        d = dict(r)
+        if isinstance(d.get("ts"), datetime):
+            d["ts"] = d["ts"].isoformat()
+        d["scenario"] = (head or {}).get("name")
+        d["trace_id"] = (head or {}).get("trace_id")
+        steps.append(d)
+    return {"handle_id": handle_id, "name": (head or {}).get("name"),
+            "status": (head or {}).get("status"),
+            "trace_id": (head or {}).get("trace_id"), "steps": steps}
+
+
 @router.get("/handle/{handle_id}/timeline")
 async def scenario_timeline(handle_id: str, state: GatewayState = Depends(get_state)) -> dict:
-    """Proxy the event-by-event timeline for a run (survives a page reload)."""
+    """Timeline for a run (survives a page reload). Prefers the scenario service;
+    falls back to reading the timeline straight from RDS so seeded/demo timelines
+    and reloads work even when the service doesn't hold the handle in memory."""
     ok, data = await _proxy(state, "GET", f"/scenarios/{handle_id}/timeline")
-    if not ok:
-        raise HTTPException(status_code=404,
-                            detail={"error": "timeline_unavailable", "handle_id": handle_id})
-    REQUESTS.labels("scenarios", "ok").inc()
-    return data
+    if ok:
+        REQUESTS.labels("scenarios", "ok").inc()
+        return data
+    # Fallback: RDS-backed timeline (demo handles + service-down resilience).
+    db = await _db_timeline(state, handle_id)
+    if db is not None:
+        REQUESTS.labels("scenarios", "ok").inc()
+        return db
+    raise HTTPException(status_code=404,
+                        detail={"error": "timeline_unavailable", "handle_id": handle_id})
 
 
 async def _db_scenarios(state: GatewayState) -> list:

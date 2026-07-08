@@ -41,12 +41,19 @@ interface RealtimeCtx {
 const Ctx = createContext<RealtimeCtx | null>(null);
 
 function wsUrl(): string {
-  const proto = location.protocol === "https:" ? "wss" : "ws";
   // Carry the DRIVER token as a query param: the WS handshake can't set an
   // Authorization header from the browser, so the gateway validates ?token=
   // when AUTH_ENABLED=true (and ignores it when auth is off).
   const token = getToken();
   const q = token ? `?token=${encodeURIComponent(token)}` : "";
+  // When VITE_GATEWAY_URL is set (statically-served build), point the socket at
+  // the gateway directly; else same-origin (dev proxy / nginx /pwa).
+  const base = (import.meta.env.VITE_GATEWAY_URL || "").replace(/\/$/, "");
+  if (base) {
+    const wsBase = base.replace(/^http/, "ws");
+    return `${wsBase}/api/ws${q}`;
+  }
+  const proto = location.protocol === "https:" ? "wss" : "ws";
   return `${proto}://${location.host}/api/ws${q}`;
 }
 

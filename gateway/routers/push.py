@@ -30,6 +30,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
+from .. import audit
 from ..logging import get_logger
 from ..metrics import REQUESTS
 from ..state import GatewayState, get_state
@@ -121,17 +122,34 @@ async def deliver(state: GatewayState, device_id: str, payload: dict) -> bool:
     and returns False — the caller still has the WS reroute frame as a fallback.
     """
     cfg = state.cfg
+    # Best-effort delivery-history row for every attempt (audit trail).
+    msg = payload.get("body") or payload.get("title") or payload.get("type") or ""
+    event_id = payload.get("alert_id") or payload.get("case_id") or payload.get("id")
+
+    def _log(status: str, provider: Any) -> None:
+        audit.spawn(
+            audit.log_notification(
+                channel="webpush", event_id=event_id, receiver=device_id,
+                message=str(msg), delivery_status=status, provider_response=provider,
+            )
+        )
+
     sub = SUBSCRIPTIONS.get(device_id)
     if sub is None:
         log.debug("push_no_subscription", device_id=device_id)
+        _log("NO_SUBSCRIPTION", {"reason": "no_subscription"})
         return False
     if not (cfg.vapid_private_key.strip() and cfg.vapid_public_key.strip()):
         log.debug("push_not_configured", device_id=device_id)
+        _log("SKIPPED", {"reason": "vapid_not_configured"})
         return False
     try:
-        return await asyncio.to_thread(_send_blocking, sub, payload, cfg)
+        ok = await asyncio.to_thread(_send_blocking, sub, payload, cfg)
+        _log("SENT" if ok else "FAILED", {"pywebpush": ok})
+        return ok
     except Exception as exc:  # noqa: BLE001
         log.warning("push_delivery_failed", device_id=device_id, error=str(exc))
+        _log("FAILED", {"error": str(exc)})
         # A 404/410 means the endpoint is gone — drop the stale subscription.
         if "410" in str(exc) or "404" in str(exc):
             SUBSCRIPTIONS.pop(device_id, None)

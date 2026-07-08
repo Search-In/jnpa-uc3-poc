@@ -3,10 +3,13 @@
 // primitives (Card / Button / Badge / Select / Spinner / EmptyState) so it reads
 // as a native part of the dashboard. All data flows through the DataAdapter
 // (getAdapter()), never fetch() directly — same pattern as every other screen.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import { Nfc, Search } from "lucide-react";
 import { getAdapter } from "@/data";
+import { useGlobalSearch } from "@/lib/searchStore";
+import { api } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -42,6 +45,22 @@ const TABS: { key: TabKey; label: string }[] = [
 
 export default function Fastag() {
   const [tab, setTab] = useState<TabKey>("balance");
+  // Global Search hand-off: a FASTag/RC query from the header omnibox (searchStore)
+  // or a ?q= deep link pre-fills + auto-runs the Balance lookup.
+  const gs = useGlobalSearch();
+  const [params] = useSearchParams();
+  const seed = useMemo(() => {
+    if ((gs.entity === "fastag" || gs.entity === "vehicle") && gs.query) {
+      return { rc: gs.query.toUpperCase(), nonce: gs.nonce };
+    }
+    const q = params.get("q");
+    return q ? { rc: q.toUpperCase(), nonce: 0 } : null;
+  }, [gs.entity, gs.query, gs.nonce, params]);
+
+  useEffect(() => {
+    if (seed) setTab("balance");
+  }, [seed?.rc, seed?.nonce]); // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <div className="h-full overflow-y-auto p-4">
       <div className="mb-3 flex items-center gap-2">
@@ -68,7 +87,7 @@ export default function Fastag() {
         ))}
       </div>
 
-      {tab === "balance" && <BalanceTab />}
+      {tab === "balance" && <BalanceTab seed={seed} />}
       {tab === "transactions" && <TransactionsTab />}
       {tab === "enroute" && <EnrouteTab />}
     </div>
@@ -116,6 +135,15 @@ function tagStatusColour(status?: string | null): string {
   return "#6b7280"; // grey
 }
 
+/** Colour for the data-source / fetch-source badge (RDS=blue, LIVE=green, SIM=amber). */
+function sourceColour(src?: string | null): string {
+  const s = (src ?? "").toUpperCase();
+  if (s === "LIVE") return "#16a34a"; // green — real ULIP vendor
+  if (s === "RDS") return "#2563eb"; // blue — persisted RDS history
+  if (s === "SIM") return "#d97706"; // amber — ULIP simulator
+  return "#6b7280"; // grey (LIVE_BATCH / unknown)
+}
+
 /** RC search bar reused by Balance + Transactions. */
 function RcSearch({
   value,
@@ -157,12 +185,21 @@ function RcSearch({
 
 // --- Balance tab ------------------------------------------------------------
 
-function BalanceTab() {
+function BalanceTab({ seed }: { seed?: { rc: string; nonce: number } | null }) {
   const [rc, setRc] = useState("");
   const m = useMutation<FastagBalance, Error, string>({
     mutationFn: (rcNumber) => getAdapter().fastagBalance(rcNumber),
   });
   const b = m.data;
+
+  // Auto-run when a seed RC arrives from Global Search / deep link.
+  useEffect(() => {
+    if (seed?.rc) {
+      setRc(seed.rc);
+      m.mutate(seed.rc);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seed?.rc, seed?.nonce]);
   return (
     <div className="max-w-2xl space-y-4">
       <Card>
@@ -248,7 +285,38 @@ function TransactionsTab() {
   });
   const [page, setPage] = useState(0);
   const m = useMutation<FastagTransactions, Error, string>({
-    mutationFn: (rcNumber) => getAdapter().fastagTransactions(rcNumber),
+    // RDS (jnpa.fastag_transactions) is the source of truth for what the tab
+    // displays. We still best-effort trigger the live ULIP fetch first — which
+    // persists any newly-fetched toll transactions into RDS (adapter unchanged)
+    // — then always read the stored history back for display. This keeps the
+    // screen consistent regardless of whether the vendor is LIVE, SIM, or
+    // unconfigured, and surfaces the true data source (RDS) in the badge.
+    mutationFn: async (rcNumber) => {
+      let live: FastagTransactions | null = null;
+      try {
+        live = await getAdapter().fastagTransactions(rcNumber); // persists into RDS
+      } catch {
+        live = null; // vendor unavailable/unconfigured — RDS remains source of truth
+      }
+      const h = await api.fastagTransactionsHistory(rcNumber, 500);
+      if (!h.transactions.length) {
+        // Nothing persisted yet. Show the fresh fetch if we have one, else error.
+        if (live && live.transactions.length) return live;
+        throw new Error(`No stored FASTag transactions found for ${rcNumber}.`);
+      }
+      return {
+        transactions: h.transactions,
+        source: "RDS",
+        fetch_source: live?.fetch_source ?? "UNAVAILABLE",
+        stored_count: h.count,
+        inserted_count: live?.inserted_count ?? 0,
+        skipped_count: live?.skipped_count ?? 0,
+        failed_count: live?.failed_count ?? 0,
+        total: h.count,
+        correlation_id: live?.correlation_id ?? "",
+        rc_number: h.rc_number,
+      } satisfies FastagTransactions;
+    },
     onSuccess: () => setPage(0),
   });
   const rows = m.data?.transactions ?? [];
@@ -281,6 +349,18 @@ function TransactionsTab() {
       </Card>
 
       {m.isError && <ErrorNote error={m.error} />}
+
+      {m.data && !m.isPending && (
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-muted-foreground">Data source</span>
+          <Badge colour={sourceColour(m.data.source)}>{m.data.source ?? "RDS"}</Badge>
+          <span className="text-muted-foreground">· fetched via</span>
+          <Badge colour={sourceColour(m.data.fetch_source)}>{m.data.fetch_source ?? "SIM"}</Badge>
+          <span className="text-muted-foreground">
+            · {m.data.stored_count ?? rows.length} stored in RDS · {m.data.inserted_count} new this fetch
+          </span>
+        </div>
+      )}
 
       {m.isPending && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">

@@ -1,0 +1,6 @@
+migration_state.json
+migration_state.json.tmp
+create_missing_indexes.generated.sql
+.env
+.venv/
+__pycache__/

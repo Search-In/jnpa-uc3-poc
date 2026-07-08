@@ -1,0 +1,4 @@
+# Migration utility dependencies (Python 3.9+)
+psycopg2-binary>=2.9.9
+tqdm>=4.66.0        # progress bars (utility degrades gracefully if absent)
+python-dotenv>=1.0.0  # optional: load a local .env file

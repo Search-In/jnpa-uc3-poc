@@ -40,7 +40,10 @@ export default function ParkingManagement() {
   const { basemap } = useMapSettings();
   const [tab, setTab] = useState<TabKey>("facilities");
 
-  const sumQ = useQuery({ queryKey: ["parking-summary"], queryFn: () => api.parkingSummary(), refetchInterval: 10000 });
+  // Distinct key from the adapter-shaped ["parking-summary"] used by the Live-Ops
+  // ParkingBoard — this one returns the {available,capacity,...} api shape, so a
+  // shared key would let one screen read the other's differently-named fields.
+  const sumQ = useQuery({ queryKey: ["parking-summary-mgmt"], queryFn: () => api.parkingSummary(), refetchInterval: 10000 });
   const availQ = useQuery({ queryKey: ["parking-avail"], queryFn: () => api.parkingAvailability(), refetchInterval: 10000 });
   const histQ = useQuery({ queryKey: ["parking-hist"], queryFn: () => api.parkingHistory(200) });
   const violQ = useQuery({ queryKey: ["parking-viol"], queryFn: () => api.parkingViolations(200) });
@@ -82,7 +85,7 @@ export default function ParkingManagement() {
   );
 
   function refreshAll() {
-    void qc.invalidateQueries({ queryKey: ["parking-summary"] });
+    void qc.invalidateQueries({ queryKey: ["parking-summary-mgmt"] });
     void qc.invalidateQueries({ queryKey: ["parking-avail"] });
     void qc.invalidateQueries({ queryKey: ["parking-hist"] });
     void qc.invalidateQueries({ queryKey: ["parking-viol"] });

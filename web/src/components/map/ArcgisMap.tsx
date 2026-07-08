@@ -56,6 +56,9 @@ import {
   type LngLat,
 } from "@/lib/roadSnap";
 import { useClickOutside } from "@/hooks/useClickOutside";
+// 3D counterpart of this map — fed the SAME live-data props so a 2D↔3D toggle is
+// a pure view change over one data source (no separate page, no simulator/mock).
+import { Scene3D } from "./scene3d/Scene3D";
 
 const DEFAULT_BASEMAP = "dark-gray-vector";
 // Spotlight halo colour (CB-safe info blue, matching the guided-tour ring tone).
@@ -155,6 +158,10 @@ export function ArcgisMap({
   className,
 }: ArcgisMapProps) {
   const { t } = useTranslation();
+  // Map view mode — flat 2D MapView (default, existing behaviour) vs. the 3D
+  // SceneView. The toggle lives in the map toolbar and swaps ONLY the canvas;
+  // every surrounding panel/filter/KPI in the host screen is untouched.
+  const [mode, setMode] = useState<"2d" | "3d">("2d");
   const viewRef = useRef<MapView | null>(null);
   // Flips true once the MapView is ready. Because /live remounts each time the
   // guided tour navigates to it, the spotlight effect must (re)run after the view
@@ -690,20 +697,67 @@ export function ArcgisMap({
       className={className ?? "h-full w-full"}
       style={{ position: "relative" }}
     >
-      <ArcgisMapWC
-        basemap={basemap}
-        // The typed `center` prop is a Point (the element's getter type), so we
-        // build one from the [lon, lat] tuple rather than passing the array.
-        center={initialCenter}
-        zoom={zoom}
-        onArcgisViewReadyChange={handleReady}
-        style={{ height: "100%", width: "100%" }}
-      />
+      {/* 2D canvas — the existing MapView. Kept mounted only in 2D so a single
+          heavy ArcGIS view exists at a time. */}
+      {mode === "2d" && (
+        <ArcgisMapWC
+          basemap={basemap}
+          // The typed `center` prop is a Point (the element's getter type), so we
+          // build one from the [lon, lat] tuple rather than passing the array.
+          center={initialCenter}
+          zoom={zoom}
+          onArcgisViewReadyChange={handleReady}
+          style={{ height: "100%", width: "100%" }}
+        />
+      )}
 
-      {/* Floating Layers control (GIS-5): hidden by default, opens on the icon,
-          closes on the icon again or an outside click. ArcGIS-widget styling.
-          Positioned just BELOW the native zoom (+/−) widget (top-left) so the two
-          stack cleanly instead of overlapping. */}
+      {/* 3D canvas — the SceneView, fed the SAME live-data props. Replaces only
+          the map canvas; the host screen's panels/KPIs are unchanged. */}
+      {mode === "3d" && (
+        <Scene3D
+          corridor={corridor}
+          gates={gates}
+          zones={zones}
+          snapshots={snapshots}
+          trucks={trucks}
+          parkingFacilities={parkingFacilities}
+          highlights={highlights}
+          highlightLabels={highlightLabels}
+          focusPoint={focusPoint}
+          basemap={basemap}
+          center={center}
+          zoom={zoom}
+          onGateClick={onGateClick}
+        />
+      )}
+
+      {/* 2D / 3D toggle — the Google-Maps-style view switcher in the map toolbar
+          (top-right). Swaps only the canvas above; the surrounding screen and its
+          data source are unchanged. */}
+      <div className="absolute right-[15px] top-[15px] z-10 flex overflow-hidden rounded-md border border-border bg-card/90 shadow-md backdrop-blur">
+        {(["2d", "3d"] as const).map((m) => (
+          <button
+            key={m}
+            type="button"
+            onClick={() => setMode(m)}
+            aria-pressed={mode === m}
+            title={m === "2d" ? t("map.view2d", "2D map") : t("map.view3d", "3D scene")}
+            className={
+              "px-3 py-1.5 text-xs font-semibold uppercase tracking-wide transition " +
+              (mode === m
+                ? "bg-severity-info text-white"
+                : "text-foreground hover:bg-muted")
+            }
+          >
+            {m === "2d" ? "2D" : "3D"}
+          </button>
+        ))}
+      </div>
+
+      {/* Floating Layers control (GIS-5): 2D only (it toggles 2D GraphicsLayers).
+          Hidden by default, opens on the icon, closes on the icon again or an
+          outside click. Positioned just BELOW the native zoom (+/−) widget. */}
+      {mode === "2d" && (
       <div ref={layersCtrlRef} className="absolute left-[15px] top-[92px] z-10">
         <button
           type="button"
@@ -747,6 +801,7 @@ export function ArcgisMap({
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }

@@ -33,7 +33,10 @@ export function HeaderActions() {
   const { alerts: liveAlerts } = useSocket();
   const seedQ = useQuery({
     queryKey: ["alerts-seed"],
-    queryFn: () => getAdapter().alerts({ limit: 20 }),
+    // Shares the ["alerts-seed"] cache with Command Center + Alerts Center at a
+    // single limit so the badge, the Command Center KPI and the Alerts Center all
+    // count the same set (no divergence from differing limits on the same key).
+    queryFn: () => getAdapter().alerts({ limit: 100 }),
   });
   const merged = useMemo(
     () => mergeAlerts(liveAlerts, seedQ.data ?? [], 50),

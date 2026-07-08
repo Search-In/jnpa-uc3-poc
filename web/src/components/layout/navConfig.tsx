@@ -21,8 +21,6 @@ import {
   BellRing,
   ScanSearch,
   Map as MapIcon,
-  Shapes,
-  TriangleAlert,
   CreditCard,
   FileText,
   UserPlus,
@@ -90,16 +88,11 @@ export const NAV_SECTIONS: NavSection[] = [
     emoji: "📊",
     items: [
       leaf("/intelligence", "nav.intelligence", ScanSearch),
-      {
-        kind: "group",
-        id: "geo",
-        i18nKey: "navGroup.geo",
-        icon: MapIcon,
-        children: [
-          leaf("/geofencing", "nav.geofencing", Shapes),
-          leaf("/geofence-events", "nav.geofenceEvents", TriangleAlert),
-        ],
-      },
+      // Geo-fencing Manager + Geo-fence Events are merged into one Geo Analytics
+      // screen, so the sidebar shows a SINGLE entry (no duplicate operational
+      // pages). Both /geofencing and /geofence-events routes remain valid for
+      // deep links; the merged screen opens at the matching default tab.
+      leaf("/geofencing", "navGroup.geo", MapIcon),
       leaf("/fastag", "nav.fastag", CreditCard),
       leaf("/reports", "nav.reports", FileText),
     ],

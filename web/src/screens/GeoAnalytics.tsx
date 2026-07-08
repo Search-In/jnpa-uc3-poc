@@ -77,7 +77,7 @@ export default function GeoAnalytics({ defaultTab = "zones" }: { defaultTab?: Ta
           <StatCard icon={MapPinned} label="Vehicles in Zone" value={insideQ.data?.vehicles?.length ?? "—"} tone="warn" loading={insideQ.isLoading} />
           <StatCard icon={LogIn} label="Entry/Exit Events" value={(eventsQ.data?.events ?? []).filter((e) => e.event_type === "ENTER" || e.event_type === "EXIT").length} tone="info" loading={eventsQ.isLoading} />
           <StatCard icon={TriangleAlert} label="Violations" value={violQ.data?.violations?.length ?? "—"} tone={(violQ.data?.violations?.length ?? 0) > 0 ? "critical" : "ok"} loading={violQ.isLoading} />
-          <StatCard icon={Cpu} label="AI Events" value={aiQ.data?.events?.length ?? "—"} tone={(aiQ.data?.events?.length ?? 0) > 0 ? "warn" : "ok"} loading={aiQ.isLoading} />
+          <StatCard icon={Cpu} label="AI Events" value={aiQ.data?.count ?? "—"} tone={(aiQ.data?.count ?? 0) > 0 ? "warn" : "ok"} loading={aiQ.isLoading} />
         </StatGrid>
       </div>
 

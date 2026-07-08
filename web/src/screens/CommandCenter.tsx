@@ -25,6 +25,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { getAdapter } from "@/data";
+import { api } from "@/lib/api";
 import { ArcgisMap } from "@/components/map/ArcgisMap";
 import { Card } from "@/components/ui/card";
 import { LastUpdated, LoadingState, ErrorState, EmptyState } from "@/components/ui/misc";
@@ -34,9 +35,6 @@ import { STATUS } from "@/lib/tokens";
 import { relativeAge } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 import type { Alert, Gate, TruckDevice } from "@/lib/types";
-
-// Alert kinds surfaced by the AI/anomaly services (for the "AI Incidents" KPI).
-const AI_KINDS = new Set(["WRONG_WAY", "ABANDONED", "ROUTE_DEVIATION", "ILLEGAL_PARKING"]);
 
 type Tone = "info" | "ok" | "warn" | "critical";
 const TONE_COLOUR: Record<Tone, string> = {
@@ -59,9 +57,13 @@ export default function CommandCenter() {
   const trucksQ = useQuery({ queryKey: ["trucks", "live-map"], queryFn: () => getAdapter().trucks(undefined, 500), refetchInterval: 5_000 });
   const queuedQ = useQuery({ queryKey: ["trucks", "AT_GATE_QUEUE"], queryFn: () => getAdapter().trucks("AT_GATE_QUEUE", 500), refetchInterval: 6_000 });
   const parkingAvailQ = useQuery({ queryKey: ["parking-availability"], queryFn: () => getAdapter().parkingAvailability(), refetchInterval: 10_000 });
-  const parkingSumQ = useQuery({ queryKey: ["parking-summary"], queryFn: () => getAdapter().parkingSummary() });
-  const customsQ = useQuery({ queryKey: ["customs-flags"], queryFn: () => getAdapter().customsFlags(), refetchInterval: 15_000 });
-  const alertsQ = useQuery({ queryKey: ["alerts-seed"], queryFn: () => getAdapter().alerts({ limit: 50 }), refetchInterval: 15_000 });
+  // Customs Flags + AI Incidents read the SAME endpoints the Customs / Reports /
+  // Geo screens use, so these KPIs match those screens exactly. Alerts share the
+  // ["alerts-seed"] cache with the header bell and Alerts Center at ONE limit so
+  // the count never diverges between them.
+  const customsQ = useQuery({ queryKey: ["customs-history"], queryFn: () => api.customsHistory(200), refetchInterval: 15_000 });
+  const aiQ = useQuery({ queryKey: ["ai-events"], queryFn: () => api.aiEvents(undefined, 200), refetchInterval: 15_000 });
+  const alertsQ = useQuery({ queryKey: ["alerts-seed"], queryFn: () => getAdapter().alerts({ limit: 100 }), refetchInterval: 15_000 });
   const carbonQ = useQuery({ queryKey: ["carbon"], queryFn: () => getAdapter().carbonRollup() });
   const leoQ = useQuery({ queryKey: ["leo-queue"], queryFn: () => getAdapter().leoQueue(), refetchInterval: 15_000 });
   const enrollQ = useQuery({ queryKey: ["enrollments"], queryFn: () => getAdapter().enrollments() });
@@ -91,9 +93,29 @@ export default function CommandCenter() {
     return Math.max(enrolled, distinctPlates);
   }, [enrollments, trucks]);
 
-  const aiIncidents = alerts.filter((a) => AI_KINDS.has(a.kind)).length;
-  const parkingSum = parkingSumQ.data;
+  const aiIncidents = aiQ.data?.count ?? 0;
+  const customsFlags = customsQ.data?.alerts?.length ?? 0;
+  // Parking totals summed from the facility list — robust regardless of the
+  // /api/parking/summary field naming, and identical to the Parking screen's
+  // facility table totals.
+  const facilities = parkingAvailQ.data ?? [];
+  const parkingTotals = useMemo(
+    () => ({
+      capacity: facilities.reduce((s, f) => s + (f.capacity ?? 0), 0),
+      occupied: facilities.reduce((s, f) => s + (f.occupied ?? 0), 0),
+      available: facilities.reduce((s, f) => s + (f.available ?? 0), 0),
+      full: facilities.filter((f) => f.status === "FULL").length,
+    }),
+    [facilities],
+  );
   const carbon = carbonQ.data;
+
+  // "Today's Violations" = incidents dated today (IST) — matches Reports' "Today's Cases".
+  const todaysViolations = useMemo(() => {
+    const list = violationsQ.data ?? [];
+    const today = new Date().toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
+    return list.filter((i) => new Date(i.ts).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" }) === today).length;
+  }, [violationsQ.data]);
 
   const lastUpdated = Math.max(
     trucksQ.dataUpdatedAt || 0,
@@ -109,10 +131,10 @@ export default function CommandCenter() {
     { key: "activeContainers", icon: Container, value: fmt(leoQ.data?.length), tone: "info", loading: leoQ.isLoading },
     { key: "gateQueue", icon: ArrowLeftRight, value: fmt(queuedQ.data?.length), tone: (queuedQ.data?.length ?? 0) > 40 ? "warn" : "info", loading: queuedQ.isLoading },
     { key: "avgEta", icon: Timer, value: avgEtaMin != null ? `${avgEtaMin} min` : "—", tone: "info", loading: trucksQ.isLoading },
-    { key: "parkingAvailable", icon: SquareParking, value: fmt(parkingSum?.total_available), tone: "ok", loading: parkingSumQ.isLoading },
-    { key: "customsFlags", icon: ShieldAlert, value: fmt(customsQ.data?.length), tone: (customsQ.data?.length ?? 0) > 0 ? "warn" : "ok", loading: customsQ.isLoading },
-    { key: "aiIncidents", icon: ScanEye, value: fmt(aiIncidents), tone: aiIncidents > 0 ? "warn" : "ok", loading: alertsQ.isLoading },
-    { key: "todaysViolations", icon: FileWarning, value: fmt(violationsQ.data?.length), tone: (violationsQ.data?.length ?? 0) > 0 ? "warn" : "ok", loading: violationsQ.isLoading },
+    { key: "parkingAvailable", icon: SquareParking, value: fmt(parkingTotals.available), tone: "ok", loading: parkingAvailQ.isLoading },
+    { key: "customsFlags", icon: ShieldAlert, value: fmt(customsFlags), tone: customsFlags > 0 ? "warn" : "ok", loading: customsQ.isLoading },
+    { key: "aiIncidents", icon: ScanEye, value: fmt(aiIncidents), tone: aiIncidents > 0 ? "warn" : "ok", loading: aiQ.isLoading },
+    { key: "todaysViolations", icon: FileWarning, value: fmt(todaysViolations), tone: todaysViolations > 0 ? "warn" : "ok", loading: violationsQ.isLoading },
     { key: "carbon", icon: Leaf, value: carbon ? fmtTonnes(carbon.total_kg) : "—", tone: "ok", loading: carbonQ.isLoading },
   ];
 
@@ -178,6 +200,18 @@ export default function CommandCenter() {
             trucks={trucks}
             parkingFacilities={parkingAvailQ.data}
           />
+          {/* Never a blank card: overlay while the corridor geometry loads or if it fails. */}
+          {(corridorQ.isLoading || corridorQ.isError) && (
+            <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-background/70 backdrop-blur-sm">
+              {corridorQ.isError ? (
+                <div className="pointer-events-auto">
+                  <ErrorState onRetry={() => corridorQ.refetch()} detail={(corridorQ.error as Error)?.message} />
+                </div>
+              ) : (
+                <LoadingState label={t("commandCenter.mapLoading", "Waiting for live corridor data…")} />
+              )}
+            </div>
+          )}
         </Card>
       </div>
 
@@ -214,13 +248,13 @@ export default function CommandCenter() {
       <div className="grid grid-cols-1 gap-3 px-4 pb-6 md:grid-cols-3">
         <GateSummary gates={gates} queued={queuedQ.data?.length ?? 0} loading={gatesQ.isLoading} />
         <ParkingSummaryCard
-          capacity={parkingSum?.total_capacity}
-          occupied={parkingSum?.total_occupied}
-          available={parkingSum?.total_available}
-          full={parkingSum?.full_count}
-          loading={parkingSumQ.isLoading}
+          capacity={parkingTotals.capacity}
+          occupied={parkingTotals.occupied}
+          available={parkingTotals.available}
+          full={parkingTotals.full}
+          loading={parkingAvailQ.isLoading}
         />
-        <CustomsSummary leo={leoQ.data ?? []} flags={customsQ.data?.length ?? 0} loading={leoQ.isLoading} />
+        <CustomsSummary leo={leoQ.data ?? []} flags={customsFlags} loading={leoQ.isLoading} />
       </div>
     </div>
   );

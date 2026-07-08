@@ -62,7 +62,7 @@ export function Shell({ children, onResetBaseline, resetDisabled }: ShellProps) 
           onClick={() => navigate("/command-center")}
           className="flex items-center gap-2.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
         >
-          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-sky-500 to-blue-700 text-white shadow-sm">
+          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm">
             <Waypoints className="h-5 w-5" strokeWidth={2.2} />
           </span>
           <span className="hidden flex-col items-start leading-tight sm:flex">
@@ -128,18 +128,29 @@ export function Shell({ children, onResetBaseline, resetDisabled }: ShellProps) 
 
 // --- Left navigation rail -----------------------------------------------------
 
+// Enterprise sidebar design system — ONE dark surface (`--sidebar` below) with
+// state changes expressed as white opacity overlays (not different colours), a
+// single restrained `primary` accent, and standardized metrics: 36px item
+// height, 18px icons @2 stroke, 13px labels, uppercase 10px section headers.
+const SB = {
+  idleText: "text-slate-400",
+  idleIcon: "text-slate-500",
+  hover: "hover:bg-white/[0.05] hover:text-slate-100",
+  activeBg: "bg-white/[0.08]",
+} as const;
+
 function Sidebar() {
   const { t } = useTranslation();
   return (
     <nav
       aria-label={t("app.title")}
-      className="hidden w-60 shrink-0 flex-col overflow-y-auto border-r border-slate-800 bg-slate-900 py-3 text-slate-300 md:flex [scrollbar-color:rgb(51_65_85)_transparent] [scrollbar-width:thin]"
+      className="hidden w-[248px] shrink-0 flex-col overflow-y-auto border-r border-white/[0.06] bg-[#0e131c] pb-2 pt-1 text-slate-400 md:flex [scrollbar-color:rgb(51_65_85)_transparent] [scrollbar-width:thin]"
     >
       {NAV_SECTIONS.map((section) => (
         <NavSectionBlock key={section.id} section={section} />
       ))}
 
-      <div className="mt-auto space-y-1.5 px-4 pb-1 pt-4">
+      <div className="mt-auto space-y-1.5 border-t border-white/[0.06] px-4 pb-1 pt-3">
         <SourceBadge />
         <p className="text-[10.5px] leading-tight text-slate-500">{t("app.corridor")}</p>
       </div>
@@ -149,16 +160,14 @@ function Sidebar() {
 
 function NavSectionBlock({ section }: { section: NavSection }) {
   const { t } = useTranslation();
-  // A section is shown when at least one of its (visible) leaves is reachable.
   const visibleItems = section.items.filter(itemVisible);
   if (visibleItems.length === 0) return null;
   return (
-    <div className="mb-1 px-3">
-      <div className="flex items-center gap-1.5 px-2 pb-1 pt-2 text-[10.5px] font-bold uppercase tracking-wider text-slate-500">
-        <span aria-hidden>{section.emoji}</span>
+    <div className="px-2.5">
+      <div className="px-2.5 pb-1 pt-4 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500/80">
         {t(section.i18nKey)}
       </div>
-      <div className="space-y-0.5">
+      <div className="space-y-px">
         {visibleItems.map((item) =>
           item.kind === "group" ? (
             <NavGroupBlock key={item.id} group={item} />
@@ -183,16 +192,23 @@ function NavGroupBlock({ group }: { group: NavGroup }) {
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-[13px] font-medium text-slate-300 transition-colors hover:bg-slate-800 hover:text-white"
+        className={cn(
+          "flex h-9 w-full items-center gap-3 rounded-md px-2.5 text-[13px] font-medium transition-colors",
+          SB.idleText,
+          SB.hover,
+        )}
       >
-        <Icon className="h-[18px] w-[18px] shrink-0 text-slate-400" strokeWidth={1.9} />
+        <Icon className={cn("h-[18px] w-[18px] shrink-0", SB.idleIcon)} strokeWidth={2} />
         <span>{t(group.i18nKey)}</span>
         <ChevronDown
-          className={cn("ml-auto h-4 w-4 shrink-0 transition-transform", !open && "-rotate-90")}
+          className={cn(
+            "ml-auto h-3.5 w-3.5 shrink-0 text-slate-500 transition-transform",
+            !open && "-rotate-90",
+          )}
         />
       </button>
       {open && (
-        <div className="mt-0.5 space-y-0.5 pl-3">
+        <div className="mb-0.5 ml-[19px] mt-px space-y-px border-l border-white/[0.06] pl-1.5">
           {children.map((c) => (
             <NavLeafLink key={c.to} leaf={c} nested />
           ))}
@@ -210,29 +226,31 @@ function NavLeafLink({ leaf, nested }: { leaf: NavLeaf; nested?: boolean }) {
       to={leaf.to}
       className={({ isActive }) =>
         cn(
-          "group relative flex items-center gap-2.5 rounded-md py-2 pr-3 text-[13px] font-medium transition-colors",
-          nested ? "pl-3.5" : "pl-3",
+          "group relative flex h-9 items-center gap-3 rounded-md pr-3 text-[13px] transition-colors",
+          nested ? "pl-2" : "pl-2.5",
           isActive
-            ? "bg-slate-800 text-white"
-            : "text-slate-300 hover:bg-slate-800/60 hover:text-white",
+            ? cn(SB.activeBg, "font-semibold text-white")
+            : cn("font-medium", SB.idleText, SB.hover),
         )
       }
     >
       {({ isActive }) => (
         <>
+          {/* One restrained accent (the shared `primary` token) — a thin left bar,
+              not a bright fill. Same accent as content-area buttons/tabs. */}
           <span
             aria-hidden
             className={cn(
-              "absolute inset-y-1 left-0 w-1 rounded-full bg-sky-400 transition-opacity",
+              "absolute inset-y-1.5 left-0 w-[3px] rounded-r-full bg-primary transition-opacity",
               isActive ? "opacity-100" : "opacity-0",
             )}
           />
           <Icon
             className={cn(
               "h-[18px] w-[18px] shrink-0",
-              isActive ? "text-sky-400" : "text-slate-400 group-hover:text-slate-200",
+              isActive ? "text-primary" : cn(SB.idleIcon, "group-hover:text-slate-300"),
             )}
-            strokeWidth={1.9}
+            strokeWidth={2}
           />
           <span className="truncate">{t(leaf.i18nKey)}</span>
         </>

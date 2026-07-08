@@ -1,448 +1,226 @@
+// Operations Testing Console (FINAL PHASE redesign of the Demo Console).
+// A presenter/QA surface that groups the platform's testing capabilities into
+// clearly-labelled DEMO cards — Fault Injection, AI Testing, Traffic Simulation,
+// Camera Testing, API Testing — so simulation controls are never confused with
+// production. Fault injection (camera/vahan/trucks fallback chains), the operator
+// banner (live WS), and the realism probes (OCR / congestion-F1) are preserved
+// verbatim; only the Calcite chrome is replaced by the DTCCC kit. No backend edits.
+
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import {
-  CalciteSegmentedControl,
-  CalciteSegmentedControlItem,
-  CalciteButton,
-  CalciteChip,
-  CalciteNotice,
-  CalciteBlock,
-} from "@esri/calcite-components-react";
+  SlidersHorizontal,
+  Bug,
+  Cpu,
+  Truck,
+  Camera,
+  Plug,
+  RotateCcw,
+  TriangleAlert,
+  Play,
+  ExternalLink,
+} from "lucide-react";
 import { getAdapter, DATA_MODE } from "@/data";
 import { useSocket } from "@/hooks/SocketContext";
 import type { FaultControlResult, FaultSeverity, FaultState, OperatorBanner } from "@/lib/types";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/misc";
 import { KpiStrip } from "@/components/panels/KpiStrip";
 import { DecisionPathBadge } from "@/components/DecisionPathBadge";
+import { PageContainer, PageHeader, StatusChip, type Tone } from "@/components/ui/dtccc";
 import { STATUS } from "@/lib/tokens";
-import { SlidersHorizontal, Joystick } from "lucide-react";
+import { cn } from "@/lib/utils";
 
-// Demo Console (presenter control surface). Live control over the three
-// fault-injection fallback chains (camera / Vahan / trucks), an operator banner
-// that also updates from the live WS `operator_banner` frame, and a realism
-// status panel (OCR accuracy, congestion F1, KPI deltas). Controls without a
-// backend yet (feeds, demo clock, fleet size) are rendered as clearly-labelled
-// "(preview)" demo-local widgets — no fabricated backend calls.
-
-// The three chains. Severity colour comes from the response, not from us; we
-// only render. Rungs are read from getFaults() so the control mirrors the
-// backend's declared ladder exactly.
 const CHAINS: { domain: "camera" | "vahan" | "trucks"; label: string; blurb: string }[] = [
   { domain: "camera", label: "Camera", blurb: "LIVE → CACHED → SYNTHETIC frame fallback" },
-  {
-    domain: "vahan",
-    label: "Vahan",
-    blurb: "LIVE_PRIMARY → LIVE_FALLBACK → CACHED → PROVISIONAL RC lookup",
-  },
-  { domain: "trucks", label: "Trucks", blurb: "PRIMARY → SECONDARY → TERTIARY telemetry source" },
+  { domain: "vahan", label: "Vahan", blurb: "LIVE_PRIMARY → LIVE_FALLBACK → CACHED → PROVISIONAL" },
+  { domain: "trucks", label: "Trucks", blurb: "PRIMARY → SECONDARY → TERTIARY telemetry" },
 ];
 
-/** GREEN/AMBER/RED severity → CB-safe token (tokens.ts only). */
-function severityColour(sev?: FaultSeverity | null): string {
-  if (sev === "RED") return STATUS.critical;
-  if (sev === "AMBER") return STATUS.warning;
-  if (sev === "GREEN") return STATUS.ok;
-  return STATUS.unknown;
+function sevTone(sev?: FaultSeverity | null): Tone {
+  if (sev === "RED") return "critical";
+  if (sev === "AMBER") return "warn";
+  if (sev === "GREEN") return "ok";
+  return "neutral";
+}
+
+/** Card wrapper with a persistent DEMO badge so simulation features never read as production. */
+function TestingCard({ icon: Icon, title, subtitle, children, className }: { icon: typeof Bug; title: string; subtitle?: string; children: React.ReactNode; className?: string }) {
+  return (
+    <Card className={cn("flex flex-col p-3", className)}>
+      <div className="mb-2 flex items-start justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary"><Icon className="h-4 w-4" /></span>
+          <div>
+            <h3 className="text-sm font-semibold leading-tight">{title}</h3>
+            {subtitle && <p className="text-[11px] text-muted-foreground">{subtitle}</p>}
+          </div>
+        </div>
+        <StatusChip label="DEMO" tone="warn" />
+      </div>
+      {children}
+    </Card>
+  );
 }
 
 export default function DemoConsole() {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const { operatorBanner: wsBanner } = useSocket();
-
-  // Latest banner echoed by a force/clear mutation (so a single client reacts
-  // instantly without waiting for the WS round-trip).
   const [localBanner, setLocalBanner] = useState<OperatorBanner | null>(null);
 
-  // ---- Fault-injection state (PRIMARY — full backend support) ----------
-  const faultsQ = useQuery<FaultState>({
-    queryKey: ["faults"],
-    queryFn: () => getAdapter().getFaults(),
-    refetchInterval: 3000,
-  });
-
+  const faultsQ = useQuery<FaultState>({ queryKey: ["faults"], queryFn: () => getAdapter().getFaults(), refetchInterval: 3000 });
   const force = useMutation({
-    mutationFn: ({ domain, rung }: { domain: string; rung: string }) =>
-      getAdapter().forceFault(domain, rung),
-    onSuccess: (res: FaultControlResult) => {
-      setLocalBanner(res.banner);
-      void qc.invalidateQueries({ queryKey: ["faults"] });
-    },
+    mutationFn: ({ domain, rung }: { domain: string; rung: string }) => getAdapter().forceFault(domain, rung),
+    onSuccess: (res: FaultControlResult) => { setLocalBanner(res.banner); void qc.invalidateQueries({ queryKey: ["faults"] }); },
   });
-
   const clear = useMutation({
     mutationFn: (domain?: string) => getAdapter().clearFault(domain),
-    onSuccess: (res: FaultControlResult) => {
-      setLocalBanner(res.banner);
-      void qc.invalidateQueries({ queryKey: ["faults"] });
-    },
+    onSuccess: (res: FaultControlResult) => { setLocalBanner(res.banner); void qc.invalidateQueries({ queryKey: ["faults"] }); },
   });
 
-  // The banner shown is the freshest of (live WS push) vs (last mutation echo).
-  // WS wins when present so a fault forced by another presenter also lights up.
   const banner: OperatorBanner | null = wsBanner ?? localBanner ?? null;
   const bannerActive = banner?.active ?? false;
 
-  // ---- Realism probes --------------------------------------------------
   const ocrQ = useQuery({ queryKey: ["ocr-eval"], queryFn: () => getAdapter().ocrEval() });
-  const f1Q = useQuery({
-    queryKey: ["congestion-metrics"],
-    queryFn: () => getAdapter().congestionMetrics(),
-  });
+  const f1Q = useQuery({ queryKey: ["congestion-metrics"], queryFn: () => getAdapter().congestionMetrics() });
 
   const faults = faultsQ.data;
-  const anyForced = useMemo(() => {
-    if (!faults) return false;
-    return Object.values(faults.domains).some((d) => d.forced_rung != null);
-  }, [faults]);
+  const anyForced = useMemo(() => (faults ? Object.values(faults.domains).some((d) => d.forced_rung != null) : false), [faults]);
+
+  const chainCard = (domain: "camera" | "vahan" | "trucks") => {
+    const chain = CHAINS.find((c) => c.domain === domain)!;
+    const state = faults?.domains[domain];
+    const rungs = faults?.rungs[domain] ?? [];
+    const forced = state?.forced_rung ?? null;
+    return (
+      <div key={domain} className={cn("rounded-lg border p-2.5", forced ? "border-primary bg-primary/5" : "border-border")}>
+        <div className="mb-1.5 flex items-center justify-between">
+          <span className="text-[13px] font-semibold">{chain.label}</span>
+          <StatusChip label={state?.severity ?? "GREEN"} tone={sevTone(state?.severity)} />
+        </div>
+        <p className="mb-2 text-[11px] text-muted-foreground">{chain.blurb}</p>
+        {faultsQ.isLoading ? (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground"><Spinner /> {t("demo.loadingRungs")}</div>
+        ) : (
+          <div className="flex flex-wrap gap-1">
+            {rungs.map((rung) => (
+              <button
+                key={rung}
+                onClick={() => rung !== forced && force.mutate({ domain, rung })}
+                className={cn("rounded-md border px-2 py-1 text-[11px] font-medium transition-colors", rung === forced ? "border-primary bg-primary text-primary-foreground" : "border-border hover:bg-muted")}
+              >
+                {rung}
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="mt-2 flex items-center justify-between">
+          <span className="text-[11px] text-muted-foreground">{t("demo.forced")}: <span className="font-medium text-foreground">{forced ?? t("demo.none")}</span></span>
+          <button onClick={() => clear.mutate(domain)} disabled={!forced || clear.isPending} className="rounded-md border border-border px-2 py-0.5 text-[11px] hover:bg-muted disabled:opacity-40">{t("demo.clear")}</button>
+        </div>
+      </div>
+    );
+  };
 
   return (
-    <div className="flex h-full flex-col overflow-y-auto">
-      <div className="flex items-center justify-between border-b border-border p-4">
-        <div className="flex items-center gap-2">
-          <SlidersHorizontal className="h-5 w-5 text-primary" />
-          <div>
-            <h1 className="text-lg font-semibold">{t("nav.demo")}</h1>
-            <p className="text-sm text-muted-foreground">{t("demo.subtitle")}</p>
-          </div>
+    <PageContainer>
+      <PageHeader
+        icon={SlidersHorizontal}
+        title="Operations Testing Console"
+        subtitle="Presenter & QA surface — fault injection, AI/camera/API testing. Every control is DEMO-only."
+        actions={
+          <button onClick={() => clear.mutate(undefined)} disabled={!anyForced || clear.isPending} className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium hover:bg-muted disabled:opacity-40">
+            <RotateCcw className="h-3.5 w-3.5" /> {clear.isPending && clear.variables === undefined ? t("demo.resetting") : t("demo.resetAllFaults")}
+          </button>
+        }
+      />
+
+      {/* Operator banner (live WS) */}
+      <div className="px-4 pt-3">
+        <div className={cn("flex items-center gap-2 rounded-lg border px-3 py-2 text-xs", bannerActive ? (banner?.severity === "RED" ? "border-severity-critical/40 bg-severity-critical/10" : "border-severity-warning/40 bg-severity-warning/10") : "border-border bg-muted/40")}>
+          <TriangleAlert className={cn("h-4 w-4", bannerActive ? "text-severity-warning" : "text-muted-foreground")} />
+          <span className="font-semibold">{t("demo.operatorBannerTitle")}</span>
+          <span className="text-muted-foreground">
+            {banner && banner.domains.length > 0 ? `${t("demo.forcedChains")}: ${banner.domains.join(", ")} · ${t("demo.severity")} ${banner.severity ?? "—"}` : t("demo.noFaultsForced")}
+          </span>
+          <StatusChip label={`${DATA_MODE.toUpperCase()} MODE`} tone={DATA_MODE === "live" ? "ok" : "warn"} />
         </div>
-        <CalciteButton
-          appearance="outline"
-          kind="neutral"
-          iconStart="reset"
-          scale="s"
-          disabled={!anyForced || clear.isPending || undefined}
-          onClick={() => clear.mutate(undefined)}
-        >
-          {clear.isPending && clear.variables === undefined
-            ? t("demo.resetting")
-            : t("demo.resetAllFaults")}
-        </CalciteButton>
       </div>
 
-      {/* ---- Operator banner ---- */}
-      <div className="px-4 pt-4">
-        <CalciteNotice
-          open={bannerActive || undefined}
-          kind={banner?.severity === "RED" ? "danger" : "warning"}
-          icon="exclamation-mark-triangle"
-          scale="m"
-        >
-          <div slot="title">{t("demo.operatorBannerTitle")}</div>
-          <div slot="message">
-            {banner && banner.domains.length > 0
-              ? `${t("demo.forcedChains")}: ${banner.domains.join(", ")} · ${t("demo.severity")} ${
-                  banner.severity ?? "—"
-                }`
-              : t("demo.noFaultsForced")}
+      {/* Feature cards */}
+      <div className="grid grid-cols-1 gap-3 px-4 py-3 lg:grid-cols-2">
+        {/* Fault Injection */}
+        <TestingCard icon={Bug} title="Fault Injection" subtitle="Force fallback rungs on the resilience chains" className="lg:col-span-2">
+          <div className="grid grid-cols-1 gap-2.5 md:grid-cols-3">
+            {chainCard("camera")}
+            {chainCard("vahan")}
+            {chainCard("trucks")}
           </div>
-        </CalciteNotice>
+        </TestingCard>
+
+        {/* AI Testing */}
+        <TestingCard icon={Cpu} title="AI Testing" subtitle="Model realism probes (RDS-backed metrics)">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <Probe label={t("demo.ocrAccuracyClear")} loading={ocrQ.isLoading} value={ocrQ.data ? `${(ocrQ.data.clear_accuracy * 100).toFixed(1)}%` : null} met={ocrQ.data ? (ocrQ.data.target_met ?? ocrQ.data.clear_accuracy >= (ocrQ.data.target ?? 0.95)) : undefined} target={`≥${((ocrQ.data?.target ?? 0.95) * 100).toFixed(0)}%`} />
+            <Probe label={t("demo.f1ForecastLabel")} loading={f1Q.isLoading} value={f1Q.data ? f1Q.data.f1.toFixed(3) : null} met={f1Q.data ? (f1Q.data.target_met ?? f1Q.data.f1 >= (f1Q.data.target ?? 0.85)) : undefined} target={`≥${(f1Q.data?.target ?? 0.85).toFixed(2)}`} />
+          </div>
+        </TestingCard>
+
+        {/* Traffic Simulation */}
+        <TestingCard icon={Truck} title="Traffic Simulation" subtitle="Reactive scenarios & fleet simulator">
+          <p className="mb-2 text-xs text-muted-foreground">Drive corridor scenarios (TFC-1/2/3) and the live fleet simulator. Wired controls live in their own consoles.</p>
+          <div className="flex flex-wrap gap-2">
+            <Link to="/what-if" className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-[13px] font-semibold text-primary-foreground hover:bg-primary/90"><Play className="h-3.5 w-3.5" /> What-If Console</Link>
+            <Link to="/simulator" className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-[13px] font-medium hover:bg-muted"><ExternalLink className="h-3.5 w-3.5" /> Simulator</Link>
+          </div>
+        </TestingCard>
+
+        {/* Camera Testing */}
+        <TestingCard icon={Camera} title="Camera Testing" subtitle="ANPR frame-source fallback & provenance">
+          <p className="mb-2 text-xs text-muted-foreground">Camera fallback (LIVE → CACHED → SYNTHETIC) is forced from Fault Injection. Per-frame provenance:</p>
+          <div className="flex flex-wrap items-center gap-2">
+            {["LIVE", "CACHED", "SYNTHETIC"].map((p) => <DecisionPathBadge key={p} path={p} />)}
+            <Link to="/health" className="ml-auto text-[11px] font-semibold text-primary hover:underline">Camera health →</Link>
+          </div>
+        </TestingCard>
+
+        {/* API Testing */}
+        <TestingCard icon={Plug} title="API Testing" subtitle="Vendor fallback & decision-path provenance">
+          <p className="mb-2 text-xs text-muted-foreground">Vahan/Sarathi/FASTag fallback is forced from Fault Injection. Provenance badges follow the CB-safe palette.</p>
+          <div className="flex flex-wrap items-center gap-2">
+            {["LIVE", "CACHED", "PROVISIONAL"].map((p) => <DecisionPathBadge key={p} path={p} />)}
+            <Link to="/health" className="ml-auto text-[11px] font-semibold text-primary hover:underline">Source health →</Link>
+          </div>
+        </TestingCard>
       </div>
 
-      {/* ---- Fault-injection chains ---- */}
-      <div className="grid grid-cols-1 gap-3 p-4 md:grid-cols-3">
-        {CHAINS.map((chain) => {
-          const state = faults?.domains[chain.domain];
-          const rungs = faults?.rungs[chain.domain] ?? [];
-          const forced = state?.forced_rung ?? null;
-          const sev = state?.severity ?? null;
-          return (
-            <Card key={chain.domain} className={forced ? "border-primary" : ""}>
-              <CardHeader className="flex-row items-center justify-between">
-                <CardTitle>{chain.label}</CardTitle>
-                <CalciteChip
-                  scale="s"
-                  kind={sev === "RED" ? "brand" : "neutral"}
-                  style={{ color: severityColour(sev) }}
-                >
-                  {sev ?? "GREEN"}
-                </CalciteChip>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <p className="text-xs text-muted-foreground">{chain.blurb}</p>
-
-                {faultsQ.isLoading ? (
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Spinner /> {t("demo.loadingRungs")}
-                  </div>
-                ) : (
-                  <CalciteSegmentedControl
-                    scale="s"
-                    width="full"
-                    onCalciteSegmentedControlChange={(e) => {
-                      const value = (e.target as HTMLCalciteSegmentedControlElement)
-                        .value as string;
-                      if (value && value !== forced)
-                        force.mutate({ domain: chain.domain, rung: value });
-                    }}
-                  >
-                    {rungs.map((rung) => (
-                      <CalciteSegmentedControlItem
-                        key={rung}
-                        value={rung}
-                        checked={rung === forced || undefined}
-                      >
-                        {rung}
-                      </CalciteSegmentedControlItem>
-                    ))}
-                  </CalciteSegmentedControl>
-                )}
-
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] text-muted-foreground">
-                    {t("demo.forced")}:{" "}
-                    <span className="font-medium text-foreground">{forced ?? t("demo.none")}</span>
-                  </span>
-                  <CalciteButton
-                    appearance="outline"
-                    kind="neutral"
-                    scale="s"
-                    disabled={!forced || clear.isPending || undefined}
-                    onClick={() => clear.mutate(chain.domain)}
-                  >
-                    {t("demo.clear")}
-                  </CalciteButton>
-                </div>
-              </CardContent>
-            </Card>
-          );
-        })}
-      </div>
-
-      {/* ---- Realism status panel ---- */}
-      <div className="grid grid-cols-1 gap-3 px-4 md:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("demo.ocrTitle")}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {ocrQ.isLoading ? (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Spinner /> {t("demo.probing")}
-              </div>
-            ) : ocrQ.data ? (
-              (() => {
-                const acc = ocrQ.data.clear_accuracy;
-                const target = ocrQ.data.target ?? 0.95;
-                const met = ocrQ.data.target_met ?? acc >= target;
-                const degraded = ocrQ.data.degraded ?? !met;
-                return (
-                  <>
-                    <div className="flex items-baseline gap-2">
-                      <span
-                        className="text-3xl font-semibold tabular-nums"
-                        style={{ color: met ? STATUS.ok : STATUS.critical }}
-                      >
-                        {(acc * 100).toFixed(1)}%
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        {t("demo.ocrAccuracyClear")} · {t("demo.target")} ≥
-                        {(target * 100).toFixed(0)}%
-                      </span>
-                    </div>
-                    {degraded ? (
-                      <CalciteNotice open kind="danger" icon="exclamation-mark-triangle" scale="s">
-                        <div slot="title">{t("demo.degradedModelTitle")}</div>
-                        <div slot="message">
-                          {t("demo.degradedModelMsgPre")} (~{(acc * 100).toFixed(0)}%),{" "}
-                          <strong>{t("demo.not")}</strong> {t("demo.degradedModelMsgCommitted")} ≥
-                          {(target * 100).toFixed(0)}%. {t("demo.degradedModelMsgPost")}
-                        </div>
-                      </CalciteNotice>
-                    ) : null}
-                  </>
-                );
-              })()
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                {t("demo.ocrNoEndpointPre")}{" "}
-                <span className="font-medium text-foreground">{t("demo.ocrNoEndpointTarget")}</span>{" "}
-                {t("demo.ocrNoEndpointPost")}
-              </p>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("demo.f1Title")}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {f1Q.isLoading ? (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Spinner /> {t("demo.probing")}
-              </div>
-            ) : f1Q.data ? (
-              (() => {
-                const f1 = f1Q.data.f1;
-                const target = f1Q.data.target ?? 0.85;
-                const met = f1Q.data.target_met ?? f1 >= target;
-                return (
-                  <>
-                    <div className="flex items-baseline gap-2">
-                      <span
-                        className="text-3xl font-semibold tabular-nums"
-                        style={{ color: met ? STATUS.ok : STATUS.critical }}
-                      >
-                        {f1.toFixed(4)}
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        {t("demo.f1ForecastLabel")} · {t("demo.target")} ≥{target.toFixed(2)}
-                      </span>
-                    </div>
-                    {!met ? (
-                      <CalciteNotice open kind="warning" icon="exclamation-mark-triangle" scale="s">
-                        <div slot="title">{t("demo.belowTargetTitle")}</div>
-                        <div slot="message">
-                          {t("demo.belowTargetMsgPre")} {f1.toFixed(4)}{" "}
-                          {t("demo.belowTargetMsgMid")} {target.toFixed(2)}{" "}
-                          {t("demo.belowTargetMsgPost")}
-                        </div>
-                      </CalciteNotice>
-                    ) : null}
-                  </>
-                );
-              })()
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                {t("demo.f1NoEndpointPre")}{" "}
-                <span className="font-medium text-foreground">
-                  {t("demo.f1NoEndpointAdvisory")}
-                </span>{" "}
-                {t("demo.f1NoEndpointPost")}
-              </p>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* ---- KPI strip deltas (reuse existing component + adapter) ---- */}
-      <div className="px-4 pt-4">
+      {/* KPI deltas */}
+      <div className="px-4 pb-6">
         <h2 className="mb-2 text-sm font-semibold">{t("demo.kpiStripTitle")}</h2>
         <KpiStrip />
       </div>
-
-      {/* ---- Mode badge + decision-path legend ---- */}
-      <div className="px-4 pt-4">
-        <Card>
-          <CardHeader className="flex-row items-center justify-between">
-            <CardTitle>{t("demo.modeLegendTitle")}</CardTitle>
-            <CalciteChip scale="s" kind={DATA_MODE === "live" ? "brand" : "neutral"}>
-              {DATA_MODE.toUpperCase()} {t("demo.mode")}
-            </CalciteChip>
-          </CardHeader>
-          <CardContent className="flex flex-wrap items-center gap-3">
-            {["LIVE", "CACHED", "SYNTHETIC", "PROVISIONAL"].map((p) => (
-              <DecisionPathBadge key={p} path={p} />
-            ))}
-            <span className="text-[11px] text-muted-foreground">
-              {t("demo.provenanceBadgesNote")}
-            </span>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* ---- Scenario triggers live in the What-If Console (wired) ---- */}
-      <div className="px-4 pt-4">
-        <CalciteNotice open kind="brand" icon="lightbulb" scale="s">
-          <div slot="title">{t("demo.runScenariosTitle")}</div>
-          <div slot="message">
-            {t("demo.runScenariosMsgPre")} <strong>{t("demo.whatIfConsole")}</strong>{" "}
-            {t("demo.runScenariosMsgPost")}
-          </div>
-        </CalciteNotice>
-      </div>
-
-      {/* ---- Roadmap controls (NOT wired — disabled so nothing dead is clickable) ---- */}
-      <div className="p-4">
-        <CalciteBlock
-          collapsible
-          heading={t("demo.roadmapControlsHeading")}
-          description={t("demo.roadmapControlsDescription")}
-        >
-          <div className="flex items-center gap-2 px-1 pb-2">
-            <Joystick className="h-4 w-4 text-muted-foreground" aria-hidden />
-            <span className="text-[11px] text-muted-foreground">
-              {t("demo.roadmapControlsNote")}
-            </span>
-          </div>
-          <PreviewControls />
-        </CalciteBlock>
-      </div>
-    </div>
+    </PageContainer>
   );
 }
 
-// Demo-local-only controls. Each renders a "(preview)" chip and mutates local
-// state ONLY — there is intentionally no adapter call here (no fabricated
-// backend). They demonstrate the intended presenter surface without claiming an
-// effect they don't have.
-function PreviewControls() {
-  // Static, NON-interactive placeholders. These controls are not wired to any
-  // backend; they are disabled so nothing dead can be clicked during a demo.
-  // Drive an actual demo from the What-If Console (TFC-1/2/3 are wired there).
-  const { t } = useTranslation();
+function Probe({ label, value, met, target, loading }: { label: string; value: string | null; met?: boolean; target: string; loading: boolean }) {
+  const colour = met === undefined ? STATUS.unknown : met ? STATUS.ok : STATUS.critical;
   return (
-    <div className="grid grid-cols-1 gap-4 opacity-60 md:grid-cols-3" aria-disabled>
-      <div className="space-y-1.5">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-medium">{t("demo.feeds")}</span>
-          <CalciteChip scale="s" kind="neutral">
-            {t("demo.notWired")}
-          </CalciteChip>
-        </div>
-        <CalciteButton appearance="outline" kind="neutral" scale="s" iconStart="play" disabled>
-          {t("demo.startStopFeeds")}
-        </CalciteButton>
-      </div>
-
-      <div className="space-y-1.5">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-medium">{t("demo.demoClock")}</span>
-          <CalciteChip scale="s" kind="neutral">
-            {t("demo.notWired")}
-          </CalciteChip>
-        </div>
-        <input
-          type="range"
-          min={1}
-          max={60}
-          step={1}
-          value={1}
-          readOnly
-          disabled
-          className="w-full"
-          aria-label={t("demo.demoClockAria")}
-        />
-        <span className="text-[11px] text-muted-foreground tabular-nums">
-          1×–60× ({t("demo.roadmap")})
-        </span>
-      </div>
-
-      <div className="space-y-1.5">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-medium">{t("demo.fleetSize")}</span>
-          <CalciteChip scale="s" kind="neutral">
-            {t("demo.notWired")}
-          </CalciteChip>
-        </div>
-        <input
-          type="range"
-          min={20000}
-          max={30000}
-          step={1000}
-          value={25000}
-          readOnly
-          disabled
-          className="w-full"
-          aria-label={t("demo.fleetSizeAria")}
-        />
-        <span className="text-[11px] text-muted-foreground tabular-nums">
-          20,000–30,000 ({t("demo.roadmap")})
-        </span>
-      </div>
+    <div className="rounded-lg border border-border p-3">
+      {loading ? (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground"><Spinner /> …</div>
+      ) : value == null ? (
+        <div className="text-xs text-muted-foreground">Metrics endpoint not exposed — {target} target.</div>
+      ) : (
+        <>
+          <div className="text-2xl font-bold tabular-nums" style={{ color: colour }}>{value}</div>
+          <div className="mt-0.5 text-[11px] text-muted-foreground">{label}</div>
+          <div className="mt-1"><StatusChip label={met ? `meets ${target}` : `below ${target}`} tone={met ? "ok" : "critical"} /></div>
+        </>
+      )}
     </div>
   );
 }

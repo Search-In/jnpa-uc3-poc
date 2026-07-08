@@ -26,7 +26,7 @@ test("primary navigation reaches every screen", async ({ page }) => {
   // Labels are the accessible-name contract for the grouped sidebar (navConfig).
   for (const name of [
     "Driver Advisory",
-    "Geo-fencing Manager",
+    "Geo Analytics",
     "Reports & Enforcement",
     "System Health",
     "What-If Console",

@@ -3,9 +3,8 @@ import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getAdapter } from "@/data";
 import type { TruckDevice } from "@/lib/types";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import {
   Select,
   SelectContent,
@@ -14,8 +13,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Spinner, EmptyState } from "@/components/ui/misc";
+import { PageContainer, PageHeader, StatGrid, StatCard } from "@/components/ui/dtccc";
 import { fmtEta } from "@/lib/utils";
-import { Navigation, CheckCircle2, AlertCircle } from "lucide-react";
+import { Navigation, CheckCircle2, AlertCircle, Route, DoorOpen } from "lucide-react";
 
 const GATES = ["G-NSICT", "G-JNPCT", "G-NSIGT", "G-BMCT"];
 
@@ -42,61 +42,88 @@ export default function DriverAdvisory() {
     );
     return ranked[0];
   };
+  const busiest = GATES.reduce(
+    (a, b) => ((depth.get(b) ?? 0) > (depth.get(a) ?? 0) ? b : a),
+    GATES[0],
+  );
 
   return (
-    <div className="h-full overflow-y-auto p-4">
-      <div className="mb-3 flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-semibold">{t("nav.advisory")}</h1>
-          <p className="text-sm text-muted-foreground">
-            {t("advisory.subtitlePrefix")} <span className="font-mono">AT_GATE_QUEUE</span> ·{" "}
-            {t("advisory.subtitleSuffix")}
-          </p>
-        </div>
-        <Badge colour="#56B4E9">{t("advisory.queuedCount", { count: devices.length })}</Badge>
+    <PageContainer>
+      <PageHeader
+        icon={Route}
+        title={t("nav.advisory")}
+        subtitle={`${t("advisory.subtitlePrefix")} AT_GATE_QUEUE · ${t("advisory.subtitleSuffix")}`}
+        updatedAt={queued.dataUpdatedAt}
+        isFetching={queued.isFetching && !queued.isLoading}
+        onRefresh={() =>
+          qc.invalidateQueries({ queryKey: ["trucks", "AT_GATE_QUEUE", "advisory"] })
+        }
+      />
+
+      <div className="px-4 pt-3">
+        <StatGrid className="lg:grid-cols-5">
+          <StatCard
+            icon={DoorOpen}
+            label={t("advisory.queuedTrucks")}
+            value={devices.length}
+            tone={devices.length > 40 ? "warn" : "info"}
+            loading={queued.isLoading}
+          />
+          {GATES.map((g) => (
+            <StatCard
+              key={g}
+              label={g.replace("G-", "")}
+              value={depth.get(g) ?? 0}
+              tone={g === busiest && (depth.get(g) ?? 0) > 0 ? "warn" : "ok"}
+              sub={g === busiest && (depth.get(g) ?? 0) > 0 ? "busiest" : "queue depth"}
+              loading={queued.isLoading}
+            />
+          ))}
+        </StatGrid>
       </div>
 
-      {queued.isLoading ? (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Spinner /> {t("advisory.loadingQueue")}
-        </div>
-      ) : devices.length === 0 ? (
-        <Card>
-          <EmptyState>{t("advisory.emptyQueue")}</EmptyState>
-        </Card>
-      ) : (
-        <Card data-guided-id="advisory-queue">
-          <CardHeader>
-            <CardTitle>{t("advisory.queuedTrucks")}</CardTitle>
-          </CardHeader>
-          <CardContent className="p-0">
-            <table className="w-full text-sm">
-              <thead className="border-b border-border text-left text-xs text-muted-foreground">
-                <tr>
-                  <th className="px-4 py-2">{t("advisory.colDevice")}</th>
-                  <th className="px-4 py-2">{t("advisory.colPlate")}</th>
-                  <th className="px-4 py-2">{t("advisory.colGate")}</th>
-                  <th className="px-4 py-2">{t("advisory.colEta")}</th>
-                  <th className="px-4 py-2">{t("advisory.colRemaining")}</th>
-                  <th className="px-4 py-2">{t("advisory.colRecommend")}</th>
-                  <th className="px-4 py-2 text-right">{t("advisory.colAction")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {devices.slice(0, 200).map((t) => (
-                  <QueueRow
-                    key={t.device_id}
-                    truck={t}
-                    recommend={recommendFor(t.gate_id)}
-                    qc={qc}
-                  />
-                ))}
-              </tbody>
-            </table>
-          </CardContent>
-        </Card>
-      )}
-    </div>
+      <div className="px-4 py-3">
+        {queued.isLoading ? (
+          <Card className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
+            <Spinner /> {t("advisory.loadingQueue")}
+          </Card>
+        ) : devices.length === 0 ? (
+          <Card>
+            <EmptyState>{t("advisory.emptyQueue")}</EmptyState>
+          </Card>
+        ) : (
+          <Card data-guided-id="advisory-queue" className="overflow-hidden">
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="border-b border-border bg-muted/60 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+                    <tr>
+                      <th className="px-4 py-2">{t("advisory.colDevice")}</th>
+                      <th className="px-4 py-2">{t("advisory.colPlate")}</th>
+                      <th className="px-4 py-2">{t("advisory.colGate")}</th>
+                      <th className="px-4 py-2">{t("advisory.colEta")}</th>
+                      <th className="px-4 py-2">{t("advisory.colRemaining")}</th>
+                      <th className="px-4 py-2">{t("advisory.colRecommend")}</th>
+                      <th className="px-4 py-2 text-right">{t("advisory.colAction")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {devices.slice(0, 200).map((t) => (
+                      <QueueRow
+                        key={t.device_id}
+                        truck={t}
+                        recommend={recommendFor(t.gate_id)}
+                        qc={qc}
+                      />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+      </div>
+    </PageContainer>
   );
 }
 

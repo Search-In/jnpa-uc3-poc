@@ -433,3 +433,249 @@ export type WsFrame =
   | { type: "scenario_step"; payload: ScenarioStep }
   | { type: "operator_banner"; payload: OperatorBanner }
   | { type: "violation_enforced"; payload: ViolationEnforcedEvent };
+
+// --- FASTag (ULIP) — mirrors gateway/routers/fastag.py response models ---
+export interface FastagBalance {
+  rc_number?: string | null;
+  tag_id?: string | null;
+  available_balance?: string | null;
+  tag_status?: string | null;
+  updated?: boolean;
+  correlation_id: string;
+  provider_name?: string | null;
+  provider_code?: string | null;
+  customer_name?: string | null;
+  available_recharge_limit?: string | null;
+  vehicle_class?: string | null;
+  vehicle_class_desc?: string | null;
+  model_name?: string | null;
+}
+
+export interface TollPlaza {
+  name?: string | null;
+  cost?: string | null;
+  lat?: number | null;
+  lng?: number | null;
+}
+
+export interface TollEnroute {
+  id: string;
+  source?: string | null;
+  destination?: string | null;
+  distance?: string | null;
+  duration?: string | null;
+  plaza_count: number;
+  toll_plaza_details: TollPlaza[];
+  correlation_id: string;
+}
+
+export interface TollEnrouteInput {
+  source_state: string;
+  source_name: string;
+  destination_state: string;
+  destination_name: string;
+  vehicle_type: string;
+}
+
+export interface FastagTransactionRow {
+  seq_no?: string | null;
+  transaction_date_time?: string | null;
+  toll_plaza_name?: string | null;
+  toll_plaza_geocode?: string | null;
+  vehicle_type?: string | null;
+  lane_direction?: string | null;
+  bank_name?: string | null;
+  status?: string | null;
+}
+
+export interface FastagTransactions {
+  inserted_count: number;
+  skipped_count: number;
+  failed_count: number;
+  total: number;
+  correlation_id: string;
+  transactions: FastagTransactionRow[];
+  /** Store the returned rows came from — "RDS" (persisted history) normally. */
+  source?: string;
+  /** Where the underlying refresh came from — "LIVE" (real ULIP) or "SIM". */
+  fetch_source?: string;
+  rc_number?: string | null;
+  stored_count?: number;
+}
+
+export interface FastagHealth {
+  module: string;
+  status: string;
+  ulip_configured: boolean;
+  db: string;
+  tables: Record<string, boolean>;
+}
+
+// --- Customs & Gate systems (RDS-backed: jnpa.gate_captures / leo_reconciliation / alerts) ---
+export interface GateCapture {
+  id: number;
+  capture_type: "ESEAL" | "FORM13" | "WEIGHBRIDGE" | "ICEGATE";
+  container_no: string | null;
+  vehicle_plate: string | null;
+  gate_id: string | null;
+  source_mode: string;
+  status: string | null;
+  captured_at: string | null;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface LeoReconciliation {
+  id: number;
+  container_no: string | null;
+  vehicle_plate: string | null;
+  leo_ready: boolean;
+  customs_flags: string[];
+  checks: Record<string, unknown>;
+  source_mode: string;
+  reconciled_at: string;
+}
+
+export interface CustomsAlert {
+  id: string;
+  ts: string;
+  kind: string;
+  severity: string;
+  plate: string | null;
+  payload: Record<string, unknown>;
+  ack: boolean;
+}
+
+// --- Parking Management (RDS-backed) ---
+export interface ParkingFacilityRow {
+  facility_id: string;
+  name: string | null;
+  lat: number | null;
+  lon: number | null;
+  gate_id: string | null;
+  capacity: number;
+  occupied: number;
+  available: number;
+  free_pct: number | null;
+  status: string;
+}
+export interface ParkingMgmtSummary {
+  source?: string;
+  capacity: number;
+  occupied: number;
+  available: number;
+  facilities: number;
+  full: number;
+}
+export interface ParkingAllocation {
+  allocated: boolean;
+  facility_id?: string;
+  slot_number?: string;
+  slot_id?: number;
+  transaction_id?: number;
+  entry_time?: string;
+  reason?: string;
+}
+export interface ParkingTransaction {
+  id: number;
+  vehicle_id: string | null;
+  driver_id: string | null;
+  facility_id: string | null;
+  slot_id: number | null;
+  entry_time: string | null;
+  exit_time: string | null;
+  duration_s: number | null;
+  status: string;
+}
+export interface ParkingViolation {
+  id: number;
+  event_type: string;
+  vehicle_id: string | null;
+  facility_id: string | null;
+  detail: Record<string, unknown>;
+  created_at: string;
+}
+
+// --- Empty Container Allocation (RDS-backed) ---
+export interface ContainerInventory {
+  container_id: string;
+  container_type: string | null;
+  location: string | null;
+  owner: string | null;
+  availability_status: string;
+  updated_at: string;
+}
+export interface ContainerAllocateInput {
+  container_type: string;
+  truck_id?: string;
+  trailer_id?: string;
+  driver_id?: string;
+  shipping_line?: string;
+  cargo_type?: string;
+  allocation_reason?: string;
+}
+export interface ContainerAllocation {
+  allocated?: boolean;
+  id?: number;
+  allocation_id?: number;
+  container_id: string | null;
+  truck_id: string | null;
+  trailer_id: string | null;
+  driver_id: string | null;
+  shipping_line: string | null;
+  cfs: string | null;
+  ecd: string | null;
+  allocation_reason: string | null;
+  allocated_at: string | null;
+  status?: string;
+}
+
+// --- Geo-fence enforcement (RDS-backed) ---
+export interface GeoVehicleInZone {
+  vehicle_id: string;
+  zone_id: string;
+  entry_time: string;
+  dwell_s: number;
+  violated: boolean;
+}
+export interface GeofenceEvent {
+  id: number;
+  vehicle_id: string | null;
+  driver_id: string | null;
+  zone_id: string | null;
+  event_type: string | null;
+  entry_time: string | null;
+  exit_time: string | null;
+  dwell_seconds: number | null;
+  violation_type: string | null;
+  action_taken: string | null;
+  created_at: string;
+}
+export interface AiEvent {
+  id: number;
+  event_type: string;
+  vehicle_id: string | null;
+  driver_id: string | null;
+  location: Record<string, unknown>;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
+// --- Vehicle & Driver Intelligence (RDS-backed aggregates) ---
+export interface VehicleIntel {
+  vehicle_number: string;
+  rc: Record<string, unknown> | null;
+  tracking: { ts: string; lat: number; lon: number; speed_kmh: number }[];
+  violations: Record<string, unknown>[];
+  challans: Record<string, unknown>[];
+  alerts: Record<string, unknown>[];
+  verification_history: Record<string, unknown>[];
+}
+export interface DriverIntel {
+  driver_key: string;
+  driver: Record<string, unknown> | null;
+  dl_history: Record<string, unknown>[];
+  activity: Record<string, unknown>[];
+  vehicle_no: string | null;
+  violations: Record<string, unknown>[];
+}

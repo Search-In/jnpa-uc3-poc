@@ -3,18 +3,106 @@
     "title": "JNPA UC-III — Traffic Decongestion",
     "shortTitle": "JNPA UC-III",
     "subtitle": "Traffic Control Room",
+    "brandTitle": "JNPA DTCCC",
+    "brandSubtitle": "Digital Twin Command & Control Centre",
     "corridor": "NH-348 · JNPA → Karal Phata"
   },
+  "navSection": {
+    "operations": "Operations",
+    "analytics": "Analytics",
+    "administration": "Administration"
+  },
+  "navGroup": {
+    "traffic": "Traffic Operations",
+    "geo": "Geo Analytics"
+  },
   "nav": {
+    "commandCenter": "Command Center",
     "live": "Live Operations",
     "advisory": "Driver Advisory",
+    "alerts": "Alerts Center",
     "geofencing": "Geo-fencing Manager",
-    "reports": "Traffic-Police Reports",
+    "geofenceEvents": "Geo-fence Events",
+    "reports": "Reports & Enforcement",
+    "fastag": "FASTag",
+    "intelligence": "Vehicle & Driver Intelligence",
+    "gateCustoms": "Customs & Gate",
+    "parking": "Parking",
     "health": "System Health",
     "whatIf": "What-If Console",
     "simulator": "Simulator",
     "demo": "Demo Console",
     "enrollments": "Driver Enrolment"
+  },
+  "search": {
+    "placeholder": "Search vehicle, driver, RC, DL, container, FASTag, alert, case…",
+    "hint": "Jump to",
+    "vehicle": "Vehicle / RC",
+    "driver": "Driver / DL",
+    "container": "Container",
+    "fastag": "FASTag",
+    "alert": "Alert",
+    "case": "Case ID"
+  },
+  "commandCenter": {
+    "title": "Command Center",
+    "subtitle": "Live corridor overview — JNPA Digital Twin Command & Control Centre",
+    "refresh": "Refresh",
+    "viewAll": "View all",
+    "topVehicles": "Top 20 Active Vehicles",
+    "topAlerts": "Top 10 Critical Alerts",
+    "noVehicles": "No active vehicles on the corridor.",
+    "gateSummary": "Gate Summary",
+    "gateThroughput": "Throughput/h",
+    "gateQueueShort": "In Queue",
+    "gateUtil": "Avg Util.",
+    "parkingSummary": "Parking Summary",
+    "parkingFull": "Full",
+    "occupied": "occupied",
+    "customsSummary": "Customs Summary",
+    "leoReady": "LEO Ready",
+    "leoHeld": "Held",
+    "customsFlagsShort": "Flags",
+    "kpi": {
+      "activeVehicles": "Active Vehicles",
+      "activeDrivers": "Active Drivers",
+      "activeContainers": "Active Containers",
+      "gateQueue": "Gate Queue",
+      "avgEta": "Average ETA",
+      "parkingAvailable": "Parking Available",
+      "customsFlags": "Customs Flags",
+      "aiIncidents": "AI Incidents",
+      "todaysViolations": "Today's Violations",
+      "carbon": "Carbon Emission"
+    },
+    "col": {
+      "vehicle": "Vehicle",
+      "driver": "Driver",
+      "location": "Current Location",
+      "eta": "ETA",
+      "status": "Status",
+      "updated": "Last Updated"
+    }
+  },
+  "alertsCenter": {
+    "title": "Alerts Center",
+    "subtitle": "Every active corridor alert, categorised and time-filtered",
+    "empty": "No alerts match these filters.",
+    "cat": {
+      "all": "All",
+      "critical": "Critical",
+      "traffic": "Traffic",
+      "parking": "Parking",
+      "geofence": "Geo-fence",
+      "customs": "Customs",
+      "ai": "AI",
+      "vehicle": "Vehicle"
+    },
+    "range": {
+      "today": "Today",
+      "24h": "Last 24 Hours",
+      "7d": "Last 7 Days"
+    }
   },
   "common": {
     "resetToBaseline": "Reset to baseline",
@@ -31,7 +119,11 @@
     "cancel": "Cancel",
     "retry": "Retry",
     "collapse": "Collapse",
-    "expand": "Expand"
+    "expand": "Expand",
+    "errorTitle": "Unable to load live data",
+    "errorReason": "Backend / database is currently unavailable.",
+    "lastUpdated": "Updated {{time}} IST",
+    "refreshing": "Refreshing…"
   },
   "header": {
     "moreOptions": "More options",
@@ -199,7 +291,11 @@
     "throughputTrend": "Throughput · trend",
     "loadingGateKpis": "loading gate KPIs…",
     "queue": "queue",
-    "target": "target"
+    "target": "target",
+    "rtLive": "Live",
+    "rtPolling": "Polling",
+    "rtLiveHint": "Real-time WebSocket connected — updates are pushed live.",
+    "rtPollHint": "WebSocket offline — auto-refreshing on a timer (fallback)."
   },
   "tas": {
     "title": "Terminal Appointment System",
@@ -316,7 +412,9 @@
       "TFC-1": "Close G-NSICT; forecaster predicts spillover; trucks auto-re-route; TAS slots rescheduled.",
       "TFC-2": "Inject a wrong-way track at Karal Phata; anomaly fires; e-Challan issued with evidence.",
       "TFC-3": "UC-II DPD release spike (2.5×) → corridor demand surge; forecaster build-up; gate-slot reissue."
-    }
+    },
+    "demoTimelines": "Demo & recorded timelines",
+    "demoTimelinesHint": "Preview a recorded run (read-only — does not start a live simulation)"
   },
   "reports": {
     "kind": "Kind",

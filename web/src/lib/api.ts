@@ -196,6 +196,21 @@ export const api = {
       method: "POST",
       body: JSON.stringify(handleId ? { handle_id: handleId } : {}),
     }),
+  // Recent scenario run handles (What-If demo timeline picker) — RDS-backed.
+  scenarioHandles: (limit = 50) =>
+    http<{
+      count: number;
+      handles: {
+        handle_id: string;
+        name: string;
+        status: string;
+        trace_id?: string | null;
+        started_at?: string | null;
+        ended_at?: string | null;
+        step_count: number;
+        is_demo: boolean;
+      }[];
+    }>(`/api/scenarios/handles?limit=${limit}`),
   scenarioTimeline: (handleId: string) =>
     http<{
       handle_id: string;
@@ -205,6 +220,34 @@ export const api = {
       steps: import("./types").ScenarioStep[];
     }>(`/api/scenarios/handle/${handleId}/timeline`),
 
+  // --- FASTag (ULIP) — /api/fastag/* ---
+  fastagBalance: (rcNumber: string) =>
+    http<import("./types").FastagBalance>("/api/fastag/balance", {
+      method: "POST",
+      body: JSON.stringify({ rc_number: rcNumber }),
+    }),
+  fastagTransactions: (rcNumber: string) =>
+    http<import("./types").FastagTransactions>("/api/fastag/transactions", {
+      method: "POST",
+      body: JSON.stringify({ rc_number: rcNumber }),
+    }),
+  // Stored transactions for an RC straight from jnpa.fastag_transactions (no
+  // vendor call). Used as the display source and as a fallback when the live
+  // ULIP fetch is unavailable, so the tab always shows persisted RDS history.
+  fastagTransactionsHistory: (rcNumber: string, limit = 100) =>
+    http<{
+      source: string;
+      rc_number: string;
+      count: number;
+      transactions: import("./types").FastagTransactionRow[];
+    }>(`/api/fastag/transactions/history?rc_number=${encodeURIComponent(rcNumber)}&limit=${limit}`),
+  tollEnroute: (body: import("./types").TollEnrouteInput) =>
+    http<import("./types").TollEnroute>("/api/fastag/toll-enroute", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  fastagHealth: () => http<import("./types").FastagHealth>("/api/fastag/health"),
+
   // --- Terminal Appointment System (TFC-1) ---
   tasSlots: (gateId?: string) =>
     http<{ slots: import("./types").TasSlot[] }>(
@@ -212,4 +255,128 @@ export const api = {
     ),
 
   health: () => http<{ status: string; ws_clients: number }>("/healthz"),
+
+  // --- Customs & Gate systems (e-Seal / Form-13 / Weighbridge / ICEGATE) ---
+  // All RDS-backed (jnpa.gate_captures / leo_reconciliation / alerts).
+  gateProviders: () =>
+    http<{ sources: Record<string, { mode: string; requested: string; url_configured: boolean }> }>(
+      "/api/gate-data/providers",
+    ),
+  gateCaptures: (type?: string, containerNo?: string, limit = 100) => {
+    const q = new URLSearchParams();
+    if (type) q.set("type", type);
+    if (containerNo) q.set("container_no", containerNo);
+    q.set("limit", String(limit));
+    return http<{ count: number; captures: import("./types").GateCapture[] }>(
+      `/api/gate-data/captures?${q.toString()}`,
+    );
+  },
+  gateReconciliations: (ready?: boolean, limit = 100) => {
+    const q = new URLSearchParams();
+    if (ready !== undefined) q.set("ready", String(ready));
+    q.set("limit", String(limit));
+    return http<{ count: number; reconciliations: import("./types").LeoReconciliation[] }>(
+      `/api/gate-data/reconciliations?${q.toString()}`,
+    );
+  },
+  customsHistory: (limit = 200) =>
+    http<{ count: number; alerts: import("./types").CustomsAlert[] }>(
+      `/api/gate-data/customs/history?limit=${limit}`,
+    ),
+
+  // --- Parking Management (RDS-backed: parking_facilities/slots/transactions/events) ---
+  parkingAvailability: () =>
+    http<{ source: string; facilities: import("./types").ParkingFacilityRow[] }>(
+      "/api/parking/availability",
+    ),
+  parkingSummary: () => http<import("./types").ParkingMgmtSummary>("/api/parking/summary"),
+  parkingAllocate: (facilityId: string, vehicleId: string, driverId?: string) =>
+    http<import("./types").ParkingAllocation>("/api/parking/allocate", {
+      method: "POST",
+      body: JSON.stringify({ facility_id: facilityId, vehicle_id: vehicleId, driver_id: driverId }),
+    }),
+  parkingRelease: (vehicleId: string) =>
+    http<{ released: boolean; facility_id?: string; duration_s?: number }>("/api/parking/release", {
+      method: "POST",
+      body: JSON.stringify({ vehicle_id: vehicleId }),
+    }),
+  parkingHistory: (limit = 100) =>
+    http<{ count: number; transactions: import("./types").ParkingTransaction[] }>(
+      `/api/parking/history?limit=${limit}`,
+    ),
+  parkingViolations: (limit = 100) =>
+    http<{ count: number; violations: import("./types").ParkingViolation[] }>(
+      `/api/parking/violations?limit=${limit}`,
+    ),
+
+  // --- Empty Container Allocation (RDS-backed) ---
+  containersAvailable: (containerType?: string, limit = 200) => {
+    const q = new URLSearchParams();
+    if (containerType) q.set("container_type", containerType);
+    q.set("limit", String(limit));
+    return http<{
+      count: number;
+      containers: import("./types").ContainerInventory[];
+      by_type?: any[];
+    }>(`/api/empty/containers/available?${q.toString()}`);
+  },
+  containersAllocate: (body: import("./types").ContainerAllocateInput) =>
+    http<import("./types").ContainerAllocation>("/api/empty/containers/allocate", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  containersAllocationHistory: (limit = 100) =>
+    http<{ count: number; allocations: import("./types").ContainerAllocation[] }>(
+      `/api/empty/containers/allocation/history?limit=${limit}`,
+    ),
+
+  // --- Geo-fence enforcement (RDS-backed: geofence_events, DB-driven engine) ---
+  geoZonesActive: () =>
+    http<{
+      count: number;
+      source: string;
+      zones: { id: string; name: string; kind: string; points: number }[];
+    }>("/api/geo/zones-active"),
+  geoVehiclesInZones: () =>
+    http<{ count: number; vehicles: import("./types").GeoVehicleInZone[] }>(
+      "/api/geo/vehicles-in-zones",
+    ),
+  geoEvents: (eventType?: string, limit = 200) => {
+    const q = new URLSearchParams();
+    if (eventType) q.set("event_type", eventType);
+    q.set("limit", String(limit));
+    return http<{ count: number; events: import("./types").GeofenceEvent[] }>(
+      `/api/geo/events?${q.toString()}`,
+    );
+  },
+  geoViolations: (limit = 200) =>
+    http<{ count: number; violations: import("./types").GeofenceEvent[] }>(
+      `/api/geo/violations?limit=${limit}`,
+    ),
+  aiEvents: (eventType?: string, limit = 200) => {
+    const q = new URLSearchParams();
+    if (eventType) q.set("event_type", eventType);
+    q.set("limit", String(limit));
+    return http<{ count: number; events: import("./types").AiEvent[] }>(
+      `/api/ai/events?${q.toString()}`,
+    );
+  },
+
+  // --- Vehicle & Driver Intelligence (Vahan/Sarathi, RDS-backed) ---
+  vehicleIntel: (plate: string) =>
+    http<import("./types").VehicleIntel>(`/api/vahan/vehicle-intel/${encodeURIComponent(plate)}`),
+  driverIntel: (key: string) =>
+    http<import("./types").DriverIntel>(`/api/vahan/driver-intel/${encodeURIComponent(key)}`),
+  dlLookup: (dl: string) =>
+    http<{ dl: string; decision_path?: string; status?: string; record?: Record<string, unknown> }>(
+      `/api/vahan/dl/${encodeURIComponent(dl)}`,
+    ),
+  verificationHistory: (limit = 100) =>
+    http<{ count: number; history: Record<string, unknown>[] }>(
+      `/api/vahan/verification-history?limit=${limit}`,
+    ),
+  dlHistory: (limit = 100) =>
+    http<{ count: number; history: Record<string, unknown>[] }>(
+      `/api/vahan/dl-history?limit=${limit}`,
+    ),
 };

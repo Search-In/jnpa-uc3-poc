@@ -143,7 +143,10 @@ def test_facilities_inside_geofenced_port_area():
 
 # --- in-process API checks --------------------------------------------------
 
-def test_api_endpoints_match_pure_functions():
+def test_api_endpoints_degrade_gracefully_without_db():
+    # The live board is RDS-backed (no synthetic occupancy). Without a reachable
+    # DB the service must degrade gracefully — 200 with an explicit source, never
+    # 500 — and never fabricate occupancy numbers.
     from starlette.testclient import TestClient
 
     from parking.app import app
@@ -153,27 +156,23 @@ def test_api_endpoints_match_pure_functions():
         assert health.status_code == 200
         assert health.json()["facilities"] == len(fac.FACILITIES)
 
-        avail = client.get("/availability", params={"minute_of_day": 630})
+        avail = client.get("/availability")
         assert avail.status_code == 200
-        assert avail.json()["facilities"] == fac.snapshot(630)
+        abody = avail.json()
+        assert abody["source"] in {"rds", "unavailable"}
+        for f in abody.get("facilities", []):
+            assert f["available"] == f["capacity"] - f["occupied"]
 
-        summ = client.get("/summary", params={"minute_of_day": 630})
+        summ = client.get("/summary")
         assert summ.status_code == 200
-        body = summ.json()
-        for k, v in fac.summary(630).items():
-            assert body[k] == v
+        sbody = summ.json()
+        assert sbody["source"] in {"rds", "unavailable"}
+        assert sbody["available"] == sbody["capacity"] - sbody["occupied"]
 
+        # /facilities falls back to the static inventory when the DB is unseeded.
         inv = client.get("/facilities")
         assert inv.status_code == 200
-        assert inv.json()["facilities"] == fac.inventory()
-
-
-def test_api_rejects_out_of_range_minute():
-    from starlette.testclient import TestClient
-
-    from parking.app import app
-
-    with TestClient(app) as client:
-        # FastAPI Query(lt=1440) returns 422 for an out-of-range value.
-        assert client.get("/availability", params={"minute_of_day": 1440}).status_code == 422
-        assert client.get("/availability", params={"minute_of_day": -1}).status_code == 422
+        ibody = inv.json()
+        assert ibody["source"] in {"rds", "fallback"}
+        if ibody["source"] == "fallback":
+            assert ibody["facilities"] == fac.inventory()

@@ -1,0 +1,16 @@
+# LOCAL-ONLY compose override (auto-loaded by `docker compose`; untracked).
+# The production `web` image ships an nginx TLS config for searchintech.in that
+# cannot start locally (no Let's Encrypt certs, listens on 80/443 not 3000).
+# Here we mount a plain-HTTP-on-3000 config over the baked one and point the
+# healthcheck at it, so the dashboard runs locally without touching the image or
+# the committed production config. Delete this file to restore stock behaviour.
+services:
+  web:
+    volumes:
+      - ./web/nginx/default.local.conf:/etc/nginx/conf.d/default.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:3000/ >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 5

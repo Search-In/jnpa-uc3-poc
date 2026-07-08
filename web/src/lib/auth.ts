@@ -29,10 +29,22 @@ const CONTROL_ROOM: Role[] = ["JNPA_TRAFFIC", "DTCCC_ADMIN", "TERMINAL_OPS"];
 /** Screen path -> roles allowed to see it. Mirrors gateway/auth.py _POLICY so the
  *  UI never offers a screen whose data the gateway would 403. */
 export const SCREEN_ROLES: Record<string, Role[]> = {
+  // Command Center is the shared DTCCC landing page — every role lands here.
+  "/command-center": ALL_ROLES,
+  // Consolidated Alerts Center — control room + enforcement + customs.
+  "/alerts": [...CONTROL_ROOM, "TRAFFIC_POLICE", "CUSTOMS"],
   "/live": ALL_ROLES,
   "/advisory": [...CONTROL_ROOM, "DRIVER"],
   "/geofencing": [...CONTROL_ROOM, "TRAFFIC_POLICE"],
+  "/geofence-events": [...CONTROL_ROOM, "TRAFFIC_POLICE"],
   "/reports": [...CONTROL_ROOM, "TRAFFIC_POLICE", "CUSTOMS"],
+  // FASTag ULIP — mirrors gateway/auth.py /api/fastag policy (control room + customs).
+  "/fastag": [...CONTROL_ROOM, "CUSTOMS"],
+  "/intelligence": [...CONTROL_ROOM, "TRAFFIC_POLICE", "CUSTOMS"],
+  // Customs & Gate console (e-Seal/Form-13/Weighbridge/ICEGATE/Auto-LEO).
+  "/gate-customs": [...CONTROL_ROOM, "CUSTOMS"],
+  // Parking Management dashboard — control room + traffic police.
+  "/parking": [...CONTROL_ROOM, "TRAFFIC_POLICE"],
   // Driver enrolment approval — biometric-sensitive, mirrors the gateway
   // /api/identity policy (customs + admin only).
   "/enrollments": ["DTCCC_ADMIN", "CUSTOMS"],

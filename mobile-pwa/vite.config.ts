@@ -59,5 +59,15 @@ export default defineConfig({
       "/api": { target: GATEWAY, changeOrigin: true },
     },
   },
+  // `vite preview` (serving the built bundle) also proxies /api -> gateway so a
+  // production-preview of the PWA fetches real data without a separate nginx.
+  preview: {
+    host: "0.0.0.0",
+    port: 3001,
+    proxy: {
+      "/api/ws": { target: GATEWAY.replace(/^http/, "ws"), ws: true, changeOrigin: true },
+      "/api": { target: GATEWAY, changeOrigin: true },
+    },
+  },
   build: { outDir: "dist", sourcemap: false, target: "es2020" },
 });

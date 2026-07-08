@@ -4,10 +4,16 @@ import { Shell } from "@/components/layout/Shell";
 import { useScenario } from "@/hooks/ScenarioContext";
 import { authEnabled, canSeeScreen, getRole, type Role } from "@/lib/auth";
 import { LoginGate } from "@/components/auth/LoginGate";
+import CommandCenter from "@/screens/CommandCenter";
+import AlertsCenter from "@/screens/AlertsCenter";
 import LiveOperations from "@/screens/LiveOperations";
 import DriverAdvisory from "@/screens/DriverAdvisory";
-import GeofencingManager from "@/screens/GeofencingManager";
+import GeoAnalytics from "@/screens/GeoAnalytics";
 import PoliceReports from "@/screens/PoliceReports";
+import Fastag from "@/screens/Fastag";
+import GateCustoms from "@/screens/GateCustoms";
+import Intelligence from "@/screens/Intelligence";
+import ParkingManagement from "@/screens/ParkingManagement";
 import SystemHealth from "@/screens/SystemHealth";
 import WhatIfConsole from "@/screens/WhatIfConsole";
 import DemoConsole from "@/screens/DemoConsole";
@@ -84,7 +90,23 @@ function DashboardShell({
     <Shell onResetBaseline={reset} resetDisabled={scenario === "none"}>
       <main className="min-h-0 flex-1 overflow-hidden" style={{ height: "100%" }}>
         <Routes>
-          <Route path="/" element={<Navigate to="/live" replace />} />
+          <Route path="/" element={<Navigate to="/command-center" replace />} />
+          <Route
+            path="/command-center"
+            element={
+              <Guard path="/command-center">
+                <CommandCenter />
+              </Guard>
+            }
+          />
+          <Route
+            path="/alerts"
+            element={
+              <Guard path="/alerts">
+                <AlertsCenter />
+              </Guard>
+            }
+          />
           <Route path="/live" element={<LiveOperations />} />
           <Route
             path="/advisory"
@@ -98,7 +120,7 @@ function DashboardShell({
             path="/geofencing"
             element={
               <Guard path="/geofencing">
-                <GeofencingManager />
+                <GeoAnalytics defaultTab="zones" />
               </Guard>
             }
           />
@@ -107,6 +129,46 @@ function DashboardShell({
             element={
               <Guard path="/reports">
                 <PoliceReports />
+              </Guard>
+            }
+          />
+          <Route
+            path="/fastag"
+            element={
+              <Guard path="/fastag">
+                <Fastag />
+              </Guard>
+            }
+          />
+          <Route
+            path="/gate-customs"
+            element={
+              <Guard path="/gate-customs">
+                <GateCustoms />
+              </Guard>
+            }
+          />
+          <Route
+            path="/intelligence"
+            element={
+              <Guard path="/intelligence">
+                <Intelligence />
+              </Guard>
+            }
+          />
+          <Route
+            path="/parking"
+            element={
+              <Guard path="/parking">
+                <ParkingManagement />
+              </Guard>
+            }
+          />
+          <Route
+            path="/geofence-events"
+            element={
+              <Guard path="/geofence-events">
+                <GeoAnalytics defaultTab="events" />
               </Guard>
             }
           />
@@ -151,7 +213,7 @@ function DashboardShell({
               </Guard>
             }
           />
-          <Route path="*" element={<Navigate to="/live" replace />} />
+          <Route path="*" element={<Navigate to="/command-center" replace />} />
         </Routes>
       </main>
 

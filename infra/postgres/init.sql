@@ -509,3 +509,385 @@ CREATE INDEX IF NOT EXISTS idx_case_audit_case ON jnpa.case_audit (case_id, id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_alerts_case_kind
     ON jnpa.alerts ((payload->>'case_id'), kind)
     WHERE payload->>'source' = 'violation-console';
+
+-- ===========================================================================
+-- ULIP FASTag foundation layer (greenfield). Three vendor APIs land here:
+--   * RC -> FASTag Balance     -> jnpa.fastag_balance      (RC-keyed snapshot)
+--   * RC -> FASTag Transaction -> jnpa.fastag_transactions (one row per crossing)
+--   * Toll Enroute             -> jnpa.toll_enroute        (route + plaza JSONB)
+-- Money is NUMERIC(10,2) everywhere (never float); all timestamps are timestamptz.
+-- All DDL is IF NOT EXISTS so a running DB can be topped up by re-applying this
+-- block (init.sql itself only runs on first container start).
+-- ===========================================================================
+
+-- A) RC-based FASTag balance snapshot (latest known state per registration).
+CREATE TABLE IF NOT EXISTS jnpa.fastag_balance (
+    rc_number                 text PRIMARY KEY,
+    tag_id                    text,
+    provider_name             text,
+    provider_code             text,
+    customer_name             text,
+    available_recharge_limit  numeric(10,2),
+    available_balance         numeric(10,2),
+    tag_status                text,
+    vehicle_class             text,
+    vehicle_class_desc        text,
+    model_name                text,              -- nullable per ULIP spec
+    updated_at                timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_fastag_balance_tag
+    ON jnpa.fastag_balance (tag_id);
+
+-- B) FASTag plaza transactions (RC -> Transaction API). seq_no is the vendor's
+-- idempotency key: UNIQUE so a replayed batch cannot double-insert a crossing.
+CREATE TABLE IF NOT EXISTS jnpa.fastag_transactions (
+    id                     uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tag_id                 text,
+    rc_number              text,
+    seq_no                 text UNIQUE,
+    transaction_date_time  timestamptz,
+    lane_direction         text,
+    toll_plaza_name        text,
+    toll_plaza_geocode     text,               -- raw "lat,lng" as returned by vendor
+    vehicle_type           text,
+    bank_name              text,               -- batch-level (provider returns once per lookup)
+    status                 text,               -- batch-level tag status
+    created_at             timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_fastag_txn_rc
+    ON jnpa.fastag_transactions (rc_number, transaction_date_time DESC);
+CREATE INDEX IF NOT EXISTS idx_fastag_txn_tag
+    ON jnpa.fastag_transactions (tag_id, transaction_date_time DESC);
+
+-- C) Toll Enroute route lookups. The full toll_plaza_details array is preserved
+-- verbatim as JSONB (name, cost, lat, lng per plaza) so no array data is lost.
+CREATE TABLE IF NOT EXISTS jnpa.toll_enroute (
+    id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    client_id           text,
+    source_state        text,
+    source_name         text,
+    destination_state   text,
+    destination_name    text,
+    vehicle_type        text,
+    duration            text,
+    distance            numeric(10,2),
+    toll_plaza_details  jsonb NOT NULL DEFAULT '[]'::jsonb,
+    created_at          timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_toll_enroute_route
+    ON jnpa.toll_enroute (source_name, destination_name, created_at DESC);
+
+-- ===========================================================================
+-- Common audit & persistence framework (single source of truth) — see
+-- infra/postgres/migrations/0003_audit_persistence.sql for the standalone/RDS
+-- apply path and gateway/audit.py::ensure_audit_schema() for runtime top-up.
+--   api_audit_log       : every external API request + response (integration audit)
+--   digital_twin_events : every operational/AI event, unified timeline
+--   notifications       : delivery audit trail (webpush/sms/ws/email)
+--   decision_audit      : durable replacement for the in-memory DecisionRing
+--   geofence_events     : zone enter/exit + dwell violations
+-- All DDL is IF NOT EXISTS so re-applying never touches existing data.
+-- ===========================================================================
+
+CREATE TABLE IF NOT EXISTS jnpa.api_audit_log (
+    id               bigserial PRIMARY KEY,
+    service_name     text NOT NULL,
+    endpoint         text,
+    method           text,
+    request_payload  jsonb NOT NULL DEFAULT '{}'::jsonb,
+    response_payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+    status_code      integer,
+    latency_ms       numeric(10,2),
+    error            text,
+    transaction_id   text,
+    created_at       timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_api_audit_service_ts ON jnpa.api_audit_log (service_name, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_api_audit_txn        ON jnpa.api_audit_log (transaction_id);
+CREATE INDEX IF NOT EXISTS idx_api_audit_ts         ON jnpa.api_audit_log (created_at DESC);
+
+CREATE TABLE IF NOT EXISTS jnpa.digital_twin_events (
+    id           bigserial PRIMARY KEY,
+    event_type   text NOT NULL,
+    vehicle_id   text,
+    driver_id    text,
+    location     jsonb NOT NULL DEFAULT '{}'::jsonb,
+    payload      jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at   timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_dt_events_type_ts    ON jnpa.digital_twin_events (event_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_dt_events_vehicle_ts ON jnpa.digital_twin_events (vehicle_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_dt_events_driver_ts  ON jnpa.digital_twin_events (driver_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_dt_events_ts         ON jnpa.digital_twin_events (created_at DESC);
+
+CREATE TABLE IF NOT EXISTS jnpa.notifications (
+    id                bigserial PRIMARY KEY,
+    event_id          text,
+    channel           text NOT NULL,
+    receiver          text,
+    message           text,
+    delivery_status   text NOT NULL DEFAULT 'PENDING'
+                      CHECK (delivery_status IN
+                             ('PENDING','SENT','DELIVERED','FAILED','SKIPPED','NO_SUBSCRIPTION')),
+    provider_response jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at        timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_ts       ON jnpa.notifications (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_receiver ON jnpa.notifications (receiver, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_status   ON jnpa.notifications (delivery_status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_event    ON jnpa.notifications (event_id);
+
+CREATE TABLE IF NOT EXISTS jnpa.decision_audit (
+    id            bigserial PRIMARY KEY,
+    request_id    text,
+    input_data    jsonb NOT NULL DEFAULT '{}'::jsonb,
+    rule_executed text,
+    decision      text,
+    action_taken  text,
+    created_at    timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_decision_audit_ts      ON jnpa.decision_audit (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_decision_audit_request ON jnpa.decision_audit (request_id);
+CREATE INDEX IF NOT EXISTS idx_decision_audit_rule    ON jnpa.decision_audit (rule_executed, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS jnpa.geofence_events (
+    id             bigserial PRIMARY KEY,
+    vehicle_id     text,
+    zone_id        text,
+    entry_time     timestamptz,
+    exit_time      timestamptz,
+    violation_type text,
+    action_taken   text,
+    created_at     timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_geofence_events_vehicle ON jnpa.geofence_events (vehicle_id, entry_time DESC);
+CREATE INDEX IF NOT EXISTS idx_geofence_events_zone    ON jnpa.geofence_events (zone_id, entry_time DESC);
+CREATE INDEX IF NOT EXISTS idx_geofence_events_ts      ON jnpa.geofence_events (created_at DESC);
+
+-- ===========================================================================
+-- Customs & Gate systems (Phase 2) — e-Seal / Form-13 / Weighbridge / ICEGATE
+-- capture + Auto-LEO reconciliation. See migration 0004_gate_customs.sql and
+-- gate-data/persistence.py::ensure_gate_schema for the runtime top-up path.
+-- ===========================================================================
+CREATE TABLE IF NOT EXISTS jnpa.gate_captures (
+    id            bigserial PRIMARY KEY,
+    capture_type  text NOT NULL
+                  CHECK (capture_type IN ('ESEAL','FORM13','WEIGHBRIDGE','ICEGATE')),
+    container_no  text,
+    vehicle_plate text,
+    gate_id       text,
+    source_mode   text NOT NULL DEFAULT 'sim',
+    status        text,
+    captured_at   timestamptz,
+    payload       jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (container_no, capture_type, captured_at)
+);
+CREATE INDEX IF NOT EXISTS idx_gate_captures_container ON jnpa.gate_captures (container_no);
+CREATE INDEX IF NOT EXISTS idx_gate_captures_plate     ON jnpa.gate_captures (vehicle_plate);
+CREATE INDEX IF NOT EXISTS idx_gate_captures_type_ts   ON jnpa.gate_captures (capture_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_gate_captures_ts        ON jnpa.gate_captures (created_at DESC);
+
+CREATE TABLE IF NOT EXISTS jnpa.leo_reconciliation (
+    id             bigserial PRIMARY KEY,
+    container_no   text,
+    vehicle_plate  text,
+    leo_ready      boolean NOT NULL DEFAULT false,
+    customs_flags  jsonb NOT NULL DEFAULT '[]'::jsonb,
+    checks         jsonb NOT NULL DEFAULT '{}'::jsonb,
+    source_mode    text NOT NULL DEFAULT 'sim',
+    reconciled_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_leo_recon_container ON jnpa.leo_reconciliation (container_no, reconciled_at DESC);
+CREATE INDEX IF NOT EXISTS idx_leo_recon_ready     ON jnpa.leo_reconciliation (leo_ready, reconciled_at DESC);
+CREATE INDEX IF NOT EXISTS idx_leo_recon_ts        ON jnpa.leo_reconciliation (reconciled_at DESC);
+
+-- ==== Parking Management (migration 0005) ====
+CREATE SCHEMA IF NOT EXISTS jnpa;
+SET search_path TO jnpa, public;
+CREATE TABLE IF NOT EXISTS jnpa.parking_facilities (
+    id            text PRIMARY KEY,
+    facility_name text NOT NULL,
+    location      jsonb NOT NULL DEFAULT '{}'::jsonb,   -- {lat,lon,gate_id}
+    capacity      integer NOT NULL DEFAULT 0,
+    status        text NOT NULL DEFAULT 'OPEN',         -- OPEN | CLOSED | FULL
+    created_at    timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS jnpa.parking_slots (
+    id                  bigserial PRIMARY KEY,
+    facility_id         text NOT NULL REFERENCES jnpa.parking_facilities(id) ON DELETE CASCADE,
+    slot_number         text NOT NULL,
+    availability_status text NOT NULL DEFAULT 'AVAILABLE'
+                        CHECK (availability_status IN ('AVAILABLE','OCCUPIED','RESERVED','OUT_OF_SERVICE')),
+    vehicle_id          text,
+    updated_at          timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (facility_id, slot_number)
+);
+CREATE INDEX IF NOT EXISTS idx_parking_slots_facility ON jnpa.parking_slots (facility_id, availability_status);
+CREATE INDEX IF NOT EXISTS idx_parking_slots_vehicle  ON jnpa.parking_slots (vehicle_id);
+CREATE TABLE IF NOT EXISTS jnpa.parking_transactions (
+    id          bigserial PRIMARY KEY,
+    vehicle_id  text,
+    driver_id   text,
+    facility_id text,
+    slot_id     bigint,
+    entry_time  timestamptz NOT NULL DEFAULT now(),
+    exit_time   timestamptz,
+    duration    interval,
+    status      text NOT NULL DEFAULT 'ACTIVE'
+                CHECK (status IN ('ACTIVE','COMPLETED','EXPIRED')),
+    created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_parking_txn_vehicle ON jnpa.parking_transactions (vehicle_id, entry_time DESC);
+CREATE INDEX IF NOT EXISTS idx_parking_txn_status  ON jnpa.parking_transactions (status, entry_time DESC);
+CREATE INDEX IF NOT EXISTS idx_parking_txn_facility ON jnpa.parking_transactions (facility_id, entry_time DESC);
+CREATE TABLE IF NOT EXISTS jnpa.parking_events (
+    id          bigserial PRIMARY KEY,
+    event_type  text NOT NULL
+                CHECK (event_type IN ('ALLOCATION','RELEASE','OVERFLOW',
+                                      'ILLEGAL_PARKING','NO_PARKING_VIOLATION')),
+    vehicle_id  text,
+    driver_id   text,
+    facility_id text,
+    slot_id     bigint,
+    detail      jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_parking_events_type ON jnpa.parking_events (event_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_parking_events_vehicle ON jnpa.parking_events (vehicle_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_parking_events_ts ON jnpa.parking_events (created_at DESC);
+
+-- ==== Empty Container (migration 0006) ====
+CREATE SCHEMA IF NOT EXISTS jnpa;
+SET search_path TO jnpa, public;
+CREATE TABLE IF NOT EXISTS jnpa.empty_container_inventory (
+    container_id        text PRIMARY KEY,
+    container_type      text,                    -- 20GP | 40GP | 40HC | REEFER | TANKER …
+    location            text,                    -- depot / ECD / CFS id
+    owner               text,                    -- shipping_line | fleet_owner | CFS | ECD
+    availability_status text NOT NULL DEFAULT 'AVAILABLE'
+                        CHECK (availability_status IN ('AVAILABLE','ALLOCATED','IN_TRANSIT','DELIVERED')),
+    updated_at          timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_ec_inventory_status ON jnpa.empty_container_inventory (availability_status, container_type);
+CREATE INDEX IF NOT EXISTS idx_ec_inventory_location ON jnpa.empty_container_inventory (location);
+CREATE TABLE IF NOT EXISTS jnpa.empty_container_allocations (
+    id                bigserial PRIMARY KEY,
+    container_id      text,
+    truck_id          text,
+    trailer_id        text,
+    driver_id         text,
+    shipping_line     text,
+    cfs               text,
+    ecd               text,
+    allocation_reason text,
+    allocated_at      timestamptz NOT NULL DEFAULT now(),
+    status            text NOT NULL DEFAULT 'ALLOCATED'
+                      CHECK (status IN ('ALLOCATED','PICKED_UP','IN_TRANSIT','DELIVERED','COMPLETED','CANCELLED'))
+);
+CREATE INDEX IF NOT EXISTS idx_ec_alloc_container ON jnpa.empty_container_allocations (container_id, allocated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ec_alloc_status    ON jnpa.empty_container_allocations (status, allocated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ec_alloc_ts        ON jnpa.empty_container_allocations (allocated_at DESC);
+CREATE TABLE IF NOT EXISTS jnpa.container_movement_history (
+    id            bigserial PRIMARY KEY,
+    container_id  text,
+    allocation_id bigint,
+    movement_type text NOT NULL
+                  CHECK (movement_type IN ('PICKUP','ALLOCATION','TRANSFER','DELIVERY','COMPLETION')),
+    location      text,
+    detail        jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at    timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_container_move_container ON jnpa.container_movement_history (container_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_container_move_type ON jnpa.container_movement_history (movement_type, created_at DESC);
+
+-- ==== geofence_events enforcement columns (migration 0007) ====
+ALTER TABLE jnpa.geofence_events ADD COLUMN IF NOT EXISTS driver_id     text;
+ALTER TABLE jnpa.geofence_events ADD COLUMN IF NOT EXISTS event_type    text;
+ALTER TABLE jnpa.geofence_events ADD COLUMN IF NOT EXISTS dwell_seconds integer;
+CREATE INDEX IF NOT EXISTS idx_geofence_events_type ON jnpa.geofence_events (event_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_geofence_events_driver ON jnpa.geofence_events (driver_id, created_at DESC);
+
+-- ==== Vehicle & Driver Intelligence history (migration 0008) ====
+CREATE SCHEMA IF NOT EXISTS jnpa;
+SET search_path TO jnpa, public;
+CREATE TABLE IF NOT EXISTS jnpa.vehicle_verification_history (
+    id                  bigserial PRIMARY KEY,
+    vehicle_number      text,
+    request_payload     jsonb NOT NULL DEFAULT '{}'::jsonb,
+    response_payload    jsonb NOT NULL DEFAULT '{}'::jsonb,
+    verification_status text,                     -- VERIFIED | PROVISIONAL | NOT_FOUND | ERROR
+    source              text,                     -- LIVE_PRIMARY | LIVE_FALLBACK | CACHED | SIM | PROVISIONAL
+    created_at          timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_veh_verif_number ON jnpa.vehicle_verification_history (vehicle_number, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_veh_verif_ts     ON jnpa.vehicle_verification_history (created_at DESC);
+CREATE TABLE IF NOT EXISTS jnpa.driver_license_lookup_history (
+    id                bigserial PRIMARY KEY,
+    dl_number         text,
+    request_payload   jsonb NOT NULL DEFAULT '{}'::jsonb,
+    response_payload  jsonb NOT NULL DEFAULT '{}'::jsonb,
+    status            text,                       -- VALID | EXPIRED | NOT_FOUND | ERROR
+    source            text,
+    created_at        timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_dl_lookup_number ON jnpa.driver_license_lookup_history (dl_number, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_dl_lookup_ts     ON jnpa.driver_license_lookup_history (created_at DESC);
+CREATE SCHEMA IF NOT EXISTS jnpa;
+SET search_path TO jnpa, public;
+CREATE TABLE IF NOT EXISTS jnpa.otp_requests (
+    id          bigserial PRIMARY KEY,
+    mobile      text NOT NULL,
+    device_id   text,
+    code_hash   text NOT NULL,
+    expires_at  timestamptz NOT NULL,
+    verified    boolean NOT NULL DEFAULT false,
+    attempts    integer NOT NULL DEFAULT 0,
+    created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_otp_mobile ON jnpa.otp_requests (mobile, created_at DESC);
+CREATE TABLE IF NOT EXISTS jnpa.device_bindings (
+    device_id   text PRIMARY KEY,
+    mobile      text NOT NULL,
+    driver_id   text,
+    bound_at    timestamptz NOT NULL DEFAULT now(),
+    last_seen   timestamptz NOT NULL DEFAULT now(),
+    active      boolean NOT NULL DEFAULT true
+);
+CREATE INDEX IF NOT EXISTS idx_device_bindings_mobile ON jnpa.device_bindings (mobile);
+
+-- ==== geofence_events mandatory event_type (migration 0010) ====
+-- Backfill any legacy NULL/'' event_type, then guarantee it going forward via a
+-- BEFORE-trigger derivation + NOT NULL. Keeps GET /api/geo/events free of blank
+-- event types without modifying the audit-framework writer.
+CREATE SCHEMA IF NOT EXISTS jnpa;
+SET search_path TO jnpa, public;
+UPDATE jnpa.geofence_events
+SET event_type = CASE
+    WHEN violation_type IS NOT NULL AND violation_type <> '' THEN violation_type
+    WHEN exit_time IS NOT NULL                                THEN 'EXIT'
+    WHEN COALESCE(dwell_seconds, 0) > 0                       THEN 'DWELL'
+    WHEN entry_time IS NOT NULL                               THEN 'ENTER'
+    ELSE 'ENTER'
+END
+WHERE event_type IS NULL OR event_type = '';
+CREATE OR REPLACE FUNCTION jnpa.geofence_events_default_event_type()
+RETURNS trigger AS $$
+BEGIN
+    IF NEW.event_type IS NULL OR NEW.event_type = '' THEN
+        NEW.event_type := CASE
+            WHEN NEW.violation_type IS NOT NULL AND NEW.violation_type <> '' THEN NEW.violation_type
+            WHEN NEW.exit_time IS NOT NULL                                   THEN 'EXIT'
+            WHEN COALESCE(NEW.dwell_seconds, 0) > 0                          THEN 'DWELL'
+            WHEN NEW.entry_time IS NOT NULL                                  THEN 'ENTER'
+            ELSE 'ENTER'
+        END;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_geofence_events_event_type ON jnpa.geofence_events;
+CREATE TRIGGER trg_geofence_events_event_type
+    BEFORE INSERT OR UPDATE ON jnpa.geofence_events
+    FOR EACH ROW EXECUTE FUNCTION jnpa.geofence_events_default_event_type();
+ALTER TABLE jnpa.geofence_events ALTER COLUMN event_type SET NOT NULL;

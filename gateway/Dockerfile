@@ -38,6 +38,12 @@ COPY parking/ /app/parking/
 RUN pip install -e /app/empty-container -e /app/carbon -e /app/gate-data \
         -e /app/identity -e /app/parking
 
+# FASTag ULIP integration layer (client + mappers + service). A plain package
+# imported as `services.fastag` via PYTHONPATH=/app (no pip install needed); the
+# gateway's /api/fastag router imports it, so it MUST be present in the image or
+# `import gateway.main` fails at the guard below.
+COPY services/ /app/services/
+
 # Guarantee starlette is intact: the original build landed a half-written
 # starlette (Version: None -> `import starlette.exceptions` fails) which only
 # surfaced at runtime, not at the build import-guard. Force a clean reinstall of
@@ -63,6 +69,7 @@ RUN python -m playwright install chromium || true
 # stack explicitly so a half-written starlette is caught at build, not runtime.
 RUN python -c "import starlette.exceptions, fastapi; from starlette.exceptions import HTTPException; print('asgi stack OK', fastapi.__version__)" \
     && python -c "import gateway.main, gateway.fallback, gateway.cache; print('gateway import OK')" \
+    && python -c "import services.fastag; from services.fastag import UlipFastagClient, FastagService; print('fastag layer OK')" \
     && python -c "import empty_container.optimizer, carbon.calculator, gate_data.leo, identity.embeddings, parking.facilities; print('capability fallbacks OK')"
 
 EXPOSE 8000

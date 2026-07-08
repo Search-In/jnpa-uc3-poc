@@ -130,7 +130,7 @@ a {
   width: 100%;
   max-width: 520px;
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(6, 1fr);
   background: var(--surface);
   border-top: 1px solid var(--border);
   padding-bottom: env(safe-area-inset-bottom);
@@ -144,10 +144,12 @@ a {
   padding: 10px 0 12px;
   color: var(--muted);
   text-decoration: none;
-  font-size: 10.5px;
+  font-size: 9.5px;
   position: relative;
   white-space: nowrap;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .tabbar a.active {
   color: var(--blue);
@@ -260,6 +262,15 @@ a {
   margin-bottom: 12px;
   position: relative;
   background: var(--surface-2);
+}
+/* Full-screen nav map — combined selector (0,2,0) beats plain .minimap so the
+   fixed 200px height is overridden regardless of source order. */
+.minimap.minimap-fill {
+  height: 100%;
+  width: 100%;
+  border-radius: 0;
+  border: none;
+  margin-bottom: 0;
 }
 .minimap .maplibregl-ctrl-attrib {
   font-size: 9px;

@@ -1,8 +1,16 @@
 import { useEffect, useRef } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { mapStyle } from "@/lib/basemap";
+import { mapStyle, roadStyle } from "@/lib/basemap";
 import type { CorridorGeometry, DevicePosition, Gate } from "@/lib/types";
+
+// One route option to draw (Google-Maps-style): a polyline in [lon,lat] pairs,
+// flagged primary (highlighted) or alternate (greyed). `id` keys the feature.
+export interface RouteLine {
+  id: string;
+  coords: [number, number][];
+  primary?: boolean;
+}
 
 // "Traffic ahead" mini-map. It loads the SAME basemap as the dashboard (Carto
 // Positron raster by default, token-free; Mapbox/Bhuvan optional via the shared
@@ -18,6 +26,12 @@ interface Props {
   targetGateId?: string | null;
   // segment_id -> jam_factor (0..1), drives the "traffic ahead" colour.
   jam?: Record<string, number>;
+  // Fill the parent container (full-screen nav map) instead of the fixed 200px.
+  fill?: boolean;
+  // Use the Google-Maps-style road basemap instead of the default (satellite).
+  roads?: boolean;
+  // Multiple route options to draw (primary highlighted, alternates greyed).
+  routes?: RouteLine[];
 }
 
 function jamColor(j: number): string {
@@ -26,7 +40,16 @@ function jamColor(j: number): string {
   return "#009e73"; // green — free-flow
 }
 
-export default function MiniMap({ corridor, gates, truck, targetGateId, jam }: Props) {
+export default function MiniMap({
+  corridor,
+  gates,
+  truck,
+  targetGateId,
+  jam,
+  fill,
+  roads,
+  routes,
+}: Props) {
   const el = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
   const truckMarker = useRef<maplibregl.Marker | null>(null);
@@ -35,7 +58,7 @@ export default function MiniMap({ corridor, gates, truck, targetGateId, jam }: P
     if (!el.current || map.current) return;
     const m = new maplibregl.Map({
       container: el.current,
-      style: mapStyle(),
+      style: roads ? roadStyle() : mapStyle(),
       center: [72.952, 18.948],
       zoom: 11.5,
       // Carto/OSM tiles require attribution; use the compact "ⓘ" toggle so it
@@ -47,7 +70,13 @@ export default function MiniMap({ corridor, gates, truck, targetGateId, jam }: P
     });
     map.current = m;
     m.on("load", () => m.resize());
+    // Full-screen/flex containers settle their size AFTER mount, so observe the
+    // container and resize the map whenever it changes (fixes a map that renders
+    // at the wrong height and leaves blank space).
+    const ro = new ResizeObserver(() => m.resize());
+    ro.observe(el.current);
     return () => {
+      ro.disconnect();
       m.remove();
       map.current = null;
     };
@@ -126,6 +155,69 @@ export default function MiniMap({ corridor, gates, truck, targetGateId, jam }: P
     else m.once("load", draw);
   }, [corridor, gates, targetGateId, jam]);
 
+  // Multiple route options (Google-Maps-style): alternates greyed, primary blue
+  // on top. Fits the map to the routes when present.
+  useEffect(() => {
+    const m = map.current;
+    if (!m || !routes || !routes.length) return;
+    const draw = () => {
+      // Order so the primary route draws last (on top).
+      const ordered = [...routes].sort((a, b) => Number(!!a.primary) - Number(!!b.primary));
+      const fc: GeoJSON.FeatureCollection = {
+        type: "FeatureCollection",
+        features: ordered.map((r) => ({
+          type: "Feature",
+          properties: { primary: !!r.primary, id: r.id },
+          geometry: { type: "LineString", coordinates: r.coords },
+        })),
+      };
+      if (!m.getSource("routes")) {
+        m.addSource("routes", { type: "geojson", data: fc });
+        // Casing under the line for a clean Google-Maps look.
+        m.addLayer({
+          id: "routes-casing",
+          type: "line",
+          source: "routes",
+          layout: { "line-cap": "round", "line-join": "round" },
+          paint: {
+            "line-color": ["case", ["get", "primary"], "#1a56db", "#9aa4b2"],
+            "line-width": ["case", ["get", "primary"], 9, 6],
+            "line-opacity": ["case", ["get", "primary"], 0.35, 0.25],
+          },
+        });
+        m.addLayer({
+          id: "routes-line",
+          type: "line",
+          source: "routes",
+          layout: { "line-cap": "round", "line-join": "round" },
+          paint: {
+            "line-color": ["case", ["get", "primary"], "#1a56db", "#7b8794"],
+            "line-width": ["case", ["get", "primary"], 5, 3.5],
+          },
+        });
+      } else {
+        (m.getSource("routes") as maplibregl.GeoJSONSource).setData(fc);
+      }
+      // Fit to all route coordinates.
+      try {
+        const all = ordered.flatMap((r) => r.coords);
+        const lons = all.map((p) => p[0]);
+        const lats = all.map((p) => p[1]);
+        m.fitBounds(
+          [
+            [Math.min(...lons), Math.min(...lats)],
+            [Math.max(...lons), Math.max(...lats)],
+          ],
+          { padding: 40, animate: true, maxZoom: 13 },
+        );
+      } catch {
+        /* degenerate */
+      }
+    };
+    if (m.isStyleLoaded()) draw();
+    else m.once("load", draw);
+  }, [routes]);
+
   // Live truck marker.
   useEffect(() => {
     const m = map.current;
@@ -141,5 +233,5 @@ export default function MiniMap({ corridor, gates, truck, targetGateId, jam }: P
     }
   }, [truck]);
 
-  return <div className="minimap" ref={el} />;
+  return <div className={fill ? "minimap minimap-fill" : "minimap"} ref={el} />;
 }

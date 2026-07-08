@@ -34,6 +34,12 @@ export function activeBasemapProvider(): "mapbox" | "esri" | "carto" | "bhuvan" 
   return "esri"; // satellite — default
 }
 
+// Google-Maps-style road basemap (Carto Positron light) regardless of the
+// configured default — used by the driver navigation map so routes read clearly.
+export function roadStyle(): StyleSpecification {
+  return cartoLightStyle();
+}
+
 export function mapStyle(): string | StyleSpecification {
   if (MAPBOX_TOKEN) {
     // Mapbox satellite-streets keeps road labels on top of satellite imagery.

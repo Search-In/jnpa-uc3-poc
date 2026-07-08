@@ -8,7 +8,12 @@
     "reroute": "Re-route",
     "inbox": "Inbox",
     "vehicle": "Vehicle",
-    "enrol": "Enrol"
+    "enrol": "Enrol",
+    "parking": "Parking",
+    "zones": "Zones",
+    "home": "Home",
+    "map": "Map",
+    "alerts": "Alerts"
   },
   "screens": {
     "home": "Home",
@@ -16,7 +21,11 @@
     "reroute": "Re-route",
     "inbox": "Inbox",
     "vehicle": "Vehicle",
-    "enrol": "Driver Enrolment"
+    "enrol": "Driver Enrolment",
+    "parking": "Parking",
+    "zones": "Zones",
+    "map": "Live Map",
+    "alerts": "Alerts"
   },
   "home": {
     "welcome": "Welcome,",
@@ -162,5 +171,40 @@
     "statusActive": "Your enrolment is approved and active. You can now be verified at the gate.",
     "statusRejected": "Your enrolment was rejected. Please re-submit.",
     "statusReenroll": "Re-enrolment requested. Please re-capture your reference photos and submit again."
+  },
+  "parking": {
+    "title": "Nearby parking",
+    "free": "free",
+    "request": "Request slot",
+    "navigate": "Navigate",
+    "confirmed": "Slot confirmed",
+    "slot": "Slot",
+    "release": "Release slot",
+    "loading": "Loading parking…",
+    "full": "Facility full — try another",
+    "failed": "Allocation failed",
+    "noPlate": "Pair a vehicle first",
+    "home": "Home"
+  },
+  "zones": {
+    "title": "Geo-fence zones",
+    "current": "Current zone",
+    "clear": "Clear — no active zone",
+    "alerts": "Zone alerts",
+    "restricted": "Restricted zones",
+    "noParkingZones": "No-parking zones",
+    "enter": "Entered {{zone}}",
+    "warnRestricted": "⚠ Restricted zone: {{zone}}",
+    "warnNoParking": "⚠ No-parking / dwell exceeded: {{zone}}",
+    "noPlate": "Pair a vehicle to enable zone alerts",
+    "noLocation": "Location unavailable"
+  },
+  "alertCenter": {
+    "title": "Alerts"
+  },
+  "map": {
+    "normal": "Normal",
+    "medium": "Medium",
+    "heavy": "Heavy"
   }
 }

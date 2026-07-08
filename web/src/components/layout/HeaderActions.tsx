@@ -22,8 +22,10 @@ import { Spinner } from "@/components/ui/misc";
 import { AlertEvidenceDialog } from "@/components/AlertEvidenceDialog";
 import { alertFocusStore } from "@/lib/alertFocus";
 import { alertKey, mergeAlerts } from "@/lib/alerts";
+import { ALERT_CATEGORIES, categoryOf, type AlertCategory } from "@/lib/alertCategory";
 import { severityColour } from "@/lib/palette";
 import { relativeAge } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 
 export function HeaderActions() {
   // Alert feed = WS-live ∪ adapter seed (shared React-Query cache key, so this
@@ -31,7 +33,10 @@ export function HeaderActions() {
   const { alerts: liveAlerts } = useSocket();
   const seedQ = useQuery({
     queryKey: ["alerts-seed"],
-    queryFn: () => getAdapter().alerts({ limit: 20 }),
+    // Shares the ["alerts-seed"] cache with Command Center + Alerts Center at a
+    // single limit so the badge, the Command Center KPI and the Alerts Center all
+    // count the same set (no divergence from differing limits on the same key).
+    queryFn: () => getAdapter().alerts({ limit: 100 }),
   });
   const merged = useMemo(
     () => mergeAlerts(liveAlerts, seedQ.data ?? [], 50),
@@ -48,6 +53,7 @@ function NotificationBell({ alerts, loading }: { alerts: Alert[]; loading: boole
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [category, setCategory] = useState<AlertCategory>("all");
   const [seen, setSeen] = useState<Set<string>>(() => new Set());
   const [evidence, setEvidence] = useState<Alert | null>(null);
 
@@ -72,13 +78,24 @@ function NotificationBell({ alerts, loading }: { alerts: Alert[]; loading: boole
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return alerts;
-    return alerts.filter((a) =>
-      [a.plate, a.kind, a.gate_id, a.payload?.zone_id, a.severity]
-        .filter(Boolean)
-        .some((v) => String(v).toLowerCase().includes(q)),
+    return alerts.filter(
+      (a) =>
+        (category === "all" || categoryOf(a) === category) &&
+        (!q ||
+          [a.plate, a.kind, a.gate_id, a.payload?.zone_id, a.severity]
+            .filter(Boolean)
+            .some((v) => String(v).toLowerCase().includes(q))),
     );
-  }, [alerts, query]);
+  }, [alerts, query, category]);
+
+  const catCounts = useMemo(() => {
+    const c: Record<string, number> = { all: alerts.length };
+    for (const a of alerts) {
+      const k = categoryOf(a);
+      c[k] = (c[k] ?? 0) + 1;
+    }
+    return c;
+  }, [alerts]);
 
   function onAlertClick(a: Alert) {
     // Publish to the map (LiveOperations pans/zooms + rings it), then reveal it.
@@ -155,6 +172,25 @@ function NotificationBell({ alerts, loading }: { alerts: Alert[]; loading: boole
                 placeholder={t("notifications.search")}
                 className="w-full rounded-full border border-border bg-background py-2.5 pl-9 pr-3 text-sm outline-none transition-colors focus:border-severity-info focus:ring-2 focus:ring-severity-info/30"
               />
+            </div>
+            {/* Category filter chips (Notification Center categories). */}
+            <div className="mt-2 flex flex-wrap gap-1">
+              {ALERT_CATEGORIES.filter((c) => c === "all" || (catCounts[c] ?? 0) > 0).map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setCategory(c)}
+                  className={cn(
+                    "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors",
+                    category === c
+                      ? "border-severity-info bg-severity-info/10 text-severity-info"
+                      : "border-border text-muted-foreground hover:bg-muted",
+                  )}
+                >
+                  {t(`alertsCenter.cat.${c}`)}
+                  <span className="tabular-nums opacity-70">{catCounts[c] ?? 0}</span>
+                </button>
+              ))}
             </div>
           </div>
 

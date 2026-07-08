@@ -42,6 +42,11 @@ import type {
   ViolationEnforceResult,
   ViolationIncident,
   Zone,
+  FastagBalance,
+  FastagHealth,
+  FastagTransactions,
+  TollEnroute,
+  TollEnrouteInput,
 } from "@/lib/types";
 import type { TasSlot } from "@/lib/types";
 import type { DriverEnrollment } from "@/lib/types";
@@ -1532,5 +1537,84 @@ export class MockAdapter implements DataAdapter {
   congestionMetrics(): Promise<CongestionMetrics | null> {
     // congestion_onset_f1: 0.8411 vs target_f1: 0.85 → below target.
     return Promise.resolve({ f1: 0.8411, target: 0.85, target_met: false });
+  }
+
+  // ---- FASTag (ULIP) — deterministic fixtures mirroring the provider samples,
+  //      so the mock/demo build renders the FASTag screen without a live vendor.
+  fastagBalance(rcNumber: string): Promise<FastagBalance> {
+    return Promise.resolve({
+      rc_number: rcNumber || "MH12XX1234",
+      tag_id: "34161FA81E1234BCFE0",
+      available_balance: "509.00",
+      tag_status: "Activated",
+      updated: true,
+      correlation_id: "mock",
+      provider_name: "idfc_first_bank",
+      provider_code: "IDFC88000PATXM",
+      customer_name: "SURAJE",
+      available_recharge_limit: "9491.00",
+      vehicle_class: "4",
+      vehicle_class_desc: "Car / Jeep / Van",
+      model_name: null,
+    });
+  }
+
+  fastagTransactions(rcNumber: string): Promise<FastagTransactions> {
+    const rows = [
+      {
+        seq_no: "001001240768650",
+        transaction_date_time: "2024-07-16T19:00:16Z",
+        toll_plaza_name: "Balibhasa Toll Plaza",
+        toll_plaza_geocode: "22.34462627,87.12665241",
+        vehicle_type: "VC13",
+        lane_direction: "S",
+        bank_name: "IDFC First Bank",
+        status: "Active",
+      },
+      {
+        seq_no: "00100324077431473",
+        transaction_date_time: "2024-07-16T21:07:11Z",
+        toll_plaza_name: "Jharpokharia Toll Plaza",
+        toll_plaza_geocode: "22.180518,86.636253",
+        vehicle_type: "VC13",
+        lane_direction: "S",
+        bank_name: "IDFC First Bank",
+        status: "Active",
+      },
+    ];
+    return Promise.resolve({
+      inserted_count: rows.length,
+      skipped_count: 0,
+      failed_count: 0,
+      total: rows.length,
+      correlation_id: "mock",
+      transactions: rcNumber ? rows : [],
+    });
+  }
+
+  tollEnroute(body: TollEnrouteInput): Promise<TollEnroute> {
+    return Promise.resolve({
+      id: "mock-enroute",
+      source: body.source_name || "ghazipur",
+      destination: body.destination_name || "patna",
+      distance: "195.20",
+      duration: "4 hour 53 mins",
+      plaza_count: 2,
+      correlation_id: "mock",
+      toll_plaza_details: [
+        { name: "Kulhariya", cost: "565.00", lat: 25.58056, lng: 84.76861 },
+        { name: "Dalsagar", cost: "525.00", lat: 25.580548, lng: 84.060688 },
+      ],
+    });
+  }
+
+  fastagHealth(): Promise<FastagHealth> {
+    return Promise.resolve({
+      module: "fastag",
+      status: "ok",
+      ulip_configured: true,
+      db: "ok",
+      tables: { fastag_balance: true, fastag_transactions: true, toll_enroute: true },
+    });
   }
 }

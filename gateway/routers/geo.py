@@ -252,3 +252,168 @@ async def put_zones(
 
     REQUESTS.labels("zones", "ok").inc()
     return {"saved": True, "count": len(supplied_ids), "ids": supplied_ids}
+
+
+# ---------------------------------------------------------------------------
+# Geo-fence EVENTS (enter / exit / dwell violation) — durable event log.
+# Producers (the anomaly service, or any GPS consumer) POST an enter/exit event
+# here; it is persisted to jnpa.geofence_events for audit/analytics. The alerts
+# pump also lands geofence-family violations here automatically (gateway/audit).
+# ---------------------------------------------------------------------------
+@router.post("/api/geo/events")
+async def create_geofence_event(
+    body: Dict[str, Any] = Body(...),
+    state: GatewayState = Depends(get_state),
+) -> dict:
+    """Record a geo-fence event. Body: ``{vehicle_id, zone_id, entry_time?,
+    exit_time?, violation_type?, action_taken?}`` (ISO-8601 timestamps)."""
+    from .. import audit
+
+    def _ts(v: Any) -> Any:
+        if not v:
+            return None
+        try:
+            return datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+        except Exception:  # noqa: BLE001
+            return None
+
+    zone_id = body.get("zone_id")
+    if not zone_id and not body.get("vehicle_id"):
+        raise HTTPException(status_code=422,
+                            detail={"error": "vehicle_id_or_zone_id_required"})
+    await audit.record_geofence_event(
+        vehicle_id=body.get("vehicle_id"),
+        zone_id=zone_id,
+        entry_time=_ts(body.get("entry_time")),
+        exit_time=_ts(body.get("exit_time")),
+        violation_type=body.get("violation_type") or "ENTER",
+        action_taken=body.get("action_taken"),
+        dsn=state.cfg.postgres_dsn,
+    )
+    REQUESTS.labels("geofence_events", "ok").inc()
+    return {"recorded": True}
+
+
+@router.get("/api/geo/events")
+async def list_geofence_events(
+    limit: int = 100,
+    event_type: str | None = None,
+    state: GatewayState = Depends(get_state),
+) -> dict:
+    """Recent geo-fence events (audit/analytics read path), RDS-backed."""
+    from jnpa_shared.db import fetch_all
+
+    where = ""
+    params: Dict[str, Any] = {"limit": max(1, min(int(limit), 1000))}
+    if event_type:
+        where = "WHERE event_type = :et"
+        params["et"] = event_type
+    try:
+        rows = await fetch_all(
+            f"""
+            SELECT id, vehicle_id, driver_id, zone_id,
+                   -- Defensive: never surface a blank event_type even on a legacy
+                   -- (pre-migration-0010) volume — derive one from the row.
+                   COALESCE(NULLIF(event_type, ''), violation_type,
+                            CASE WHEN exit_time IS NOT NULL THEN 'EXIT'
+                                 WHEN COALESCE(dwell_seconds, 0) > 0 THEN 'DWELL'
+                                 WHEN entry_time IS NOT NULL THEN 'ENTER'
+                                 ELSE 'ENTER' END) AS event_type,
+                   entry_time, exit_time,
+                   dwell_seconds, violation_type, action_taken, created_at
+            FROM jnpa.geofence_events
+            {where}
+            ORDER BY created_at DESC
+            LIMIT :limit
+            """,
+            params,
+            dsn=state.cfg.postgres_dsn,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.debug("geofence_events_db_unavailable", error=str(exc))
+        return {"events": [], "count": 0}
+    out = []
+    for r in rows:
+        d: Dict[str, Any] = dict(r)
+        for k in ("entry_time", "exit_time", "created_at"):
+            if isinstance(d.get(k), datetime):
+                d[k] = d[k].isoformat()
+        out.append(d)
+    REQUESTS.labels("geofence_events", "ok").inc()
+    return {"events": out, "count": len(out)}
+
+
+@router.get("/api/geo/violations")
+async def list_geofence_violations(
+    limit: int = 100,
+    state: GatewayState = Depends(get_state),
+) -> dict:
+    """Geo-fence violations only (NO_PARKING_VIOLATION / RESTRICTED_ENTRY / DWELL)."""
+    from jnpa_shared.db import fetch_all
+
+    try:
+        rows = await fetch_all(
+            """
+            SELECT id, vehicle_id, driver_id, zone_id, event_type, dwell_seconds,
+                   violation_type, action_taken, created_at
+            FROM jnpa.geofence_events
+            WHERE violation_type IS NOT NULL
+            ORDER BY created_at DESC LIMIT :limit
+            """,
+            {"limit": max(1, min(int(limit), 1000))},
+            dsn=state.cfg.postgres_dsn,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return {"violations": [], "count": 0}
+    out = []
+    for r in rows:
+        d = dict(r)
+        if isinstance(d.get("created_at"), datetime):
+            d["created_at"] = d["created_at"].isoformat()
+        out.append(d)
+    REQUESTS.labels("geofence_events", "ok").inc()
+    return {"violations": out, "count": len(out)}
+
+
+@router.post("/api/geo/evaluate")
+async def evaluate_position(
+    body: Dict[str, Any] = Body(...),
+    state: GatewayState = Depends(get_state),
+) -> dict:
+    """Evaluate a vehicle position against the LIVE DB zones (mobile location /
+    explicit push). Body: {vehicle_id, lat, lon, driver_id?}. Persists any
+    enter/exit/dwell/violation transition and returns the emitted events + the
+    zones the point is currently inside."""
+    vehicle_id = (body.get("vehicle_id") or "").strip()
+    lat, lon = body.get("lat"), body.get("lon")
+    if not vehicle_id or lat is None or lon is None:
+        raise HTTPException(status_code=422, detail={"error": "vehicle_id_lat_lon_required"})
+    try:
+        emitted = await state.geofence.evaluate_position(
+            vehicle_id, float(lat), float(lon), driver_id=body.get("driver_id")
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail={"error": "geofence_unavailable", "reason": str(exc)})
+    # Which zones is the point in right now (for the driver "current zone" view)?
+    await state.geofence.refresh_zones()
+    inside = [{"id": z.id, "name": z.name, "kind": z.kind}
+              for z in state.geofence._zones if z.contains(float(lat), float(lon))]
+    REQUESTS.labels("geofence_eval", "ok").inc()
+    return {"vehicle_id": vehicle_id, "inside_zones": inside, "events": emitted}
+
+
+@router.get("/api/geo/vehicles-in-zones")
+async def vehicles_in_zones(state: GatewayState = Depends(get_state)) -> dict:
+    """Live occupancy: which vehicles are currently inside which zones."""
+    rows = state.geofence.vehicles_in_zones()
+    REQUESTS.labels("geofence_events", "ok").inc()
+    return {"count": len(rows), "vehicles": rows}
+
+
+@router.get("/api/geo/zones-active")
+async def zones_active(state: GatewayState = Depends(get_state)) -> dict:
+    """The zones the engine is currently enforcing (loaded from jnpa.geofence_zones)."""
+    await state.geofence.refresh_zones()
+    snap = state.geofence.zones_snapshot()
+    REQUESTS.labels("geofence_events", "ok").inc()
+    return {"count": len(snap), "zones": snap, "source": "jnpa.geofence_zones"}

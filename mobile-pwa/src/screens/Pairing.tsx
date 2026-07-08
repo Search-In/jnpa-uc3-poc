@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
-import { codeToDeviceId, setPairing } from "@/lib/device";
+import { codeToDeviceId, setPairing, setToken } from "@/lib/device";
+import { api } from "@/lib/api";
+
+// Derive a stable device id for an OTP login from the mobile number's last 6
+// digits, keeping the TRK-###### shape the rest of the platform expects.
+function mobileToDeviceId(mobile: string): string {
+  const d = mobile.replace(/\D/g, "").slice(-6).padStart(6, "0");
+  return `TRK-${d}`;
+}
 
 // Pairing — PoC authentication is a simple device_id pairing: scan the QR (which
 // encodes the PWA URL with ?device=TRK-...) or type the 6-digit code printed on
@@ -49,12 +57,130 @@ export default function Pairing({ onPaired }: { onPaired: (deviceId: string) => 
 
   const ready = digits.every((d) => d !== "");
 
+  // --- OTP login (real device auth; replaces static-only pairing) ----------
+  const [mobile, setMobile] = useState("");
+  const [otp, setOtp] = useState("");
+  const [otpStep, setOtpStep] = useState<"mobile" | "code">("mobile");
+  const [otpBusy, setOtpBusy] = useState(false);
+  const [otpMsg, setOtpMsg] = useState<string | null>(null);
+
+  const requestOtp = async () => {
+    const m = mobile.replace(/\D/g, "");
+    if (m.length < 10) {
+      setOtpMsg("Enter a valid 10-digit mobile");
+      return;
+    }
+    setOtpBusy(true);
+    setOtpMsg(null);
+    try {
+      const r = await api.otpRequest(m, mobileToDeviceId(m));
+      setOtpStep("code");
+      setOtpMsg(r.dev_otp ? `OTP sent (demo: ${r.dev_otp})` : "OTP sent to your mobile");
+    } catch (e) {
+      setOtpMsg(String(e));
+    } finally {
+      setOtpBusy(false);
+    }
+  };
+
+  const verifyOtp = async () => {
+    const m = mobile.replace(/\D/g, "");
+    const deviceId = mobileToDeviceId(m);
+    setOtpBusy(true);
+    setOtpMsg(null);
+    try {
+      const r = await api.otpVerify(m, otp.replace(/\D/g, ""), deviceId);
+      if (r.verified && r.access_token) {
+        setToken(r.access_token);
+        setPairing(deviceId);
+        onPaired(deviceId);
+      } else {
+        setOtpMsg("Invalid OTP");
+      }
+    } catch {
+      setOtpMsg("Invalid or expired OTP");
+    } finally {
+      setOtpBusy(false);
+    }
+  };
+
   return (
     <div className="pair-wrap">
       <div className="brand">
         <img className="logo" src={`${import.meta.env.BASE_URL}icons/icon.svg`} alt="JNPA" />
         <h1>JNPA Trucking</h1>
-        <p>Pair your in-cab unit to receive gate slots & live re-routes.</p>
+        <p>Login with your mobile OTP to receive gate slots & live re-routes.</p>
+      </div>
+
+      {/* OTP login (primary) */}
+      <div className="otp-box" style={{ width: "100%", maxWidth: 320 }}>
+        {otpStep === "mobile" ? (
+          <>
+            <input
+              inputMode="numeric"
+              placeholder="Mobile number"
+              value={mobile}
+              onChange={(e) => setMobile(e.target.value)}
+              style={{
+                width: "100%",
+                height: 44,
+                fontSize: 18,
+                textAlign: "center",
+                marginBottom: 8,
+              }}
+            />
+            <button
+              className="btn primary"
+              disabled={otpBusy}
+              onClick={requestOtp}
+              style={{ width: "100%" }}
+            >
+              {otpBusy ? "…" : "Send OTP"}
+            </button>
+          </>
+        ) : (
+          <>
+            <input
+              inputMode="numeric"
+              placeholder="6-digit OTP"
+              value={otp}
+              onChange={(e) => setOtp(e.target.value)}
+              maxLength={6}
+              style={{
+                width: "100%",
+                height: 44,
+                fontSize: 22,
+                textAlign: "center",
+                letterSpacing: 6,
+                marginBottom: 8,
+              }}
+            />
+            <button
+              className="btn primary"
+              disabled={otpBusy}
+              onClick={verifyOtp}
+              style={{ width: "100%" }}
+            >
+              {otpBusy ? "…" : "Verify & Login"}
+            </button>
+            <button
+              className="btn ghost"
+              onClick={() => setOtpStep("mobile")}
+              style={{ width: "100%" }}
+            >
+              Change number
+            </button>
+          </>
+        )}
+        {otpMsg && (
+          <div className="muted" style={{ fontSize: 12, textAlign: "center", marginTop: 6 }}>
+            {otpMsg}
+          </div>
+        )}
+      </div>
+
+      <div className="muted" style={{ textAlign: "center", fontSize: 12, margin: "14px 0 6px" }}>
+        — or pair an in-cab unit —
       </div>
 
       <div className="qr-box">

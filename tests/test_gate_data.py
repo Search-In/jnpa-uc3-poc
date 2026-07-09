@@ -30,8 +30,9 @@ from gate_data.leo import (  # noqa: E402
 )
 from gate_data.seed import PINNED_CLEAN, PINNED_TAMPER  # noqa: E402
 from jnpa_shared.schemas import is_valid_plate  # noqa: E402
+from jnpa_shared.iso6346 import is_valid_container_no  # noqa: E402
 
-_ISO6346_LEN = 11  # 4 letters + 7 digits
+_ISO6346_LEN = 11  # 3 owner letters + 'U' + 6-digit serial + check digit
 
 
 def _dataset():
@@ -52,6 +53,8 @@ def test_dataset_is_schema_faithful():
         assert len(cn) == _ISO6346_LEN, cn
         assert cn[:4].isalpha() and cn[3] == "U", cn
         assert cn[4:].isdigit(), cn
+        # Every generated container number is a check-digit-VALID ISO 6346 number.
+        assert is_valid_container_no(cn), cn
         # Every source record references the same container number.
         assert rec.eseal.container_no == cn
         assert rec.form13.container_no == cn

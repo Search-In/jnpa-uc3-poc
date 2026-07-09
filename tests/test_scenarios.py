@@ -31,10 +31,13 @@ def test_uc2_bridge_matches_spec():
     assert p.total_trucks == 400
 
 
-def test_registry_has_three_scenarios():
-    from scenarios import scenario_names
+def test_registry_has_expected_scenarios():
+    from scenarios import get_scenario, scenario_names
 
-    assert set(scenario_names()) == {"tfc1", "tfc2", "tfc3"}
+    assert set(scenario_names()) == {"tfc1", "tfc2", "tfc3", "monsoon_friday"}
+    # The master scenario exposes the run/reset contract like the others.
+    mf = get_scenario("monsoon_friday")
+    assert mf is not None and callable(mf.run) and callable(mf.reset)
 
 
 # --------------------------------------------------------------------------- e2e

@@ -13,9 +13,10 @@ Everything is generated *fully deterministically* from a fixed ``SEED`` and
 anchored to a fixed ``REFERENCE_DATE`` (not "today"), so the demo, the dashboard
 and the tests are reproducible run-to-run and host-to-host.
 
-Container numbers follow the ISO 6346-ish format (4 letters + 7 digits, e.g.
-``MSCU1234567``). Vehicle plates reuse the canonical Indian-plate format from
-``jnpa_shared`` so the gate data joins cleanly against the Vahan dataset.
+Container numbers are check-digit-VALID ISO 6346 (owner + 'U' + 6-digit serial +
+computed check digit, e.g. ``MSCU1234566``), validated by
+``jnpa_shared.iso6346``. Vehicle plates reuse the canonical Indian-plate format
+from ``jnpa_shared`` so the gate data joins cleanly against the Vahan dataset.
 
 A controlled slice of records deliberately MISMATCHES so the Customs flags fire:
     * ~6 %  e-seal tamper                 -> ESEAL_TAMPER
@@ -33,6 +34,8 @@ import json
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Dict, Iterable, List, Optional
+
+from jnpa_shared.iso6346 import with_check_digit
 
 # --- Determinism anchors -----------------------------------------------------
 SEED = "jnpa-uc3-gate-data-v1"
@@ -140,10 +143,11 @@ class GateRecord:
 
 # --- Field generators --------------------------------------------------------
 def _container_no(i: int) -> str:
-    """Build an ISO 6346-ish container number: 3 line letters + 'U' + 7 digits."""
+    """Build a check-digit-VALID ISO 6346 container number: 3 owner letters +
+    'U' category + 6-digit serial + computed check digit (11 chars total)."""
     line = LINE_CODES[_h("line", i) % len(LINE_CODES)]
-    serial = _h("cserial", i) % 10_000_000          # 0000000..9999999
-    return f"{line}U{serial:07d}"
+    serial = _h("cserial", i) % 1_000_000           # 000000..999999 (6 digits)
+    return with_check_digit(f"{line}U{serial:06d}")
 
 
 def _vehicle_plate(i: int) -> str:
@@ -243,8 +247,8 @@ def _build_record(i: int) -> GateRecord:
 # Well-known containers that must always resolve so the documented verification
 # commands and the dashboard demo work as written. Each is forced onto a clean
 # (no-flag) index so the "happy path" container always reconciles ready.
-PINNED_CLEAN = "MSCU1234567"      # guaranteed leo_ready=True, zero flags
-PINNED_TAMPER = "MAEU7654321"     # guaranteed ESEAL_TAMPER + leo_ready=False
+PINNED_CLEAN = "MSCU1234566"      # valid ISO6346; guaranteed leo_ready=True, zero flags
+PINNED_TAMPER = "MAEU7654320"     # valid ISO6346; guaranteed ESEAL_TAMPER + leo_ready=False
 
 
 def _clean_index() -> int:

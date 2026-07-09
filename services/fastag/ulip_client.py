@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import json
 import random
 import time
 from typing import Any, Mapping, Optional
@@ -20,6 +21,8 @@ from typing import Any, Mapping, Optional
 import httpx
 
 from jnpa_shared.logging import get_logger
+
+from .demo_provider import demo_balance, demo_transactions
 
 log = get_logger("services.fastag.ulip_client")
 
@@ -159,6 +162,12 @@ class UlipFastagClient:
         Never transforms the body. Logs every attempt (request + response) with
         the correlation id so a call can be traced end-to-end.
         """
+        if not self._base_url and os.environ.get("FASTAG_DEMO_MODE", "").lower() == "true":
+            if api == "balance":
+                return demo_balance(json.get("rcNumber") if json else "")
+            if api in ("transactions", "transaction"):
+                return demo_transactions(json.get("rcNumber") if json else "")
+
         if not self._base_url:
             raise UlipClientError("no ULIP base_url configured", api=api,
                                   category="config", client_id=client_id)

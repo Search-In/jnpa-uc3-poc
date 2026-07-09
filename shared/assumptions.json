@@ -1,0 +1,60 @@
+{
+  "$schema_note": "Single source of truth for cross-UC PoC assumptions (JNPA Digital Twin). Consumed by UC-3 services via jnpa_shared.assumptions.load_assumptions() and by the dashboard via GET /api/assumptions; UC-2 reads the same file. Prose rationale lives in docs/ASSUMPTIONS.md. Production values come from the JNPA baseline study (jnport.gov.in Reports / NLDS), post-award.",
+  "version": "1.0.0",
+  "data_posture": "All production APIs are JNPA-facilitated, post-award; each is replaced by a schema-faithful simulator in the PoC (mock -> live is a config change).",
+  "port": {
+    "name": "Jawaharlal Nehru Port Authority (JNPA)",
+    "annual_throughput_teu": 6600000,
+    "annual_throughput_teu_note": "Nominal PoC planning figure; production value from JNPA published statistics.",
+    "terminals": ["NSICT", "JNPCT", "NSIGT", "BMCT"],
+    "poc_total_containers": 200,
+    "poc_total_containers_source": "gate-data/seed.py TOTAL_CONTAINERS"
+  },
+  "gates": {
+    "count": 4,
+    "ids": ["G-NSICT", "G-JNPCT", "G-NSIGT", "G-BMCT"],
+    "throughput_target_vph": 60.0,
+    "throughput_baseline_vph": 44.0,
+    "throughput_source": "shared/jnpa_shared/kpi.py KPI_TARGETS.gate_throughput",
+    "lanes_per_gate": 3,
+    "txn_time_target_min": 3.0,
+    "txn_time_baseline_min": 5.2
+  },
+  "corridor": {
+    "highway": "NH-348",
+    "route": "Port gates -> Karal Phata",
+    "length_km": 40,
+    "segments": 13,
+    "geometry_source": "shared/jnpa_shared/corridor.py (OSM-traced, not survey-grade)",
+    "road": {
+      "lanes_per_direction": 2,
+      "per_lane_capacity_vph": 1800,
+      "capacity_note": "Standard urban-arterial per-lane saturation flow assumption; not a JNPA survey value."
+    }
+  },
+  "vehicles": {
+    "trucking_app_devices": 20000,
+    "trucking_app_devices_max": 30000,
+    "trucking_app_source": "bid §8.5.1 install base; 20k-device simulator, hot-scalable to 30k+",
+    "baseline_corridor_trucks_per_h": 240,
+    "baseline_corridor_trucks_per_h_source": "scenarios/uc2_bridge.py BASELINE_TRUCKS_PER_H",
+    "vahan_dataset_plates": 25000
+  },
+  "vessel": {
+    "avg_moves_per_call": 1500,
+    "avg_dwell_hours": 30,
+    "dpd_release_baseline_multiplier": 1.0,
+    "dpd_release_surge_multiplier": 2.5,
+    "dpd_note": "Vessel/berth figures are nominal PoC planning assumptions; the only wired cross-twin signal is the cargo.dpd_release spike (UC-II -> UC-III)."
+  },
+  "kpi_targets": {
+    "source": "shared/jnpa_shared/kpi.py KPI_TARGETS (authoritative; mirrored here for cross-UC/read-only consumers)",
+    "gate_queue_wait": { "unit": "min", "target": 8.0, "baseline": 14.5, "direction": "lower_is_better" },
+    "gate_txn_time": { "unit": "min", "target": 3.0, "baseline": 5.2, "direction": "lower_is_better" },
+    "trt_empty_ecd": { "unit": "min", "target": 45.0, "baseline": 72.0, "direction": "lower_is_better" },
+    "tat_inside_port": { "unit": "min", "target": 90.0, "baseline": 135.0, "direction": "lower_is_better" },
+    "queue_length": { "unit": "vehicles", "target": 25.0, "baseline": 41.0, "direction": "lower_is_better" },
+    "avg_dwell": { "unit": "min", "target": 12.0, "baseline": 19.0, "direction": "lower_is_better" },
+    "gate_throughput": { "unit": "vph", "target": 60.0, "baseline": 44.0, "direction": "higher_is_better" }
+  }
+}

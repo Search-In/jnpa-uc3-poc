@@ -21,12 +21,14 @@ import {
   BellRing,
   ScanSearch,
   Map as MapIcon,
+  Box,
   CreditCard,
   FileText,
   UserPlus,
   HeartPulse,
   FlaskConical,
   SlidersHorizontal,
+  Workflow,
 } from "lucide-react";
 
 export interface NavLeaf {
@@ -85,6 +87,7 @@ export const NAV_SECTIONS: NavSection[] = [
     emoji: "📊",
     items: [
       leaf("/intelligence", "nav.intelligence", ScanSearch),
+      leaf("/follow-the-box", "nav.followBox", Box),
       // Geo-fencing Manager + Geo-fence Events are merged into one Geo Analytics
       // screen, so the sidebar shows a SINGLE entry (no duplicate operational
       // pages). Both /geofencing and /geofence-events routes remain valid for
@@ -100,6 +103,7 @@ export const NAV_SECTIONS: NavSection[] = [
     emoji: "⚙",
     items: [
       leaf("/enrollments", "nav.enrollments", UserPlus),
+      leaf("/workflows", "nav.workflows", Workflow),
       leaf("/health", "nav.health", HeartPulse),
       leaf("/what-if", "nav.whatIf", FlaskConical),
       leaf("/demo", "nav.demo", SlidersHorizontal),

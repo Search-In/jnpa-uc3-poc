@@ -28,6 +28,9 @@ import { Card } from "@/components/ui/card";
 import { StatusDot, Spinner } from "@/components/ui/misc";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { IdentityPanel } from "@/components/panels/IdentityPanel";
+import { ModelPerformancePanel } from "@/components/panels/ModelPerformancePanel";
+import { ProductionCapabilityPanel } from "@/components/panels/ProductionCapabilityPanel";
+import { OssInventoryPanel } from "@/components/panels/OssInventoryPanel";
 import { AssumptionsPanel } from "@/components/AssumptionsPanel";
 import { DecisionPathBadge } from "@/components/DecisionPathBadge";
 import {
@@ -339,6 +342,17 @@ export default function SystemHealth() {
             )}
           </div>
         </Card>
+      </div>
+
+      {/* AI model performance — evaluator-verifiable eval metrics (UC-3 P0) */}
+      <div className="px-4 pb-3">
+        <ModelPerformancePanel />
+      </div>
+
+      {/* Platform maturity — Production Capability + OSS Inventory (UC-3 P2) */}
+      <div className="grid grid-cols-1 gap-3 px-4 pb-3 xl:grid-cols-2">
+        <ProductionCapabilityPanel />
+        <OssInventoryPanel />
       </div>
 
       {/* Driver identity verification (preserved) */}

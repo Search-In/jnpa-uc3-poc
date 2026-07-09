@@ -732,7 +732,7 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-    environment:
+    environment: &anomaly-env
       PYTHONPATH: /app/ai
       PORT: "8321"
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
@@ -771,8 +771,13 @@ services:
       - anomaly-artifacts:/artifacts
     networks:
       - jnpa
-    # Warm the AE on first boot (train if no weights are present locally or in
-    # MinIO), then serve. A restart re-serves the existing model instantly.
+    # Boot flow: sync AE weights from MinIO (best-effort), then ALWAYS serve.
+    # Training must never run during container boot — it is slow and would block
+    # the health endpoint on 8321 until it finished, leaving the container
+    # unhealthy. When weights are absent the API serves in rules-only mode (see
+    # the app lifespan, which itself degrades gracefully). Train offline instead:
+    #   docker compose run --rm anomaly-train
+    # or POST /train_ae against the running API to train + hot-swap live.
     command:
       - sh
       - -c
@@ -781,19 +786,46 @@ services:
         from anomaly.config import AnomalyConfig
         from anomaly import storage
         from pathlib import Path
-        import sys
-        cfg = AnomalyConfig.from_env()
-        storage.sync_weights(cfg)
-        sys.exit(0 if Path(cfg.weights_path).is_file() else 7)
+        try:
+            cfg = AnomalyConfig.from_env()
+            storage.sync_weights(cfg)
+            if Path(cfg.weights_path).is_file():
+                print("[anomaly] AE weights present — serving with model")
+            else:
+                print("[anomaly] no AE weights — serving in rules-only mode "
+                      "(train offline: docker compose run --rm anomaly-train)")
+        except Exception as exc:
+            print(f"[anomaly] AE weight sync skipped ({exc}) — serving in rules-only mode")
         PY
-        have_weights=$$?
-        if [ "$$have_weights" -eq 0 ]; then
-          echo "[anomaly] AE weights present — skipping training";
-        else
-          echo "[anomaly] no AE weights — training on synthetic+telemetry corpus…";
-          anomaly-train || echo "[anomaly] AE training skipped/failed; serving rules-only";
-        fi
         exec anomaly-api
+
+  # --------------------------------------------------------------------------
+  # Offline AE training job (NOT started by default — profile-gated). Trains the
+  # trajectory autoencoder on the synthetic+telemetry corpus and publishes the
+  # weights to MinIO so the running `anomaly` API can sync/hot-swap them. Run on
+  # demand with:
+  #   docker compose run --rm anomaly-train
+  # Reuses the anomaly image + environment; exits when training completes.
+  # --------------------------------------------------------------------------
+  anomaly-train:
+    image: jnpa/anomaly-ai:0.1.0
+    build:
+      context: .
+      dockerfile: ai/anomaly/Dockerfile
+    profiles: ["train"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment: *anomaly-env
+    volumes:
+      - ./ai/anomaly:/app/ai/anomaly:ro
+      - anomaly-artifacts:/artifacts
+    networks:
+      - jnpa
+    command: ["anomaly-train"]
 
   # --------------------------------------------------------------------------
   # API gateway + fallback orchestrator (UC-III Sub-Criterion 3).

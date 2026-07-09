@@ -382,9 +382,7 @@ export const api = {
 
   // --- Workflow Composer (automation rule authoring + execution audit) ---
   wfCatalog: () =>
-    http<{ fields: WfField[]; operators: string[]; actions: WfAction[] }>(
-      "/api/workflows/catalog",
-    ),
+    http<{ fields: WfField[]; operators: string[]; actions: WfAction[] }>("/api/workflows/catalog"),
   wfRules: () => http<{ rules: WfRule[]; count: number }>("/api/workflows/rules"),
   wfCreateRule: (body: WfRuleInput) =>
     http<{ rule: WfRule }>("/api/workflows/rules", {
@@ -406,9 +404,7 @@ export const api = {
       body: JSON.stringify({ event }),
     }),
   wfExecutions: (limit = 50) =>
-    http<{ executions: WfExecution[]; count: number }>(
-      `/api/workflows/executions?limit=${limit}`,
-    ),
+    http<{ executions: WfExecution[]; count: number }>(`/api/workflows/executions?limit=${limit}`),
 };
 
 export interface WfField {

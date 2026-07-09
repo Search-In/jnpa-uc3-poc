@@ -18,13 +18,7 @@ import type {
   ParkingFacility,
   ParkingSummary,
 } from "@/lib/types";
-import type {
-  CongestionMetrics,
-  ContainerJourney,
-  DataAdapter,
-  DataMode,
-  OcrEval,
-} from "./types";
+import type { CongestionMetrics, ContainerJourney, DataAdapter, DataMode, OcrEval } from "./types";
 
 // Attach the bearer token when a session exists (auth-enabled builds), mirroring
 // lib/api.ts. When auth is disabled there is no token and the header is omitted.

@@ -15,18 +15,73 @@ interface OssItem {
 
 // Bundled mirror of gateway/routers/meta.py OSS_INVENTORY — offline fallback.
 const FALLBACK: OssItem[] = [
-  { name: "YOLOv8 (Ultralytics)", purpose: "ANPR licence-plate detection", license: "AGPL-3.0", where: "ai/anpr" },
-  { name: "PaddleOCR (PP-OCRv4)", purpose: "Plate text recognition (OCR)", license: "Apache-2.0", where: "ai/anpr" },
-  { name: "ByteTrack", purpose: "Multi-object tracking (anomaly)", license: "MIT", where: "ai/anomaly" },
-  { name: "GraphSAGE + LSTM", purpose: "Congestion-onset forecasting", license: "MIT (project code)", where: "ai/congestion" },
-  { name: "ArcGIS Maps SDK for JS", purpose: "Corridor / geofence maps", license: "Esri EULA", where: "web" },
-  { name: "Apache Kafka", purpose: "Event backbone (CloudEvents)", license: "Apache-2.0", where: "infra" },
-  { name: "FastAPI", purpose: "Gateway + microservice framework", license: "MIT", where: "gateway" },
-  { name: "TimescaleDB / PostgreSQL", purpose: "Time-series + relational store", license: "Apache-2.0 / PostgreSQL", where: "infra" },
-  { name: "Redis", purpose: "Frame bus + prediction cache", license: "BSD-3 / RSALv2", where: "infra" },
-  { name: "Eclipse Mosquitto (MQTT)", purpose: "Telemetry ingest", license: "EPL-2.0 / EDL", where: "infra" },
+  {
+    name: "YOLOv8 (Ultralytics)",
+    purpose: "ANPR licence-plate detection",
+    license: "AGPL-3.0",
+    where: "ai/anpr",
+  },
+  {
+    name: "PaddleOCR (PP-OCRv4)",
+    purpose: "Plate text recognition (OCR)",
+    license: "Apache-2.0",
+    where: "ai/anpr",
+  },
+  {
+    name: "ByteTrack",
+    purpose: "Multi-object tracking (anomaly)",
+    license: "MIT",
+    where: "ai/anomaly",
+  },
+  {
+    name: "GraphSAGE + LSTM",
+    purpose: "Congestion-onset forecasting",
+    license: "MIT (project code)",
+    where: "ai/congestion",
+  },
+  {
+    name: "ArcGIS Maps SDK for JS",
+    purpose: "Corridor / geofence maps",
+    license: "Esri EULA",
+    where: "web",
+  },
+  {
+    name: "Apache Kafka",
+    purpose: "Event backbone (CloudEvents)",
+    license: "Apache-2.0",
+    where: "infra",
+  },
+  {
+    name: "FastAPI",
+    purpose: "Gateway + microservice framework",
+    license: "MIT",
+    where: "gateway",
+  },
+  {
+    name: "TimescaleDB / PostgreSQL",
+    purpose: "Time-series + relational store",
+    license: "Apache-2.0 / PostgreSQL",
+    where: "infra",
+  },
+  {
+    name: "Redis",
+    purpose: "Frame bus + prediction cache",
+    license: "BSD-3 / RSALv2",
+    where: "infra",
+  },
+  {
+    name: "Eclipse Mosquitto (MQTT)",
+    purpose: "Telemetry ingest",
+    license: "EPL-2.0 / EDL",
+    where: "infra",
+  },
   { name: "React + Vite", purpose: "Dashboard + driver PWA", license: "MIT", where: "web" },
-  { name: "Prometheus + Grafana", purpose: "Metrics + observability", license: "Apache-2.0 / AGPL-3.0", where: "infra" },
+  {
+    name: "Prometheus + Grafana",
+    purpose: "Metrics + observability",
+    license: "Apache-2.0 / AGPL-3.0",
+    where: "infra",
+  },
 ];
 
 async function fetchInventory(): Promise<OssItem[]> {

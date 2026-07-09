@@ -41,13 +41,22 @@ function StageItem({ s, accent }: { s: JourneyStage; accent: string }) {
   });
   return (
     <li className="relative pb-3 last:pb-0">
-      <span className="absolute -left-4 top-1.5 h-2 w-2 rounded-full" style={{ backgroundColor: accent }} />
-      <span className="absolute -left-[13px] top-3.5 h-full w-px" style={{ backgroundColor: accent + "33" }} />
+      <span
+        className="absolute -left-4 top-1.5 h-2 w-2 rounded-full"
+        style={{ backgroundColor: accent }}
+      />
+      <span
+        className="absolute -left-[13px] top-3.5 h-full w-px"
+        style={{ backgroundColor: accent + "33" }}
+      />
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-[13px] font-semibold">{title}</span>
         <span
           className="rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide"
-          style={{ color: real ? STATUS.ok : STATUS.unknown, backgroundColor: (real ? STATUS.ok : STATUS.unknown) + "22" }}
+          style={{
+            color: real ? STATUS.ok : STATUS.unknown,
+            backgroundColor: (real ? STATUS.ok : STATUS.unknown) + "22",
+          }}
           title={real ? "Real captured record" : "Deterministically reconstructed (SIMULATED)"}
         >
           {real ? t("followBox.real") : t("followBox.simulated")}
@@ -64,7 +73,10 @@ function StageItem({ s, accent }: { s: JourneyStage; accent: string }) {
           {Object.entries(s.facts)
             .filter(([, v]) => v != null && v !== "")
             .map(([k, v]) => (
-              <span key={k} className="inline-flex items-center gap-1 rounded border border-border bg-muted/40 px-1.5 py-0.5 text-[10px]">
+              <span
+                key={k}
+                className="inline-flex items-center gap-1 rounded border border-border bg-muted/40 px-1.5 py-0.5 text-[10px]"
+              >
                 <span className="text-muted-foreground">{k}</span>
                 <span className="font-mono text-foreground">{String(v)}</span>
               </span>
@@ -75,7 +87,15 @@ function StageItem({ s, accent }: { s: JourneyStage; accent: string }) {
   );
 }
 
-function TwinColumn({ twin, icon: Icon, stages }: { twin: string; icon: typeof Ship; stages: JourneyStage[] }) {
+function TwinColumn({
+  twin,
+  icon: Icon,
+  stages,
+}: {
+  twin: string;
+  icon: typeof Ship;
+  stages: JourneyStage[];
+}) {
   const { t } = useTranslation();
   const accent = twin === "UC-II" ? STATUS.info : STATUS.ok;
   const who = twin === "UC-II" ? t("followBox.cargoTwin") : t("followBox.trafficTwin");
@@ -83,7 +103,9 @@ function TwinColumn({ twin, icon: Icon, stages }: { twin: string; icon: typeof S
     <Card className="p-4" style={{ borderColor: accent + "55" }}>
       <div className="mb-3 flex items-center gap-2">
         <Icon size={16} style={{ color: accent }} />
-        <h3 className="text-sm font-semibold">{twin} · {who}</h3>
+        <h3 className="text-sm font-semibold">
+          {twin} · {who}
+        </h3>
       </div>
       <ol className="relative space-y-0 pl-4">
         {stages.map((s, i) => (
@@ -98,7 +120,9 @@ function Row({ k, v, mono }: { k: string; v?: string; mono?: boolean }) {
   return (
     <div className="flex items-baseline justify-between gap-2">
       <dt className="shrink-0 text-muted-foreground">{k}</dt>
-      <dd className={`truncate text-right ${mono ? "font-mono" : ""}`} title={v}>{v ?? "—"}</dd>
+      <dd className={`truncate text-right ${mono ? "font-mono" : ""}`} title={v}>
+        {v ?? "—"}
+      </dd>
     </div>
   );
 }
@@ -126,7 +150,10 @@ function HandoffCard({ j }: { j: ContainerJourney }) {
           <Row k={t("followBox.eventTime")} v={fmtDateTimeIST(x.event_time)} />
         </dl>
         <div className="mt-2 flex items-center justify-between">
-          <StatusChip label={`${t("followBox.statusWord")} · ${t("followBox.delivered")}`} tone="ok" />
+          <StatusChip
+            label={`${t("followBox.statusWord")} · ${t("followBox.delivered")}`}
+            tone="ok"
+          />
           {x.simulated && (
             <span
               className="rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase"
@@ -186,7 +213,10 @@ function MetaBar({ j }: { j: ContainerJourney }) {
     { k: t("followBox.meta.caseId"), v: j.case_id },
     { k: t("followBox.meta.vehicle"), v: j.vehicle_no },
     { k: t("followBox.meta.gate"), v: j.gate },
-    { k: t("followBox.meta.eta"), v: j.eta_min != null ? t("followBox.etaMin", { n: j.eta_min }) : undefined },
+    {
+      k: t("followBox.meta.eta"),
+      v: j.eta_min != null ? t("followBox.etaMin", { n: j.eta_min }) : undefined,
+    },
     { k: t("followBox.meta.topic"), v: j.cross_twin?.topic },
     { k: t("followBox.meta.delivery"), v: j.cross_twin?.status },
   ];
@@ -196,7 +226,9 @@ function MetaBar({ j }: { j: ContainerJourney }) {
         {cells.map((c) => (
           <div key={c.k}>
             <div className="text-[9px] uppercase tracking-wide text-muted-foreground">{c.k}</div>
-            <div className="truncate font-mono text-[12px] font-medium" title={c.v}>{c.v ?? "—"}</div>
+            <div className="truncate font-mono text-[12px] font-medium" title={c.v}>
+              {c.v ?? "—"}
+            </div>
           </div>
         ))}
       </div>

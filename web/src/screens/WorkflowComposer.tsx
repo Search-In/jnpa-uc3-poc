@@ -34,7 +34,10 @@ export default function WorkflowComposer() {
   const create = useMutation({
     mutationFn: () => api.wfCreateRule({ name, field, op, value, actions: picked }),
     onSuccess: () => {
-      setName(""); setField(""); setValue(""); setPicked([]);
+      setName("");
+      setField("");
+      setValue("");
+      setPicked([]);
       qc.invalidateQueries({ queryKey: ["wf-rules"] });
     },
   });
@@ -101,7 +104,10 @@ export default function WorkflowComposer() {
                 className="w-full rounded-md border border-border bg-card px-2 py-1.5 outline-none"
               />
               <div>
-                <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide" style={{ color: STATUS.warning }}>
+                <div
+                  className="mb-1 text-[11px] font-semibold uppercase tracking-wide"
+                  style={{ color: STATUS.warning }}
+                >
                   IF
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -113,7 +119,8 @@ export default function WorkflowComposer() {
                     <option value="">field…</option>
                     {fields.map((f) => (
                       <option key={f.key} value={f.key}>
-                        {f.label}{f.unit ? ` (${f.unit})` : ""}
+                        {f.label}
+                        {f.unit ? ` (${f.unit})` : ""}
                       </option>
                     ))}
                   </select>
@@ -123,7 +130,9 @@ export default function WorkflowComposer() {
                     className="rounded-md border border-border bg-card px-2 py-1.5 font-mono"
                   >
                     {operators.map((o) => (
-                      <option key={o} value={o}>{o}</option>
+                      <option key={o} value={o}>
+                        {o}
+                      </option>
                     ))}
                   </select>
                   <input
@@ -135,7 +144,10 @@ export default function WorkflowComposer() {
                 </div>
               </div>
               <div>
-                <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide" style={{ color: STATUS.info }}>
+                <div
+                  className="mb-1 text-[11px] font-semibold uppercase tracking-wide"
+                  style={{ color: STATUS.info }}
+                >
                   THEN
                 </div>
                 <div className="flex flex-wrap gap-1.5">
@@ -184,7 +196,8 @@ export default function WorkflowComposer() {
               {fields.map((f) => (
                 <label key={f.key} className="flex flex-col gap-0.5">
                   <span className="text-[10px] text-muted-foreground">
-                    {f.label}{f.unit ? ` (${f.unit})` : ""}
+                    {f.label}
+                    {f.unit ? ` (${f.unit})` : ""}
                   </span>
                   <input
                     value={testEvent[f.key] ?? ""}
@@ -207,14 +220,19 @@ export default function WorkflowComposer() {
                 <div className="text-[12px]">
                   <strong>{lastEval.matched_count}</strong> rule(s) fired
                 </div>
-                {lastEval.results.filter((r) => r.matched).map((r) => (
-                  <div key={r.rule_id} className="rounded-md border px-2 py-1 text-[11px]"
-                       style={{ borderColor: STATUS.ok + "66" }}>
-                    <span className="font-medium">{r.name}</span>
-                    <span className="text-muted-foreground"> · {r.condition} → </span>
-                    {r.actions_fired.map((a) => actionLabel(a)).join(", ")}
-                  </div>
-                ))}
+                {lastEval.results
+                  .filter((r) => r.matched)
+                  .map((r) => (
+                    <div
+                      key={r.rule_id}
+                      className="rounded-md border px-2 py-1 text-[11px]"
+                      style={{ borderColor: STATUS.ok + "66" }}
+                    >
+                      <span className="font-medium">{r.name}</span>
+                      <span className="text-muted-foreground"> · {r.condition} → </span>
+                      {r.actions_fired.map((a) => actionLabel(a)).join(", ")}
+                    </div>
+                  ))}
               </div>
             )}
           </Card>
@@ -233,13 +251,21 @@ export default function WorkflowComposer() {
             ) : (
               <div className="space-y-2">
                 {rulesQ.data.rules.map((r) => (
-                  <div key={r.id} className="flex flex-wrap items-center gap-2 rounded-md border border-border p-2 text-[13px]">
-                    <StatusChip label={r.enabled ? "on" : "off"} tone={r.enabled ? "ok" : "neutral"} />
+                  <div
+                    key={r.id}
+                    className="flex flex-wrap items-center gap-2 rounded-md border border-border p-2 text-[13px]"
+                  >
+                    <StatusChip
+                      label={r.enabled ? "on" : "off"}
+                      tone={r.enabled ? "ok" : "neutral"}
+                    />
                     <span className="font-medium">{r.name}</span>
                     <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">
                       IF {r.field} {r.op} {r.value}
                     </span>
-                    <span className="text-muted-foreground">THEN {r.actions.map(actionLabel).join(", ")}</span>
+                    <span className="text-muted-foreground">
+                      THEN {r.actions.map(actionLabel).join(", ")}
+                    </span>
                     <div className="ml-auto flex items-center gap-2">
                       <button
                         onClick={() => toggle.mutate(r)}
@@ -290,10 +316,15 @@ export default function WorkflowComposer() {
                           <td className="py-1.5 pr-3 whitespace-nowrap text-muted-foreground">
                             {fmtDateTimeIST(ex.ts)}
                           </td>
-                          <td className="py-1.5 pr-3 font-mono text-[11px]">{JSON.stringify(ex.event)}</td>
+                          <td className="py-1.5 pr-3 font-mono text-[11px]">
+                            {JSON.stringify(ex.event)}
+                          </td>
                           <td className="py-1.5 pr-3 tabular-nums">{ex.matched_count}</td>
                           <td className="py-1.5 pr-3 text-muted-foreground">
-                            {fired.flatMap((r) => r.actions_fired).map(actionLabel).join(", ") || "—"}
+                            {fired
+                              .flatMap((r) => r.actions_fired)
+                              .map(actionLabel)
+                              .join(", ") || "—"}
                           </td>
                         </tr>
                       );

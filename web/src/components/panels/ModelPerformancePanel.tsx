@@ -49,7 +49,17 @@ function SynthBadge({ synthetic }: { synthetic?: boolean }) {
   );
 }
 
-function Metric({ label, value, target, met }: { label: string; value: string; target?: string; met?: boolean }) {
+function Metric({
+  label,
+  value,
+  target,
+  met,
+}: {
+  label: string;
+  value: string;
+  target?: string;
+  met?: boolean;
+}) {
   const colour = met == null ? undefined : met ? STATUS.ok : STATUS.warning;
   return (
     <div className="rounded-md border border-border bg-muted/30 px-2 py-1.5">
@@ -75,7 +85,12 @@ function AnprBlock({ e }: { e: OcrEval }) {
         <SynthBadge synthetic={e.metrics_synthetic ?? e.degraded} />
       </div>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <Metric label="Accuracy" value={pct(e.accuracy ?? e.clear_accuracy)} target={pct(e.target)} met={met} />
+        <Metric
+          label="Accuracy"
+          value={pct(e.accuracy ?? e.clear_accuracy)}
+          target={pct(e.target)}
+          met={met}
+        />
         <Metric label="Precision" value={pct(e.precision)} />
         <Metric label="Detect recall" value={pct(e.recall)} />
         <Metric label="OCR conf" value={pct(e.ocr_confidence)} />
@@ -137,7 +152,10 @@ function CongestionBlock({ m }: { m: CongestionMetrics }) {
 export function ModelPerformancePanel() {
   const { t } = useTranslation();
   const anpr = useQuery({ queryKey: ["ocr-eval"], queryFn: () => getAdapter().ocrEval() });
-  const cong = useQuery({ queryKey: ["congestion-metrics"], queryFn: () => getAdapter().congestionMetrics() });
+  const cong = useQuery({
+    queryKey: ["congestion-metrics"],
+    queryFn: () => getAdapter().congestionMetrics(),
+  });
 
   const loading = anpr.isLoading || cong.isLoading;
   const empty = !anpr.data && !cong.data;

@@ -50,13 +50,7 @@ import type {
 } from "@/lib/types";
 import type { TasSlot } from "@/lib/types";
 import type { DriverEnrollment } from "@/lib/types";
-import type {
-  CongestionMetrics,
-  ContainerJourney,
-  DataAdapter,
-  DataMode,
-  OcrEval,
-} from "./types";
+import type { CongestionMetrics, ContainerJourney, DataAdapter, DataMode, OcrEval } from "./types";
 import { isValidContainerNo } from "@/lib/iso6346";
 import { buildKpiResult } from "@/kpi/compute";
 
@@ -1546,9 +1540,27 @@ export class MockAdapter implements DataAdapter {
       recall: 0.42,
       ocr_confidence: 0.31,
       dataset_breakdown: [
-        { condition: "clean", n: 90, exact_match: 0.1063, char_accuracy: 0.34, detection_recall: 0.55 },
-        { condition: "dust_haze", n: 60, exact_match: 0.05, char_accuracy: 0.29, detection_recall: 0.4 },
-        { condition: "night", n: 50, exact_match: 0.02, char_accuracy: 0.28, detection_recall: 0.31 },
+        {
+          condition: "clean",
+          n: 90,
+          exact_match: 0.1063,
+          char_accuracy: 0.34,
+          detection_recall: 0.55,
+        },
+        {
+          condition: "dust_haze",
+          n: 60,
+          exact_match: 0.05,
+          char_accuracy: 0.29,
+          detection_recall: 0.4,
+        },
+        {
+          condition: "night",
+          n: 50,
+          exact_match: 0.02,
+          char_accuracy: 0.28,
+          detection_recall: 0.31,
+        },
       ],
       data_mode: "mock",
       metrics_synthetic: true,
@@ -1585,8 +1597,10 @@ export class MockAdapter implements DataAdapter {
       for (const ch of salt + ":" + cn) x = (x * 31 + ch.charCodeAt(0)) >>> 0;
       return x;
     };
-    const hex = (salt: string, n: number) => h(salt).toString(16).toUpperCase().padStart(n, "0").slice(0, n);
-    const plate = `MH${String(h("ps") % 100).padStart(2, "0")}` +
+    const hex = (salt: string, n: number) =>
+      h(salt).toString(16).toUpperCase().padStart(n, "0").slice(0, n);
+    const plate =
+      `MH${String(h("ps") % 100).padStart(2, "0")}` +
       "ABCDEFGHJKLMNPQRSTUVWXYZ"[h("pa") % 24] +
       "ABCDEFGHJKLMNPQRSTUVWXYZ"[h("pb") % 24] +
       String(h("pn") % 10000).padStart(4, "0");
@@ -1598,37 +1612,130 @@ export class MockAdapter implements DataAdapter {
     const evt = (stage: string) => "EVT-" + hex(stage, 10);
     const TOPIC = "cargo.dpd_release";
     const mk = (
-      twin: "UC-II" | "UC-III", stage: string, source: string, source_system: string,
-      ts: string, title: string, detail: string, facts: Record<string, unknown>,
-    ) => ({ twin, stage, source, source_system, event_id: evt(stage), correlation_id: corr,
-            container_no: cn, ts, data_mode: "mock" as const, title, detail, facts });
+      twin: "UC-II" | "UC-III",
+      stage: string,
+      source: string,
+      source_system: string,
+      ts: string,
+      title: string,
+      detail: string,
+      facts: Record<string, unknown>,
+    ) => ({
+      twin,
+      stage,
+      source,
+      source_system,
+      event_id: evt(stage),
+      correlation_id: corr,
+      container_no: cn,
+      ts,
+      data_mode: "mock" as const,
+      title,
+      detail,
+      facts,
+    });
 
     const stages = [
-      mk("UC-II", "vessel_discharge", "derived", "UC-II cargo twin", "2026-06-13T06:00:00Z",
-        "Vessel discharge", "Discharged from MV MAERSK SELETAR at the quay crane.", { vessel: "MV MAERSK SELETAR" }),
-      mk("UC-II", "yard_movement", "derived", "UC-II cargo twin", "2026-06-13T09:30:00Z",
-        "Yard movement", "Moved by RTG to import stack block C-21.", { yard_block: "C-21" }),
-      mk("UC-II", "dpd_release", "derived", "UC-II cargo twin", "2026-06-14T02:00:00Z",
-        "Release (DPD)", "Customs-cleared and released for Direct Port Delivery.", { customs: "CLEARED" }),
-      mk("UC-II", "cross_twin_published", "derived", "UC-II cargo twin", "2026-06-14T02:30:00Z",
-        "Cross-twin event published", `UC-II published the release to UC-III on ${TOPIC}.`,
-        { topic: TOPIC, publishing_twin: "UC-II", delivery_status: "Published", simulated: true }),
-      mk("UC-III", "cross_twin_received", "derived", "UC-III traffic twin", "2026-06-14T02:48:00Z",
-        "Cross-twin event received", `UC-III consumed the ${TOPIC} event; truck demand recorded.`,
-        { topic: TOPIC, receiving_twin: "UC-III", delivery_status: "Delivered", simulated: true }),
-      mk("UC-III", "truck_assignment", "derived", "UC-III TAS", "2026-06-14T03:00:00Z",
-        "Truck assignment", `TAS assigned tractor ${plate} and a gate-in slot at ${gate}.`, { vehicle_no: plate, gate }),
-      mk("UC-III", "anpr_detection", "derived", "UC-III ANPR", "2026-06-14T03:48:00Z",
-        "ANPR detection", `Plate ${plate} read at ${cam} (conf 0.94).`, { vehicle_no: plate, camera_id: cam, conf: 0.94 }),
-      mk("UC-III", "gate_crossing", "seed", "UC-III gate-data (Auto-LEO)", "2026-06-14T04:00:00Z",
-        "Gate crossing (Auto-LEO)", `Gate ${gate}: Auto-LEO reconciled; e-seal ARMED.`, { gate, vehicle_no: plate, eseal_status: "ARMED" }),
-      mk("UC-III", "eta_tracking", "derived", "UC-III corridor", "2026-06-14T04:12:00Z",
-        "ETA tracking", `Corridor ETA ~${eta} min to Karal Phata under current conditions.`, { eta_min: eta }),
+      mk(
+        "UC-II",
+        "vessel_discharge",
+        "derived",
+        "UC-II cargo twin",
+        "2026-06-13T06:00:00Z",
+        "Vessel discharge",
+        "Discharged from MV MAERSK SELETAR at the quay crane.",
+        { vessel: "MV MAERSK SELETAR" },
+      ),
+      mk(
+        "UC-II",
+        "yard_movement",
+        "derived",
+        "UC-II cargo twin",
+        "2026-06-13T09:30:00Z",
+        "Yard movement",
+        "Moved by RTG to import stack block C-21.",
+        { yard_block: "C-21" },
+      ),
+      mk(
+        "UC-II",
+        "dpd_release",
+        "derived",
+        "UC-II cargo twin",
+        "2026-06-14T02:00:00Z",
+        "Release (DPD)",
+        "Customs-cleared and released for Direct Port Delivery.",
+        { customs: "CLEARED" },
+      ),
+      mk(
+        "UC-II",
+        "cross_twin_published",
+        "derived",
+        "UC-II cargo twin",
+        "2026-06-14T02:30:00Z",
+        "Cross-twin event published",
+        `UC-II published the release to UC-III on ${TOPIC}.`,
+        { topic: TOPIC, publishing_twin: "UC-II", delivery_status: "Published", simulated: true },
+      ),
+      mk(
+        "UC-III",
+        "cross_twin_received",
+        "derived",
+        "UC-III traffic twin",
+        "2026-06-14T02:48:00Z",
+        "Cross-twin event received",
+        `UC-III consumed the ${TOPIC} event; truck demand recorded.`,
+        { topic: TOPIC, receiving_twin: "UC-III", delivery_status: "Delivered", simulated: true },
+      ),
+      mk(
+        "UC-III",
+        "truck_assignment",
+        "derived",
+        "UC-III TAS",
+        "2026-06-14T03:00:00Z",
+        "Truck assignment",
+        `TAS assigned tractor ${plate} and a gate-in slot at ${gate}.`,
+        { vehicle_no: plate, gate },
+      ),
+      mk(
+        "UC-III",
+        "anpr_detection",
+        "derived",
+        "UC-III ANPR",
+        "2026-06-14T03:48:00Z",
+        "ANPR detection",
+        `Plate ${plate} read at ${cam} (conf 0.94).`,
+        { vehicle_no: plate, camera_id: cam, conf: 0.94 },
+      ),
+      mk(
+        "UC-III",
+        "gate_crossing",
+        "seed",
+        "UC-III gate-data (Auto-LEO)",
+        "2026-06-14T04:00:00Z",
+        "Gate crossing (Auto-LEO)",
+        `Gate ${gate}: Auto-LEO reconciled; e-seal ARMED.`,
+        { gate, vehicle_no: plate, eseal_status: "ARMED" },
+      ),
+      mk(
+        "UC-III",
+        "eta_tracking",
+        "derived",
+        "UC-III corridor",
+        "2026-06-14T04:12:00Z",
+        "ETA tracking",
+        `Corridor ETA ~${eta} min to Karal Phata under current conditions.`,
+        { eta_min: eta },
+      ),
     ];
     const labels: Record<string, string> = {
-      vessel_discharge: "Container discharged", yard_movement: "Yard movement", dpd_release: "Released (DPD)",
-      cross_twin_published: "Cross-twin published", cross_twin_received: "Transferred to UC-III",
-      truck_assignment: "Truck assigned", anpr_detection: "ANPR detection", gate_crossing: "Gate crossing",
+      vessel_discharge: "Container discharged",
+      yard_movement: "Yard movement",
+      dpd_release: "Released (DPD)",
+      cross_twin_published: "Cross-twin published",
+      cross_twin_received: "Transferred to UC-III",
+      truck_assignment: "Truck assigned",
+      anpr_detection: "ANPR detection",
+      gate_crossing: "Gate crossing",
       eta_tracking: "ETA tracking",
     };
     return Promise.resolve({
@@ -1644,12 +1751,23 @@ export class MockAdapter implements DataAdapter {
       gate_record_source: "seed",
       data_mode: "mock",
       cross_twin: {
-        topic: TOPIC, publishing_twin: "UC-II", receiving_twin: "UC-III",
-        correlation_id: corr, case_id: caseId, event_id: evt("cross_twin"),
-        event_time: "2026-06-14T02:30:00Z", container_no: cn, status: "Delivered",
-        data_mode: "mock", simulated: true,
+        topic: TOPIC,
+        publishing_twin: "UC-II",
+        receiving_twin: "UC-III",
+        correlation_id: corr,
+        case_id: caseId,
+        event_id: evt("cross_twin"),
+        event_time: "2026-06-14T02:30:00Z",
+        container_no: cn,
+        status: "Delivered",
+        data_mode: "mock",
+        simulated: true,
       },
-      journey_status: stages.map((s) => ({ key: s.stage, label: labels[s.stage] ?? s.title, done: true })),
+      journey_status: stages.map((s) => ({
+        key: s.stage,
+        label: labels[s.stage] ?? s.title,
+        done: true,
+      })),
       stages,
       note:
         "Mock cross-twin journey: UC-III gate facts from the deterministic seed; " +

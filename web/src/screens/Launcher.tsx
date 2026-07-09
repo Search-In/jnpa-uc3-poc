@@ -93,7 +93,9 @@ export default function Launcher() {
                 disabled={!clickable}
                 onClick={() => clickable && navigate(uc.to!)}
                 className={`flex flex-col rounded-xl border border-border bg-card p-5 text-left transition ${
-                  clickable ? "cursor-pointer hover:border-primary hover:shadow-md" : "cursor-default opacity-80"
+                  clickable
+                    ? "cursor-pointer hover:border-primary hover:shadow-md"
+                    : "cursor-default opacity-80"
                 }`}
               >
                 <div className="mb-3 flex items-center justify-between">
@@ -108,7 +110,9 @@ export default function Launcher() {
                 <div className="text-[11px] font-semibold text-muted-foreground">{uc.id}</div>
                 <div className="text-base font-semibold">{uc.title}</div>
                 <div className="text-[12px] text-muted-foreground">{uc.subtitle}</div>
-                <p className="mt-2 flex-1 text-[12px] leading-snug text-muted-foreground">{uc.desc}</p>
+                <p className="mt-2 flex-1 text-[12px] leading-snug text-muted-foreground">
+                  {uc.desc}
+                </p>
                 {clickable && (
                   <div className="mt-3 inline-flex items-center gap-1 text-[13px] font-semibold text-primary">
                     Open <ArrowRight size={14} />
@@ -121,9 +125,10 @@ export default function Launcher() {
 
         <p className="mt-6 text-[11px] leading-snug text-muted-foreground">
           UC-3 is the deployed application in this repository. UC-2 runs as a separate twin and is
-          linked to UC-3 through the <code className="rounded bg-muted px-1">cargo.dpd_release</code>{" "}
-          cross-twin event (see the What-If Console TFC-3 scenario and Follow-the-Box). UC-1 is shown
-          for platform completeness and is not part of this PoC.
+          linked to UC-3 through the{" "}
+          <code className="rounded bg-muted px-1">cargo.dpd_release</code> cross-twin event (see the
+          What-If Console TFC-3 scenario and Follow-the-Box). UC-1 is shown for platform
+          completeness and is not part of this PoC.
         </p>
       </div>
     </div>

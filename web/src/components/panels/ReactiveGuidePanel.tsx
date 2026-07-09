@@ -32,10 +32,7 @@ function StageBlock({ stage, last }: { stage: CausalStage; last: boolean }) {
   const meta = KIND_META[stage.kind];
   return (
     <div className="flex flex-col items-stretch">
-      <div
-        className="rounded-lg border bg-card p-3"
-        style={{ borderColor: meta.color + "66" }}
-      >
+      <div className="rounded-lg border bg-card p-3" style={{ borderColor: meta.color + "66" }}>
         <div className="mb-1 flex items-center gap-2">
           <span
             className="rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide"

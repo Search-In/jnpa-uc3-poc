@@ -64,13 +64,15 @@ export const CAUSAL_CHAINS: Record<string, CausalChain> = {
       {
         kind: "action",
         label: "Dynamic lane allocation",
-        mechanism: "Open an additional inbound lane and rebalance the lane mix / gate load for HGVs.",
+        mechanism:
+          "Open an additional inbound lane and rebalance the lane mix / gate load for HGVs.",
         kpi: "gate_throughput",
       },
       {
         kind: "outcome",
         label: "ETA recovery",
-        mechanism: "Service rate rises to match arrivals; the queue drains and ETA returns toward plan.",
+        mechanism:
+          "Service rate rises to match arrivals; the queue drains and ETA returns toward plan.",
         magnitude: { from: "14.5", to: "8.2", unit: "min wait", simulated: true },
         kpi: "gate_queue_wait",
       },
@@ -91,7 +93,8 @@ export const CAUSAL_CHAINS: Record<string, CausalChain> = {
       {
         kind: "impact",
         label: "Spillover congestion on feeding segments",
-        mechanism: "Inbound trucks pool on the approach; the forecaster raises P(congested) past 0.7.",
+        mechanism:
+          "Inbound trucks pool on the approach; the forecaster raises P(congested) past 0.7.",
         magnitude: { from: "0.20", to: "0.74", unit: "P(onset)", simulated: true },
         kpi: "congestion_onset",
         where: "SEG-10",
@@ -99,13 +102,15 @@ export const CAUSAL_CHAINS: Record<string, CausalChain> = {
       {
         kind: "action",
         label: "Auto-reroute to best alternate gate + TAS reslot",
-        mechanism: "/api/routing/best_alt_gate reassigns inbound trucks; TAS slots move to RESCHEDULED.",
+        mechanism:
+          "/api/routing/best_alt_gate reassigns inbound trucks; TAS slots move to RESCHEDULED.",
         kpi: "queue_length",
       },
       {
         kind: "outcome",
         label: "ETA held, queue drained",
-        mechanism: "Load redistributes to a gate with spare capacity; queue wait returns toward target.",
+        mechanism:
+          "Load redistributes to a gate with spare capacity; queue wait returns toward target.",
         magnitude: { from: "14.5", to: "8.0", unit: "min wait", simulated: true },
         kpi: "gate_queue_wait",
       },
@@ -126,14 +131,16 @@ export const CAUSAL_CHAINS: Record<string, CausalChain> = {
       {
         kind: "impact",
         label: "WRONG_WAY anomaly + collision risk",
-        mechanism: "ByteTrack flags a reverse heading versus the lane vector; the autoencoder scores it anomalous.",
+        mechanism:
+          "ByteTrack flags a reverse heading versus the lane vector; the autoencoder scores it anomalous.",
         kpi: "safety",
         where: "C-KARAL-EXIT",
       },
       {
         kind: "action",
         label: "e-Challan issued + operator banner + evidence clip",
-        mechanism: "Auto-LEO issues a challan stub, persists an MP4 evidence clip, and raises a WS operator banner.",
+        mechanism:
+          "Auto-LEO issues a challan stub, persists an MP4 evidence clip, and raises a WS operator banner.",
       },
       {
         kind: "outcome",
@@ -146,7 +153,8 @@ export const CAUSAL_CHAINS: Record<string, CausalChain> = {
   "TFC-3": {
     id: "TFC-3",
     title: "Cross-twin DPD surge (TFC-3)",
-    summary: "A UC-II release spike propagates into UC-III truck demand and the pre-emptive response.",
+    summary:
+      "A UC-II release spike propagates into UC-III truck demand and the pre-emptive response.",
     stages: [
       {
         kind: "cause",
@@ -156,20 +164,23 @@ export const CAUSAL_CHAINS: Record<string, CausalChain> = {
       {
         kind: "impact",
         label: "Upstream truck demand rises",
-        mechanism: "uc2_bridge.translate_release maps the spike into a corridor demand profile over ~40 min.",
+        mechanism:
+          "uc2_bridge.translate_release maps the spike into a corridor demand profile over ~40 min.",
         magnitude: { from: "240", to: "600", unit: "trucks/h", simulated: true },
         kpi: "truck_demand",
       },
       {
         kind: "action",
         label: "Pre-emptive gate-slot reissue + PWA push",
-        mechanism: "TAS reissues slots ahead of the wave and drivers are notified via WebPush / WS reroute.",
+        mechanism:
+          "TAS reissues slots ahead of the wave and drivers are notified via WebPush / WS reroute.",
         kpi: "queue_length",
       },
       {
         kind: "outcome",
         label: "Gate queue capped, idle carbon avoided",
-        mechanism: "Demand is spread across the window instead of spiking, so the queue stays bounded.",
+        mechanism:
+          "Demand is spread across the window instead of spiking, so the queue stays bounded.",
         magnitude: { from: "41", to: "26", unit: "veh", simulated: true },
         kpi: "queue_length",
       },
@@ -189,7 +200,8 @@ export const CAUSAL_CHAINS: Record<string, CausalChain> = {
       {
         kind: "impact",
         label: "Speeds drop, congestion spreads, throughput falls",
-        mechanism: "Wet-road speed loss lifts the jam factor; the forecaster flags onset across SEG-06…SEG-12 and ANPR degrades in rain.",
+        mechanism:
+          "Wet-road speed loss lifts the jam factor; the forecaster flags onset across SEG-06…SEG-12 and ANPR degrades in rain.",
         magnitude: { from: "0.20", to: "0.78", unit: "P(onset)", simulated: true },
         kpi: "congestion_onset",
         where: "SEG-09",
@@ -197,7 +209,8 @@ export const CAUSAL_CHAINS: Record<string, CausalChain> = {
       {
         kind: "action",
         label: "Reroute + dynamic lane allocation + advisory push",
-        mechanism: "Best-alt-gate routing, extra inbound lanes and PWA advisories are applied; TAS reslots.",
+        mechanism:
+          "Best-alt-gate routing, extra inbound lanes and PWA advisories are applied; TAS reslots.",
         kpi: "gate_throughput",
       },
       {

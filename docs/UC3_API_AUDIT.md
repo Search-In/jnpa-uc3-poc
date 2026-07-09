@@ -7,6 +7,23 @@
 
 ---
 
+## ✅ Remediation applied (2026-07-10) — code-level fixes + validation
+
+All blockers below were fixed at code level and validated end-to-end. Final smoke result: **PASS 131 · hard FAIL 0**.
+
+| # | Fix | Files changed | Verified |
+|---|---|---|---|
+| 1 | **Stale `jnpa_shared`** → rebuilt gateway image (`docker compose build gateway`) so `iso6346.py`+`assumptions.py` reinstall. journey/workflows/meta now mount; a fresh `import gateway.main` succeeds (147 routes) → **restart-safe**. | image rebuild (Dockerfile already copies `shared/`) | `openapi.json` 125→134 paths; journey/workflows/assumptions all 200 |
+| 2 | **`audit_client.py` RequestNotRead** → added `_safe_request_body()` guarding `httpx.RequestNotRead`/`StreamConsumed` on streaming multipart forwards; records a non-consuming placeholder. | `gateway/audit_client.py` | `/api/anpr/infer`, `/api/violations/detect`, `/api/violations/enforce` all 200; full pipeline detect→commit→**CHALLAN_ISSUED** (ECH-2026-001001, ₹8750, 2 alerts)→enforce→evidence persisted→`jnpa.challans` rows |
+| 3 | **FASTag demo mode** → wired `FASTAG_DEMO_MODE` into compose (`:-true`, only effective when no ULIP URL); added `demo_toll_enroute()` (toll-enroute had no demo path); routed `enroute` through demo in `ulip_client`. | `docker-compose.yml`, `services/fastag/demo_provider.py`, `services/fastag/ulip_client.py` | all 3 FASTag POSTs 200; persisted to `jnpa.fastag_balance`/`fastag_transactions`/`toll_enroute` |
+| 4 | **MinIO down** → started container; evidence now uploads + serves. | runtime (`docker compose up -d minio`) | `/api/evidence/violations/…jpg` → 200 image/jpeg |
+| 5 | **truck-sim unhealthy** → recreated. Reroute still depends on external `router.project-osrm.org` (slow/flaky) — classified in the smoke test as **DEP UNREADY** (external, not a gateway fault), not a hard fail. | runtime | GET truck paths 200 |
+| — | **Smoke test** → section 0 now validates internal services by **container health** (not host ports); dynamic ID discovery; `hit_dep` for external-sim-gated routes. | `scripts/uc3_smoke_test.sh` | PASS 131 · hard FAIL 0 |
+
+The sections below are the ORIGINAL audit findings (pre-fix) and remain as the record of what was wrong.
+
+---
+
 ## Executive summary of defects
 
 | # | Severity | Issue | Effect |

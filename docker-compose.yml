@@ -883,9 +883,15 @@ services:
       GATEWAY_ULIP_URL: ${GATEWAY_ULIP_URL:-}
       ULIP_API_KEY: ${ULIP_API_KEY:-}
       # FASTag ULIP APIs (/api/fastag/*). All env-driven — NO hardcoded vendor URL.
-      # Empty FASTAG_ULIP_URL -> the client returns a config error (HTTP 500) until
-      # the authorised provider base URL is supplied. Paths + auth scheme stay
-      # configurable because the vendor contract is not yet confirmed.
+      # Empty FASTAG_ULIP_URL -> demo fallback (below) when FASTAG_DEMO_MODE=true,
+      # else a config error (HTTP 500). Paths + auth scheme stay configurable
+      # because the vendor contract is not yet confirmed.
+      # Demo mode: with NO FASTAG_ULIP_URL set, every /api/fastag/* call returns a
+      # deterministic demo payload (balance/transactions/toll-enroute) that still
+      # flows through the mapper + DB persistence — no external ULIP dependency.
+      # Only takes effect when FASTAG_ULIP_URL is empty, so a real vendor URL for
+      # production automatically supersedes it (default true is demo-safe).
+      FASTAG_DEMO_MODE: ${FASTAG_DEMO_MODE:-true}
       FASTAG_ULIP_URL: ${FASTAG_ULIP_URL:-}
       FASTAG_ULIP_ENROUTE_PATH: ${FASTAG_ULIP_ENROUTE_PATH:-}
       FASTAG_ULIP_BALANCE_PATH: ${FASTAG_ULIP_BALANCE_PATH:-}

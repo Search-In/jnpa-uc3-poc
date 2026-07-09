@@ -22,7 +22,7 @@ import httpx
 
 from jnpa_shared.logging import get_logger
 
-from .demo_provider import demo_balance, demo_transactions
+from .demo_provider import demo_balance, demo_toll_enroute, demo_transactions
 
 log = get_logger("services.fastag.ulip_client")
 
@@ -163,10 +163,15 @@ class UlipFastagClient:
         the correlation id so a call can be traced end-to-end.
         """
         if not self._base_url and os.environ.get("FASTAG_DEMO_MODE", "").lower() == "true":
+            # Demo mode: no external ULIP dependency. Every FASTag API has a
+            # deterministic demo payload (vendor-shaped) so the full pipeline
+            # (client -> mapper -> service persist) exercises end-to-end.
             if api == "balance":
                 return demo_balance(json.get("rcNumber") if json else "")
             if api in ("transactions", "transaction"):
                 return demo_transactions(json.get("rcNumber") if json else "")
+            if api in ("enroute", "toll-enroute", "toll_enroute"):
+                return demo_toll_enroute(dict(json) if json else None)
 
         if not self._base_url:
             raise UlipClientError("no ULIP base_url configured", api=api,

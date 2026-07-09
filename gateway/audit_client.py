@@ -93,6 +93,31 @@ def _decode_body(raw: Optional[bytes]) -> Any:
         return {"_raw": text}
 
 
+def _safe_request_body(request: httpx.Request) -> Any:
+    """Best-effort request payload for the audit row — never disturbs the forward.
+
+    A streaming/multipart request (e.g. an uploaded image being proxied to the
+    ANPR service) has NOT been buffered into memory, so ``request.content``
+    raises ``httpx.RequestNotRead``. Accessing it unguarded here previously
+    500-ed every multipart forward (``/api/anpr/infer``, ``/api/violations/*``).
+    We must not read/buffer a large binary body just to audit it, so we record a
+    lightweight, non-consuming placeholder describing the stream instead.
+    """
+    try:
+        return _decode_body(request.content)
+    except httpx.StreamConsumed:  # body already sent downstream
+        return {"_stream": "consumed"}
+    except httpx.RequestNotRead:  # streaming/multipart upload — not in memory
+        ctype = request.headers.get("content-type", "") or "streaming"
+        length = request.headers.get("content-length")
+        body: dict[str, Any] = {"_stream": ctype}
+        if length and length.isdigit():
+            body["_bytes"] = int(length)
+        return body
+    except Exception:  # noqa: BLE001 — auditing must never break a proxied call
+        return {}
+
+
 class AuditingAsyncClient(httpx.AsyncClient):
     """httpx.AsyncClient that persists every request/response to api_audit_log."""
 
@@ -107,7 +132,7 @@ class AuditingAsyncClient(httpx.AsyncClient):
         service = _service_for(request.url, request.headers.get("X-Audit-Service"))
         txn = request.headers.get("X-Correlation-ID") or request.headers.get("X-Request-ID")
         endpoint = f"{request.method} {urlsplit(str(request.url)).path or '/'}"
-        req_body = _decode_body(request.content)
+        req_body = _safe_request_body(request)
         started = time.perf_counter()
         try:
             response = await super().send(request, *args, **kwargs)

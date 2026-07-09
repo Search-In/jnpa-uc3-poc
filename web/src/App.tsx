@@ -13,12 +13,15 @@ import PoliceReports from "@/screens/PoliceReports";
 import Fastag from "@/screens/Fastag";
 import GateCustoms from "@/screens/GateCustoms";
 import Intelligence from "@/screens/Intelligence";
+import FollowTheBox from "@/screens/FollowTheBox";
 import ParkingManagement from "@/screens/ParkingManagement";
 import SystemHealth from "@/screens/SystemHealth";
 import WhatIfConsole from "@/screens/WhatIfConsole";
 import DemoConsole from "@/screens/DemoConsole";
 import DriverEnrollments from "@/screens/DriverEnrollments";
+import WorkflowComposer from "@/screens/WorkflowComposer";
 import SimulatorPage from "@/sim/SimulatorPage";
+import Launcher from "@/screens/Launcher";
 import { SimBridge } from "@/sim/SimBridge";
 import { GuidedTour } from "@/whatif/GuidedTour";
 
@@ -57,6 +60,9 @@ export default function App() {
             </Guard>
           }
         />
+
+        {/* Unified Launcher — platform front door, rendered outside the Shell. */}
+        <Route path="/launcher" element={<Launcher />} />
 
         {/* Everything else lives inside the dashboard Shell. */}
         <Route
@@ -157,6 +163,14 @@ function DashboardShell({
             }
           />
           <Route
+            path="/follow-the-box"
+            element={
+              <Guard path="/follow-the-box">
+                <FollowTheBox />
+              </Guard>
+            }
+          />
+          <Route
             path="/parking"
             element={
               <Guard path="/parking">
@@ -194,6 +208,14 @@ function DashboardShell({
             element={
               <Guard path="/whatif">
                 <WhatIfConsole />
+              </Guard>
+            }
+          />
+          <Route
+            path="/workflows"
+            element={
+              <Guard path="/workflows">
+                <WorkflowComposer />
               </Guard>
             }
           />

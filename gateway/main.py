@@ -54,7 +54,9 @@ from .routers import (
     gate_data,
     geo,
     identity,
+    journey,
     kpi,
+    meta,
     otp,
     parking,
     push,
@@ -66,6 +68,7 @@ from .routers import (
     ulip,
     vahan,
     violations,
+    workflows,
     ws,
 )
 from .state import GatewayState
@@ -305,6 +308,9 @@ app.include_router(scenario_ext.router)
 app.include_router(empty_container.router)
 app.include_router(carbon.router)
 app.include_router(gate_data.router)
+app.include_router(journey.router)
+app.include_router(meta.router)
+app.include_router(workflows.router)
 app.include_router(identity.router)
 app.include_router(parking.router)
 app.include_router(debug.router)

@@ -379,4 +379,70 @@ export const api = {
     http<{ count: number; history: Record<string, unknown>[] }>(
       `/api/vahan/dl-history?limit=${limit}`,
     ),
+
+  // --- Workflow Composer (automation rule authoring + execution audit) ---
+  wfCatalog: () =>
+    http<{ fields: WfField[]; operators: string[]; actions: WfAction[] }>("/api/workflows/catalog"),
+  wfRules: () => http<{ rules: WfRule[]; count: number }>("/api/workflows/rules"),
+  wfCreateRule: (body: WfRuleInput) =>
+    http<{ rule: WfRule }>("/api/workflows/rules", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  wfUpdateRule: (id: string, body: Partial<WfRuleInput>) =>
+    http<{ rule: WfRule }>(`/api/workflows/rules/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  wfDeleteRule: (id: string) =>
+    http<{ deleted: string }>(`/api/workflows/rules/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  wfEvaluate: (event: Record<string, unknown>) =>
+    http<WfExecution>("/api/workflows/evaluate", {
+      method: "POST",
+      body: JSON.stringify({ event }),
+    }),
+  wfExecutions: (limit = 50) =>
+    http<{ executions: WfExecution[]; count: number }>(`/api/workflows/executions?limit=${limit}`),
 };
+
+export interface WfField {
+  key: string;
+  label: string;
+  unit: string;
+  type: "number" | "string";
+}
+export interface WfAction {
+  key: string;
+  label: string;
+}
+export interface WfRuleInput {
+  name: string;
+  field: string;
+  op: string;
+  value: string | number;
+  actions: string[];
+  enabled?: boolean;
+}
+export interface WfRule extends WfRuleInput {
+  id: string;
+  value: string;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+export interface WfExecutionResult {
+  rule_id: string;
+  name: string;
+  condition: string;
+  field_present: boolean;
+  matched: boolean;
+  actions_fired: string[];
+}
+export interface WfExecution {
+  ts: string;
+  event: Record<string, unknown>;
+  results: WfExecutionResult[];
+  matched_count: number;
+}

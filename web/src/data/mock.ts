@@ -50,7 +50,8 @@ import type {
 } from "@/lib/types";
 import type { TasSlot } from "@/lib/types";
 import type { DriverEnrollment } from "@/lib/types";
-import type { CongestionMetrics, DataAdapter, DataMode, OcrEval } from "./types";
+import type { CongestionMetrics, ContainerJourney, DataAdapter, DataMode, OcrEval } from "./types";
+import { isValidContainerNo } from "@/lib/iso6346";
 import { buildKpiResult } from "@/kpi/compute";
 
 // --------------------------------------------------------------------------
@@ -1526,17 +1527,253 @@ export class MockAdapter implements DataAdapter {
   // values drive the "DEGRADED MODEL" notice in the Demo Console.
   ocrEval(): Promise<OcrEval | null> {
     // combined_weighted_accuracy_pct: 10.63 → 0.1063; OCR_TARGET_MET: false.
+    // Fallback OCR on a weights-less PoC host: honest low numbers, marked
+    // metrics_synthetic so the card renders a "DEGRADED MODEL" badge.
     return Promise.resolve({
       clear_accuracy: 0.1063,
       target: 0.95,
       target_met: false,
       degraded: true,
+      model_name: "deterministic-fallback-OCR",
+      accuracy: 0.1063,
+      precision: 0.1063,
+      recall: 0.42,
+      ocr_confidence: 0.31,
+      dataset_breakdown: [
+        {
+          condition: "clean",
+          n: 90,
+          exact_match: 0.1063,
+          char_accuracy: 0.34,
+          detection_recall: 0.55,
+        },
+        {
+          condition: "dust_haze",
+          n: 60,
+          exact_match: 0.05,
+          char_accuracy: 0.29,
+          detection_recall: 0.4,
+        },
+        {
+          condition: "night",
+          n: 50,
+          exact_match: 0.02,
+          char_accuracy: 0.28,
+          detection_recall: 0.31,
+        },
+      ],
+      data_mode: "mock",
+      metrics_synthetic: true,
     });
   }
 
   congestionMetrics(): Promise<CongestionMetrics | null> {
-    // congestion_onset_f1: 0.8411 vs target_f1: 0.85 → below target.
-    return Promise.resolve({ f1: 0.8411, target: 0.85, target_met: false });
+    // Mirrors the real committed artifact ai/congestion/artifacts/metrics.json
+    // (retrained: F1 0.8797 ≥ 0.85). These are genuine offline-train metrics,
+    // independent of data_mode, hence metrics_synthetic: false.
+    return Promise.resolve({
+      f1: 0.8797,
+      target: 0.85,
+      target_met: true,
+      model_name: "GraphSAGE + LSTM (congestion-onset forecaster)",
+      precision: 0.9624,
+      recall: 0.8101,
+      evaluation_dataset:
+        "14-day deterministic synthetic corridor commute history; 13 NH-348 segments; held-out temporal split, 17732 segment-windows",
+      data_mode: "mock",
+      metrics_synthetic: false,
+    });
+  }
+
+  containerJourney(containerNo: string): Promise<ContainerJourney | null> {
+    // Deterministic mirror of the gateway journey router (same shape: shared
+    // correlation id, explicit cross-twin PUBLISH/RECEIVE stages, per-stage
+    // metadata, cross_twin handoff + journey_status), so Follow-the-Box renders
+    // offline / in the mock build. Cross-twin transport is SIMULATED here.
+    const cn = containerNo.trim().toUpperCase();
+    const valid = isValidContainerNo(cn);
+    const h = (salt: string) => {
+      let x = 0;
+      for (const ch of salt + ":" + cn) x = (x * 31 + ch.charCodeAt(0)) >>> 0;
+      return x;
+    };
+    const hex = (salt: string, n: number) =>
+      h(salt).toString(16).toUpperCase().padStart(n, "0").slice(0, n);
+    const plate =
+      `MH${String(h("ps") % 100).padStart(2, "0")}` +
+      "ABCDEFGHJKLMNPQRSTUVWXYZ"[h("pa") % 24] +
+      "ABCDEFGHJKLMNPQRSTUVWXYZ"[h("pb") % 24] +
+      String(h("pn") % 10000).padStart(4, "0");
+    const gate = ["G-NSICT", "G-JNPCT", "G-NSIGT", "G-BMCT"][h("gate") % 4];
+    const cam = ["CAM-NSICT-ENT", "CAM-JNPCT-ENT", "CAM-COR-03", "CAM-COR-05"][h("cam") % 4];
+    const eta = 30 + (h("eta") % 60);
+    const corr = "XT-" + hex("corr", 8);
+    const caseId = `CASE-${(h("case") % 900000) + 100000}`;
+    const evt = (stage: string) => "EVT-" + hex(stage, 10);
+    const TOPIC = "cargo.dpd_release";
+    const mk = (
+      twin: "UC-II" | "UC-III",
+      stage: string,
+      source: string,
+      source_system: string,
+      ts: string,
+      title: string,
+      detail: string,
+      facts: Record<string, unknown>,
+    ) => ({
+      twin,
+      stage,
+      source,
+      source_system,
+      event_id: evt(stage),
+      correlation_id: corr,
+      container_no: cn,
+      ts,
+      data_mode: "mock" as const,
+      title,
+      detail,
+      facts,
+    });
+
+    const stages = [
+      mk(
+        "UC-II",
+        "vessel_discharge",
+        "derived",
+        "UC-II cargo twin",
+        "2026-06-13T06:00:00Z",
+        "Vessel discharge",
+        "Discharged from MV MAERSK SELETAR at the quay crane.",
+        { vessel: "MV MAERSK SELETAR" },
+      ),
+      mk(
+        "UC-II",
+        "yard_movement",
+        "derived",
+        "UC-II cargo twin",
+        "2026-06-13T09:30:00Z",
+        "Yard movement",
+        "Moved by RTG to import stack block C-21.",
+        { yard_block: "C-21" },
+      ),
+      mk(
+        "UC-II",
+        "dpd_release",
+        "derived",
+        "UC-II cargo twin",
+        "2026-06-14T02:00:00Z",
+        "Release (DPD)",
+        "Customs-cleared and released for Direct Port Delivery.",
+        { customs: "CLEARED" },
+      ),
+      mk(
+        "UC-II",
+        "cross_twin_published",
+        "derived",
+        "UC-II cargo twin",
+        "2026-06-14T02:30:00Z",
+        "Cross-twin event published",
+        `UC-II published the release to UC-III on ${TOPIC}.`,
+        { topic: TOPIC, publishing_twin: "UC-II", delivery_status: "Published", simulated: true },
+      ),
+      mk(
+        "UC-III",
+        "cross_twin_received",
+        "derived",
+        "UC-III traffic twin",
+        "2026-06-14T02:48:00Z",
+        "Cross-twin event received",
+        `UC-III consumed the ${TOPIC} event; truck demand recorded.`,
+        { topic: TOPIC, receiving_twin: "UC-III", delivery_status: "Delivered", simulated: true },
+      ),
+      mk(
+        "UC-III",
+        "truck_assignment",
+        "derived",
+        "UC-III TAS",
+        "2026-06-14T03:00:00Z",
+        "Truck assignment",
+        `TAS assigned tractor ${plate} and a gate-in slot at ${gate}.`,
+        { vehicle_no: plate, gate },
+      ),
+      mk(
+        "UC-III",
+        "anpr_detection",
+        "derived",
+        "UC-III ANPR",
+        "2026-06-14T03:48:00Z",
+        "ANPR detection",
+        `Plate ${plate} read at ${cam} (conf 0.94).`,
+        { vehicle_no: plate, camera_id: cam, conf: 0.94 },
+      ),
+      mk(
+        "UC-III",
+        "gate_crossing",
+        "seed",
+        "UC-III gate-data (Auto-LEO)",
+        "2026-06-14T04:00:00Z",
+        "Gate crossing (Auto-LEO)",
+        `Gate ${gate}: Auto-LEO reconciled; e-seal ARMED.`,
+        { gate, vehicle_no: plate, eseal_status: "ARMED" },
+      ),
+      mk(
+        "UC-III",
+        "eta_tracking",
+        "derived",
+        "UC-III corridor",
+        "2026-06-14T04:12:00Z",
+        "ETA tracking",
+        `Corridor ETA ~${eta} min to Karal Phata under current conditions.`,
+        { eta_min: eta },
+      ),
+    ];
+    const labels: Record<string, string> = {
+      vessel_discharge: "Container discharged",
+      yard_movement: "Yard movement",
+      dpd_release: "Released (DPD)",
+      cross_twin_published: "Cross-twin published",
+      cross_twin_received: "Transferred to UC-III",
+      truck_assignment: "Truck assigned",
+      anpr_detection: "ANPR detection",
+      gate_crossing: "Gate crossing",
+      eta_tracking: "ETA tracking",
+    };
+    return Promise.resolve({
+      container_no: cn,
+      iso6346_valid: valid,
+      owner_code: cn.length >= 3 ? cn.slice(0, 3) : null,
+      found: true,
+      correlation_id: corr,
+      case_id: caseId,
+      vehicle_no: plate,
+      gate,
+      eta_min: eta,
+      gate_record_source: "seed",
+      data_mode: "mock",
+      cross_twin: {
+        topic: TOPIC,
+        publishing_twin: "UC-II",
+        receiving_twin: "UC-III",
+        correlation_id: corr,
+        case_id: caseId,
+        event_id: evt("cross_twin"),
+        event_time: "2026-06-14T02:30:00Z",
+        container_no: cn,
+        status: "Delivered",
+        data_mode: "mock",
+        simulated: true,
+      },
+      journey_status: stages.map((s) => ({
+        key: s.stage,
+        label: labels[s.stage] ?? s.title,
+        done: true,
+      })),
+      stages,
+      note:
+        "Mock cross-twin journey: UC-III gate facts from the deterministic seed; " +
+        "UC-II, the cross-twin event and derived UC-III steps reconstructed from the " +
+        "container id (SIMULATED cross-twin transport).",
+    });
   }
 
   // ---- FASTag (ULIP) — deterministic fixtures mirroring the provider samples,

@@ -650,6 +650,29 @@ CREATE INDEX IF NOT EXISTS idx_decision_audit_ts      ON jnpa.decision_audit (cr
 CREATE INDEX IF NOT EXISTS idx_decision_audit_request ON jnpa.decision_audit (request_id);
 CREATE INDEX IF NOT EXISTS idx_decision_audit_rule    ON jnpa.decision_audit (rule_executed, created_at DESC);
 
+-- Workflow Composer: operator-authored IF/THEN automation rules + execution log
+-- (audit closure). The gateway also auto-provisions these via CREATE TABLE IF
+-- NOT EXISTS so a running stack gains them without a fresh init.
+CREATE TABLE IF NOT EXISTS jnpa.automation_rules (
+    id         text PRIMARY KEY,
+    name       text NOT NULL,
+    enabled    boolean NOT NULL DEFAULT true,
+    field      text NOT NULL,
+    op         text NOT NULL,
+    value      text NOT NULL,
+    actions    jsonb NOT NULL DEFAULT '[]'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS jnpa.automation_executions (
+    id            bigserial PRIMARY KEY,
+    ts            timestamptz NOT NULL DEFAULT now(),
+    event         jsonb NOT NULL,
+    results       jsonb NOT NULL,
+    matched_count int NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_automation_exec_ts ON jnpa.automation_executions (ts DESC);
+
 CREATE TABLE IF NOT EXISTS jnpa.geofence_events (
     id             bigserial PRIMARY KEY,
     vehicle_id     text,

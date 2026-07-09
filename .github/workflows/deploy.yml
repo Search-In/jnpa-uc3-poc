@@ -61,7 +61,17 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+          # Accept the host key on first connect so the deploy does not depend on
+          # ssh-keyscan succeeding. Under `bash -e`, a non-zero ssh-keyscan (which
+          # happens whenever the host is briefly unreachable on :22 — e.g. right
+          # after an instance restart, or a stale EC2_HOST) would otherwise abort
+          # the whole step even when the subsequent ssh/rsync would connect fine.
+          printf 'Host %s\n  StrictHostKeyChecking accept-new\n  UserKnownHostsFile ~/.ssh/known_hosts\n' \
+            "${{ secrets.EC2_HOST }}" > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+          # Best-effort pre-populate; never fatal.
+          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || \
+            echo "::warning::ssh-keyscan could not reach ${{ secrets.EC2_HOST }} on port 22; relying on accept-new at first connect"
 
       - name: Free disk space on EC2 (before sync)
         run: |

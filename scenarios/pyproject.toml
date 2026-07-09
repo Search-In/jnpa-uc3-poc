@@ -34,6 +34,7 @@ scenarios-runner = "scenarios.runner:run"
 tfc1 = "scenarios.tfc1"
 tfc2 = "scenarios.tfc2"
 tfc3 = "scenarios.tfc3"
+monsoon_friday = "scenarios.monsoon_friday"
 
 [tool.setuptools]
 packages = ["scenarios"]

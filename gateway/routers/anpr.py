@@ -133,23 +133,109 @@ async def cameras(state: GatewayState = Depends(get_state)) -> dict:
     return {"cameras": rows}
 
 
+def _mean(values: list) -> Optional[float]:
+    nums = [v for v in values if isinstance(v, (int, float))]
+    return round(sum(nums) / len(nums), 4) if nums else None
+
+
+def _normalize_anpr_eval(data: dict) -> dict:
+    """Map ai/anpr's held-out OCR benchmark into the evaluator-facing shape
+    (model_name / accuracy / precision / recall / ocr_confidence /
+    dataset_breakdown / data_mode) WITHOUT fabricating any value.
+
+    Every returned number is derived from a real measured field; the semantics of
+    each (OCR eval is not a binary classifier, so precision/recall are defined
+    explicitly) are documented in ``metric_definitions``. All upstream keys are
+    preserved so the existing DemoConsole probe keeps working.
+    """
+    from jnpa_shared.config import get_settings
+
+    slices = data.get("slices") or []
+    detection = data.get("detection") or {}
+    combined = data.get("combined_weighted_accuracy_pct")
+    engine = data.get("engine")
+    degraded = bool(data.get("degraded"))
+
+    breakdown = []
+    det_recalls = []
+    clean_exact = None
+    for s in slices:
+        name = s.get("name")
+        det = detection.get(name, {}) if isinstance(detection, dict) else {}
+        dr = det.get("detection_recall@0.3iou")
+        if dr is not None:
+            det_recalls.append(dr)
+        if name in ("clean", "clear"):
+            clean_exact = s.get("exact_match")
+        breakdown.append({
+            "condition": name,
+            "n": s.get("n"),
+            "exact_match": s.get("exact_match"),
+            "char_accuracy": s.get("char_accuracy"),
+            "detection_recall": dr,
+        })
+
+    accuracy = combined / 100.0 if isinstance(combined, (int, float)) else None
+    # `precision` = clean-condition exact-match (best-case read precision);
+    # `recall` = mean plate detection recall; both are real measured fields.
+    precision = clean_exact if clean_exact is not None else accuracy
+    recall = _mean(det_recalls)
+    ocr_confidence = _mean([s.get("char_accuracy") for s in slices])
+
+    # data_mode reflects the whole-twin data posture; metrics themselves are also
+    # tagged honest via `degraded`/`engine` (fallback OCR reports its true lower
+    # numbers, never the 95% target).
+    data_mode = get_settings().data_mode
+
+    out = dict(data)  # preserve every upstream key (backward compatible)
+    out.update({
+        "model_name": (
+            "YOLOv8n + PaddleOCR PP-OCRv4"
+            if engine == "paddle+yolo"
+            else "deterministic-fallback-OCR"
+        ),
+        "accuracy": round(accuracy, 4) if accuracy is not None else None,
+        "precision": round(precision, 4) if isinstance(precision, (int, float)) else None,
+        "recall": recall,
+        "ocr_confidence": ocr_confidence,
+        "dataset_breakdown": breakdown,
+        "data_mode": data_mode,
+        "metrics_synthetic": degraded or engine != "paddle+yolo",
+        "metric_definitions": {
+            "accuracy": "combined weighted plate exact-match across all conditions",
+            "precision": "clean-condition plate exact-match rate (read precision)",
+            "recall": "mean plate detection recall @0.3 IoU",
+            "ocr_confidence": "mean character-level accuracy across conditions",
+        },
+    })
+    return out
+
+
 @router.get("/eval")
 async def eval_metrics(state: GatewayState = Depends(get_state)) -> dict:
-    """Proxy ai/anpr's held-out OCR benchmark (``GET /eval``) so the dashboard's
-    realism probe (web/src/data/live.ts:ocrEval) can render the accuracy panel.
+    """Proxy ai/anpr's held-out OCR benchmark (``GET /eval``) and normalize it into
+    the evaluator-facing shape the dashboard model-performance card renders
+    (model_name / accuracy / precision / recall / ocr_confidence /
+    dataset_breakdown / data_mode). All upstream keys are preserved so the
+    DemoConsole realism probe (web/src/data/live.ts:ocrEval) keeps working.
 
-    Returns the upstream JSON verbatim (``combined_weighted_accuracy_pct``,
-    ``OCR_TARGET_MET``, per-condition accuracies, ...). 503 when the AI service is
-    unreachable — the dashboard already degrades that to a static target note.
+    503 when the AI service is unreachable — the dashboard degrades that to a
+    static target note.
     """
     url = state.cfg.anpr_ai_url.rstrip("/") + "/eval"
     t0 = time.perf_counter()
     try:
-        resp = await state.http.get(url, timeout=10.0)
+        # The held-out OCR benchmark runs the model over the eval set, so it is
+        # inherently slow (seconds-to-minutes on a CPU-only host). Allow a
+        # generous budget (override with GATEWAY_ANPR_EVAL_TIMEOUT_S) rather than
+        # 503-ing a working-but-slow eval.
+        import os as _os
+        _eval_timeout = float(_os.environ.get("GATEWAY_ANPR_EVAL_TIMEOUT_S", "60"))
+        resp = await state.http.get(url, timeout=_eval_timeout)
         UPSTREAM_LATENCY.labels("anpr", "anpr-ai").observe(time.perf_counter() - t0)
         if resp.status_code == 200:
             REQUESTS.labels("anpr", "ok").inc()
-            return resp.json()
+            return _normalize_anpr_eval(resp.json())
         log.info("anpr_eval_miss", status=resp.status_code)
     except httpx.HTTPError as exc:
         log.warning("anpr_eval_unreachable", url=url, error=str(exc))

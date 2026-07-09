@@ -5,13 +5,14 @@ import { createContext, useContext, useState, type ReactNode } from "react";
 // it is client-side state shared across screens (the What-If console will drive
 // it). Persisted to sessionStorage so a refresh keeps the banner.
 
-export type ScenarioId = "none" | "TFC-1" | "TFC-2" | "TFC-3";
+export type ScenarioId = "none" | "TFC-1" | "TFC-2" | "TFC-3" | "MONSOON-FRIDAY";
 
 export const SCENARIO_LABELS: Record<ScenarioId, string> = {
   none: "Baseline",
   "TFC-1": "TFC-1 · Gate closure",
   "TFC-2": "TFC-2 · Congestion surge",
   "TFC-3": "TFC-3 · GPS / re-route",
+  "MONSOON-FRIDAY": "Monsoon Friday · master",
 };
 
 interface ScenarioCtx {

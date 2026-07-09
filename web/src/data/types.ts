@@ -49,6 +49,14 @@ import type {
 // on the gateway, so LiveAdapter degrades to `null` rather than throwing (the
 // screen then shows a static "target/advisory" note). Mock returns plausible
 // deterministic values.
+export interface AnprConditionSlice {
+  condition?: string;
+  n?: number;
+  exact_match?: number;
+  char_accuracy?: number;
+  detection_recall?: number;
+}
+
 export interface OcrEval {
   /** OCR accuracy in the CLEAR condition, 0..1 (e.g. 0.97). */
   clear_accuracy: number;
@@ -58,6 +66,17 @@ export interface OcrEval {
   target_met?: boolean;
   /** True when the deterministic fallback OCR is active (no CRNN weights). */
   degraded?: boolean;
+  // --- evaluator-facing normalized fields (from GET /api/anpr/eval) ---
+  model_name?: string;
+  accuracy?: number;
+  precision?: number;
+  recall?: number;
+  ocr_confidence?: number;
+  dataset_breakdown?: AnprConditionSlice[];
+  /** Whole-twin data posture: "mock" | "live". */
+  data_mode?: DataMode;
+  /** True when metrics come from the degraded fallback OCR, not the real model. */
+  metrics_synthetic?: boolean;
 }
 
 export interface CongestionMetrics {
@@ -67,9 +86,70 @@ export interface CongestionMetrics {
   target?: number;
   /** True only when f1 >= target. */
   target_met?: boolean;
+  // --- evaluator-facing normalized fields (from GET /api/traffic/metrics) ---
+  model_name?: string;
+  precision?: number;
+  recall?: number;
+  evaluation_dataset?: string;
+  data_mode?: DataMode;
+  metrics_synthetic?: boolean;
 }
 
 export type DataMode = "mock" | "live";
+
+// Follow-the-Box cross-twin container journey (UC-II → UC-III).
+export interface JourneyStage {
+  twin: "UC-II" | "UC-III";
+  stage: string;
+  source: string; // "gate-data" | "live" | "derived"
+  source_system?: string;
+  event_id?: string;
+  correlation_id?: string;
+  container_no?: string;
+  ts: string;
+  data_mode?: DataMode;
+  title: string;
+  detail: string;
+  facts?: Record<string, unknown>;
+}
+
+export interface CrossTwinEvent {
+  topic: string;
+  publishing_twin: string;
+  receiving_twin: string;
+  correlation_id: string;
+  case_id?: string;
+  event_id: string;
+  event_time: string;
+  container_no: string;
+  status: string; // "Delivered"
+  data_mode?: DataMode;
+  simulated?: boolean;
+}
+
+export interface JourneyStatusStep {
+  key: string;
+  label: string;
+  done: boolean;
+}
+
+export interface ContainerJourney {
+  container_no: string;
+  iso6346_valid: boolean;
+  owner_code?: string | null;
+  found: boolean;
+  correlation_id?: string;
+  case_id?: string;
+  vehicle_no?: string;
+  gate?: string;
+  eta_min?: number;
+  gate_record_source?: string;
+  data_mode?: DataMode;
+  cross_twin?: CrossTwinEvent;
+  journey_status?: JourneyStatusStep[];
+  stages: JourneyStage[];
+  note?: string;
+}
 
 export interface DataAdapter {
   readonly mode: DataMode;
@@ -172,4 +252,7 @@ export interface DataAdapter {
   // --- Realism probes (graceful: null when the gateway lacks the endpoint) ---
   ocrEval(): Promise<OcrEval | null>;
   congestionMetrics(): Promise<CongestionMetrics | null>;
+
+  // --- Follow-the-Box cross-twin container journey ---
+  containerJourney(containerNo: string): Promise<ContainerJourney | null>;
 }

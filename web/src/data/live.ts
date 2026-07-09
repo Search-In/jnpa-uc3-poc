@@ -18,7 +18,7 @@ import type {
   ParkingFacility,
   ParkingSummary,
 } from "@/lib/types";
-import type { CongestionMetrics, DataAdapter, DataMode, OcrEval } from "./types";
+import type { CongestionMetrics, ContainerJourney, DataAdapter, DataMode, OcrEval } from "./types";
 
 // Attach the bearer token when a session exists (auth-enabled builds), mirroring
 // lib/api.ts. When auth is disabled there is no token and the header is omitted.
@@ -210,6 +210,13 @@ export class LiveAdapter implements DataAdapter {
         target_pct?: number;
         OCR_TARGET_MET?: boolean;
         degraded?: boolean;
+        model_name?: string;
+        precision?: number;
+        recall?: number;
+        ocr_confidence?: number;
+        dataset_breakdown?: OcrEval["dataset_breakdown"];
+        data_mode?: OcrEval["data_mode"];
+        metrics_synthetic?: boolean;
       }>("/api/anpr/eval");
       // Prefer the explicit per-condition accuracy; fall back to the combined %.
       const acc =
@@ -224,6 +231,14 @@ export class LiveAdapter implements DataAdapter {
         target: d.target_pct != null ? d.target_pct / 100 : 0.95,
         target_met: d.OCR_TARGET_MET,
         degraded: d.degraded,
+        model_name: d.model_name,
+        accuracy: d.accuracy ?? acc,
+        precision: d.precision,
+        recall: d.recall,
+        ocr_confidence: d.ocr_confidence,
+        dataset_breakdown: d.dataset_breakdown,
+        data_mode: d.data_mode,
+        metrics_synthetic: d.metrics_synthetic,
       };
     } catch {
       return null;
@@ -232,18 +247,46 @@ export class LiveAdapter implements DataAdapter {
   congestionMetrics = async (): Promise<CongestionMetrics | null> => {
     for (const path of ["/api/traffic/metrics", "/api/congestion/metrics"]) {
       try {
-        const d = await getJson<{ f1?: number; congestion_onset_f1?: number; target_f1?: number }>(
-          path,
-        );
+        const d = await getJson<{
+          f1?: number;
+          congestion_onset_f1?: number;
+          target_f1?: number;
+          model_name?: string;
+          precision?: number;
+          recall?: number;
+          evaluation_dataset?: string;
+          data_mode?: CongestionMetrics["data_mode"];
+          metrics_synthetic?: boolean;
+        }>(path);
         const f1 = d.f1 ?? d.congestion_onset_f1;
         if (f1 != null) {
           const target = d.target_f1 ?? 0.85;
-          return { f1, target, target_met: f1 >= target };
+          return {
+            f1,
+            target,
+            target_met: f1 >= target,
+            model_name: d.model_name,
+            precision: d.precision,
+            recall: d.recall,
+            evaluation_dataset: d.evaluation_dataset,
+            data_mode: d.data_mode,
+            metrics_synthetic: d.metrics_synthetic,
+          };
         }
       } catch {
         /* try the next candidate, else fall through to null */
       }
     }
     return null;
+  };
+
+  containerJourney = async (containerNo: string): Promise<ContainerJourney | null> => {
+    try {
+      return await getJson<ContainerJourney>(
+        `/api/journey/container/${encodeURIComponent(containerNo.trim().toUpperCase())}`,
+      );
+    } catch {
+      return null;
+    }
   };
 }

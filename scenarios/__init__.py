@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Awaitable, Callable, Dict, Protocol
 
 from .handle import ScenarioHandle
-from . import tfc1, tfc2, tfc3
+from . import monsoon_friday, tfc1, tfc2, tfc3
 
 
 class ScenarioModule(Protocol):
@@ -31,6 +31,7 @@ REGISTRY: Dict[str, object] = {
     tfc1.NAME: tfc1,
     tfc2.NAME: tfc2,
     tfc3.NAME: tfc3,
+    monsoon_friday.NAME: monsoon_friday,
 }
 
 

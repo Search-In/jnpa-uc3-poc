@@ -26,13 +26,79 @@
     "reports": "Reports & Enforcement",
     "fastag": "FASTag",
     "intelligence": "Vehicle & Driver Intelligence",
+    "followBox": "Follow the Box",
     "gateCustoms": "Customs & Gate",
     "parking": "Parking",
     "health": "System Health",
+    "workflows": "Workflow Composer",
     "whatIf": "What-If Console",
     "simulator": "Simulator",
     "demo": "Demo Console",
     "enrollments": "Driver Enrolment"
+  },
+  "followBox": {
+    "title": "Follow the Box",
+    "subtitle": "Cross-twin container journey — UC-II → UC-III continuity",
+    "searchPlaceholder": "Container no. (e.g. MSCU1234566)",
+    "follow": "Follow",
+    "isoValid": "ISO 6346 valid",
+    "isoInvalid": "ISO 6346 invalid",
+    "unavailable": "Journey service unavailable — start the gateway to follow a box.",
+    "journeyStatus": "Journey status",
+    "complete": "{{done}}/{{total}} complete — one continuous lifecycle",
+    "cargoTwin": "Cargo twin",
+    "trafficTwin": "Traffic twin",
+    "crossTwinEvent": "UC-II → UC-III event",
+    "publishing": "Publishing",
+    "receiving": "Receiving",
+    "correlation": "Correlation",
+    "caseId": "Case ID",
+    "eventId": "Event ID",
+    "eventTime": "Event time",
+    "topicLabel": "Topic",
+    "statusWord": "Status",
+    "delivered": "Delivered",
+    "simulated": "simulated",
+    "real": "real",
+    "etaMin": "{{n}} min",
+    "note": "UC-III gate-crossing facts are the real Auto-LEO capture; UC-II, the cross-twin event and the derived UC-III steps are reconstructed deterministically from the container id and the cross-twin release contract (SIMULATED cross-twin transport).",
+    "meta": {
+      "container": "Container", "correlation": "Correlation", "caseId": "Case ID",
+      "vehicle": "Vehicle", "gate": "Gate", "eta": "ETA", "topic": "Topic", "delivery": "Delivery"
+    },
+    "stage": {
+      "vessel_discharge": "Vessel discharge",
+      "yard_movement": "Yard movement",
+      "dpd_release": "Release (DPD)",
+      "cross_twin_published": "Cross-twin event published",
+      "cross_twin_received": "Cross-twin event received",
+      "truck_assignment": "Truck assignment",
+      "anpr_detection": "ANPR detection",
+      "gate_crossing": "Gate crossing (Auto-LEO)",
+      "eta_tracking": "ETA tracking"
+    },
+    "status": {
+      "vessel_discharge": "Container discharged",
+      "yard_movement": "Yard movement",
+      "dpd_release": "Released (DPD)",
+      "cross_twin_published": "Cross-twin published",
+      "cross_twin_received": "Transferred to UC-III",
+      "truck_assignment": "Truck assigned",
+      "anpr_detection": "ANPR detection",
+      "gate_crossing": "Gate crossing",
+      "eta_tracking": "ETA tracking"
+    },
+    "detail": {
+      "vessel_discharge": "Discharged from {{vessel}} at the quay crane.",
+      "yard_movement": "Moved by RTG to import stack block {{block}}.",
+      "dpd_release": "Customs-cleared and released for Direct Port Delivery.",
+      "cross_twin_published": "UC-II published the release to UC-III on {{topic}}.",
+      "cross_twin_received": "UC-III consumed the {{topic}} event; truck demand recorded.",
+      "truck_assignment": "TAS assigned tractor {{vehicle}} and a gate-in slot at {{gate}}.",
+      "anpr_detection": "Plate {{vehicle}} read at {{camera}} (conf {{conf}}).",
+      "gate_crossing": "Gate {{gate}}: Auto-LEO reconciled.",
+      "eta_tracking": "Corridor ETA ~{{eta}} min to Karal Phata under current conditions."
+    }
   },
   "search": {
     "placeholder": "Search vehicle, driver, RC, DL, container, FASTag, alert, case…",
@@ -411,7 +477,8 @@
     "blurb": {
       "TFC-1": "Close G-NSICT; forecaster predicts spillover; trucks auto-re-route; TAS slots rescheduled.",
       "TFC-2": "Inject a wrong-way track at Karal Phata; anomaly fires; e-Challan issued with evidence.",
-      "TFC-3": "UC-II DPD release spike (2.5×) → corridor demand surge; forecaster build-up; gate-slot reissue."
+      "TFC-3": "UC-II DPD release spike (2.5×) → corridor demand surge; forecaster build-up; gate-slot reissue.",
+      "MONSOON-FRIDAY": "Master scenario: monsoon rain + Friday peak → congestion → demand surge → gate queue → reroute → carbon impact."
     },
     "demoTimelines": "Demo & recorded timelines",
     "demoTimelinesHint": "Preview a recorded run (read-only — does not start a live simulation)"

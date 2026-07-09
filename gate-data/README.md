@@ -33,8 +33,9 @@ source records the Auto-LEO process reconciles:
 | weighbridge  | `vehicle_plate`, `container_no`, `measured_wt_kg`, `axle_count` |
 | ICEGATE      | `shipping_bill_no`, `leo_status`, `igm_no`, `assessment` |
 
-Container numbers follow the **ISO 6346**-ish format (3 line letters + `U` + 7
-digits, e.g. `MSCU1234567`); vehicle plates reuse the canonical Indian-plate
+Container numbers are check-digit-**valid ISO 6346** (3 owner letters + `U` +
+6-digit serial + computed check digit, e.g. `MSCU1234566`, validated by
+`jnpa_shared.iso6346`); vehicle plates reuse the canonical Indian-plate
 format so the gate data joins cleanly against the Vahan dataset. Everything is
 derived from a fixed `SEED` anchored to a fixed `REFERENCE_DATE`, so results are
 identical across runs and hosts.
@@ -68,8 +69,8 @@ dicts (`kind="CUSTOMS_FLAG"`) for the dashboard's Customs feed.
 
 ```bash
 curl -s http://localhost:8350/healthz | jq .
-curl -s http://localhost:8350/records/MSCU1234567 | jq .
+curl -s http://localhost:8350/records/MSCU1234566 | jq .
 curl -s -X POST http://localhost:8350/leo -H 'content-type: application/json' \
-     -d '{"container_no":"MAEU7654321"}' | jq .
+     -d '{"container_no":"MAEU7654320"}' | jq .
 curl -s http://localhost:8350/customs/flags | jq '.by_flag'
 ```

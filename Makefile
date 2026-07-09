@@ -219,6 +219,12 @@ tfc3: ## Run the TFC-3 cargo-surge cross-twin scenario (stack must be up)
 		-d '{"dpd_release_spike":2.5}' -H 'content-type: application/json' \
 		| $(PY) -m json.tool || true
 
+monsoon: ## Run the Monsoon Friday master scenario (stack must be up)
+	@curl -s -XPOST http://localhost:8400/scenarios/monsoon_friday/run \
+		-d '{"gate_id":"G-NSICT","rain_intensity":"heavy","demand_trucks":120}' \
+		-H 'content-type: application/json' \
+		| $(PY) -m json.tool || true
+
 scenarios-verify: ## Smoke-test the scenarios runner end-to-end (stack must be up)
 	@echo "== /healthz ==" && curl -s http://localhost:8400/healthz | $(PY) -m json.tool || true
 	@echo "== run tfc1 ==" \

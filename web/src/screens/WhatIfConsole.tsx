@@ -39,6 +39,7 @@ import {
 } from "lucide-react";
 import { tourStore } from "@/whatif/tourStore";
 import { getScript } from "@/whatif/scenarioScripts";
+import { ReactiveGuidePanel } from "@/components/panels/ReactiveGuidePanel";
 
 const SCENARIOS: { id: ScenarioId; runner: string; blurb: string; params: Record<string, any> }[] =
   [
@@ -62,6 +63,13 @@ const SCENARIOS: { id: ScenarioId; runner: string; blurb: string; params: Record
       blurb:
         "UC-II DPD release spike (2.5×) → corridor demand surge; forecaster build-up; gate-slot reissue.",
       params: { dpd_release_spike: 2.5 },
+    },
+    {
+      id: "MONSOON-FRIDAY",
+      runner: "monsoon_friday",
+      blurb:
+        "Master scenario: monsoon rain + Friday peak → congestion → demand surge → gate queue → reroute → carbon impact.",
+      params: { gate_id: "G-NSICT", rain_intensity: "heavy", demand_trucks: 120 },
     },
   ];
 
@@ -405,6 +413,12 @@ export default function WhatIfConsole() {
             </ol>
           </Card>
         )}
+      </div>
+
+      {/* Reactive Guide — explainable causal chain (UC-3 P1). Locks to the
+          running scenario, else lets the user explore a teaching chain. */}
+      <div className="px-4 pb-6">
+        <ReactiveGuidePanel scenarioId={activeHandle ? scenario : null} />
       </div>
     </PageContainer>
   );

@@ -154,6 +154,10 @@ class AnomalyEngine:
 
     # -- dedup + emit -------------------------------------------------------
     def _should_emit(self, track_id: str, alert: Alert) -> bool:
+        # Prevent dedup dict from growing infinitely
+        if len(self._last_emit) > 10000:
+            self.prune(older_than_s=3600.0)
+
         key = (track_id, alert.kind)
         last = self._last_emit.get(key)
         now = alert.ts

@@ -47,6 +47,10 @@ class Track:
 
     def add(self, point: TrackPoint) -> None:
         self.points.append(point)
+        # Cap track history to 1800 points (~5 mins at 6 FPS)
+        # to prevent OOM on stationary/long-lived tracks.
+        if len(self.points) > 1800:
+            self.points = self.points[-1800:]
 
     @property
     def first_ts(self) -> Optional[datetime]:

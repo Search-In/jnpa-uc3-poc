@@ -407,6 +407,81 @@ WHERE provisional = true
 ORDER BY provisional_until ASC;
 
 -- ===========================================================================
+-- Gate lifecycle events + Appendix-C gate KPIs.
+-- The truck-sim (primary GPS device feed) emits one row per state transition of
+-- a port visit: GATE_ARRIVAL (joined queue), GATE_TXN_START (boom processing
+-- began), GATE_IN (boom cleared / admitted), GATE_OUT (left the port). The KPI
+-- views pair these per trip_id to derive real, event-driven KPI values — no
+-- hardcoded numbers. The gateway also auto-provisions this table + views at boot
+-- (ensure_kpi_gate_schema) so pre-existing volumes gain them without a reset.
+-- ===========================================================================
+CREATE TABLE IF NOT EXISTS jnpa.gate_events (
+    id         bigserial PRIMARY KEY,
+    ts         timestamptz NOT NULL DEFAULT now(),
+    device_id  text NOT NULL,
+    plate      text,
+    gate_id    text,
+    trip_id    text NOT NULL,
+    event_type text NOT NULL
+               CHECK (event_type IN ('GATE_ARRIVAL','GATE_TXN_START','GATE_IN','GATE_OUT')),
+    lat        double precision,
+    lon        double precision
+);
+CREATE INDEX IF NOT EXISTS idx_gate_events_trip ON jnpa.gate_events (trip_id);
+CREATE INDEX IF NOT EXISTS idx_gate_events_type_ts ON jnpa.gate_events (event_type, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_gate_events_ts ON jnpa.gate_events (ts DESC);
+
+-- One row per port visit with the four phase timestamps pivoted out (last 24h).
+CREATE OR REPLACE VIEW jnpa.kpi_gate_trip_timeline AS
+SELECT
+    trip_id,
+    max(gate_id)                                        AS gate_id,
+    max(plate)                                          AS plate,
+    min(ts) FILTER (WHERE event_type = 'GATE_ARRIVAL')   AS arrival_ts,
+    min(ts) FILTER (WHERE event_type = 'GATE_TXN_START') AS txn_start_ts,
+    min(ts) FILTER (WHERE event_type = 'GATE_IN')        AS gate_in_ts,
+    min(ts) FILTER (WHERE event_type = 'GATE_OUT')       AS gate_out_ts
+FROM jnpa.gate_events
+WHERE ts > now() - interval '24 hours'
+GROUP BY trip_id;
+
+-- KPI 1 — Gate Queue Wait Time: GATE_ARRIVAL -> GATE_TXN_START, per 15-min bucket.
+CREATE OR REPLACE VIEW jnpa.kpi_gate_queue_wait AS
+SELECT
+    time_bucket('15 minutes', txn_start_ts)                                  AS bucket,
+    round(avg(EXTRACT(EPOCH FROM (txn_start_ts - arrival_ts)))::numeric/60.0, 2) AS wait_min,
+    count(*)                                                                 AS trips
+FROM jnpa.kpi_gate_trip_timeline
+WHERE arrival_ts IS NOT NULL AND txn_start_ts IS NOT NULL
+  AND txn_start_ts >= arrival_ts
+GROUP BY 1
+ORDER BY 1 DESC;
+
+-- KPI 2 — Avg Gate Transaction Time: GATE_TXN_START -> GATE_IN, per 15-min bucket.
+CREATE OR REPLACE VIEW jnpa.kpi_gate_txn_time AS
+SELECT
+    time_bucket('15 minutes', gate_in_ts)                                    AS bucket,
+    round(avg(EXTRACT(EPOCH FROM (gate_in_ts - txn_start_ts)))::numeric/60.0, 2) AS txn_min,
+    count(*)                                                                 AS trips
+FROM jnpa.kpi_gate_trip_timeline
+WHERE txn_start_ts IS NOT NULL AND gate_in_ts IS NOT NULL
+  AND gate_in_ts >= txn_start_ts
+GROUP BY 1
+ORDER BY 1 DESC;
+
+-- KPI 4 — Turn-Around Time inside port: GATE_IN -> GATE_OUT, per 15-min bucket.
+CREATE OR REPLACE VIEW jnpa.kpi_tat_inside_port AS
+SELECT
+    time_bucket('15 minutes', gate_out_ts)                                   AS bucket,
+    round(avg(EXTRACT(EPOCH FROM (gate_out_ts - gate_in_ts)))::numeric/60.0, 2) AS tat_min,
+    count(*)                                                                 AS trips
+FROM jnpa.kpi_gate_trip_timeline
+WHERE gate_in_ts IS NOT NULL AND gate_out_ts IS NOT NULL
+  AND gate_out_ts >= gate_in_ts
+GROUP BY 1
+ORDER BY 1 DESC;
+
+-- ===========================================================================
 -- Geo-fence zones (UC-III Sub-Criterion 4 — Geo-fencing Manager).
 -- The dashboard's terra-draw editor PUTs no-parking / restricted polygons here;
 -- the behavioural anomaly service (ai/anomaly) reads them live to decide

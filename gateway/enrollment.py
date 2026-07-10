@@ -596,6 +596,21 @@ def _iso_row(d: dict) -> dict:
     return {k: _iso(v) for k, v in d.items()}
 
 
+def _with_browser_photo(d: dict, fallback: Optional[str]) -> dict:
+    """Common photo mapping: turn the stored ``photo_url`` (which may be an
+    ``s3://`` pointer) into a browser-loadable presigned URL, and mirror it onto
+    ``photo``. Applies to every read path (demo + real enrolment) so the UI never
+    receives an ``s3://`` URL it cannot fetch. Falls back to a captured frame when
+    no object URL exists yet."""
+    from . import objectstore
+
+    resolved = objectstore.resolve_photo_url(d.get("photo_url"))
+    if resolved is not None:
+        d["photo_url"] = resolved
+    d["photo"] = resolved or d.get("photo") or fallback
+    return d
+
+
 def _row(row: Mapping[str, Any], *, include_faces: bool) -> dict:
     d = dict(row)
     for k in ("consent_at", "submitted_at", "reviewed_at", "updated_at"):
@@ -606,10 +621,9 @@ def _row(row: Mapping[str, Any], *, include_faces: bool) -> dict:
             d[k] = _loads(d[k])
     # `thumb` (first frame) becomes the list photo when no MinIO url exists yet.
     thumb = d.pop("thumb", None)
-    d.setdefault("photo", d.get("photo_url") or thumb)
     if not include_faces:
         d.pop("reference_image", None)
-    return d
+    return _with_browser_photo(d, thumb)
 
 
 def _public(rec: dict, *, include_faces: bool) -> dict:
@@ -618,8 +632,8 @@ def _public(rec: dict, *, include_faces: bool) -> dict:
         d.pop("face_images", None)
         d.pop("reference_image", None)
         d.pop("documents", None)
-    d.setdefault("photo", d.get("photo_url") or (rec.get("face_images") or [None])[0])
-    return d
+    fallback = (rec.get("face_images") or [None])[0]
+    return _with_browser_photo(d, fallback)
 
 
 __all__ = [

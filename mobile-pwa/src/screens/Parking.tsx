@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "@/lib/api";
+import { SkeletonCard } from "@/components/Skeleton";
+import { IconParking, IconNavigate, IconPin } from "@/components/icons";
 
 // Driver parking view — nearby parking areas (RDS-backed availability), request a
 // slot, confirmation, and release. The vehicle plate (from pairing) is the
@@ -37,12 +39,20 @@ export default function Parking({ deviceId, plate }: { deviceId: string; plate?:
   const [confirm, setConfirm] = useState<{ facility: string; slot: string } | null>(null);
   const [active, setActive] = useState<boolean>(false);
   const [err, setErr] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
 
   const load = () => {
     api
       .parkingAvailability()
       .then((d) => setFacilities(d.facilities || []))
-      .catch((e) => setErr(String(e)));
+      .catch(() =>
+        setErr(
+          t("parking.loadFailed", {
+            defaultValue: "Couldn't load parking. Check your connection.",
+          }),
+        ),
+      )
+      .finally(() => setLoaded(true));
   };
 
   useEffect(() => {
@@ -83,8 +93,8 @@ export default function Parking({ deviceId, plate }: { deviceId: string; plate?:
       } else {
         setErr(r.reason === "facility_full" ? t("parking.full") : t("parking.failed"));
       }
-    } catch (e) {
-      setErr(String(e));
+    } catch {
+      setErr(t("parking.failed"));
     } finally {
       setBusy(null);
     }
@@ -98,8 +108,8 @@ export default function Parking({ deviceId, plate }: { deviceId: string; plate?:
       setConfirm(null);
       setActive(false);
       load();
-    } catch (e) {
-      setErr(String(e));
+    } catch {
+      setErr(t("parking.failed"));
     } finally {
       setBusy(null);
     }
@@ -112,67 +122,86 @@ export default function Parking({ deviceId, plate }: { deviceId: string; plate?:
   };
 
   return (
-    <div style={{ padding: 12 }}>
-      <h2 style={{ fontSize: 16, marginBottom: 8 }}>{t("parking.title")}</h2>
+    <div>
+      <h2 style={{ fontSize: 20, fontWeight: 800, margin: "2px 0 12px" }}>{t("parking.title")}</h2>
 
       {confirm && (
-        <div
-          className="card"
-          style={{ background: "var(--green-bg, #0d3)", padding: 12, marginBottom: 12 }}
-        >
-          <div style={{ fontWeight: 600 }}>{t("parking.confirmed")}</div>
-          <div style={{ fontSize: 13 }}>
-            {confirm.facility} · {t("parking.slot")} <b>{confirm.slot}</b>
+        <div className="pk-confirm">
+          <div className="pk-confirm-badge">
+            <IconParking size={22} />
           </div>
-          <button
-            className="btn"
-            style={{ marginTop: 8 }}
-            disabled={busy === "release"}
-            onClick={release}
-          >
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 800, fontSize: 15 }}>{t("parking.confirmed")}</div>
+            <div style={{ fontSize: 13.5, opacity: 0.9 }}>
+              {t("parking.slot")} <b>{confirm.slot}</b>
+            </div>
+          </div>
+          <button className="pk-release" disabled={busy === "release"} onClick={release}>
             {busy === "release" ? "…" : t("parking.release")}
           </button>
         </div>
       )}
 
-      {err && <div style={{ color: "var(--red, #c00)", fontSize: 13, marginBottom: 8 }}>{err}</div>}
+      {err && <div className="banner warn">{err}</div>}
 
-      {withDistance.length === 0 ? (
-        <div className="muted">{t("parking.loading")}</div>
+      {!loaded && withDistance.length === 0 ? (
+        <>
+          <SkeletonCard lines={2} />
+          <SkeletonCard lines={2} />
+        </>
+      ) : withDistance.length === 0 ? (
+        <div className="empty">
+          <div style={{ marginBottom: 8, color: "var(--muted)" }}>
+            <IconParking size={38} />
+          </div>
+          {t("parking.none", { defaultValue: "No parking areas available nearby right now." })}
+        </div>
       ) : (
-        withDistance.map((f) => (
-          <div key={f.facility_id} className="card" style={{ padding: 12, marginBottom: 8 }}>
-            <div
-              style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}
-            >
-              <div style={{ fontWeight: 600 }}>{f.name || f.facility_id}</div>
-              <div
-                style={{
-                  fontSize: 12,
-                  color: f.available > 0 ? "var(--green)" : "var(--red, #c00)",
-                }}
-              >
-                {f.available}/{f.capacity} {t("parking.free")}
+        withDistance.map((f) => {
+          const pct = f.capacity > 0 ? Math.round((f.available / f.capacity) * 100) : 0;
+          const tone = f.available <= 0 ? "down" : pct < 20 ? "warn" : "ok";
+          return (
+            <div key={f.facility_id} className="pk-card">
+              <div className="pk-card-head">
+                <span className="pk-card-ico">
+                  <IconParking size={22} />
+                </span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="pk-name">{f.name || f.facility_id}</div>
+                  <div className="pk-meta">
+                    {f.km != null ? (
+                      <>
+                        <IconPin size={13} /> {f.km.toFixed(1)} km
+                      </>
+                    ) : null}
+                  </div>
+                </div>
+                <div className={`pk-avail ${tone}`}>
+                  <span className="pk-avail-n">{f.available}</span>
+                  <span className="pk-avail-l">{t("parking.free")}</span>
+                </div>
+              </div>
+
+              {/* availability bar */}
+              <div className="pk-bar">
+                <span className={`pk-bar-fill ${tone}`} style={{ width: `${Math.max(4, pct)}%` }} />
+              </div>
+
+              <div className="pk-actions">
+                <button
+                  className="btn primary"
+                  disabled={busy === f.facility_id || f.available <= 0 || active}
+                  onClick={() => request(f.facility_id)}
+                >
+                  {busy === f.facility_id ? "…" : t("parking.request")}
+                </button>
+                <button className="btn" onClick={() => navTo(f)}>
+                  <IconNavigate size={17} /> {t("parking.navigate")}
+                </button>
               </div>
             </div>
-            <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
-              {f.km != null ? `${f.km.toFixed(1)} km · ` : ""}
-              {f.status}
-            </div>
-            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-              <button
-                className="btn"
-                disabled={busy === f.facility_id || f.available <= 0 || active}
-                onClick={() => request(f.facility_id)}
-              >
-                {busy === f.facility_id ? "…" : t("parking.request")}
-              </button>
-              <button className="btn btn-ghost" onClick={() => navTo(f)}>
-                {t("parking.navigate")}
-              </button>
-            </div>
-          </div>
-        ))
+          );
+        })
       )}
     </div>
   );

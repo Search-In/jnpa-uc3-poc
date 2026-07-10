@@ -73,6 +73,7 @@ class TruckConfig:
 
     # --- State machine dwell times (seconds) ---
     gate_queue_dwell_s: float = 120.0    # base AT_GATE_QUEUE dwell (jam-scaled)
+    gate_txn_dwell_s: float = 90.0       # base GATE_TRANSACTION dwell (boom processing)
     inside_port_dwell_s: float = 300.0   # turnaround inside the port
     idle_dwell_s: float = 60.0           # rest at home before next trip
 
@@ -139,6 +140,7 @@ class TruckConfig:
             gps_outlier_prob=_as_float(os.environ.get("TRUCK_GPS_OUTLIER_PROB"), 0.01),
             gps_outlier_m=_as_float(os.environ.get("TRUCK_GPS_OUTLIER_M"), 50.0),
             gate_queue_dwell_s=_as_float(os.environ.get("TRUCK_GATE_DWELL_S"), 120.0),
+            gate_txn_dwell_s=_as_float(os.environ.get("TRUCK_GATE_TXN_DWELL_S"), 90.0),
             inside_port_dwell_s=_as_float(os.environ.get("TRUCK_PORT_DWELL_S"), 300.0),
             idle_dwell_s=_as_float(os.environ.get("TRUCK_IDLE_DWELL_S"), 60.0),
             osrm_base_url=os.environ.get(

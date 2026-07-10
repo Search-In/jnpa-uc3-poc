@@ -11,6 +11,7 @@ import RealtimeWorker from "@/workers/realtime.worker?worker";
 import { api } from "@/lib/api";
 import { getToken } from "@/lib/device";
 import { appendAdvisories, loadAdvisories } from "@/lib/store";
+import { alertToNotification, notifyDriver } from "@/lib/notify";
 import type { Advisory, RerouteAdvisory, WsFrame } from "@/lib/types";
 
 // One realtime hub for the whole app. It:
@@ -136,6 +137,13 @@ export function RealtimeProvider({
         // Only surface alerts relevant to this device/plate, plus broadcast-y ones.
         if (!a.plate || !plate || a.plate === plate) {
           appendAdvisories([alertToAdvisory(a)]).then(setAdvisories);
+          // Raise an on-device notification / toast for this live alert. handleFrame
+          // fires ONLY for live WS + push frames (never cache hydration), so this
+          // won't replay history. Covers the congestion / parking / compliance /
+          // emergency categories the backend detects but doesn't yet push.
+          const kind = a.kind || a.payload?.kind || "ALERT";
+          const body = a.payload?.message || a.payload?.detail || a.detail;
+          notifyDriver(alertToNotification(String(kind), body));
         }
       }
     },
@@ -161,6 +169,8 @@ export function RealtimeProvider({
         if (f.type === "reroute") ingestReroute(f as RerouteAdvisory);
         else handleFrame({ type: f.type, payload: f } as WsFrame);
       }
+      // A notificationclick asked us to deep-link the focused window.
+      if (ev.data?.navigate) location.hash = String(ev.data.navigate);
     };
     navigator.serviceWorker?.addEventListener?.("message", onSwMessage);
 

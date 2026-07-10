@@ -13,6 +13,7 @@
     "zones": "ज़ोन",
     "home": "होम",
     "map": "नक्शा",
+    "navigate": "नेविगेट",
     "alerts": "अलर्ट"
   },
   "screens": {
@@ -160,11 +161,70 @@
     "noLocation": "स्थान अनुपलब्ध"
   },
   "alertCenter": {
-    "title": "अलर्ट"
+    "title": "अलर्ट",
+    "empty": "अभी कोई अलर्ट नहीं। सुरक्षित चलें।"
+  },
+  "gps": {
+    "updated": "अपडेट",
+    "awaiting": "GPS की प्रतीक्षा…"
+  },
+  "driverStatus": {
+    "moving": "चल रहा है",
+    "waitingGate": "गेट पर प्रतीक्षा",
+    "stopped": "रुका हुआ",
+    "actionRequired": "कार्रवाई आवश्यक",
+    "online": "ऑनलाइन",
+    "offline": "ऑफ़लाइन",
+    "gpsActive": "GPS सक्रिय",
+    "gpsSearching": "GPS खोज रहा है…"
+  },
+  "traffic": {
+    "label": "ट्रैफ़िक",
+    "light": "हल्का",
+    "medium": "मध्यम",
+    "heavy": "भारी"
+  },
+  "command": {
+    "currentTrip": "वर्तमान यात्रा",
+    "headingTo": "गंतव्य",
+    "noTrip": "अभी कोई सक्रिय यात्रा नहीं",
+    "noTripSub": "आपका अगला गेट असाइनमेंट यहाँ दिखेगा।",
+    "startNavigation": "नेविगेशन शुरू करें",
+    "viewRoute": "मार्ग देखें",
+    "lastSync": "अंतिम सिंक"
+  },
+  "emergency": {
+    "sos": "SOS",
+    "title": "आपातकाल और सहायता",
+    "subtitle": "एक विकल्प चुनें। कॉल इंटरनेट के बिना भी काम करती हैं।",
+    "callControl": "पोर्ट कंट्रोल रूम को कॉल करें",
+    "callControlSub": "JNPA गेट संचालन",
+    "call112": "आपातकाल 112",
+    "call112Sub": "पुलिस · अग्निशमन · एम्बुलेंस",
+    "shareLocation": "मेरा लाइव स्थान साझा करें",
+    "shareLocationSub": "सहायता हेतु अपनी GPS स्थिति भेजें",
+    "raiseAlert": "कंट्रोल रूम को अलर्ट करें",
+    "raiseAlertSub": "अपनी यात्रा में खराबी या घटना दर्ज करें",
+    "raising": "अलर्ट भेजा जा रहा है…",
+    "raised": "कंट्रोल रूम को सूचित किया गया ✓",
+    "raiseFailed": "ऑफ़लाइन सहेजा गया — ऑनलाइन होने पर पुनः प्रयास",
+    "locating": "आपका स्थान प्राप्त किया जा रहा है…",
+    "locationShared": "स्थान साझा करने हेतु तैयार",
+    "locationFailed": "स्थान अनुपलब्ध — सीधे कॉल करें",
+    "cancel": "रद्द करें",
+    "myContact": "मेरा आपातकालीन संपर्क"
   },
   "map": {
     "normal": "सामान्य",
     "medium": "मध्यम",
-    "heavy": "भारी"
+    "heavy": "भारी",
+    "destination": "गंतव्य",
+    "recommended": "अनुशंसित",
+    "fastest": "सबसे तेज़",
+    "alt": "वैकल्पिक",
+    "noRoute": "अभी मार्ग उपलब्ध नहीं",
+    "routeErr": "अभी मार्ग उपलब्ध नहीं है",
+    "finding": "सबसे तेज़ मार्ग खोजा जा रहा है…",
+    "directDistance": "गेट तक सीधी दूरी"
   }
 }

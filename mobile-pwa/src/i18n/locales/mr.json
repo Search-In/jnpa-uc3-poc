@@ -13,6 +13,7 @@
     "zones": "झोन",
     "home": "होम",
     "map": "नकाशा",
+    "navigate": "नेव्हिगेट",
     "alerts": "अलर्ट"
   },
   "screens": {
@@ -160,11 +161,70 @@
     "noLocation": "स्थान अनुपलब्ध"
   },
   "alertCenter": {
-    "title": "अलर्ट"
+    "title": "अलर्ट",
+    "empty": "सध्या कोणतेही अलर्ट नाहीत. सुरक्षित चला."
+  },
+  "gps": {
+    "updated": "अपडेट",
+    "awaiting": "GPS ची प्रतीक्षा…"
+  },
+  "driverStatus": {
+    "moving": "चालू आहे",
+    "waitingGate": "गेटवर प्रतीक्षा",
+    "stopped": "थांबले",
+    "actionRequired": "कारवाई आवश्यक",
+    "online": "ऑनलाइन",
+    "offline": "ऑफलाइन",
+    "gpsActive": "GPS सक्रिय",
+    "gpsSearching": "GPS शोधत आहे…"
+  },
+  "traffic": {
+    "label": "वाहतूक",
+    "light": "हलकी",
+    "medium": "मध्यम",
+    "heavy": "जास्त"
+  },
+  "command": {
+    "currentTrip": "सध्याची यात्रा",
+    "headingTo": "गंतव्य",
+    "noTrip": "अद्याप सक्रिय यात्रा नाही",
+    "noTripSub": "तुमचे पुढील गेट असाइनमेंट येथे दिसेल.",
+    "startNavigation": "नेव्हिगेशन सुरू करा",
+    "viewRoute": "मार्ग पहा",
+    "lastSync": "शेवटचे सिंक"
+  },
+  "emergency": {
+    "sos": "SOS",
+    "title": "आणीबाणी आणि मदत",
+    "subtitle": "एक पर्याय निवडा. कॉल इंटरनेटशिवायही काम करतात.",
+    "callControl": "पोर्ट कंट्रोल रूमला कॉल करा",
+    "callControlSub": "JNPA गेट संचालन",
+    "call112": "आणीबाणी 112",
+    "call112Sub": "पोलीस · अग्निशमन · रुग्णवाहिका",
+    "shareLocation": "माझे थेट स्थान शेअर करा",
+    "shareLocationSub": "मदतीसाठी तुमचे GPS स्थान पाठवा",
+    "raiseAlert": "कंट्रोल रूमला अलर्ट करा",
+    "raiseAlertSub": "तुमच्या प्रवासात बिघाड किंवा घटना नोंदवा",
+    "raising": "अलर्ट पाठवत आहे…",
+    "raised": "कंट्रोल रूमला कळवले ✓",
+    "raiseFailed": "ऑफलाइन जतन केले — ऑनलाइन झाल्यावर पुन्हा प्रयत्न",
+    "locating": "तुमचे स्थान मिळवत आहे…",
+    "locationShared": "स्थान शेअर करण्यास तयार",
+    "locationFailed": "स्थान अनुपलब्ध — थेट कॉल करा",
+    "cancel": "रद्द करा",
+    "myContact": "माझा आणीबाणी संपर्क"
   },
   "map": {
     "normal": "सामान्य",
     "medium": "मध्यम",
-    "heavy": "जास्त"
+    "heavy": "जास्त",
+    "destination": "गंतव्य",
+    "recommended": "शिफारस केलेला",
+    "fastest": "सर्वात जलद",
+    "alt": "पर्यायी",
+    "noRoute": "अद्याप मार्ग उपलब्ध नाही",
+    "routeErr": "सध्या मार्ग उपलब्ध नाही",
+    "finding": "सर्वात जलद मार्ग शोधत आहे…",
+    "directDistance": "गेटपर्यंत थेट अंतर"
   }
 }

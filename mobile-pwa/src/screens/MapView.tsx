@@ -1,16 +1,31 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import MiniMap, { type RouteLine } from "@/components/MiniMap";
+import { IconFlag, IconNavigate, IconRoute } from "@/components/icons";
+import { trafficFromSpeed } from "@/lib/driverLang";
 import { api } from "@/lib/api";
 import { cached } from "@/lib/store";
 import type { CorridorGeometry, Gate, TruckEnvelope } from "@/lib/types";
 
-// Live Map — full-screen, Google-Maps-style driver navigation. Road basemap,
-// your live position, the destination gate, and MULTIPLE route options (fastest
-// + alternates) from OSRM, selectable like Google Maps. All data is gateway/RDS
-// backed and cached for offline.
+// Navigate — a full-screen, ArcGIS/Esri-satellite navigation experience that
+// reuses the SAME map stack and basemap as Home (MiniMap + lib/basemap). On top
+// of the shared imagery it overlays: the corridor, the destination gate pin,
+// parking POIs, the multi-option OSRM route, and the directional truck puck. The
+// bottom sheet always shows the recommended route + ETA/distance/traffic +
+// alternatives (never a permanent skeleton).
 
 type RouteOpt = { id: string; coords: [number, number][]; durationMin: number; distanceKm: number };
+type Park = { id: string; lat: number; lon: number; available?: number | null };
+
+function haversineKm(a: { lat: number; lon: number }, b: { lat: number; lon: number }): number {
+  const R = 6371;
+  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+  const dLon = ((b.lon - a.lon) * Math.PI) / 180;
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((a.lat * Math.PI) / 180) * Math.cos((b.lat * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
 
 async function fetchAlternatives(
   from: { lat: number; lon: number },
@@ -36,35 +51,45 @@ export default function MapView({ deviceId }: { deviceId: string }) {
   const [corridor, setCorridor] = useState<CorridorGeometry | undefined>();
   const [gates, setGates] = useState<Gate[] | undefined>();
   const [truck, setTruck] = useState<{ lat: number; lon: number } | null>(null);
+  const [heading, setHeading] = useState<number | null>(null);
+  const [speed, setSpeed] = useState<number | null>(null);
   const [targetGate, setTargetGate] = useState<Gate | null>(null);
-  const [zones, setZones] = useState<{ id: string; name: string; kind: string }[]>([]);
-  const [parkingFree, setParkingFree] = useState<number | null>(null);
+  const [parking, setParking] = useState<Park[]>([]);
 
   const [opts, setOpts] = useState<RouteOpt[]>([]);
   const [selected, setSelected] = useState(0);
   const [routeErr, setRouteErr] = useState<string | null>(null);
+  const [routing, setRouting] = useState(true);
   const routedFrom = useRef<string>("");
 
   useEffect(() => {
     void cached<{ gates: Gate[] }>("gates", () => api.gates()).then((g) => g && setGates(g.gates));
-    void cached<{ zones: { id: string; name: string; kind: string }[] }>("geo-zones", () =>
-      api.geoZones(),
-    ).then((z) => z && setZones(z.zones || []));
-    void cached<{ total_available?: number }>("parking-sum", () => api.parkingSummary()).then(
-      (p) => p && setParkingFree(p.total_available ?? null),
-    );
     void cached<CorridorGeometry>("corridor", () => api.corridor()).then(
       (c) => c && setCorridor(c),
     );
+    // Parking POIs to plot on the map (display only).
+    void cached<{ facilities: any[] }>("parking-avail", () => api.parkingAvailability()).then(
+      (p) =>
+        p &&
+        setParking(
+          (p.facilities || [])
+            .filter((f) => f.lat != null && f.lon != null)
+            .map((f) => ({ id: f.facility_id, lat: f.lat, lon: f.lon, available: f.available })),
+        ),
+    );
   }, []);
 
-  // Live position + destination gate.
+  // Live position + heading + speed + destination gate.
   useEffect(() => {
     const poll = async () => {
       try {
         const env: TruckEnvelope = await api.truck(deviceId);
         const p: any = (env as any).record || {};
-        if (p.lat != null) setTruck({ lat: p.lat, lon: p.lon });
+        const lat = p.lat ?? p.position?.lat;
+        const lon = p.lon ?? p.position?.lon;
+        if (lat != null) setTruck({ lat, lon });
+        if (typeof p.heading === "number") setHeading(p.heading);
+        if (typeof p.speed_kmh === "number") setSpeed(p.speed_kmh);
         const gid: string | undefined = p.gate_id || (env as any).gate_id;
         if (gid && gates) {
           const g = gates.find((x) => x.id === gid || x.id.endsWith(gid.replace(/^GATE-/, "")));
@@ -82,21 +107,25 @@ export default function MapView({ deviceId }: { deviceId: string }) {
   // Destination fallback: first gate if the truck's gate isn't resolved.
   const dest = targetGate || (gates && gates[0]) || null;
 
-  // Compute alternative routes once we have a position + destination (re-run only
-  // when the origin moves materially, to avoid spamming OSRM).
+  // Compute alternative routes once we have a position + destination.
   useEffect(() => {
     if (!truck || !dest) return;
     const key = `${truck.lat.toFixed(3)},${truck.lon.toFixed(3)}->${dest.id}`;
     if (routedFrom.current === key) return;
     routedFrom.current = key;
+    setRouting(true);
     (async () => {
       try {
         const r = await fetchAlternatives(truck, { lat: dest.lat, lon: dest.lon });
         setOpts(r);
         setSelected(0);
-        setRouteErr(r.length ? null : t("map.noRoute", { defaultValue: "No route found" }));
+        setRouteErr(
+          r.length ? null : t("map.noRoute", { defaultValue: "Route not available yet" }),
+        );
       } catch {
-        setRouteErr(t("map.routeErr", { defaultValue: "Routing unavailable" }));
+        setRouteErr(t("map.routeErr", { defaultValue: "Route not available right now" }));
+      } finally {
+        setRouting(false);
       }
     })();
   }, [truck, dest, t]);
@@ -106,121 +135,138 @@ export default function MapView({ deviceId }: { deviceId: string }) {
     [opts, selected],
   );
 
-  const restricted = zones.filter((z) => z.kind === "restricted").length;
-  const noParking = zones.filter((z) => z.kind !== "restricted").length;
+  const sel = opts[selected];
+  const straightKm = truck && dest ? haversineKm(truck, { lat: dest.lat, lon: dest.lon }) : null;
+
+  // Traffic condition: from the selected route's average speed when available,
+  // otherwise the truck's live speed. Presentation only.
+  const routeAvgKmh = sel && sel.durationMin > 0 ? (sel.distanceKm / sel.durationMin) * 60 : null;
+  const traffic = trafficFromSpeed(routeAvgKmh ?? speed);
 
   return (
-    // Fill the content area (which already reserves bottom space for the fixed
-    // tab bar via .content's padding). The map grows to fill, the route bar docks
-    // below it, and the tab bar stays visible.
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      {/* Full-screen road map with route options */}
-      <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
+    <div className="nav-screen">
+      {/* Full-screen map — SAME basemap/engine as Home (no `roads`: Esri satellite). */}
+      <div className="nav-map">
         <MiniMap
           fill
-          roads
           gates={gates}
           truck={truck as any}
+          heading={heading}
           targetGateId={dest?.id ?? null}
+          destination={dest ? { lat: dest.lat, lon: dest.lon, name: dest.name } : null}
+          parking={parking}
+          frameToTrip
+          // Show the OSRM route when we have one; otherwise fall back to the
+          // static corridor line so the map is never bare. Gates render either
+          // way (they're decoupled from the corridor now).
           corridor={opts.length ? undefined : corridor}
           routes={routeLines}
         />
 
-        {/* Destination banner (Google-Maps style) */}
+        {/* Floating destination card (top) */}
         {dest && (
-          <div
-            style={{
-              position: "absolute",
-              top: 10,
-              left: 10,
-              right: 10,
-              background: "var(--surface,#fff)",
-              borderRadius: 12,
-              padding: "10px 14px",
-              boxShadow: "0 2px 8px rgba(0,0,0,.15)",
-            }}
-          >
-            <div className="muted" style={{ fontSize: 11 }}>
-              {t("map.destination", { defaultValue: "Destination" })}
+          <div className="nav-top-card">
+            <span className="nav-top-flag">
+              <IconFlag size={20} />
+            </span>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div className="nav-top-eyebrow">
+                {t("map.destination", { defaultValue: "Destination" })}
+              </div>
+              <div className="nav-top-dest">{dest.name}</div>
             </div>
-            <div style={{ fontWeight: 700, fontSize: 15 }}>🏁 {dest.name}</div>
+            <div className="nav-top-eta">
+              <div className="v">
+                {sel
+                  ? sel.durationMin
+                  : straightKm != null
+                    ? Math.round((straightKm / 25) * 60)
+                    : "—"}
+                <span className="u">min</span>
+              </div>
+              <div className="k">
+                {sel ? sel.distanceKm : straightKm != null ? straightKm.toFixed(1) : "—"} km
+              </div>
+            </div>
           </div>
         )}
       </div>
 
-      {/* Route options — tap to select (like Google Maps). Docks just above the
-          fixed tab bar (the content area already reserves that space). */}
-      <div
-        style={{
-          padding: "10px 12px",
-          borderTop: "1px solid var(--border,#ddd)",
-          background: "var(--surface,#fff)",
-        }}
-      >
-        {routeErr && (
-          <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
-            {routeErr}
+      {/* Bottom instruction sheet — always populated (recommended + ETA + distance
+          + traffic + alternatives). */}
+      <div className="nav-sheet">
+        <div className="nav-sheet-grab" aria-hidden />
+
+        <div className="nav-headline">
+          <span className="nav-headline-ico">
+            <IconNavigate size={22} />
+          </span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="nav-headline-eta">
+              {sel
+                ? sel.durationMin
+                : straightKm != null
+                  ? Math.round((straightKm / 25) * 60)
+                  : "—"}{" "}
+              <span className="u">min</span>
+              <span className="nav-headline-dist">
+                · {sel ? sel.distanceKm : straightKm != null ? straightKm.toFixed(1) : "—"} km
+              </span>
+            </div>
+            <div className="nav-headline-sub">
+              {sel
+                ? (selected === 0
+                    ? t("map.fastest", { defaultValue: "Fastest route" })
+                    : t("map.alt", { defaultValue: "Alternate route" })) +
+                  (dest ? ` · ${dest.name}` : "")
+                : routing
+                  ? t("map.finding", { defaultValue: "Finding the fastest route…" })
+                  : routeErr ||
+                    t("map.directDistance", { defaultValue: "Direct distance to gate" })}
+            </div>
           </div>
-        )}
-        {opts.length > 0 ? (
-          <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 4 }}>
+          {sel && selected === 0 ? (
+            <span className="nav-recommend">
+              {t("map.recommended", { defaultValue: "Recommended" })}
+            </span>
+          ) : null}
+        </div>
+
+        {/* Traffic condition */}
+        {traffic ? (
+          <div className="nav-traffic">
+            <span className={`chip ${traffic.tone}`}>
+              <span className="dot" />
+              {t("traffic.label", { defaultValue: "Traffic" })}: {t(`traffic.${traffic.key}`)}
+            </span>
+          </div>
+        ) : null}
+
+        {/* Alternative routes */}
+        {opts.length > 1 && (
+          <div className="nav-routes">
             {opts.map((o, i) => (
               <button
                 key={o.id}
+                className={`nav-route-chip ${i === selected ? "active" : ""}`}
                 onClick={() => setSelected(i)}
-                style={{
-                  flex: "0 0 auto",
-                  textAlign: "left",
-                  borderRadius: 12,
-                  padding: "8px 14px",
-                  border: `2px solid ${i === selected ? "#1a56db" : "var(--border,#ddd)"}`,
-                  background: i === selected ? "rgba(26,86,219,.08)" : "transparent",
-                  minWidth: 120,
-                }}
               >
-                <div
-                  style={{
-                    fontWeight: 700,
-                    fontSize: 16,
-                    color: i === selected ? "#1a56db" : undefined,
-                  }}
-                >
-                  {o.durationMin} min
-                </div>
-                <div className="muted" style={{ fontSize: 12 }}>
-                  {o.distanceKm} km ·{" "}
-                  {i === 0
-                    ? t("map.fastest", { defaultValue: "Fastest" })
-                    : t("map.alt", { defaultValue: "Alternate" })}
-                </div>
+                <span className="nav-route-chip-ico">
+                  <IconRoute size={18} />
+                </span>
+                <span>
+                  <span className="nav-route-min">{o.durationMin} min</span>
+                  <span className="nav-route-km">
+                    {o.distanceKm} km ·{" "}
+                    {i === 0
+                      ? t("map.fastest", { defaultValue: "Fastest" })
+                      : t("map.alt", { defaultValue: "Alternate" })}
+                  </span>
+                </span>
               </button>
             ))}
           </div>
-        ) : (
-          !routeErr && (
-            <div className="muted" style={{ fontSize: 12 }}>
-              {t("map.computing", { defaultValue: "Computing routes…" })}
-            </div>
-          )
         )}
-
-        {/* Legend + quick counts */}
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 8, fontSize: 12 }}>
-          <span>
-            <span style={{ color: "#16a34a" }}>●</span>{" "}
-            {t("map.normal", { defaultValue: "Normal" })}
-          </span>
-          <span>
-            <span style={{ color: "#d97706" }}>●</span>{" "}
-            {t("map.medium", { defaultValue: "Medium" })}
-          </span>
-          <span>
-            <span style={{ color: "#dc2626" }}>●</span> {t("map.heavy", { defaultValue: "Heavy" })}
-          </span>
-          <span className="muted">
-            🅿 {parkingFree ?? "—"} · ⛔ {noParking} · 🚫 {restricted} · 🏗 {gates?.length ?? 0}
-          </span>
-        </div>
       </div>
     </div>
   );

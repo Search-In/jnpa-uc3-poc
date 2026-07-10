@@ -347,7 +347,10 @@ export default function WhatIfConsole() {
       )}
 
       {/* Reactive timeline */}
-      <div className="min-h-0 flex-1 border-t border-border p-4" data-guided-id="whatif-timeline">
+      {/* shrink-0 (not flex-1/min-h-0): inside the page's scrolling flex column
+          a flex-grow item collapses below its content height once the page
+          overflows, letting this section's list paint over the panel below. */}
+      <div className="shrink-0 border-t border-border p-4" data-guided-id="whatif-timeline">
         <div className="mb-3 flex items-center justify-between">
           <div>
             <h2 className="flex items-center gap-2 text-sm font-semibold">

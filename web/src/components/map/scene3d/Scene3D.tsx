@@ -296,6 +296,10 @@ export function Scene3D({
                 depth: 120,
                 height: 30 + ratio * 260, // taller column = worse congestion
                 material: { color: rgba(stop.color, 0.55) },
+                // Soft edge outline defines the translucent column against the
+                // ground and neighbours (edge-definition polish only — the
+                // column's size, height and position are unchanged).
+                edges: { type: "solid", color: [15, 23, 42, 0.4], size: 0.5 },
                 anchor: "bottom",
               },
             ],
@@ -323,7 +327,9 @@ export function Scene3D({
                 type: "extrude",
                 size: 18,
                 material: { color: rgba(fill, 0.28) },
-                edges: { type: "solid", color: fill, size: 1 },
+                // Slightly crisper prism edges for a cleaner geofence read
+                // (edge-definition polish only; extrusion height is unchanged).
+                edges: { type: "solid", color: fill, size: 1.5 },
               },
             ],
           } as never,
@@ -353,6 +359,10 @@ export function Scene3D({
                 depth: 70,
                 height: 12 + (pct / 100) * 60, // taller block = fuller lot
                 material: { color: parkingStatusColour(p.status) },
+                // Subtle solid edges read the block as a crisp solid under the
+                // scene lighting (same treatment the geofence prisms use); purely
+                // a material refinement — size/height/position are unchanged.
+                edges: { type: "solid", color: [15, 23, 42, 0.55], size: 0.5 },
                 anchor: "bottom",
               },
             ],
@@ -393,6 +403,10 @@ export function Scene3D({
                 depth: 12,
                 height: 2.5,
                 material: { color: gateColour(g.utilisation) },
+                // Crisp solid edges give the canopy slab a defined, solid read
+                // under the scene lighting (material refinement only — the slab's
+                // size, height and placement are unchanged).
+                edges: { type: "solid", color: [15, 23, 42, 0.55], size: 0.5 },
                 anchor: "bottom",
               },
             ],

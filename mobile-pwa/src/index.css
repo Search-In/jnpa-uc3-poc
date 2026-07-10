@@ -730,6 +730,13 @@ a {
   color: var(--muted);
   text-align: center;
 }
+.login-secured {
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+  opacity: 0.75;
+  margin-top: 2px;
+}
 
 /* Advanced collapsible pairing */
 .pair-advanced {

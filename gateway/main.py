@@ -178,6 +178,15 @@ async def _lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         log.warning("kpi_gate_schema_boot_failed", error=str(exc))
 
+    # Firebase Admin (FCM push transport + Phone-Auth verify) — best-effort init.
+    # A missing key/dep just leaves FCM disabled; WebPush + WS carry on unchanged.
+    try:
+        from . import firebase
+        ready = firebase.init_firebase(cfg)
+        log.info("firebase_boot", enabled=cfg.firebase_enabled, ready=ready, status=firebase.status())
+    except Exception as exc:  # noqa: BLE001
+        log.warning("firebase_boot_failed", error=str(exc))
+
     loop = asyncio.get_running_loop()
     stop = asyncio.Event()
 

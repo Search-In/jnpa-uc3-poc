@@ -119,14 +119,19 @@ async def reroute_truck(
     an optional ``force_state``. We record the override as a decision so it shows
     up in the demo evidence trail.
 
-    The re-route is then pushed to the driver's PWA on two channels so it always
-    lands within the 5 s SLA:
+    The re-route is then pushed to the driver's PWA on every configured channel
+    so it always lands within the 5 s SLA:
 
       * a ``type=reroute`` WebSocket frame (the PWA's realtime worker filters it
         by ``device_id``) — the live, in-app path; the polling fallback reads the
         same advisory back via ``GET /api/trucks/{id}/route/latest``;
       * a WebPush notification (best-effort; only when VAPID is configured and the
-        device has a subscription), so a backgrounded PWA still buzzes.
+        device has a subscription), so a backgrounded PWA still buzzes;
+      * a Firebase FCM message (best-effort; only when Firebase is configured and
+        the device has a registered token) — the production push transport.
+
+    All three are fanned out by the notification dispatcher; the client de-dupes
+    across them so the driver sees a single banner.
     """
     url = gw.cfg.truck_api_url.rstrip("/") + f"/devices/{device_id}/route"
     try:
@@ -156,8 +161,11 @@ async def reroute_truck(
         "requires_ack": True,
     }
     LAST_REROUTE[device_id] = advisory
-    await gw.ws.broadcast("reroute", advisory)
-    push_delivered = await push.deliver(gw, device_id, advisory)
+    # Fan out over WebSocket + WebPush + Firebase FCM via the unified dispatcher.
+    from .. import notifications
+
+    fanout = await notifications.dispatch(gw, device_id, advisory, ws_type="reroute")
+    push_delivered = fanout.webpush
 
     # SMS advisory channel (APP-3 / SCOPE-IU2): fan the same advisory out over SMS
     # when a phone number is supplied. Uses the env-gated provider seam (no-op by
@@ -172,6 +180,7 @@ async def reroute_truck(
         **data,
         "advisory": advisory,
         "push_delivered": push_delivered,
+        "dispatch": fanout.as_dict(),
         "sms": {"delivered": sms_result.delivered, "provider": sms_result.provider}
         if sms_result
         else None,

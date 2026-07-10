@@ -2,6 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 import { codeToDeviceId, setPairing, setToken } from "@/lib/device";
 import { api } from "@/lib/api";
+import {
+  clearPhoneVerifier,
+  isPhoneAuthConfigured,
+  sendPhoneOtp,
+  type PhoneOtpSession,
+} from "@/lib/firebase";
+import { enableFcm } from "@/lib/pwa";
 import { IconTruck, IconPhone, IconChevronRight } from "@/components/icons";
 
 // Plate the demo device (TRK-000001) resolves to — shown on the demo card for a
@@ -69,6 +76,16 @@ export default function Pairing({ onPaired }: { onPaired: (deviceId: string) => 
   const [otpBusy, setOtpBusy] = useState(false);
   const [otpMsg, setOtpMsg] = useState<string | null>(null);
 
+  // Firebase Phone Auth is used as the OTP transport WHEN configured
+  // (VITE_FIREBASE_* + auth domain); otherwise the gateway's built-in OTP is used.
+  // Both mint the same DRIVER session — the switch is transparent to the driver.
+  const firebaseLogin = isPhoneAuthConfigured();
+  const phoneSession = useRef<PhoneOtpSession | null>(null);
+
+  // Tear down the shared reCAPTCHA verifier when leaving the pairing screen so a
+  // later visit starts with a fresh one (avoids "already rendered").
+  useEffect(() => () => clearPhoneVerifier(), []);
+
   const requestOtp = async () => {
     const m = mobile.replace(/\D/g, "");
     if (m.length < 10) {
@@ -78,19 +95,36 @@ export default function Pairing({ onPaired }: { onPaired: (deviceId: string) => 
     setOtpBusy(true);
     setOtpMsg(null);
     try {
-      const r = await api.otpRequest(m, mobileToDeviceId(m));
-      setOtpStep("code");
-      // SECURITY: never surface the OTP in the UI in a production build — the
-      // gateway returns dev_otp only as a local-demo convenience, and echoing it
-      // on screen would defeat the second factor. Show it in dev builds only.
-      setOtpMsg(
-        import.meta.env.DEV && r.dev_otp
-          ? `OTP sent (demo: ${r.dev_otp})`
-          : "OTP sent to your mobile",
+      if (firebaseLogin) {
+        // Firebase sends the SMS (or accepts a console-configured test number).
+        phoneSession.current = await sendPhoneOtp(`+91${m}`, "recaptcha-container");
+        setOtpStep("code");
+        setOtpMsg("OTP sent to your mobile");
+      } else {
+        const r = await api.otpRequest(m, mobileToDeviceId(m));
+        setOtpStep("code");
+        // SECURITY: never surface the OTP in the UI in a production build — the
+        // gateway returns dev_otp only as a local-demo convenience, and echoing it
+        // on screen would defeat the second factor. Show it in dev builds only.
+        setOtpMsg(
+          import.meta.env.DEV && r.dev_otp
+            ? `OTP sent (demo: ${r.dev_otp})`
+            : "OTP sent to your mobile",
+        );
+      }
+    } catch (err) {
+      // Surface the real Firebase error so send-OTP failures are diagnosable
+      // (was previously swallowed behind a generic "connection" message).
+      console.error(
+        "Firebase Phone OTP Error:",
+        (err as { code?: string })?.code,
+        (err as { message?: string })?.message,
       );
-    } catch {
-      // Never surface a raw exception to a driver — keep it plain-language.
-      setOtpMsg("Could not send OTP. Check your connection and try again.");
+      setOtpMsg(
+        `${(err as { code?: string })?.code ?? "error"}: ${
+          (err as { message?: string })?.message ?? "Could not send OTP"
+        }`,
+      );
     } finally {
       setOtpBusy(false);
     }
@@ -102,6 +136,25 @@ export default function Pairing({ onPaired }: { onPaired: (deviceId: string) => 
     setOtpBusy(true);
     setOtpMsg(null);
     try {
+      if (firebaseLogin) {
+        const idToken = phoneSession.current
+          ? await phoneSession.current.confirm(otp.replace(/\D/g, ""))
+          : null;
+        if (!idToken) {
+          setOtpMsg("Invalid or expired OTP");
+          return;
+        }
+        const r = await api.firebaseVerify(idToken, deviceId);
+        if (r.verified && r.access_token) {
+          setToken(r.access_token);
+          setPairing(deviceId);
+          void enableFcm(deviceId); // register this device for FCM immediately
+          onPaired(deviceId);
+        } else {
+          setOtpMsg("Invalid OTP");
+        }
+        return;
+      }
       const r = await api.otpVerify(m, otp.replace(/\D/g, ""), deviceId);
       if (r.verified && r.access_token) {
         setToken(r.access_token);
@@ -110,8 +163,18 @@ export default function Pairing({ onPaired }: { onPaired: (deviceId: string) => 
       } else {
         setOtpMsg("Invalid OTP");
       }
-    } catch {
-      setOtpMsg("Invalid or expired OTP");
+    } catch (err) {
+      // Surface the real Firebase / verify error (was swallowed before).
+      console.error(
+        "Firebase Phone OTP Error:",
+        (err as { code?: string })?.code,
+        (err as { message?: string })?.message,
+      );
+      setOtpMsg(
+        `${(err as { code?: string })?.code ?? "error"}: ${
+          (err as { message?: string })?.message ?? "Invalid or expired OTP"
+        }`,
+      );
     } finally {
       setOtpBusy(false);
     }
@@ -193,12 +256,23 @@ export default function Pairing({ onPaired }: { onPaired: (deviceId: string) => 
             <button className="btn primary" disabled={otpBusy} onClick={verifyOtp}>
               {otpBusy ? "Verifying…" : "Verify & Login"}
             </button>
-            <button className="btn ghost" onClick={() => setOtpStep("mobile")}>
+            <button
+              className="btn ghost"
+              onClick={() => {
+                clearPhoneVerifier();
+                phoneSession.current = null;
+                setOtpStep("mobile");
+              }}
+            >
               Change number
             </button>
           </>
         )}
         {otpMsg && <div className="login-msg">{otpMsg}</div>}
+        {/* Invisible reCAPTCHA host for Firebase Phone Auth (no-op when the
+            gateway OTP transport is in use). */}
+        <div id="recaptcha-container" />
+        {firebaseLogin && <div className="login-secured">Secured by Firebase</div>}
       </div>
 
       {/* ADVANCED — In-cab unit pairing (collapsed by default) */}

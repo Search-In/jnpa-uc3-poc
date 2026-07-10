@@ -202,6 +202,80 @@ async def verify_otp(body: dict = Body(...), state: GatewayState = Depends(get_s
             "expires_in": 8 * 3600}
 
 
+async def _bind_and_mint(dsn, *, mobile: str, device_id: str, provider: str) -> str:
+    """Bind a device to a driver and mint a DRIVER JWT (shared by OTP + Firebase).
+
+    Reuses the exact same tables and token seam as the legacy OTP verify so the
+    session model is identical regardless of which OTP transport authenticated
+    the phone number."""
+    from jnpa_shared.db import execute
+
+    driver_id = f"MOB:{mobile}"
+    try:
+        await execute(
+            """
+            INSERT INTO jnpa.device_bindings (device_id, mobile, driver_id, last_seen, active)
+            VALUES (:d, :m, :drv, now(), true)
+            ON CONFLICT (device_id) DO UPDATE SET mobile = EXCLUDED.mobile,
+                driver_id = EXCLUDED.driver_id, last_seen = now(), active = true
+            """,
+            {"d": device_id, "m": mobile, "drv": driver_id}, dsn=dsn,
+        )
+        await execute(
+            """
+            INSERT INTO jnpa.drivers (driver_id, name, mobile, status, provider, updated_at)
+            VALUES (:id, :name, :m, 'ACTIVE', :prov, now())
+            ON CONFLICT (driver_id) DO UPDATE SET mobile = EXCLUDED.mobile, updated_at = now()
+            """,
+            {"id": driver_id, "name": f"Driver {mobile[-4:]}", "m": mobile, "prov": provider},
+            dsn=dsn,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("bind_failed", error=str(exc), provider=provider)
+    return encode_token(sub=driver_id, role="DRIVER", device_id=device_id)
+
+
+@router.post("/firebase-verify")
+async def firebase_verify(body: dict = Body(...), state: GatewayState = Depends(get_state)) -> dict:
+    """Verify a Firebase Phone-Auth ID token and mint a device-bound DRIVER token.
+
+    Body: ``{id_token, device_id}``. Firebase (client SDK) handles the SMS OTP
+    round-trip and returns an ID token; we verify it with the Admin SDK, extract
+    the verified phone number, then bind the device + mint OUR DRIVER JWT via the
+    same seam the legacy OTP flow uses. The existing OTP endpoints are untouched
+    and remain the fallback — this is added alongside, not as a replacement."""
+    dsn = state.cfg.postgres_dsn
+    id_token = str(body.get("id_token") or "").strip()
+    device_id = str(body.get("device_id") or "").strip()
+    if not (id_token and device_id):
+        raise HTTPException(status_code=422, detail={"error": "id_token_and_device_required"})
+
+    from .. import firebase
+
+    claims = firebase.verify_id_token(state.cfg, id_token)
+    if not claims:
+        raise HTTPException(status_code=401, detail={"error": "firebase_verify_failed"})
+    phone = str(claims.get("phone_number") or "")
+    mobile = "".join(ch for ch in phone if ch.isdigit())[-10:] or (claims.get("uid") or "")[:10]
+    if not mobile:
+        raise HTTPException(status_code=422, detail={"error": "no_phone_in_token"})
+
+    await _ensure(dsn)
+    token = await _bind_and_mint(dsn, mobile=mobile, device_id=device_id, provider="firebase")
+    driver_id = f"MOB:{mobile}"
+    await audit.record_decision_audit(request_id=mobile, rule_executed="firebase-verify",
+                                      decision="VERIFIED", action_taken="ISSUE_TOKEN",
+                                      input_data={"mobile": mobile, "device_id": device_id,
+                                                  "uid": claims.get("uid")}, dsn=dsn)
+    await audit.log_notification(channel="fcm", receiver=device_id,
+                                 message="Firebase phone login successful — device bound",
+                                 delivery_status="SENT", provider_response={"driver_id": driver_id}, dsn=dsn)
+    REQUESTS.labels("otp", "ok").inc()
+    return {"verified": True, "access_token": token, "token_type": "bearer",
+            "device_id": device_id, "driver_id": driver_id, "role": "DRIVER",
+            "provider": "firebase", "expires_in": 8 * 3600}
+
+
 @router.post("/refresh")
 async def refresh_token(body: dict = Body(...), state: GatewayState = Depends(get_state)) -> dict:
     """Refresh a session for a still-bound device. Body: {device_id}.

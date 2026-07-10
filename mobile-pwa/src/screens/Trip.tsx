@@ -123,7 +123,8 @@ export default function Trip({ deviceId }: { deviceId: string }) {
               {t("command.headingTo", { defaultValue: "Heading to" })} Gate {gateShort(rec.gate_id)}
             </div>
             <div className="ni-sub">
-              {t("home.eta", { defaultValue: "ETA" })} {fmtEta(rec.eta_s)} · {fmtKm(rec.remaining_km)}
+              {t("home.eta", { defaultValue: "ETA" })} {fmtEta(rec.eta_s)} ·{" "}
+              {fmtKm(rec.remaining_km)}
             </div>
           </div>
         </div>
@@ -131,7 +132,10 @@ export default function Trip({ deviceId }: { deviceId: string }) {
 
       {/* Live GPS freshness — reassures the driver the position feed is live. */}
       <div style={{ marginBottom: 12 }}>
-        <GpsStatus at={fixAt} accuracyM={typeof rec?.accuracy_m === "number" ? rec.accuracy_m : null} />
+        <GpsStatus
+          at={fixAt}
+          accuracyM={typeof rec?.accuracy_m === "number" ? rec.accuracy_m : null}
+        />
       </div>
 
       {/* Slot at Gate widget */}
@@ -200,7 +204,9 @@ export default function Trip({ deviceId }: { deviceId: string }) {
             </div>
             <div className="row">
               <span className="k">{t("common.state", { defaultValue: "Status" })}</span>
-              <span className="v">{t(`driverStatus.${statusFromState(rec.state, rec.speed_kmh).key}`)}</span>
+              <span className="v">
+                {t(`driverStatus.${statusFromState(rec.state, rec.speed_kmh).key}`)}
+              </span>
             </div>
             <div className="row">
               <span className="k">Plate</span>

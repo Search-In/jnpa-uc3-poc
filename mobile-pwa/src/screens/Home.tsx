@@ -149,7 +149,9 @@ export default function Home({ deviceId, plate }: { deviceId: string; plate?: st
           <div className="driver-plate selectable">
             <IconTruck size={20} /> {vehicle || t("common.noData", { defaultValue: "—" })}
           </div>
-          <div className="driver-name">{session.name || t("home.driver", { defaultValue: "Driver" })}</div>
+          <div className="driver-name">
+            {session.name || t("home.driver", { defaultValue: "Driver" })}
+          </div>
           <div className="driver-live">
             <span className={conn === "open" ? "on" : "off"}>
               <span className="live-dot" />
@@ -180,7 +182,8 @@ export default function Home({ deviceId, plate }: { deviceId: string; plate?: st
           </span>
           <div style={{ flex: 1, minWidth: 0, fontSize: 14 }}>
             {t("home.enableAlertsNote", {
-              defaultValue: "Get alerts for congestion, re-routes and parking — even in the background.",
+              defaultValue:
+                "Get alerts for congestion, re-routes and parking — even in the background.",
             })}
           </div>
           <button
@@ -200,7 +203,10 @@ export default function Home({ deviceId, plate }: { deviceId: string; plate?: st
         <div className="trip-card">
           <div className="trip-eyebrow">
             <span>{t("command.currentTrip", { defaultValue: "Current trip" })}</span>
-            <GpsStatus at={fixAt} accuracyM={typeof rec.accuracy_m === "number" ? rec.accuracy_m : null} />
+            <GpsStatus
+              at={fixAt}
+              accuracyM={typeof rec.accuracy_m === "number" ? rec.accuracy_m : null}
+            />
           </div>
 
           {gate ? (
@@ -247,15 +253,14 @@ export default function Home({ deviceId, plate }: { deviceId: string; plate?: st
               <div className="k">{t("home.distance", { defaultValue: "Distance" })}</div>
             </div>
             <div className="metric">
-              <div className="v">
-                {parkingFree != null ? parkingFree : "—"}
-              </div>
+              <div className="v">{parkingFree != null ? parkingFree : "—"}</div>
               <div className="k">{t("home.parkingFree", { defaultValue: "Parking free" })}</div>
             </div>
           </div>
 
           <button className="nav-btn" onClick={() => navigate("/map")}>
-            <IconNavigate size={20} /> {t("command.startNavigation", { defaultValue: "Start Navigation" })}
+            <IconNavigate size={20} />{" "}
+            {t("command.startNavigation", { defaultValue: "Start Navigation" })}
           </button>
           <div className="sub-actions">
             <button className="sub-action" onClick={() => navigate("/trip")}>
@@ -280,7 +285,9 @@ export default function Home({ deviceId, plate }: { deviceId: string; plate?: st
 
       {/* Live map preview */}
       <div className="card" style={{ padding: 0, overflow: "hidden", marginBottom: 12 }}>
-        <div style={{ padding: "12px 14px 0", fontSize: 13, fontWeight: 700, color: "var(--muted)" }}>
+        <div
+          style={{ padding: "12px 14px 0", fontSize: 13, fontWeight: 700, color: "var(--muted)" }}
+        >
           {t("home.mapPreview", { defaultValue: "LIVE POSITION" })}
         </div>
         <div style={{ height: 180 }}>

@@ -182,9 +182,22 @@ export default function AlertCenter() {
                 borderLeft: `4px solid ${crit ? "var(--red,#c00)" : "var(--orange,#d80)"}`,
               }}
             >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "baseline",
+                  gap: 8,
+                }}
+              >
                 <div
-                  style={{ fontWeight: 700, fontSize: 16, display: "flex", alignItems: "center", gap: 6 }}
+                  style={{
+                    fontWeight: 700,
+                    fontSize: 16,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                  }}
                 >
                   {crit ? (
                     <span style={{ color: "var(--red)", flex: "none" }}>
@@ -194,13 +207,21 @@ export default function AlertCenter() {
                   {cat.title}
                 </div>
                 <div className="muted" style={{ fontSize: 12.5, flex: "none" }}>
-                  {a.ts ? new Date(a.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}
+                  {a.ts
+                    ? new Date(a.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                    : ""}
                 </div>
               </div>
               {loc ? (
                 <div
                   className="muted"
-                  style={{ fontSize: 13, marginTop: 3, display: "flex", alignItems: "center", gap: 5 }}
+                  style={{
+                    fontSize: 13,
+                    marginTop: 3,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 5,
+                  }}
                 >
                   <IconPin size={13} />
                   {loc.toString().startsWith("G-")

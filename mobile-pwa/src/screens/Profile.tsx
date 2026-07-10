@@ -100,7 +100,8 @@ export default function Profile({ deviceId, plate }: { deviceId: string; plate?:
   const path = vahan?.decision_path;
   const provisional = path === "PROVISIONAL" || vahan?.provisional;
 
-  const driverName = compliance?.name || session.name || t("home.driver", { defaultValue: "Driver" });
+  const driverName =
+    compliance?.name || session.name || t("home.driver", { defaultValue: "Driver" });
   const verified = session.status === "ACTIVE";
 
   return (
@@ -115,7 +116,10 @@ export default function Profile({ deviceId, plate }: { deviceId: string; plate?:
           </div>
           <div className="prof-badges">
             <span className={`prof-badge ${verified ? "ok" : "muted"}`}>
-              <IconShield size={13} /> {verified ? t("home.status.ACTIVE", { defaultValue: "Verified" }) : t("home.status.UNVERIFIED", { defaultValue: "Not enrolled" })}
+              <IconShield size={13} />{" "}
+              {verified
+                ? t("home.status.ACTIVE", { defaultValue: "Verified" })
+                : t("home.status.UNVERIFIED", { defaultValue: "Not enrolled" })}
             </span>
             {compliance?.dlStatus ? (
               <span className={`prof-badge ${compliance.dlStatus === "VALID" ? "ok" : "warn"}`}>
@@ -164,7 +168,9 @@ export default function Profile({ deviceId, plate }: { deviceId: string; plate?:
         ) : vahan ? (
           <>
             <div style={{ marginBottom: 10 }}>
-              <Chip status={verifiedLabel(path).ok ? "ok" : "warn"}>{verifiedLabel(path).label}</Chip>
+              <Chip status={verifiedLabel(path).ok ? "ok" : "warn"}>
+                {verifiedLabel(path).label}
+              </Chip>
             </div>
             <Row
               k={t("profile.owner")}
@@ -232,11 +238,7 @@ export default function Profile({ deviceId, plate }: { deviceId: string; plate?:
       )}
 
       <Card title={t("profile.notifications")}>
-        <button
-          className="btn"
-          disabled={pushBusy || push === "subscribed"}
-          onClick={onEnablePush}
-        >
+        <button className="btn" disabled={pushBusy || push === "subscribed"} onClick={onEnablePush}>
           <IconBell size={17} />{" "}
           {pushBusy
             ? t("profile.enabling")

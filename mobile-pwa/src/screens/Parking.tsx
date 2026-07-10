@@ -46,7 +46,11 @@ export default function Parking({ deviceId, plate }: { deviceId: string; plate?:
       .parkingAvailability()
       .then((d) => setFacilities(d.facilities || []))
       .catch(() =>
-        setErr(t("parking.loadFailed", { defaultValue: "Couldn't load parking. Check your connection." })),
+        setErr(
+          t("parking.loadFailed", {
+            defaultValue: "Couldn't load parking. Check your connection.",
+          }),
+        ),
       )
       .finally(() => setLoaded(true));
   };

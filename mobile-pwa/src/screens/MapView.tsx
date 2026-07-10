@@ -119,7 +119,9 @@ export default function MapView({ deviceId }: { deviceId: string }) {
         const r = await fetchAlternatives(truck, { lat: dest.lat, lon: dest.lon });
         setOpts(r);
         setSelected(0);
-        setRouteErr(r.length ? null : t("map.noRoute", { defaultValue: "Route not available yet" }));
+        setRouteErr(
+          r.length ? null : t("map.noRoute", { defaultValue: "Route not available yet" }),
+        );
       } catch {
         setRouteErr(t("map.routeErr", { defaultValue: "Route not available right now" }));
       } finally {
@@ -138,8 +140,7 @@ export default function MapView({ deviceId }: { deviceId: string }) {
 
   // Traffic condition: from the selected route's average speed when available,
   // otherwise the truck's live speed. Presentation only.
-  const routeAvgKmh =
-    sel && sel.durationMin > 0 ? (sel.distanceKm / sel.durationMin) * 60 : null;
+  const routeAvgKmh = sel && sel.durationMin > 0 ? (sel.distanceKm / sel.durationMin) * 60 : null;
   const traffic = trafficFromSpeed(routeAvgKmh ?? speed);
 
   return (
@@ -176,7 +177,11 @@ export default function MapView({ deviceId }: { deviceId: string }) {
             </div>
             <div className="nav-top-eta">
               <div className="v">
-                {sel ? sel.durationMin : straightKm != null ? Math.round((straightKm / 25) * 60) : "—"}
+                {sel
+                  ? sel.durationMin
+                  : straightKm != null
+                    ? Math.round((straightKm / 25) * 60)
+                    : "—"}
                 <span className="u">min</span>
               </div>
               <div className="k">
@@ -198,7 +203,11 @@ export default function MapView({ deviceId }: { deviceId: string }) {
           </span>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div className="nav-headline-eta">
-              {sel ? sel.durationMin : straightKm != null ? Math.round((straightKm / 25) * 60) : "—"}{" "}
+              {sel
+                ? sel.durationMin
+                : straightKm != null
+                  ? Math.round((straightKm / 25) * 60)
+                  : "—"}{" "}
               <span className="u">min</span>
               <span className="nav-headline-dist">
                 · {sel ? sel.distanceKm : straightKm != null ? straightKm.toFixed(1) : "—"} km
@@ -212,7 +221,8 @@ export default function MapView({ deviceId }: { deviceId: string }) {
                   (dest ? ` · ${dest.name}` : "")
                 : routing
                   ? t("map.finding", { defaultValue: "Finding the fastest route…" })
-                  : routeErr || t("map.directDistance", { defaultValue: "Direct distance to gate" })}
+                  : routeErr ||
+                    t("map.directDistance", { defaultValue: "Direct distance to gate" })}
             </div>
           </div>
           {sel && selected === 0 ? (

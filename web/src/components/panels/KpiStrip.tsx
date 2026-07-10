@@ -65,7 +65,9 @@ function SourceBadge({ k }: { k: KpiResult }) {
           : t("kpi.sourceBaseline", "No event data yet — showing baseline")
       }
     >
-      {live ? `${t("kpi.live", "Live")}${k.n ? ` · ${k.n}` : ""}` : t("kpi.baselineTag", "Baseline")}
+      {live
+        ? `${t("kpi.live", "Live")}${k.n ? ` · ${k.n}` : ""}`
+        : t("kpi.baselineTag", "Baseline")}
     </span>
   );
 }

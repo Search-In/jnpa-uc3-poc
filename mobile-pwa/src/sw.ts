@@ -40,10 +40,26 @@ interface PushPayload {
   [k: string]: unknown;
 }
 
+// Normalise a raw push payload from either transport into our flat shape.
+// * WebPush (pywebpush) sends our advisory flat: { title, body, type, href, … }.
+// * FCM (firebase-admin, data-only) wraps it: { data: { title, body, … }, from,
+//   … } and may also carry a `notification` block. We flatten both here so the
+//   single push handler renders identically — this is why NO second (Firebase)
+//   service worker is needed.
+function normalize(raw: unknown): PushPayload {
+  const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const isFcm = r.data && typeof r.data === "object";
+  const base = isFcm ? (r.data as Record<string, unknown>) : r;
+  const notif = (r.notification && typeof r.notification === "object"
+    ? (r.notification as Record<string, unknown>)
+    : {}) as { title?: string; body?: string };
+  return { ...(base as PushPayload), ...(notif.title ? { title: notif.title } : {}), ...(notif.body ? { body: notif.body } : {}) };
+}
+
 self.addEventListener("push", (event: PushEvent) => {
   let data: PushPayload = {};
   try {
-    data = event.data ? (event.data.json() as PushPayload) : {};
+    data = event.data ? normalize(event.data.json()) : {};
   } catch {
     data = { title: "JNPA Trucking", body: event.data?.text() ?? "New advisory" };
   }

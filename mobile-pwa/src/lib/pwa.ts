@@ -8,10 +8,56 @@
 
 import { registerSW } from "virtual:pwa-register";
 import { api } from "./api";
+import { getFcmToken, isFcmConfigured, onForegroundMessage } from "./firebase";
+import { notifyDriver, alertToNotification, type NotifyCategory } from "./notify";
+import { getPairing } from "./device";
 
 export function registerServiceWorker(): void {
   if (!("serviceWorker" in navigator)) return;
   registerSW({ immediate: true });
+}
+
+// Set up the FCM foreground handler exactly once. Firebase delivers foreground
+// messages via onMessage (the SW push handler only fires when backgrounded), so
+// we route them into the SAME in-app toast layer WebSocket alerts already use.
+let fcmForegroundWired = false;
+async function wireFcmForeground(): Promise<void> {
+  if (fcmForegroundWired || !isFcmConfigured()) return;
+  fcmForegroundWired = true;
+  await onForegroundMessage((payload) => {
+    const d = payload.data || {};
+    const kind = d.type || d.kind || "";
+    // Reuse the alert->driver-notification mapping so FCM messages look identical
+    // to WS-sourced ones (category, deep-link, plain language).
+    const mapped = alertToNotification(kind, d.body);
+    notifyDriver({
+      title: d.title || mapped.title,
+      body: d.body || mapped.body,
+      category: (d.category as NotifyCategory) || mapped.category,
+      href: d.href || mapped.href,
+      tag: d.tag || mapped.tag,
+    });
+  });
+}
+
+// Best-effort: mint an FCM token for this device and register it with the
+// gateway. Independent of WebPush — runs whenever Firebase is configured and the
+// user has granted notification permission. Returns true if a token registered.
+export async function enableFcm(deviceId: string): Promise<boolean> {
+  if (!isFcmConfigured() || !("serviceWorker" in navigator)) return false;
+  if (Notification.permission !== "granted") return false;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const token = await getFcmToken(reg);
+    if (!token) return false;
+    const plate = getPairing()?.plate ?? undefined;
+    await api.registerDevice(deviceId, token, { platform: "web", vehicleId: plate });
+    await wireFcmForeground();
+    return true;
+  } catch (err) {
+    console.warn("fcm enable failed", err);
+    return false;
+  }
 }
 
 function urlBase64ToUint8Array(base64: string): Uint8Array<ArrayBuffer> {
@@ -38,14 +84,21 @@ export async function enablePush(deviceId: string): Promise<PushState> {
   try {
     configured = await api.vapidKey();
   } catch {
-    return "error";
+    configured = { key: null, configured: false };
   }
-  if (!configured.configured || !configured.key) return "not-configured";
 
+  // One permission prompt covers both transports.
   let permission = Notification.permission;
   if (permission === "default") permission = await Notification.requestPermission();
   if (permission !== "granted") return "denied";
 
+  // Firebase FCM leg (production transport) — best-effort, independent of VAPID.
+  const fcmOk = await enableFcm(deviceId);
+
+  // WebPush/VAPID leg (kept as-is). Skipped cleanly when VAPID is unconfigured.
+  if (!configured.configured || !configured.key) {
+    return fcmOk ? "subscribed" : "not-configured";
+  }
   try {
     const reg = await navigator.serviceWorker.ready;
     const existing = await reg.pushManager.getSubscription();
@@ -59,6 +112,6 @@ export async function enablePush(deviceId: string): Promise<PushState> {
     return "subscribed";
   } catch (err) {
     console.warn("push subscribe failed", err);
-    return "error";
+    return fcmOk ? "subscribed" : "error";
   }
 }

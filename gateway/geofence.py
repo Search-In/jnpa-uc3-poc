@@ -89,6 +89,16 @@ class GeofenceEngine:
         self._schema_ready = False
         # vehicle_id -> {zone_id -> {"entry": datetime, "violated": bool}}
         self._state: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        # Optional driver push notifier, wired by GatewayState. Signature:
+        #   async (driver_id, vehicle_id, advisory: dict) -> None
+        # Default None keeps the engine standalone (tests / no-gw contexts). When
+        # set, a violation ALSO fans out to the bound driver over WebPush + FCM
+        # (the WS leg is already covered by the alerts pump). Best-effort.
+        self._driver_notifier = None
+
+    def set_driver_notifier(self, notifier) -> None:
+        """Wire a best-effort per-driver push callback (WebPush + FCM)."""
+        self._driver_notifier = notifier
 
     async def ensure_schema(self) -> None:
         if self._schema_ready or not self.dsn:
@@ -272,6 +282,27 @@ class GeofenceEngine:
             )
         except Exception as exc:  # noqa: BLE001
             log.warning("geofence_notify_failed", error=str(exc))
+
+        # Best-effort real push to the bound driver (WebPush + FCM) when a
+        # notifier is wired and the driver has a registered device. No-op
+        # otherwise — the alert still reaches the dashboard over the WS pump.
+        if self._driver_notifier is not None:
+            restricted = vtype == "RESTRICTED_ENTRY"
+            advisory = {
+                "type": vtype,
+                "alert_id": alert_id,
+                "title": "Restricted zone" if restricted else "No-parking violation",
+                "body": (f"Leave {zone.name or 'the restricted zone'} immediately."
+                         if restricted
+                         else f"Move your vehicle from {zone.name or 'the no-parking zone'} within 5 minutes."),
+                "category": "emergency",
+                "href": "#/zones",
+                "zone_id": zone.id,
+            }
+            try:
+                await self._driver_notifier(driver_id, vehicle_id, advisory)
+            except Exception as exc:  # noqa: BLE001
+                log.debug("geofence_driver_push_skipped", error=str(exc))
 
 
 __all__ = ["GeofenceEngine"]

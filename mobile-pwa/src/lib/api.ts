@@ -313,7 +313,41 @@ export const api = {
       body: JSON.stringify({ device_id: deviceId, subscription }),
     }),
   pushTest: (deviceId: string) =>
-    http<{ delivered: boolean }>(`/api/push/test/${encodeURIComponent(deviceId)}`, {
+    http<{ delivered?: boolean; webpush?: boolean; fcm?: boolean }>(
+      `/api/push/test/${encodeURIComponent(deviceId)}`,
+      { method: "POST" },
+    ),
+
+  // --- Firebase FCM device-token registration (additive push transport) ---
+  registerDevice: (
+    deviceId: string,
+    fcmToken: string,
+    opts?: { platform?: string; driverId?: string; vehicleId?: string },
+  ) =>
+    http<{ registered: boolean; device_id: string; transport: string }>(
+      "/api/push/register-device",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          device_id: deviceId,
+          fcm_token: fcmToken,
+          platform: opts?.platform ?? "web",
+          driver_id: opts?.driverId,
+          vehicle_id: opts?.vehicleId,
+        }),
+      },
+    ),
+
+  // --- Firebase Phone-Auth login: exchange a verified ID token for a DRIVER JWT ---
+  firebaseVerify: (idToken: string, deviceId: string) =>
+    http<{
+      verified: boolean;
+      access_token?: string;
+      device_id: string;
+      driver_id?: string;
+      provider?: string;
+    }>("/api/auth/otp/firebase-verify", {
       method: "POST",
+      body: JSON.stringify({ id_token: idToken, device_id: deviceId }),
     }),
 };

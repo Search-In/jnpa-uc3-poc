@@ -98,6 +98,13 @@ class GatewayConfig:
     vapid_private_key: str = ""
     vapid_subject: str = "mailto:ops@jnpa-uc3.example"
 
+    # --- Firebase Cloud Messaging (THIRD push transport, added alongside
+    # WebPush + WebSocket). The service-account JSON is loaded from a path OUTSIDE
+    # the repo (never committed). When unset, FCM is disabled and delivery falls
+    # back to WebPush / WS exactly as before — the demo never hard-depends on it.
+    firebase_project_id: str = ""
+    firebase_service_account_path: str = ""
+
     # --- Observability ---
     log_level: str = "INFO"
 
@@ -139,6 +146,8 @@ class GatewayConfig:
             vapid_public_key=os.environ.get("VAPID_PUBLIC_KEY", ""),
             vapid_private_key=os.environ.get("VAPID_PRIVATE_KEY", ""),
             vapid_subject=os.environ.get("VAPID_SUBJECT", "mailto:ops@jnpa-uc3.example"),
+            firebase_project_id=os.environ.get("FIREBASE_PROJECT_ID", ""),
+            firebase_service_account_path=os.environ.get("FIREBASE_SERVICE_ACCOUNT_PATH", ""),
             log_level=os.environ.get("LOG_LEVEL", "INFO"),
         )
 
@@ -146,3 +155,16 @@ class GatewayConfig:
     def surepass_enabled(self) -> bool:
         """True if a live Surepass token is configured (drives LIVE_PRIMARY)."""
         return bool(self.surepass_api_token.strip())
+
+    @property
+    def firebase_enabled(self) -> bool:
+        """True if an FCM service-account credential source is configured.
+
+        Only reflects that a source is *named*; actual readiness (valid key +
+        firebase-admin installed) is confirmed lazily by ``firebase.init_firebase``.
+        """
+        return bool(
+            self.firebase_service_account_path.strip()
+            or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+            or os.environ.get("FIREBASE_CREDENTIALS_JSON", "").strip()
+        )

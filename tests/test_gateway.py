@@ -326,7 +326,9 @@ def test_push_subscribe_and_status():
         assert bad.status_code == 422
 
         status = client.get("/api/push/status").json()
-        assert status["subscriptions"] >= 1
+        # /status nests per-transport counts (webpush + fcm) since the FCM
+        # transport was added alongside WebPush.
+        assert status["webpush"]["subscriptions"] >= 1
         assert "TRK-000001" in status["devices"]
     finally:
         client.__exit__(None, None, None)

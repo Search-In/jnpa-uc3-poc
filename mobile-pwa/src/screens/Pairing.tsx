@@ -2,6 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 import { codeToDeviceId, setPairing, setToken } from "@/lib/device";
 import { api } from "@/lib/api";
+import { IconTruck, IconPhone, IconChevronRight } from "@/components/icons";
+
+// Plate the demo device (TRK-000001) resolves to — shown on the demo card for a
+// realistic look. DISPLAY ONLY; pairing still uses the device id / existing flow.
+const DEMO_PLATE = "MH04KN3106";
 
 // Derive a stable device id for an OTP login from the mobile number's last 6
 // digits, keeping the TRK-###### shape the rest of the platform expects.
@@ -75,9 +80,17 @@ export default function Pairing({ onPaired }: { onPaired: (deviceId: string) => 
     try {
       const r = await api.otpRequest(m, mobileToDeviceId(m));
       setOtpStep("code");
-      setOtpMsg(r.dev_otp ? `OTP sent (demo: ${r.dev_otp})` : "OTP sent to your mobile");
-    } catch (e) {
-      setOtpMsg(String(e));
+      // SECURITY: never surface the OTP in the UI in a production build — the
+      // gateway returns dev_otp only as a local-demo convenience, and echoing it
+      // on screen would defeat the second factor. Show it in dev builds only.
+      setOtpMsg(
+        import.meta.env.DEV && r.dev_otp
+          ? `OTP sent (demo: ${r.dev_otp})`
+          : "OTP sent to your mobile",
+      );
+    } catch {
+      // Never surface a raw exception to a driver — keep it plain-language.
+      setOtpMsg("Could not send OTP. Check your connection and try again.");
     } finally {
       setOtpBusy(false);
     }
@@ -106,119 +119,126 @@ export default function Pairing({ onPaired }: { onPaired: (deviceId: string) => 
 
   return (
     <div className="pair-wrap">
-      <div className="brand">
+      {/* Brand + welcome */}
+      <div className="pair-hero">
         <img className="logo" src={`${import.meta.env.BASE_URL}icons/icon.svg`} alt="JNPA" />
         <h1>JNPA Trucking</h1>
-        <p>Login with your mobile OTP to receive gate slots & live re-routes.</p>
+        <p className="pair-welcome">Welcome, Driver</p>
+        <p className="pair-tagline">Live gate slots, ETA and re-route advisories for the port.</p>
       </div>
 
-      {/* OTP login (primary) */}
-      <div className="otp-box" style={{ width: "100%", maxWidth: 320 }}>
+      {/* PRIMARY — Start Demo Vehicle (same demo action, restyled) */}
+      <button
+        type="button"
+        className="demo-card"
+        data-testid="pair-demo"
+        onClick={() => pair(DEFAULT_CODE)}
+      >
+        <span className="demo-card-top">
+          <span className="demo-card-icon">
+            <IconTruck size={26} />
+          </span>
+          <span className="demo-card-body">
+            <span className="demo-card-title">Start Demo Vehicle</span>
+            <span className="demo-card-plate">{DEMO_PLATE}</span>
+            <span className="demo-card-device">Device · TRK-000001</span>
+          </span>
+        </span>
+        <span className="demo-card-cta">
+          Start Demo Journey <IconChevronRight size={18} />
+        </span>
+      </button>
+
+      {/* SECONDARY — Driver Login (OTP) */}
+      <div className="login-card">
+        <div className="login-head">
+          <span className="login-head-ico">
+            <IconPhone size={18} />
+          </span>
+          <div>
+            <div className="login-title">Driver Login</div>
+            <div className="login-sub">
+              {otpStep === "mobile" ? "Enter your mobile number" : "Enter the OTP we sent you"}
+            </div>
+          </div>
+        </div>
+
         {otpStep === "mobile" ? (
           <>
-            <input
-              inputMode="numeric"
-              placeholder="Mobile number"
-              value={mobile}
-              onChange={(e) => setMobile(e.target.value)}
-              style={{
-                width: "100%",
-                height: 44,
-                fontSize: 18,
-                textAlign: "center",
-                marginBottom: 8,
-              }}
-            />
-            <button
-              className="btn primary"
-              disabled={otpBusy}
-              onClick={requestOtp}
-              style={{ width: "100%" }}
-            >
-              {otpBusy ? "…" : "Send OTP"}
+            <div className="phone-field">
+              <span className="phone-prefix">+91</span>
+              <input
+                inputMode="numeric"
+                placeholder="Mobile number"
+                aria-label="Mobile number"
+                value={mobile}
+                onChange={(e) => setMobile(e.target.value)}
+              />
+            </div>
+            <button className="btn primary" disabled={otpBusy} onClick={requestOtp}>
+              {otpBusy ? "Sending…" : "Send OTP"}
             </button>
           </>
         ) : (
           <>
             <input
+              className="otp-input"
               inputMode="numeric"
               placeholder="6-digit OTP"
+              aria-label="6-digit OTP"
               value={otp}
               onChange={(e) => setOtp(e.target.value)}
               maxLength={6}
-              style={{
-                width: "100%",
-                height: 44,
-                fontSize: 22,
-                textAlign: "center",
-                letterSpacing: 6,
-                marginBottom: 8,
-              }}
             />
-            <button
-              className="btn primary"
-              disabled={otpBusy}
-              onClick={verifyOtp}
-              style={{ width: "100%" }}
-            >
-              {otpBusy ? "…" : "Verify & Login"}
+            <button className="btn primary" disabled={otpBusy} onClick={verifyOtp}>
+              {otpBusy ? "Verifying…" : "Verify & Login"}
             </button>
-            <button
-              className="btn ghost"
-              onClick={() => setOtpStep("mobile")}
-              style={{ width: "100%" }}
-            >
+            <button className="btn ghost" onClick={() => setOtpStep("mobile")}>
               Change number
             </button>
           </>
         )}
-        {otpMsg && (
-          <div className="muted" style={{ fontSize: 12, textAlign: "center", marginTop: 6 }}>
-            {otpMsg}
+        {otpMsg && <div className="login-msg">{otpMsg}</div>}
+      </div>
+
+      {/* ADVANCED — In-cab unit pairing (collapsed by default) */}
+      <details className="pair-advanced">
+        <summary>
+          <span>In-cab unit pairing</span>
+          <span className="pair-advanced-chev">
+            <IconChevronRight size={18} />
+          </span>
+        </summary>
+        <div className="pair-advanced-body">
+          <p className="pair-advanced-hint">Scan this code with the in-cab tablet to pair it.</p>
+          <div className="qr-box">
+            <canvas ref={qrRef} data-testid="pair-qr" />
           </div>
-        )}
-      </div>
-
-      <div className="muted" style={{ textAlign: "center", fontSize: 12, margin: "14px 0 6px" }}>
-        — or pair an in-cab unit —
-      </div>
-
-      <div className="qr-box">
-        <canvas ref={qrRef} data-testid="pair-qr" />
-      </div>
-
-      <div>
-        <div className="muted" style={{ textAlign: "center", fontSize: 12, marginBottom: 10 }}>
-          Or enter the 6-digit pairing code
+          <div className="pair-code-label">Or enter the 6-digit pairing code</div>
+          <div className="code-input">
+            {digits.map((d, i) => (
+              <input
+                key={i}
+                ref={(el) => (inputs.current[i] = el)}
+                inputMode="numeric"
+                maxLength={1}
+                value={d}
+                data-testid={`pair-digit-${i}`}
+                onChange={(e) => setDigit(i, e.target.value)}
+                onKeyDown={(e) => onKeyDown(i, e)}
+              />
+            ))}
+          </div>
+          <button
+            className="btn primary"
+            data-testid="pair-submit"
+            disabled={!ready}
+            onClick={() => pair()}
+          >
+            Pair device
+          </button>
         </div>
-        <div className="code-input">
-          {digits.map((d, i) => (
-            <input
-              key={i}
-              ref={(el) => (inputs.current[i] = el)}
-              inputMode="numeric"
-              maxLength={1}
-              value={d}
-              data-testid={`pair-digit-${i}`}
-              onChange={(e) => setDigit(i, e.target.value)}
-              onKeyDown={(e) => onKeyDown(i, e)}
-            />
-          ))}
-        </div>
-      </div>
-
-      <button
-        className="btn primary"
-        data-testid="pair-submit"
-        disabled={!ready}
-        onClick={() => pair()}
-      >
-        Pair device
-      </button>
-
-      <button className="btn ghost" data-testid="pair-demo" onClick={() => pair(DEFAULT_CODE)}>
-        Use demo device (TRK-000001)
-      </button>
+      </details>
     </div>
   );
 }

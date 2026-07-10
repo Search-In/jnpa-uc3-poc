@@ -36,7 +36,82 @@ KPI_VIEWS: Dict[str, str] = {
     "corridor_speed": "jnpa.kpi_corridor_speed",
     "alerts_by_kind": "jnpa.kpi_alerts_by_kind",
     "provisional_open": "jnpa.kpi_provisional_open",
+    # Event-driven Appendix-C gate KPIs (fed by jnpa.gate_events).
+    "gate_queue_wait": "jnpa.kpi_gate_queue_wait",
+    "gate_txn_time": "jnpa.kpi_gate_txn_time",
+    "tat_inside_port": "jnpa.kpi_tat_inside_port",
+    "gate_trip_timeline": "jnpa.kpi_gate_trip_timeline",
 }
+
+# Idempotent DDL for the gate-event capture table + KPI views, applied at gateway
+# boot so volumes created before this stage gain them without a reset. Mirrors the
+# canonical definitions in infra/postgres/init.sql.
+_GATE_KPI_DDL = """
+CREATE TABLE IF NOT EXISTS jnpa.gate_events (
+    id         bigserial PRIMARY KEY,
+    ts         timestamptz NOT NULL DEFAULT now(),
+    device_id  text NOT NULL,
+    plate      text,
+    gate_id    text,
+    trip_id    text NOT NULL,
+    event_type text NOT NULL
+               CHECK (event_type IN ('GATE_ARRIVAL','GATE_TXN_START','GATE_IN','GATE_OUT')),
+    lat        double precision,
+    lon        double precision
+);
+CREATE INDEX IF NOT EXISTS idx_gate_events_trip ON jnpa.gate_events (trip_id);
+CREATE INDEX IF NOT EXISTS idx_gate_events_type_ts ON jnpa.gate_events (event_type, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_gate_events_ts ON jnpa.gate_events (ts DESC);
+CREATE OR REPLACE VIEW jnpa.kpi_gate_trip_timeline AS
+SELECT trip_id,
+    max(gate_id) AS gate_id,
+    max(plate) AS plate,
+    min(ts) FILTER (WHERE event_type = 'GATE_ARRIVAL')   AS arrival_ts,
+    min(ts) FILTER (WHERE event_type = 'GATE_TXN_START') AS txn_start_ts,
+    min(ts) FILTER (WHERE event_type = 'GATE_IN')        AS gate_in_ts,
+    min(ts) FILTER (WHERE event_type = 'GATE_OUT')       AS gate_out_ts
+FROM jnpa.gate_events
+WHERE ts > now() - interval '24 hours'
+GROUP BY trip_id;
+CREATE OR REPLACE VIEW jnpa.kpi_gate_queue_wait AS
+SELECT time_bucket('15 minutes', txn_start_ts) AS bucket,
+    round(avg(EXTRACT(EPOCH FROM (txn_start_ts - arrival_ts)))::numeric/60.0, 2) AS wait_min,
+    count(*) AS trips
+FROM jnpa.kpi_gate_trip_timeline
+WHERE arrival_ts IS NOT NULL AND txn_start_ts IS NOT NULL AND txn_start_ts >= arrival_ts
+GROUP BY 1 ORDER BY 1 DESC;
+CREATE OR REPLACE VIEW jnpa.kpi_gate_txn_time AS
+SELECT time_bucket('15 minutes', gate_in_ts) AS bucket,
+    round(avg(EXTRACT(EPOCH FROM (gate_in_ts - txn_start_ts)))::numeric/60.0, 2) AS txn_min,
+    count(*) AS trips
+FROM jnpa.kpi_gate_trip_timeline
+WHERE txn_start_ts IS NOT NULL AND gate_in_ts IS NOT NULL AND gate_in_ts >= txn_start_ts
+GROUP BY 1 ORDER BY 1 DESC;
+CREATE OR REPLACE VIEW jnpa.kpi_tat_inside_port AS
+SELECT time_bucket('15 minutes', gate_out_ts) AS bucket,
+    round(avg(EXTRACT(EPOCH FROM (gate_out_ts - gate_in_ts)))::numeric/60.0, 2) AS tat_min,
+    count(*) AS trips
+FROM jnpa.kpi_gate_trip_timeline
+WHERE gate_in_ts IS NOT NULL AND gate_out_ts IS NOT NULL AND gate_out_ts >= gate_in_ts
+GROUP BY 1 ORDER BY 1 DESC;
+"""
+
+_GATE_SCHEMA_READY: Dict[str, bool] = {}
+
+
+async def ensure_kpi_gate_schema(dsn: str | None) -> None:
+    """Apply the gate-events KPI DDL once per DSN (best-effort, cached)."""
+    if not dsn or _GATE_SCHEMA_READY.get(dsn):
+        return
+    from jnpa_shared.db import execute
+    for stmt in (s.strip() for s in _GATE_KPI_DDL.split(";")):
+        if stmt:
+            try:
+                await execute(stmt, dsn=dsn)
+            except Exception as exc:  # noqa: BLE001 — one bad DDL must not abort boot
+                log.warning("kpi_gate_ddl_skipped", error=str(exc), stmt=stmt[:60])
+    _GATE_SCHEMA_READY[dsn] = True
+    log.info("kpi_gate_schema_ready")
 
 
 async def _read_view(state: GatewayState, view_sql: str, limit: int = 500) -> List[dict]:
@@ -68,42 +143,100 @@ async def kpi_summary(state: GatewayState = Depends(get_state)) -> dict:
     return {"views": out}
 
 
-@router.get("/strip")
-async def kpi_strip(state: GatewayState = Depends(get_state)) -> dict:
-    """The dashboard KPI strip — each KPI as {value,target,deltaPct,trend} via the
-    shared KPI engine. Values are derived from the materialised views where they
-    exist and fall back to demonstrative baselines so the strip never blanks.
+def _kpi_from_buckets(key: str, rows: List[dict], value_field: str):
+    """Build a live KpiResult from a bucketed KPI view (rows are newest-first).
+
+    The headline value is the trips-weighted mean across the window (stable when
+    buckets are sparse); the sparkline is the per-bucket series oldest->newest.
+    Returns ``None`` when the view has no usable rows (caller shows baseline).
     """
     from jnpa_shared import kpi as kpi_engine
 
-    # Pull what the views give us; derive a scalar per KPI, falling back to the
-    # KPI's configured baseline (so a fresh volume still shows a populated strip).
-    dwell_rows = await _read_view(state, KPI_VIEWS["dwell"])
-    throughput_rows = await _read_view(state, KPI_VIEWS["throughput"])
+    usable = [
+        r for r in rows
+        if r.get(value_field) is not None and int(r.get("trips") or 0) > 0
+    ]
+    if not usable:
+        return None
+    total_trips = sum(int(r["trips"]) for r in usable)
+    if total_trips <= 0:
+        return None
+    value = sum(float(r[value_field]) * int(r["trips"]) for r in usable) / total_trips
+    # Trend: up to the last 8 buckets, chronological (oldest -> newest).
+    series = [float(r[value_field]) for r in reversed(usable[:8])]
+    return kpi_engine.compute_kpi(key, round(value, 2), trend=series,
+                                  source="live", n=total_trips)
 
-    def _mean(rows: List[dict], field: str) -> float | None:
-        vals = [float(r[field]) for r in rows if r.get(field) is not None]
-        return sum(vals) / len(vals) if vals else None
 
-    # Queue wait proxy: stationary_pct of the dwell view scaled into minutes is a
-    # rough live signal; when absent we show the configured baseline value.
-    values: Dict[str, float] = {}
+async def _trt_empty_kpi(state: GatewayState):
+    """TRT-empty-from-ECD from the empty-container service's computed KPI."""
+    from jnpa_shared import kpi as kpi_engine
+    try:
+        url = state.cfg.empty_container_url.rstrip("/") + "/kpi/trt_empty"
+        resp = await state.http.get(url)
+        if resp.status_code == 200:
+            d = resp.json()
+            val = d.get("value")
+            if val is not None:
+                return kpi_engine.compute_kpi(
+                    "trt_empty_ecd", float(val),
+                    trend=d.get("trend") or None, source="live",
+                    n=int(d.get("n") or 0))
+    except Exception as exc:  # noqa: BLE001 — fall back to baseline
+        log.debug("trt_empty_upstream_failed", error=str(exc))
+    return None
+
+
+@router.get("/strip")
+async def kpi_strip(state: GatewayState = Depends(get_state)) -> dict:
+    """The dashboard KPI strip — each KPI as {value,target,deltaPct,trend,source}.
+
+    The four Appendix-C acceptance KPIs are computed from **real event data**:
+      * gate_queue_wait / gate_txn_time / tat_inside_port — aggregated from
+        jnpa.gate_events (emitted per truck gate transition) via the KPI views;
+      * trt_empty_ecd — the empty-container service's computed TRT.
+    Each KPI carries ``source: "live"`` when it came from event data or
+    ``"baseline"`` when no data exists yet — so a placeholder is never mistaken
+    for a measured value. Operational roll-ups still derive from their views.
+    """
+    from jnpa_shared import kpi as kpi_engine
+
     targets = kpi_engine.KPI_TARGETS
-    stationary = _mean(dwell_rows, "stationary_pct")
-    if stationary is not None:
-        # higher stationary % => longer waits; map onto the baseline band.
-        values["gate_queue_wait"] = round(targets["gate_queue_wait"].baseline * (stationary / 100.0) * 1.5, 2)
-    tp = _mean(throughput_rows, "reads")
-    if tp is not None:
-        values["gate_throughput"] = round(tp, 2)
+    results: Dict[str, dict] = {}
 
-    # Fill the rest from baselines so the evaluator always sees the full strip.
+    # --- Appendix-C KPIs from event data ----------------------------------
+    qw_rows = await _read_view(state, KPI_VIEWS["gate_queue_wait"])
+    tx_rows = await _read_view(state, KPI_VIEWS["gate_txn_time"])
+    tat_rows = await _read_view(state, KPI_VIEWS["tat_inside_port"])
+    live = {
+        "gate_queue_wait": _kpi_from_buckets("gate_queue_wait", qw_rows, "wait_min"),
+        "gate_txn_time": _kpi_from_buckets("gate_txn_time", tx_rows, "txn_min"),
+        "tat_inside_port": _kpi_from_buckets("tat_inside_port", tat_rows, "tat_min"),
+        "trt_empty_ecd": await _trt_empty_kpi(state),
+    }
+    for key, res in live.items():
+        if res is not None:
+            results[key] = res.to_dict()
+
+    # --- Operational roll-ups (best-effort live, else baseline) ------------
+    throughput_rows = await _read_view(state, KPI_VIEWS["throughput"])
+    tp_vals = [float(r["reads"]) for r in throughput_rows if r.get("reads") is not None]
+    if tp_vals:
+        results["gate_throughput"] = kpi_engine.compute_kpi(
+            "gate_throughput", round(sum(tp_vals) / len(tp_vals), 2),
+            source="live", n=len(tp_vals)).to_dict()
+
+    # --- Fill any KPI still absent with an explicitly-labelled baseline ----
     for key, t in targets.items():
-        values.setdefault(key, t.baseline)
+        if key not in results:
+            results[key] = kpi_engine.compute_kpi(
+                key, t.baseline, source="baseline", n=0).to_dict()
 
-    strip = kpi_engine.kpi_strip(values)
+    # Preserve the canonical KPI order.
+    strip = [results[key] for key in targets if key in results]
+    live_count = sum(1 for s in strip if s.get("source") == "live")
     REQUESTS.labels("kpi", "ok").inc()
-    return {"strip": strip, "count": len(strip)}
+    return {"strip": strip, "count": len(strip), "live_count": live_count}
 
 
 @router.get("/sources")

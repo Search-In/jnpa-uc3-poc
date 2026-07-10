@@ -4,6 +4,9 @@ import { api } from "@/lib/api";
 import { Card, Chip, Row, Spinner } from "@/components/ui";
 import { clearPairing, deviceIdToCode } from "@/lib/device";
 import { enablePush, type PushState } from "@/lib/pwa";
+import { useDriverSession } from "@/hooks/DriverSession";
+import { verifiedLabel } from "@/lib/driverLang";
+import { IconShield, IconLogout, IconBell } from "@/components/icons";
 import i18n, { SUPPORTED_LANGS, LANG_LABELS } from "@/i18n";
 import type { TruckEnvelope, VahanEnvelope } from "@/lib/types";
 
@@ -21,6 +24,7 @@ const PUSH_LABEL: Record<PushState, string> = {
 
 export default function Profile({ deviceId, plate }: { deviceId: string; plate?: string | null }) {
   const { t } = useTranslation();
+  const { session } = useDriverSession();
   const [vahan, setVahan] = useState<VahanEnvelope | null>(null);
   const [resolvedPlate, setResolvedPlate] = useState<string | null>(plate ?? null);
   const [loading, setLoading] = useState(true);
@@ -96,8 +100,32 @@ export default function Profile({ deviceId, plate }: { deviceId: string; plate?:
   const path = vahan?.decision_path;
   const provisional = path === "PROVISIONAL" || vahan?.provisional;
 
+  const driverName = compliance?.name || session.name || t("home.driver", { defaultValue: "Driver" });
+  const verified = session.status === "ACTIVE";
+
   return (
     <>
+      {/* Driver profile header */}
+      <div className="prof-header">
+        <span className="prof-avatar">{driverName.trim().charAt(0).toUpperCase()}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="prof-name">{driverName}</div>
+          <div className="prof-plate selectable">
+            {resolvedPlate || t("common.noData", { defaultValue: "—" })}
+          </div>
+          <div className="prof-badges">
+            <span className={`prof-badge ${verified ? "ok" : "muted"}`}>
+              <IconShield size={13} /> {verified ? t("home.status.ACTIVE", { defaultValue: "Verified" }) : t("home.status.UNVERIFIED", { defaultValue: "Not enrolled" })}
+            </span>
+            {compliance?.dlStatus ? (
+              <span className={`prof-badge ${compliance.dlStatus === "VALID" ? "ok" : "warn"}`}>
+                {t("profile.dl", { defaultValue: "DL" })}: {compliance.dlStatus}
+              </span>
+            ) : null}
+          </div>
+        </div>
+      </div>
+
       <Card title={t("common.language")}>
         <label
           htmlFor="lang-select"
@@ -136,9 +164,7 @@ export default function Profile({ deviceId, plate }: { deviceId: string; plate?:
         ) : vahan ? (
           <>
             <div style={{ marginBottom: 10 }}>
-              <Chip status={provisional ? "warn" : path?.startsWith("LIVE") ? "ok" : "warn"}>
-                {path}
-              </Chip>
+              <Chip status={verifiedLabel(path).ok ? "ok" : "warn"}>{verifiedLabel(path).label}</Chip>
             </div>
             <Row
               k={t("profile.owner")}
@@ -206,7 +232,12 @@ export default function Profile({ deviceId, plate }: { deviceId: string; plate?:
       )}
 
       <Card title={t("profile.notifications")}>
-        <button className="btn" disabled={pushBusy || push === "subscribed"} onClick={onEnablePush}>
+        <button
+          className="btn"
+          disabled={pushBusy || push === "subscribed"}
+          onClick={onEnablePush}
+        >
+          <IconBell size={17} />{" "}
           {pushBusy
             ? t("profile.enabling")
             : push === "subscribed"
@@ -239,7 +270,7 @@ export default function Profile({ deviceId, plate }: { deviceId: string; plate?:
             location.reload();
           }}
         >
-          {t("profile.logout", { defaultValue: "Log out from device" })}
+          <IconLogout size={17} /> {t("profile.logout", { defaultValue: "Log out from device" })}
         </button>
       </Card>
     </>

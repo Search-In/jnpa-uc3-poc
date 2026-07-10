@@ -24,6 +24,9 @@ import Parking from "@/screens/Parking";
 import Zones from "@/screens/Zones";
 import MapView from "@/screens/MapView";
 import AlertCenter from "@/screens/AlertCenter";
+import EmergencyButton from "@/components/EmergencyButton";
+import Toast from "@/components/Toast";
+import { IconHome, IconNavigate, IconBell, IconParking, IconTruck } from "@/components/icons";
 
 // Uses hash routing so the PWA works under /pwa from nginx (no server rewrite
 // rules needed) and deep-links from the service worker (#/reroute) just work.
@@ -31,28 +34,35 @@ import AlertCenter from "@/screens/AlertCenter";
 function TabBar() {
   const { t } = useTranslation();
   const { unread, pendingReroute } = useRealtime();
-  // Production 6-tab bottom navigation (Phase 3): Home · Trip · Map · Parking ·
-  // Alerts · Profile. Reroute/Inbox/Enrol/Zones remain reachable as routes.
+  // Native-style 5-tab bottom navigation: Home · Navigate · Alerts · Parking ·
+  // Profile. Trip / Reroute / Inbox / Enrol / Zones remain reachable as routes
+  // (Home's actions + the full-screen reroute interrupt link into them).
   const tabs = [
-    { to: "/home", label: t("tabs.home", { defaultValue: "Home" }), icon: "🏠" },
-    { to: "/trip", label: t("tabs.trip"), icon: "🛣", alert: !!pendingReroute },
-    { to: "/map", label: t("tabs.map", { defaultValue: "Map" }), icon: "🗺" },
-    { to: "/parking", label: t("tabs.parking"), icon: "🅿" },
+    { to: "/home", label: t("tabs.home", { defaultValue: "Home" }), Icon: IconHome },
+    {
+      to: "/map",
+      label: t("tabs.navigate", { defaultValue: "Navigate" }),
+      Icon: IconNavigate,
+      alert: !!pendingReroute,
+    },
     {
       to: "/alerts",
       label: t("tabs.alerts", { defaultValue: "Alerts" }),
-      icon: "🔔",
+      Icon: IconBell,
       badge: unread,
     },
-    { to: "/profile", label: t("tabs.vehicle"), icon: "🚛" },
+    { to: "/parking", label: t("tabs.parking"), Icon: IconParking },
+    { to: "/profile", label: t("tabs.vehicle"), Icon: IconTruck },
   ];
   return (
     <nav className="tabbar">
-      {tabs.map((t) => (
-        <NavLink key={t.to} to={t.to} className={({ isActive }) => (isActive ? "active" : "")}>
-          <span style={{ fontSize: 18, color: t.alert ? "var(--blue)" : undefined }}>{t.icon}</span>
-          <span>{t.label}</span>
-          {t.badge ? <span className="badge-dot">{t.badge > 9 ? "9+" : t.badge}</span> : null}
+      {tabs.map(({ to, label, Icon, alert, badge }) => (
+        <NavLink key={to} to={to} className={({ isActive }) => (isActive ? "active" : "")}>
+          <span className="tab-icon" style={{ color: alert ? "var(--blue)" : undefined }}>
+            <Icon size={24} />
+          </span>
+          <span>{label}</span>
+          {badge ? <span className="badge-dot">{badge > 9 ? "9+" : badge}</span> : null}
         </NavLink>
       ))}
     </nav>
@@ -120,6 +130,7 @@ function PairedApp({ deviceId, plate }: { deviceId: string; plate?: string | nul
         <HashRouter>
           <div className="app-shell">
             <RerouteInterrupt />
+            <Toast />
             <TopBar />
             <main className="content">
               <Routes>
@@ -136,6 +147,9 @@ function PairedApp({ deviceId, plate }: { deviceId: string; plate?: string | nul
                 <Route path="*" element={<Navigate to="/home" replace />} />
               </Routes>
             </main>
+            {/* Always-reachable SOS. Sits at z-40, below the full-screen reroute
+                interrupt (z-50) which fully covers it when a reroute lands. */}
+            <EmergencyButton />
             <TabBar />
           </div>
         </HashRouter>

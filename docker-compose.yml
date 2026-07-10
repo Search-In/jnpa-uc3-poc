@@ -551,10 +551,18 @@ services:
       POSTGRES_DSN_LIBPQ: ${TRUCK_POSTGRES_DSN:-postgresql://postgres:jnpa_pw@postgres:5432/postgres}
       TRUCK_NUM_DEVICES: ${TRUCK_NUM_DEVICES:-20000}
       TRUCK_MAX_DEVICES: ${TRUCK_MAX_DEVICES:-30000}
+      TRUCK_ORIGIN_RADIUS_KM: ${TRUCK_ORIGIN_RADIUS_KM:-100}
       TRUCK_INTERVAL_S: ${TRUCK_INTERVAL_S:-5}
       TRUCK_INTERVAL_GATE_S: ${TRUCK_INTERVAL_GATE_S:-2}
       TRUCK_ETA_INTERVAL_S: ${TRUCK_ETA_INTERVAL_S:-30}
       TRUCK_DB_FLUSH_S: ${TRUCK_DB_FLUSH_S:-30}
+      # Gate lifecycle dwell times (seconds) — feed the Appendix-C gate KPIs.
+      # Lower these (+ TRUCK_ORIGIN_RADIUS_KM) to make gate events appear fast
+      # for a demo/verification without changing production behaviour.
+      TRUCK_GATE_DWELL_S: ${TRUCK_GATE_DWELL_S:-120}
+      TRUCK_GATE_TXN_DWELL_S: ${TRUCK_GATE_TXN_DWELL_S:-90}
+      TRUCK_PORT_DWELL_S: ${TRUCK_PORT_DWELL_S:-300}
+      TRUCK_IDLE_DWELL_S: ${TRUCK_IDLE_DWELL_S:-60}
       OSRM_BASE_URL: ${OSRM_BASE_URL:-https://router.project-osrm.org/route/v1/driving/}
       HERE_API_KEY: ${HERE_API_KEY:-}
       PORT: "8240"
@@ -916,6 +924,11 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-}
       MINIO_SECURE: ${MINIO_SECURE:-false}
+      # Browser-reachable S3 host used to MINT presigned photo URLs (the in-network
+      # minio:9000 host is not resolvable from a browser). Set to the public S3
+      # host (e.g. minio.example.com) in prod; empty falls back to MINIO_ENDPOINT.
+      MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-}
+      MINIO_PUBLIC_SECURE: ${MINIO_PUBLIC_SECURE:-}
       DRIVER_ENROL_BUCKET: ${DRIVER_ENROL_BUCKET:-driver-enrolment}
       DRIVER_ENROL_URL_BASE: ${DRIVER_ENROL_URL_BASE:-}
       # Auth + RBAC (SEC-1/SEC-2). APP_ENV drives the fail-fast startup guard in

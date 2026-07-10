@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { api } from "@/lib/api";
 import { appendAdvisories } from "@/lib/store";
 import { useRealtime } from "@/hooks/RealtimeContext";
-import { Empty } from "@/components/ui";
+import { Empty, Spinner } from "@/components/ui";
 import { fmtRelative, gateShort } from "@/lib/format";
 import type { Advisory } from "@/lib/types";
 
@@ -19,6 +19,9 @@ export default function Inbox() {
   const { advisories, markInboxRead } = useRealtime();
   const { t } = useTranslation();
   const [acked, setAcked] = useState<Record<string, boolean>>({});
+  // Track the first history fetch so a slow network shows a spinner rather than a
+  // premature "no advisories" empty state (which reads as "nothing happened").
+  const [loading, setLoading] = useState(true);
 
   // Localised alert-kind label (NOTIF-5 multilingual). Falls back to the raw
   // kind if a translation is missing.
@@ -62,13 +65,22 @@ export default function Inbox() {
         });
         if (rows.length) appendAdvisories(rows);
       })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => setLoading(false));
     markInboxRead();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (!advisories.length) {
-    return <Empty>No advisories, alerts or challans in the last 24 hours.</Empty>;
+    // Distinguish "still loading" from a genuine empty inbox — no blank screens.
+    if (loading) {
+      return (
+        <Empty>
+          <Spinner /> {t("common.loading", { defaultValue: "Loading…" })}
+        </Empty>
+      );
+    }
+    return <Empty>{t("inbox.empty")}</Empty>;
   }
 
   return (

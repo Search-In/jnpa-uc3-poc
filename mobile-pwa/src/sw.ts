@@ -33,6 +33,10 @@ interface PushPayload {
   body?: string;
   device_id?: string;
   gate_id?: string | null;
+  // Deep-link hash (e.g. "#/zones") set by locally-raised notifications
+  // (lib/notify) so notificationclick can route to the right screen.
+  href?: string;
+  category?: string;
   [k: string]: unknown;
 }
 
@@ -74,13 +78,23 @@ self.addEventListener("push", (event: PushEvent) => {
 self.addEventListener("notificationclick", (event: NotificationEvent) => {
   event.notification.close();
   const data = (event.notification.data || {}) as PushPayload;
-  const target = data.type === "reroute" ? `${BASE}#/reroute` : `${BASE}#/inbox`;
+  // Honour an explicit deep-link hash first (locally-raised notifications), then
+  // fall back to reroute → /reroute, everything else → /inbox.
+  const hash = data.href
+    ? data.href.startsWith("#")
+      ? data.href
+      : `#${data.href}`
+    : data.type === "reroute"
+      ? "#/reroute"
+      : "#/inbox";
+  const target = `${BASE}${hash}`;
 
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
       for (const c of clients) {
         if ("focus" in c) {
-          c.postMessage({ source: "push", frame: data });
+          // Navigate the focused client to the deep-link, then focus it.
+          c.postMessage({ source: "push", frame: data, navigate: hash });
           return c.focus();
         }
       }

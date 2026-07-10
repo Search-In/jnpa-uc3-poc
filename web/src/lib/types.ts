@@ -132,6 +132,12 @@ export interface KpiResult {
   direction: "lower_is_better" | "higher_is_better";
   onTarget: boolean;
   trend: number[];
+  // Provenance: "live" = aggregated from real event data; "baseline" = no data
+  // yet, showing the configured placeholder. Optional so mock fixtures (which
+  // are demonstrative by construction) default to "live" in the demo build.
+  source?: "live" | "baseline";
+  // Sample count behind a live value (trips/vehicles aggregated).
+  n?: number;
 }
 
 // --- Appendix-C capability wire types (gateway routers) ---

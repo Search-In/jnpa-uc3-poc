@@ -13,6 +13,7 @@
     "zones": "Zones",
     "home": "Home",
     "map": "Map",
+    "navigate": "Navigate",
     "alerts": "Alerts"
   },
   "screens": {
@@ -200,11 +201,70 @@
     "noLocation": "Location unavailable"
   },
   "alertCenter": {
-    "title": "Alerts"
+    "title": "Alerts",
+    "empty": "No alerts right now. Drive safe."
+  },
+  "gps": {
+    "updated": "Updated",
+    "awaiting": "Awaiting GPS…"
+  },
+  "driverStatus": {
+    "moving": "Moving",
+    "waitingGate": "Waiting at gate",
+    "stopped": "Stopped",
+    "actionRequired": "Action required",
+    "online": "Online",
+    "offline": "Offline",
+    "gpsActive": "GPS active",
+    "gpsSearching": "GPS searching…"
+  },
+  "traffic": {
+    "label": "Traffic",
+    "light": "Light",
+    "medium": "Medium",
+    "heavy": "Heavy"
+  },
+  "command": {
+    "currentTrip": "Current trip",
+    "headingTo": "Heading to",
+    "noTrip": "No active trip yet",
+    "noTripSub": "Your next gate assignment will appear here.",
+    "startNavigation": "Start Navigation",
+    "viewRoute": "View Route",
+    "lastSync": "Last sync"
+  },
+  "emergency": {
+    "sos": "SOS",
+    "title": "Emergency & Help",
+    "subtitle": "Choose an action. Calls work even without internet.",
+    "callControl": "Call Port Control Room",
+    "callControlSub": "JNPA gate operations",
+    "call112": "Emergency 112",
+    "call112Sub": "Police · Fire · Ambulance",
+    "shareLocation": "Share my live location",
+    "shareLocationSub": "Send your GPS position for help",
+    "raiseAlert": "Alert Control Room",
+    "raiseAlertSub": "Flag a breakdown or incident on your trip",
+    "raising": "Alerting…",
+    "raised": "Control room notified ✓",
+    "raiseFailed": "Saved offline — will retry when online",
+    "locating": "Getting your location…",
+    "locationShared": "Location ready to share",
+    "locationFailed": "Location unavailable — call directly",
+    "cancel": "Cancel",
+    "myContact": "My emergency contact"
   },
   "map": {
     "normal": "Normal",
     "medium": "Medium",
-    "heavy": "Heavy"
+    "heavy": "Heavy",
+    "destination": "Destination",
+    "recommended": "Recommended",
+    "fastest": "Fastest",
+    "alt": "Alternate",
+    "noRoute": "Route not available yet",
+    "routeErr": "Route not available right now",
+    "finding": "Finding the fastest route…",
+    "directDistance": "Direct distance to gate"
   }
 }

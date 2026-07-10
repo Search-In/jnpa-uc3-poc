@@ -171,6 +171,13 @@ async def _lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         log.warning("intel_schema_boot_failed", error=str(exc))
 
+    # Gate-event capture table + Appendix-C gate KPI views.
+    try:
+        from .routers import kpi as kpi_router
+        await kpi_router.ensure_kpi_gate_schema(cfg.postgres_dsn or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("kpi_gate_schema_boot_failed", error=str(exc))
+
     loop = asyncio.get_running_loop()
     stop = asyncio.Event()
 

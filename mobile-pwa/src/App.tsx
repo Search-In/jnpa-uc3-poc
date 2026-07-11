@@ -34,7 +34,7 @@ import { IconHome, IconNavigate, IconBell, IconParking, IconTruck } from "@/comp
 function TabBar() {
   const { t } = useTranslation();
   const { unread, pendingReroute } = useRealtime();
-     // Native-style 5-tab bottom navigation: Home · Navigate · Alerts · Parking ·
+  // Native-style 5-tab bottom navigation: Home · Navigate · Alerts · Parking ·
   // Profile. Trip / Reroute / Inbox / Enrol / Zones remain reachable as routes
   // (Home's actions + the full-screen reroute interrupt link into them).
   const tabs = [
@@ -199,7 +199,7 @@ export default function App() {
           if (alive) setBoot("ready");
           return;
         }
-               // Production with a failed mint: do NOT open the authed shell. Surface the
+        // Production with a failed mint: do NOT open the authed shell. Surface the
         // state and retry with capped backoff so the app self-heals once the token
         // becomes obtainable (e.g. transient gateway blip) instead of 401-storming.
         if (alive) setBoot("auth-failed");

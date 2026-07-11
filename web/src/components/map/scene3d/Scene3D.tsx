@@ -40,6 +40,16 @@ import { gateColour, jamColour, MAP_TOKENS, parkingStatusColour, zoneColour } fr
 import { JNPA_CENTER, JNPA_ZOOM } from "@/lib/basemap";
 import { installBasemapFallback, isOfflineRequested, initialBasemap } from "./basemapFallback";
 import { applyGraphics, stableOid } from "./sceneUtils";
+// Static, display-only port-context assets (UC2-parity): quay aprons, yard
+// stacks, STS cranes and berthed vessels, anchored to the four gate/terminal
+// markers. Placement frame + builders ported from the UC2 reference scene3d.ts.
+import {
+  PORT_TERMINALS,
+  terminalDeckGraphics,
+  yardStackGraphics,
+  craneGraphics,
+  vesselGraphics,
+} from "./portAssets";
 
 const MODELS = "/models";
 const WGS84 = { wkid: 4326 } as const;
@@ -77,6 +87,11 @@ type LayerSet = {
   parking: GraphicsLayer;
   gates: GraphicsLayer;
   highlight: GraphicsLayer;
+  // Static port-context assets (display only), beneath the operational overlays.
+  decks: GraphicsLayer;
+  yards: GraphicsLayer;
+  cranes: GraphicsLayer;
+  vessels: GraphicsLayer;
 };
 
 export function Scene3D({
@@ -127,6 +142,10 @@ export function Scene3D({
       parking: mk("uc3-3d-parking"),
       gates: mk("uc3-3d-gates"),
       highlight: mk("uc3-3d-highlight", "relative-to-ground"),
+      decks: mk("uc3-3d-port-decks"),
+      yards: mk("uc3-3d-port-yards", "relative-to-ground"),
+      cranes: mk("uc3-3d-port-cranes"),
+      vessels: mk("uc3-3d-port-vessels"),
     };
     layersRef.current = set;
 
@@ -135,6 +154,11 @@ export function Scene3D({
 
     map.addMany([
       set.heatmap,
+      // Port-context assets sit beneath the operational overlays.
+      set.decks,
+      set.yards,
+      set.cranes,
+      set.vessels,
       set.corridor,
       set.zones,
       set.parking,
@@ -223,9 +247,29 @@ export function Scene3D({
     renderHeatmap();
     renderZones();
     renderParking();
+    renderPortAssets();
     renderGates();
     renderTrucks();
     renderHighlight();
+  }
+
+  // Static port-context assets (quay aprons, yard stacks, STS cranes, berthed
+  // vessels) anchored to the FIXED UC2 terminal berth centroids (PORT_TERMINALS)
+  // and placed through the ported UC2 quay frame — exactly as UC2 does, NOT
+  // spawned around live gate coordinates. Display only; mirrors the existing
+  // removeAll + add render pattern; touches no data, simulation, camera or
+  // interactions.
+  function renderPortAssets() {
+    const set = layersRef.current;
+    if (!set) return;
+    set.decks.removeAll();
+    set.yards.removeAll();
+    set.cranes.removeAll();
+    set.vessels.removeAll();
+    set.decks.addMany(terminalDeckGraphics(PORT_TERMINALS));
+    set.yards.addMany(yardStackGraphics(PORT_TERMINALS));
+    set.cranes.addMany(craneGraphics(PORT_TERMINALS));
+    set.vessels.addMany(vesselGraphics(PORT_TERMINALS));
   }
 
   function renderCorridor() {
@@ -388,10 +432,11 @@ export function Scene3D({
           symbol: {
             type: "point-3d",
             symbolLayers: [
-              // Red boom barrier across the lane — the recognisable checkpoint.
+              // Toll-naka gate-house across the lane — the recognisable checkpoint.
+              // Same model UC2 uses for its gate (toll-naka.glb), synced from UC2.
               {
                 type: "object",
-                resource: { href: `${MODELS}/gate-boom.glb` },
+                resource: { href: `${MODELS}/toll-naka.glb` },
                 height: 9,
                 anchor: "bottom",
               },
@@ -612,7 +657,7 @@ function truckGraphics(trucks: TruckDevice[]): Graphic[] {
           rot: (heading + TRUCK_MODEL_OFFSET) % 360,
           model:
             tk.device_id.charCodeAt(tk.device_id.length - 1) % 3 === 0
-              ? "pickup-realistic"
+              ? "container-truck"
               : "truck-realistic",
         },
       }),
@@ -640,7 +685,7 @@ function makeTruckLayer(initial: Graphic[]): FeatureLayer {
       field: "model",
       uniqueValueInfos: [
         { model: "truck-realistic", h: 8 },
-        { model: "pickup-realistic", h: 5 },
+        { model: "container-truck", h: 5 },
       ].map(({ model, h }) => ({
         value: model,
         symbol: {

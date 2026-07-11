@@ -45,52 +45,62 @@ def _utcnow_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
 
-# The driver's own device snapshot is login-critical, so the PRIMARY lookup must
-# NOT be lost to the aggressive ANPR-tuned upstream timeout
-# (GATEWAY_UPSTREAM_TIMEOUT_S, ~2 s) or a one-off transport blip: a healthy
-# truck-sim 200 has to reach the gateway, else GET /api/trucks/{id} wrongly 404s
-# even though the device exists. So the truck-sim call gets its own, more generous
-# timeout and a single retry on a transport error (timeout / reset / refused).
-# A genuine truck-sim 404 (unknown device) is honoured immediately with no retry,
-# so an unknown id still falls through to SECONDARY/TERTIARY exactly as before.
-_PRIMARY_TIMEOUT_S = 8.0
-_PRIMARY_ATTEMPTS = 2
-
-
 async def _primary(state: GatewayState, device_id: str) -> Optional[dict]:
     """PRIMARY: the live device snapshot from the trucking-app control plane.
 
-    Returns the truck-sim record on a 200, or ``None`` only when the device is
-    genuinely unknown (truck-sim 404) or the sim stays unreachable across retries.
-    A transport error (timeout / connection reset) is retried rather than being
-    silently reported as "no device" — that conflation was why a valid device
-    (200 from truck-sim under a plain curl) surfaced as a 404 through the gateway.
+    Fully instrumented: every step (URL, status, headers, body, JSON decode) and
+    every exit is logged, and NO exception is swallowed — the previous
+    ``except httpx.HTTPError: return None`` hid the real cause behind a bare
+    ``error=""`` and a misleading 404. On a 200 the raw truck-sim record is
+    returned unchanged (no schema/field parsing happens here — the gateway just
+    passes the sim payload through as ``record``, so the PWA still reads
+    ``record.plate`` etc.). A genuine truck-sim 404 (unknown device) returns None
+    so the caller falls through to SECONDARY/TERTIARY, exactly as before.
     """
+    import traceback
+
     cfg = state.cfg
     url = cfg.truck_api_url.rstrip("/") + f"/devices/{device_id}"
-    for attempt in range(1, _PRIMARY_ATTEMPTS + 1):
-        t0 = time.perf_counter()
-        try:
-            # Per-request timeout override: the truck-sim device snapshot is not
-            # subject to the 2 s ANPR-liveness budget the shared client defaults to.
-            resp = await state.http.get(url, timeout=_PRIMARY_TIMEOUT_S)
-            UPSTREAM_LATENCY.labels("trucks", "truck-sim").observe(time.perf_counter() - t0)
-        except httpx.HTTPError as exc:
-            # Transport-level failure (timeout / reset / DNS): transient, so retry
-            # before giving up — do NOT treat as "device unknown".
-            log.warning(
-                "trucks_primary_unreachable", url=url, attempt=attempt, error=str(exc)
-            )
-            continue
-        if resp.status_code == 200:
-            return resp.json()
-        if resp.status_code == 404:
-            # Device genuinely unknown to the sim; no retry, fall through to relay.
-            return None
-        # Unexpected upstream status (5xx/etc.): retry, then give up.
-        log.warning(
-            "trucks_primary_bad_status", url=url, status=resp.status_code, attempt=attempt
+    log.info("trucks_primary_begin", device_id=device_id, url=url)
+    t0 = time.perf_counter()
+    try:
+        resp = await state.http.get(url)
+    except BaseException as exc:  # noqa: BLE001 — surface EVERYTHING, swallow nothing
+        # repr(exc) exposes the concrete class (e.g. ConnectError('') / ReadError())
+        # that str(exc)="" was hiding; the traceback pins the exact failing frame.
+        log.error(
+            "trucks_primary_exception",
+            device_id=device_id, url=url,
+            exc_type=type(exc).__name__, exc_repr=repr(exc),
+            traceback=traceback.format_exc(),
         )
+        raise
+    UPSTREAM_LATENCY.labels("trucks", "truck-sim").observe(time.perf_counter() - t0)
+
+    # Log the raw HTTP result BEFORE any interpretation.
+    body_preview = resp.text[:500]
+    log.info(
+        "trucks_primary_response",
+        device_id=device_id, status=resp.status_code,
+        headers=dict(resp.headers), body_preview=body_preview,
+    )
+
+    if resp.status_code == 200:
+        try:
+            data = resp.json()
+        except Exception as exc:  # noqa: BLE001 — a 200 that isn't valid JSON
+            log.error(
+                "trucks_primary_json_error",
+                device_id=device_id, exc_repr=repr(exc),
+                body_preview=body_preview, traceback=traceback.format_exc(),
+            )
+            raise
+        log.info("trucks_primary_return_ok", device_id=device_id, keys=list(data) if isinstance(data, dict) else None)
+        return data
+    if resp.status_code == 404:
+        log.info("trucks_primary_return_none_404", device_id=device_id)
+        return None
+    log.warning("trucks_primary_return_none_status", device_id=device_id, status=resp.status_code)
     return None
 
 

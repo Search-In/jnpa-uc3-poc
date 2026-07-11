@@ -12,14 +12,7 @@
 // pagination, selected row, filters) and the map camera are never reset by a
 // refresh — only the underlying rows/markers update.
 
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useState,
-  type ReactNode,
-} from "react";
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { useIsFetching, useQueryClient } from "@tanstack/react-query";
 
 export interface RefreshOption {

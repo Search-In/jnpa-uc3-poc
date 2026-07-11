@@ -53,7 +53,9 @@ export default function Pairing({ onPaired }: { onPaired: (deviceId: string) => 
       // 1) Acquire the DRIVER-scoped JWT for this device (production seam).
       const authed = await ensureDeviceToken(deviceId);
       if (!authed && import.meta.env.PROD) {
-        setError(t("pairing.authFailed", { defaultValue: "Could not sign in. Check your connection." }));
+        setError(
+          t("pairing.authFailed", { defaultValue: "Could not sign in. Check your connection." }),
+        );
         return;
       }
 
@@ -112,7 +114,9 @@ export default function Pairing({ onPaired }: { onPaired: (deviceId: string) => 
             <IconTruck size={18} />
           </span>
           <div>
-            <div className="login-title">{t("pairing.vehicleId", { defaultValue: "Vehicle ID" })}</div>
+            <div className="login-title">
+              {t("pairing.vehicleId", { defaultValue: "Vehicle ID" })}
+            </div>
             <div className="login-sub">
               {t("pairing.vehicleIdSub", { defaultValue: "Your assigned in-cab unit ID" })}
             </div>

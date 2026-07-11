@@ -42,7 +42,6 @@ export default function AlertsCenter() {
   const seedQ = useQuery({
     queryKey: ["alerts-seed"],
     queryFn: () => getAdapter().alerts({ limit: 100 }),
-    refetchInterval: 15_000,
   });
   const merged = useMemo(
     () => mergeAlerts(liveAlerts, seedQ.data ?? [], 200),

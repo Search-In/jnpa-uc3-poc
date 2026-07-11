@@ -88,7 +88,6 @@ export default function DemoConsole() {
   const faultsQ = useQuery<FaultState>({
     queryKey: ["faults"],
     queryFn: () => getAdapter().getFaults(),
-    refetchInterval: 3000,
   });
   const force = useMutation({
     mutationFn: ({ domain, rung }: { domain: string; rung: string }) =>

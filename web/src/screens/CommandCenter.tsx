@@ -29,6 +29,7 @@ import { api } from "@/lib/api";
 import { ArcgisMap } from "@/components/map/ArcgisMap";
 import { Card } from "@/components/ui/card";
 import { LastUpdated, LoadingState, ErrorState, EmptyState } from "@/components/ui/misc";
+import { AutoRefreshControl } from "@/components/ui/AutoRefreshControl";
 import { useMapSettings } from "@/lib/mapSettings";
 import { severityColour, severityRank } from "@/lib/palette";
 import { STATUS } from "@/lib/tokens";
@@ -58,28 +59,23 @@ export default function CommandCenter() {
   const gatesQ = useQuery({
     queryKey: ["gates"],
     queryFn: () => getAdapter().gates(),
-    refetchInterval: 10_000,
   });
   const zonesQ = useQuery({ queryKey: ["zones"], queryFn: () => getAdapter().zones() });
   const snapsQ = useQuery({
     queryKey: ["snapshots"],
     queryFn: () => getAdapter().trafficSnapshots(),
-    refetchInterval: 8_000,
   });
   const trucksQ = useQuery({
     queryKey: ["trucks", "live-map"],
     queryFn: () => getAdapter().trucks(undefined, 500),
-    refetchInterval: 5_000,
   });
   const queuedQ = useQuery({
     queryKey: ["trucks", "AT_GATE_QUEUE"],
     queryFn: () => getAdapter().trucks("AT_GATE_QUEUE", 500),
-    refetchInterval: 6_000,
   });
   const parkingAvailQ = useQuery({
     queryKey: ["parking-availability"],
     queryFn: () => getAdapter().parkingAvailability(),
-    refetchInterval: 10_000,
   });
   // Customs Flags + AI Incidents read the SAME endpoints the Customs / Reports /
   // Geo screens use, so these KPIs match those screens exactly. Alerts share the
@@ -88,23 +84,19 @@ export default function CommandCenter() {
   const customsQ = useQuery({
     queryKey: ["customs-history"],
     queryFn: () => api.customsHistory(200),
-    refetchInterval: 15_000,
   });
   const aiQ = useQuery({
     queryKey: ["ai-events"],
     queryFn: () => api.aiEvents(undefined, 200),
-    refetchInterval: 15_000,
   });
   const alertsQ = useQuery({
     queryKey: ["alerts-seed"],
     queryFn: () => getAdapter().alerts({ limit: 100 }),
-    refetchInterval: 15_000,
   });
   const carbonQ = useQuery({ queryKey: ["carbon"], queryFn: () => getAdapter().carbonRollup() });
   const leoQ = useQuery({
     queryKey: ["leo-queue"],
     queryFn: () => getAdapter().leoQueue(),
-    refetchInterval: 15_000,
   });
   const enrollQ = useQuery({
     queryKey: ["enrollments"],
@@ -284,6 +276,7 @@ export default function CommandCenter() {
         </div>
         <div className="ml-auto flex items-center gap-3">
           <LastUpdated at={lastUpdated || undefined} isFetching={anyFetching} />
+          <AutoRefreshControl />
           <button
             type="button"
             onClick={refreshAll}

@@ -43,7 +43,6 @@ export default function GeoAnalytics({ defaultTab = "zones" }: { defaultTab?: Ta
   const insideQ = useQuery({
     queryKey: ["geo-inside"],
     queryFn: () => api.geoVehiclesInZones(),
-    refetchInterval: 8000,
   });
   const violQ = useQuery({ queryKey: ["geo-violations"], queryFn: () => api.geoViolations(200) });
   const aiQ = useQuery({ queryKey: ["ai-events"], queryFn: () => api.aiEvents(undefined, 200) });
@@ -468,13 +467,11 @@ function HeatmapTab({ violations }: { violations: GeofenceEvent[] }) {
   const snapsQ = useQuery({
     queryKey: ["snapshots"],
     queryFn: () => getAdapter().trafficSnapshots(),
-    refetchInterval: 8000,
   });
   const zonesQ = useQuery({ queryKey: ["zones"], queryFn: () => getAdapter().zones() });
   const trucksQ = useQuery({
     queryKey: ["trucks", "live-map"],
     queryFn: () => getAdapter().trucks(undefined, 500),
-    refetchInterval: 5000,
   });
 
   // Violations by zone (density) for the accompanying chart.

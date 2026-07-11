@@ -22,6 +22,8 @@ import {
   LastUpdated,
   type AsyncStatus,
 } from "@/components/ui/misc";
+import { AutoRefreshControl } from "@/components/ui/AutoRefreshControl";
+import { useRefresh } from "@/lib/refresh";
 import { STATUS } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 
@@ -68,6 +70,12 @@ export function PageHeader({
   actions?: ReactNode;
 }) {
   const { t } = useTranslation();
+  const { refresh, lastRefreshAt, isRefreshing } = useRefresh();
+  // Screens may still pass a scoped updatedAt/isFetching/onRefresh; otherwise we
+  // fall back to the global RefreshManager so every page behaves identically.
+  const effectiveUpdatedAt = updatedAt ?? lastRefreshAt;
+  const effectiveFetching = isFetching ?? isRefreshing;
+  const handleRefresh = onRefresh ?? refresh;
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border bg-card px-4 py-3">
       <div className="flex items-center gap-2.5">
@@ -85,19 +93,16 @@ export function PageHeader({
       </div>
       <div className="ml-auto flex items-center gap-3">
         {actions}
-        {(updatedAt !== undefined || isFetching) && (
-          <LastUpdated at={updatedAt || undefined} isFetching={isFetching} />
-        )}
-        {onRefresh && (
-          <button
-            type="button"
-            onClick={onRefresh}
-            className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted"
-          >
-            <RefreshCw className={cn("h-3.5 w-3.5", isFetching && "animate-spin")} />
-            {t("commandCenter.refresh")}
-          </button>
-        )}
+        <LastUpdated at={effectiveUpdatedAt || undefined} isFetching={effectiveFetching} />
+        <AutoRefreshControl />
+        <button
+          type="button"
+          onClick={handleRefresh}
+          className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted"
+        >
+          <RefreshCw className={cn("h-3.5 w-3.5", effectiveFetching && "animate-spin")} />
+          {t("commandCenter.refresh")}
+        </button>
       </div>
     </div>
   );

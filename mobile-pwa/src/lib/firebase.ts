@@ -31,9 +31,9 @@ const VAPID_KEY = (import.meta.env.VITE_FIREBASE_VAPID_KEY as string | undefined
 export function isFcmConfigured(): boolean {
   return Boolean(
     firebaseConfig.apiKey &&
-      firebaseConfig.projectId &&
-      firebaseConfig.appId &&
-      firebaseConfig.messagingSenderId,
+    firebaseConfig.projectId &&
+    firebaseConfig.appId &&
+    firebaseConfig.messagingSenderId,
   );
 }
 
@@ -53,9 +53,7 @@ function ensureApp(): FirebaseApp | null {
 // ------------------------------------------------------------------ FCM push
 // Mint an FCM registration token bound to the app's existing service worker.
 // Returns null when FCM is not configured / unsupported / permission not granted.
-export async function getFcmToken(
-  registration: ServiceWorkerRegistration,
-): Promise<string | null> {
+export async function getFcmToken(registration: ServiceWorkerRegistration): Promise<string | null> {
   if (!isFcmConfigured()) return null;
   try {
     const { getMessaging, getToken, isSupported } = await import("firebase/messaging");

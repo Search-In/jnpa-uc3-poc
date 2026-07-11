@@ -50,10 +50,16 @@ function normalize(raw: unknown): PushPayload {
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const isFcm = r.data && typeof r.data === "object";
   const base = isFcm ? (r.data as Record<string, unknown>) : r;
-  const notif = (r.notification && typeof r.notification === "object"
-    ? (r.notification as Record<string, unknown>)
-    : {}) as { title?: string; body?: string };
-  return { ...(base as PushPayload), ...(notif.title ? { title: notif.title } : {}), ...(notif.body ? { body: notif.body } : {}) };
+  const notif = (
+    r.notification && typeof r.notification === "object"
+      ? (r.notification as Record<string, unknown>)
+      : {}
+  ) as { title?: string; body?: string };
+  return {
+    ...(base as PushPayload),
+    ...(notif.title ? { title: notif.title } : {}),
+    ...(notif.body ? { body: notif.body } : {}),
+  };
 }
 
 self.addEventListener("push", (event: PushEvent) => {

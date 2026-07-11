@@ -45,22 +45,52 @@ def _utcnow_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
 
+# The driver's own device snapshot is login-critical, so the PRIMARY lookup must
+# NOT be lost to the aggressive ANPR-tuned upstream timeout
+# (GATEWAY_UPSTREAM_TIMEOUT_S, ~2 s) or a one-off transport blip: a healthy
+# truck-sim 200 has to reach the gateway, else GET /api/trucks/{id} wrongly 404s
+# even though the device exists. So the truck-sim call gets its own, more generous
+# timeout and a single retry on a transport error (timeout / reset / refused).
+# A genuine truck-sim 404 (unknown device) is honoured immediately with no retry,
+# so an unknown id still falls through to SECONDARY/TERTIARY exactly as before.
+_PRIMARY_TIMEOUT_S = 8.0
+_PRIMARY_ATTEMPTS = 2
+
+
 async def _primary(state: GatewayState, device_id: str) -> Optional[dict]:
-    """PRIMARY: the live device snapshot from the trucking-app control plane."""
+    """PRIMARY: the live device snapshot from the trucking-app control plane.
+
+    Returns the truck-sim record on a 200, or ``None`` only when the device is
+    genuinely unknown (truck-sim 404) or the sim stays unreachable across retries.
+    A transport error (timeout / connection reset) is retried rather than being
+    silently reported as "no device" — that conflation was why a valid device
+    (200 from truck-sim under a plain curl) surfaced as a 404 through the gateway.
+    """
     cfg = state.cfg
     url = cfg.truck_api_url.rstrip("/") + f"/devices/{device_id}"
-    t0 = time.perf_counter()
-    try:
-        resp = await state.http.get(url)
-        UPSTREAM_LATENCY.labels("trucks", "truck-sim").observe(time.perf_counter() - t0)
-    except httpx.HTTPError as exc:
-        log.warning("trucks_primary_unreachable", url=url, error=str(exc))
-        return None
-    if resp.status_code == 200:
-        return resp.json()
-    if resp.status_code == 404:
-        # Device genuinely unknown to the sim; treat as no PRIMARY (try relay).
-        return None
+    for attempt in range(1, _PRIMARY_ATTEMPTS + 1):
+        t0 = time.perf_counter()
+        try:
+            # Per-request timeout override: the truck-sim device snapshot is not
+            # subject to the 2 s ANPR-liveness budget the shared client defaults to.
+            resp = await state.http.get(url, timeout=_PRIMARY_TIMEOUT_S)
+            UPSTREAM_LATENCY.labels("trucks", "truck-sim").observe(time.perf_counter() - t0)
+        except httpx.HTTPError as exc:
+            # Transport-level failure (timeout / reset / DNS): transient, so retry
+            # before giving up — do NOT treat as "device unknown".
+            log.warning(
+                "trucks_primary_unreachable", url=url, attempt=attempt, error=str(exc)
+            )
+            continue
+        if resp.status_code == 200:
+            return resp.json()
+        if resp.status_code == 404:
+            # Device genuinely unknown to the sim; no retry, fall through to relay.
+            return None
+        # Unexpected upstream status (5xx/etc.): retry, then give up.
+        log.warning(
+            "trucks_primary_bad_status", url=url, status=resp.status_code, attempt=attempt
+        )
     return None
 
 

@@ -71,14 +71,14 @@ export class LiveAdapter implements DataAdapter {
 
   // The KPI strip comes from the gateway /api/kpi/strip materialiser if present,
   // else we surface whatever the views give. The gateway returns the engine
-  // shape (KpiResult[]); if the route is older, return [].
+  // shape (KpiResult[]). We deliberately DON'T swallow fetch errors into []: the
+  // simulator refetches this key every tick (SimBridge), and returning [] on a
+  // transient failure would overwrite the last-good cache with an empty
+  // "successful" result — blanking the KPI strip mid-sim. Re-throw instead so
+  // React Query keeps the previous data and marks the query errored.
   kpiStrip = async (): Promise<KpiResult[]> => {
-    try {
-      const data = await getJson<{ strip?: KpiResult[] }>("/api/kpi/strip");
-      return data.strip ?? [];
-    } catch {
-      return [];
-    }
+    const data = await getJson<{ strip?: KpiResult[] }>("/api/kpi/strip");
+    return data.strip ?? [];
   };
   sources = async () => (await api.sources()).sources;
   cameras = async () => (await api.cameras()).cameras;

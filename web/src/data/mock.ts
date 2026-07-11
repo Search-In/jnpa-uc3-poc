@@ -180,16 +180,16 @@ function pointAlong(f: number): [number, number] {
 // Static fixture tables.
 // --------------------------------------------------------------------------
 
-// Gate markers positioned at the satellite-aligned JNPT terminal berth centroids
-// (methodology + reference values from the jnpa_poc_2 config/terminals.json, which
-// fine-tuned each berth onto the developed terminal rather than open water). These
+// Gate markers positioned at the latest UC2 map gate positions (jnpa_poc_2
+// data/positions.json gate3d:<terminal>-G1, the primary gate marker per
+// terminal), kept in sync with the live seed in infra/postgres/init.sql. These
 // are DISPLAY marker coordinates only — truck movement (corridor pointAlong),
 // gate throughput/utilisation and all KPIs are unchanged.
 const GATE_DEFS = [
-  { id: "G-NSICT", name: "NSICT Gate-1", lat: 18.9527, lon: 72.9505, target_vph: 60 },
-  { id: "G-JNPCT", name: "JNPCT Gate", lat: 18.9497, lon: 72.9479, target_vph: 55 },
-  { id: "G-NSIGT", name: "NSIGT Gate", lat: 18.955, lon: 72.9525, target_vph: 50 },
-  { id: "G-BMCT", name: "BMCT (PSA) Gate", lat: 18.9386, lon: 72.9383, target_vph: 70 },
+  { id: "G-NSICT", name: "NSICT Gate-1", lat: 18.951073, lon: 72.952064, target_vph: 60 },
+  { id: "G-JNPCT", name: "JNPCT Gate", lat: 18.929294, lon: 72.952185, target_vph: 55 },
+  { id: "G-NSIGT", name: "NSIGT Gate", lat: 18.9466, lon: 72.948576, target_vph: 50 },
+  { id: "G-BMCT", name: "BMCT (PSA) Gate", lat: 18.937704, lon: 72.943475, target_vph: 70 },
 ] as const;
 
 const TRUCK_STATES = [

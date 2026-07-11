@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { Area, AreaChart, ResponsiveContainer } from "recharts";
 import { getAdapter } from "@/data";
 import type { KpiResult } from "@/lib/types";
@@ -113,7 +113,13 @@ function KpiCard({ k }: { k: KpiResult }) {
 
 export function KpiStrip({ className }: { className?: string }) {
   const { t } = useTranslation();
-  const q = useQuery({ queryKey: ["kpi-strip"], queryFn: () => getAdapter().kpiStrip() });
+  const q = useQuery({
+    queryKey: ["kpi-strip"],
+    queryFn: () => getAdapter().kpiStrip(),
+    // The simulator invalidates this key every tick; keep the last-good data on
+    // screen through a transient refetch error instead of flashing to empty.
+    placeholderData: keepPreviousData,
+  });
   const kpis = q.data ?? [];
 
   if (q.isLoading) {
@@ -123,7 +129,10 @@ export function KpiStrip({ className }: { className?: string }) {
       </div>
     );
   }
-  if (q.isError || kpis.length === 0) {
+  // Only fall back to the empty view when we genuinely have no data to show.
+  // A transient error while we still hold prior KPIs keeps the strip rendered
+  // (q.data survives the error), so a 1 Hz sim refetch can't blank it.
+  if (kpis.length === 0) {
     return <EmptyState>{t("kpi.empty")}</EmptyState>;
   }
 

@@ -1018,3 +1018,41 @@ CREATE INDEX IF NOT EXISTS idx_push_subs_fcm
     WHERE fcm_token IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_push_subs_driver
     ON jnpa.push_subscriptions (driver_id);
+
+-- ==== Cargo (migration 0013) ====
+-- Single shared cargo record for the Traffic Twin (POC-3) + Cargo Twin (POC-2).
+-- POC-3 is the common backend: /api/cargo CRUD lives here; POC-2 consumes it and
+-- keeps no backend/DB. `container_number` is the ISO-6346 follow-the-box PK.
+-- Mirrors infra/postgres/migrations/0013_cargo.sql for fresh-boot bootstraps.
+CREATE SCHEMA IF NOT EXISTS jnpa;
+SET search_path TO jnpa, public;
+CREATE OR REPLACE FUNCTION jnpa.set_updated_at()
+RETURNS trigger AS $$
+BEGIN
+    NEW.updated_at := now();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+CREATE TABLE IF NOT EXISTS jnpa.cargo (
+    container_number text PRIMARY KEY,
+    vessel_name      text,
+    customs_status   text NOT NULL DEFAULT 'PENDING'
+                     CHECK (customs_status IN ('PENDING','CLEARED','HELD','UNDER_INSPECTION')),
+    yard_block       text,
+    is_released      boolean NOT NULL DEFAULT false,
+    vehicle_number   text,
+    gate             text,
+    camera_id        text,
+    eta              timestamptz,
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    updated_at       timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cargo_customs_status ON jnpa.cargo (customs_status);
+CREATE INDEX IF NOT EXISTS idx_cargo_is_released    ON jnpa.cargo (is_released);
+CREATE INDEX IF NOT EXISTS idx_cargo_yard_block     ON jnpa.cargo (yard_block);
+CREATE INDEX IF NOT EXISTS idx_cargo_vehicle        ON jnpa.cargo (vehicle_number) WHERE vehicle_number IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_cargo_eta            ON jnpa.cargo (eta DESC NULLS LAST);
+DROP TRIGGER IF EXISTS trg_cargo_updated_at ON jnpa.cargo;
+CREATE TRIGGER trg_cargo_updated_at
+    BEFORE UPDATE ON jnpa.cargo
+    FOR EACH ROW EXECUTE FUNCTION jnpa.set_updated_at();

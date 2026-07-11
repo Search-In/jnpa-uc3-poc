@@ -45,6 +45,7 @@ from .routers import (
     anpr,
     auth as auth_router,
     carbon,
+    cargo,
     checkin,
     control,
     debug,
@@ -247,6 +248,10 @@ app.add_middleware(
     allow_credentials=_allow_origins != ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
+    # Expose pagination/correlation headers so cross-origin browser clients (the
+    # POC-2 Cargo-Twin frontend) can read them — notably X-Total-Count on
+    # GET /api/cargo. Additive; unlisted response headers are unaffected.
+    expose_headers=["X-Total-Count", "X-Correlation-ID"],
 )
 
 # Auth + RBAC + rate-limit gate. Flag-gated: pass-through unless AUTH_ENABLED=true
@@ -277,6 +282,14 @@ from fastapi.encoders import jsonable_encoder  # noqa: E402
 
 @app.exception_handler(RequestValidationError)
 async def _validation_handler(request: Request, exc: RequestValidationError):
+    # /api/cargo bodies/paths surface validation failures as 400 (not 422), the
+    # same contract as /api/fastag (bad ISO-6346, bad enum, malformed types/JSON).
+    if request.url.path.startswith("/api/cargo"):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "validation_error",
+                     "detail": jsonable_encoder(exc.errors())},
+        )
     if request.url.path.startswith("/api/fastag/"):
         cid = request.headers.get("X-Correlation-ID")
         return JSONResponse(
@@ -317,6 +330,11 @@ app.include_router(violations.router)
 # router: auth+validation at the gateway, then client -> mapper -> FastagService
 # (the single orchestration point). See gateway/routers/fastag.py.
 app.include_router(fastag.router)
+# Cargo CRUD — the single shared cargo record on RDS. POC-3 is the common backend
+# for both the Traffic Twin (POC-3) and the Cargo Twin (POC-2); POC-2 consumes
+# /api/cargo directly and keeps no backend/DB. Thin router → services.cargo
+# (CargoService → raw-SQL CargoRepository). See gateway/routers/cargo.py.
+app.include_router(cargo.router)
 app.include_router(scenario_ext.router)
 # Appendix-C capability services (Empty-Container, Carbon, Gate-Data/Auto-LEO,
 # Identity/face-recognition, Parking) — each proxies its upstream and degrades

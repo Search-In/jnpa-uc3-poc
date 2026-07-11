@@ -993,3 +993,28 @@ CREATE TRIGGER trg_geofence_events_event_type
     BEFORE INSERT OR UPDATE ON jnpa.geofence_events
     FOR EACH ROW EXECUTE FUNCTION jnpa.geofence_events_default_event_type();
 ALTER TABLE jnpa.geofence_events ALTER COLUMN event_type SET NOT NULL;
+
+-- ==== driver push registrations (migration 0011) ====
+-- Durable home for the driver-notification transports: the WebPush subscription
+-- (webpush jsonb) and the Firebase FCM device token (fcm_token). Keyed on the
+-- same device_id as jnpa.device_bindings. Additive only. The gateway also
+-- self-provisions this at runtime (gateway/routers/push.py::_ensure), but seeding
+-- it here means the table exists on a fresh boot BEFORE the first read path runs
+-- (resolve_device / token lookup), which would otherwise error on an empty DB.
+CREATE SCHEMA IF NOT EXISTS jnpa;
+SET search_path TO jnpa, public;
+CREATE TABLE IF NOT EXISTS jnpa.push_subscriptions (
+    device_id    text PRIMARY KEY,
+    driver_id    text,
+    vehicle_id   text,
+    webpush      jsonb,
+    fcm_token    text,
+    platform     text NOT NULL DEFAULT 'web',
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    updated_at   timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_push_subs_fcm
+    ON jnpa.push_subscriptions (fcm_token)
+    WHERE fcm_token IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_push_subs_driver
+    ON jnpa.push_subscriptions (driver_id);

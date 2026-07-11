@@ -4,8 +4,11 @@
 
 # Firebase Admin service-account keys (never commit — load via
 # FIREBASE_SERVICE_ACCOUNT_PATH / GOOGLE_APPLICATION_CREDENTIALS instead).
+# Keep the `secrets/` dir tracked (it is the default gateway credential mount
+# source) but ignore everything inside it except the placeholder README.
 *firebase-adminsdk*.json
-secrets/
+secrets/*
+!secrets/README.md
 gateway/secrets/
 mobile-pwa/.env
 mobile-pwa/.env.local

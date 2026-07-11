@@ -39,7 +39,6 @@ export function TasWidget() {
   const q = useQuery({
     queryKey: ["tas-slots", GATE],
     queryFn: () => getAdapter().tasSlots(GATE),
-    refetchInterval: 5000,
   });
   const slots = q.data ?? [];
   const active = slots.filter((s) => s.status === "BOOKED").length;

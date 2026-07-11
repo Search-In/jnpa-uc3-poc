@@ -218,40 +218,6 @@ export const api = {
       body: JSON.stringify({ vehicle_id: vehicleId }),
     }),
 
-  // --- OTP login + device binding (Track 5 security) ---
-  otpRequest: (mobile: string, deviceId: string) =>
-    http<{ sent: boolean; expires_in: number; dev_otp?: string }>("/api/auth/otp/request", {
-      method: "POST",
-      body: JSON.stringify({ mobile, device_id: deviceId }),
-    }),
-  otpVerify: (mobile: string, otp: string, deviceId: string) =>
-    http<{ verified: boolean; access_token: string; driver_id: string; role: string }>(
-      "/api/auth/otp/verify",
-      { method: "POST", body: JSON.stringify({ mobile, otp, device_id: deviceId }) },
-    ),
-  otpRefresh: (deviceId: string) =>
-    http<{ access_token: string; expires_in: number }>("/api/auth/otp/refresh", {
-      method: "POST",
-      body: JSON.stringify({ device_id: deviceId }),
-    }),
-  otpLogout: (deviceId: string) =>
-    http<{ logged_out: boolean }>("/api/auth/otp/logout", {
-      method: "POST",
-      body: JSON.stringify({ device_id: deviceId }),
-    }),
-  sessionStatus: (deviceId: string) =>
-    http<{ bound: boolean; active?: boolean; driver_id?: string; mobile?: string }>(
-      `/api/auth/otp/session/${encodeURIComponent(deviceId)}`,
-    ),
-  // Aggregate driver intelligence (profile + DL + violations) for the Profile screen.
-  driverIntel: (key: string) =>
-    http<{
-      driver: Record<string, any> | null;
-      dl_history: Record<string, any>[];
-      vehicle_no: string | null;
-      violations: Record<string, any>[];
-    }>(`/api/vahan/driver-intel/${encodeURIComponent(key)}`),
-
   // --- Geo-fence (driver zone awareness + alerts) ---
   // Active enforced zones (from jnpa.geofence_zones).
   geoZones: () =>
@@ -337,17 +303,4 @@ export const api = {
         }),
       },
     ),
-
-  // --- Firebase Phone-Auth login: exchange a verified ID token for a DRIVER JWT ---
-  firebaseVerify: (idToken: string, deviceId: string) =>
-    http<{
-      verified: boolean;
-      access_token?: string;
-      device_id: string;
-      driver_id?: string;
-      provider?: string;
-    }>("/api/auth/otp/firebase-verify", {
-      method: "POST",
-      body: JSON.stringify({ id_token: idToken, device_id: deviceId }),
-    }),
 };

@@ -30,6 +30,7 @@ import {
   type Tone,
 } from "@/components/ui/dtccc";
 import { useSocket } from "@/hooks/SocketContext";
+import { useRefresh } from "@/lib/refresh";
 import { severityColour } from "@/lib/palette";
 import { MAP_TOKENS, STATUS } from "@/lib/tokens";
 import { useClickOutside } from "@/hooks/useClickOutside";
@@ -98,39 +99,38 @@ export default function LiveOperations() {
   const gatesQ = useQuery({
     queryKey: ["gates"],
     queryFn: () => getAdapter().gates(),
-    refetchInterval: 10_000,
   });
   const snapsQ = useQuery({
     queryKey: ["snapshots"],
     queryFn: () => getAdapter().trafficSnapshots(),
-    refetchInterval: 8_000,
   });
   const zonesQ = useQuery({ queryKey: ["zones"], queryFn: () => getAdapter().zones() });
   const trucksQ = useQuery({
     queryKey: ["trucks", "live-map"],
     queryFn: () => getAdapter().trucks(undefined, 500),
-    refetchInterval: 5_000,
   });
   const queuedQ = useQuery({
     queryKey: ["trucks", "AT_GATE_QUEUE"],
     queryFn: () => getAdapter().trucks("AT_GATE_QUEUE", 500),
-    refetchInterval: 6_000,
   });
   const parkingQ = useQuery({
     queryKey: ["parking-availability"],
     queryFn: () => getAdapter().parkingAvailability(),
-    refetchInterval: 10_000,
   });
   // Prediction carries a decision_path → surfaced as a LIVE/SYNTHETIC badge.
   const predictQ = useQuery({
     queryKey: ["traffic-predict"],
     queryFn: () => getAdapter().trafficPredict(),
-    refetchInterval: 15_000,
   });
 
-  // --- WebSocket → cache bridge (real-time primary) ------------------------
+  // --- WebSocket → cache bridge (real-time, opt-in) ------------------------
+  // Live push updates re-fetch the map/traffic caches — but ONLY while the user
+  // has Auto-Refresh enabled. With Auto-Refresh Off the socket stays connected
+  // for critical-alert notifications, yet never forces a data refresh, so an
+  // operator can inspect a frozen snapshot without it moving underneath them.
   const qc = useQueryClient();
   const { status: wsStatus, subscribe } = useSocket();
+  const { autoRefreshOn } = useRefresh();
   const lastInvalidatedRef = useRef<Record<string, number>>({});
   const invalidateThrottled = useCallback(
     (key: unknown[], tag: string) => {
@@ -142,6 +142,7 @@ export default function LiveOperations() {
     [qc],
   );
   useEffect(() => {
+    if (!autoRefreshOn) return;
     const unsub = subscribe((frame) => {
       if (frame.type === "truck_position") {
         invalidateThrottled(["trucks"], "trucks");
@@ -150,7 +151,7 @@ export default function LiveOperations() {
       }
     });
     return unsub;
-  }, [subscribe, invalidateThrottled]);
+  }, [subscribe, invalidateThrottled, autoRefreshOn]);
 
   const lastUpdated = Math.max(
     trucksQ.dataUpdatedAt || 0,

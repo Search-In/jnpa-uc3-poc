@@ -44,18 +44,54 @@ async function wireFcmForeground(): Promise<void> {
 // gateway. Independent of WebPush — runs whenever Firebase is configured and the
 // user has granted notification permission. Returns true if a token registered.
 export async function enableFcm(deviceId: string): Promise<boolean> {
-  if (!isFcmConfigured() || !("serviceWorker" in navigator)) return false;
-  if (Notification.permission !== "granted") return false;
+  console.log("[fcm] enableFcm entered", { deviceId });
+  if (!isFcmConfigured() || !("serviceWorker" in navigator)) {
+    console.warn("[fcm] aborting: not configured or no SW support", {
+      configured: isFcmConfigured(),
+      serviceWorker: "serviceWorker" in navigator,
+    });
+    return false;
+  }
+
+  // enableFcm runs right after pairing — BEFORE the user has tapped "Enable
+  // alerts" — so notification permission is almost always still "default" at this
+  // point. getToken() hard-requires "granted", so request it here instead of
+  // silently bailing (the previous `!== "granted"` early return was why
+  // register-device was never called). Called synchronously inside the click
+  // handler's microtask, so the prompt still counts as user-initiated.
+  let permission = Notification.permission;
+  console.log("[fcm] permission (initial):", permission);
+  if (permission === "default") {
+    permission = await Notification.requestPermission();
+    console.log("[fcm] permission (after request):", permission);
+  }
+  if (permission !== "granted") {
+    console.warn("[fcm] aborting: notification permission not granted:", permission);
+    return false;
+  }
+
   try {
+    console.log("[fcm] awaiting serviceWorker.ready…");
     const reg = await navigator.serviceWorker.ready;
+    console.log("[fcm] service worker ready, scope:", reg?.scope);
+
+    console.log("[fcm] getToken start");
     const token = await getFcmToken(reg);
-    if (!token) return false;
+    if (!token) {
+      console.warn("[fcm] aborting: getFcmToken returned no token");
+      return false;
+    }
+    console.log("[fcm] getToken success:", `${token.slice(0, 12)}…(${token.length} chars)`);
+
     const plate = getPairing()?.plate ?? undefined;
-    await api.registerDevice(deviceId, token, { platform: "web", vehicleId: plate });
+    console.log("[fcm] register-device request", { deviceId, platform: "web", vehicleId: plate });
+    const res = await api.registerDevice(deviceId, token, { platform: "web", vehicleId: plate });
+    console.log("[fcm] register-device response:", res);
+
     await wireFcmForeground();
     return true;
   } catch (err) {
-    console.warn("fcm enable failed", err);
+    console.error("[fcm] enable failed", err);
     return false;
   }
 }

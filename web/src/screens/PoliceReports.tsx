@@ -131,7 +131,6 @@ export default function PoliceReports() {
   const q = useQuery({
     queryKey: ["police", filters],
     queryFn: () => getAdapter().policeReport(filters),
-    refetchInterval: 10_000,
   });
   const customsQ = useQuery({
     queryKey: ["customs-history"],

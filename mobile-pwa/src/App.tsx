@@ -194,7 +194,7 @@ export default function App() {
           return;
         }
         // In development the gateway typically runs with auth disabled (no token
-        // needed), so proceed rather than block the local demo.
+        // needed), so proceed rather than block local development.
         if (import.meta.env.DEV) {
           if (alive) setBoot("ready");
           return;

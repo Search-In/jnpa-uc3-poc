@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { getAdapter } from "@/data";
 import type { Alert, AutoLeoResult } from "@/lib/types";
 import { CollapsibleCard } from "@/components/ui/CollapsibleCard";
+import { Pagination, usePagination } from "@/components/ui/Pagination";
 import { Badge } from "@/components/ui/badge";
 import { StatusDot, Spinner, EmptyState } from "@/components/ui/misc";
 import { STATUS } from "@/lib/tokens";
@@ -107,6 +108,8 @@ export function AutoLeoPanel() {
   // Single, shared selection — derived from the same store that drives the map.
   const focus = useAlertFocus();
   const rows = queueQ.data ?? [];
+  // 10-per-page client-side paging; page index survives refreshes (see usePagination).
+  const pg = usePagination(rows, 10);
 
   return (
     <CollapsibleCard
@@ -114,7 +117,7 @@ export function AutoLeoPanel() {
       className="flex h-full flex-col"
       title={t("panels.leo.title")}
       subtitle={t("panels.leo.subtitle")}
-      bodyClassName="flex-1"
+      bodyClassName="flex flex-1 flex-col"
     >
       {queueQ.isLoading ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -123,17 +126,29 @@ export function AutoLeoPanel() {
       ) : rows.length === 0 ? (
         <EmptyState>{t("panels.leo.empty")}</EmptyState>
       ) : (
-        <div className="rounded-md border border-border">
-          {rows.map((r) => (
-            <LeoRow
-              key={r.container_no}
-              row={r}
-              selected={focus.alert?.id === leoFocusId(r.container_no)}
-              onSelect={() =>
-                focusOnMap({ id: leoFocusId(r.container_no), lat: r.lat, lon: r.lon })
-              }
-            />
-          ))}
+        // Fixed-height list + pinned pagination: the panel height never changes
+        // as pages turn, so the rest of the dashboard row stays put.
+        <div className="flex flex-1 flex-col">
+          <div className="min-h-[18rem] flex-1 overflow-y-auto rounded-md border border-border">
+            {pg.pageRows.map((r) => (
+              <LeoRow
+                key={r.container_no}
+                row={r}
+                selected={focus.alert?.id === leoFocusId(r.container_no)}
+                onSelect={() =>
+                  focusOnMap({ id: leoFocusId(r.container_no), lat: r.lat, lon: r.lon })
+                }
+              />
+            ))}
+          </div>
+          <Pagination
+            page={pg.page}
+            pageCount={pg.pageCount}
+            from={pg.from}
+            to={pg.to}
+            total={pg.total}
+            onPage={pg.setPage}
+          />
         </div>
       )}
     </CollapsibleCard>
@@ -149,6 +164,8 @@ export function CustomsFeedPanel() {
   // Same shared single-selection store as the queue panel + the map.
   const focus = useAlertFocus();
   const flags = flagsQ.data ?? [];
+  // 10-per-page client-side paging; page index survives refreshes (see usePagination).
+  const pg = usePagination(flags, 10);
 
   return (
     <CollapsibleCard
@@ -156,65 +173,78 @@ export function CustomsFeedPanel() {
       className="flex h-full flex-col"
       title={t("panels.leo.customsTitle")}
       subtitle={t("panels.leo.customsSubtitle")}
-      bodyClassName="flex-1"
+      bodyClassName="flex flex-1 flex-col"
     >
-      <div className="rounded-md border border-border">
-        {flagsQ.isLoading ? (
-          <div className="flex items-center gap-2 p-3 text-sm text-muted-foreground">
-            <Spinner /> {t("common.loading")}
-          </div>
-        ) : flags.length === 0 ? (
+      {flagsQ.isLoading ? (
+        <div className="flex items-center gap-2 rounded-md border border-border p-3 text-sm text-muted-foreground">
+          <Spinner /> {t("common.loading")}
+        </div>
+      ) : flags.length === 0 ? (
+        <div className="rounded-md border border-border">
           <EmptyState>{t("panels.leo.customsEmpty")}</EmptyState>
-        ) : (
-          <ul className="divide-y divide-border/50">
-            {flags.map((a) => {
-              const lat = a.payload?.lat as number | undefined;
-              const lon = a.payload?.lon as number | undefined;
-              const focusable = typeof lat === "number" && typeof lon === "number";
-              return (
-                <li
-                  key={a.id}
-                  role={focusable ? "button" : undefined}
-                  tabIndex={focusable ? 0 : undefined}
-                  onClick={focusable ? () => focusOnMap({ id: a.id, alert: a }) : undefined}
-                  onKeyDown={
-                    focusable
-                      ? (e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            focusOnMap({ id: a.id, alert: a });
+        </div>
+      ) : (
+        // Fixed-height list + pinned pagination — panel height stays constant.
+        <div className="flex flex-1 flex-col">
+          <div className="min-h-[18rem] flex-1 overflow-y-auto rounded-md border border-border">
+            <ul className="divide-y divide-border/50">
+              {pg.pageRows.map((a) => {
+                const lat = a.payload?.lat as number | undefined;
+                const lon = a.payload?.lon as number | undefined;
+                const focusable = typeof lat === "number" && typeof lon === "number";
+                return (
+                  <li
+                    key={a.id}
+                    role={focusable ? "button" : undefined}
+                    tabIndex={focusable ? 0 : undefined}
+                    onClick={focusable ? () => focusOnMap({ id: a.id, alert: a }) : undefined}
+                    onKeyDown={
+                      focusable
+                        ? (e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              focusOnMap({ id: a.id, alert: a });
+                            }
                           }
-                        }
-                      : undefined
-                  }
-                  className={`flex items-center justify-between gap-2 px-3 py-2 ${
-                    focusable ? ROW_BASE : ""
-                  } ${focus.alert?.id === a.id ? SELECTED_ITEM : ""}`}
-                >
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <Badge colour={STATUS.warning}>{a.kind}</Badge>
-                      <span className="truncate font-mono text-[11px]">
-                        {(a.payload?.container_no as string) ?? a.plate ?? "—"}
-                      </span>
-                    </div>
-                    <div className="mt-0.5 flex flex-wrap gap-1">
-                      {((a.payload?.customs_flags as string[]) ?? []).map((f) => (
-                        <span key={f} className="font-mono text-[10px] text-muted-foreground">
-                          {f}
+                        : undefined
+                    }
+                    className={`flex items-center justify-between gap-2 px-3 py-2 ${
+                      focusable ? ROW_BASE : ""
+                    } ${focus.alert?.id === a.id ? SELECTED_ITEM : ""}`}
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <Badge colour={STATUS.warning}>{a.kind}</Badge>
+                        <span className="truncate font-mono text-[11px]">
+                          {(a.payload?.container_no as string) ?? a.plate ?? "—"}
                         </span>
-                      ))}
+                      </div>
+                      <div className="mt-0.5 flex flex-wrap gap-1">
+                        {((a.payload?.customs_flags as string[]) ?? []).map((f) => (
+                          <span key={f} className="font-mono text-[10px] text-muted-foreground">
+                            {f}
+                          </span>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                  <span className="shrink-0 text-[10px] text-muted-foreground">
-                    {relativeAge(a.ts)}
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </div>
+                    <span className="shrink-0 text-[10px] text-muted-foreground">
+                      {relativeAge(a.ts)}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+          <Pagination
+            page={pg.page}
+            pageCount={pg.pageCount}
+            from={pg.from}
+            to={pg.to}
+            total={pg.total}
+            onPage={pg.setPage}
+          />
+        </div>
+      )}
     </CollapsibleCard>
   );
 }

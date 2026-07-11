@@ -28,7 +28,6 @@ export default function DriverAdvisory() {
   const queued = useQuery({
     queryKey: ["trucks", "AT_GATE_QUEUE", "advisory"],
     queryFn: () => getAdapter().trucks("AT_GATE_QUEUE", 500),
-    refetchInterval: 6000,
   });
 
   const devices = queued.data ?? [];

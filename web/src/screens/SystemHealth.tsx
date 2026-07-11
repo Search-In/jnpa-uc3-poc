@@ -99,23 +99,19 @@ export default function SystemHealth() {
   const sourcesQ = useQuery({
     queryKey: ["sources"],
     queryFn: () => getAdapter().sources(),
-    refetchInterval: 5000,
   });
   const camerasQ = useQuery({
     queryKey: ["cameras"],
     queryFn: () => getAdapter().cameras(),
-    refetchInterval: 5000,
   });
   const fastagQ = useQuery({
     queryKey: ["fastag-health"],
     queryFn: () => getAdapter().fastagHealth(),
-    refetchInterval: 10000,
     retry: false,
   });
   const gatewayQ = useQuery({
     queryKey: ["gateway-health"],
     queryFn: () => api.health(),
-    refetchInterval: 5000,
     retry: false,
   });
   const [drawer, setDrawer] = useState<{ title: string; api?: string; source?: string } | null>(
@@ -453,7 +449,6 @@ function LogDrawer({
     queryKey: ["decisions", drawer?.api],
     queryFn: () => getAdapter().decisions(drawer?.api, 200),
     enabled: !!drawer,
-    refetchInterval: drawer ? 4000 : false,
   });
   const rows: Decision[] = (q.data ?? []).filter(
     (d) => !drawer?.source || !d.key || d.key === drawer.source || d.api === drawer.api,

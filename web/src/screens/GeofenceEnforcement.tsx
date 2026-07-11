@@ -83,7 +83,6 @@ function InsideTab() {
   const q = useQuery({
     queryKey: ["geo-inside"],
     queryFn: () => api.geoVehiclesInZones(),
-    refetchInterval: 8000,
   });
   const rows = q.data?.vehicles ?? [];
   return (

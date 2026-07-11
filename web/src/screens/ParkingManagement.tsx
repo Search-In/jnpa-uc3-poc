@@ -59,12 +59,10 @@ export default function ParkingManagement() {
   const sumQ = useQuery({
     queryKey: ["parking-summary-mgmt"],
     queryFn: () => api.parkingSummary(),
-    refetchInterval: 10000,
   });
   const availQ = useQuery({
     queryKey: ["parking-avail"],
     queryFn: () => api.parkingAvailability(),
-    refetchInterval: 10000,
   });
   const histQ = useQuery({ queryKey: ["parking-hist"], queryFn: () => api.parkingHistory(200) });
   const violQ = useQuery({ queryKey: ["parking-viol"], queryFn: () => api.parkingViolations(200) });

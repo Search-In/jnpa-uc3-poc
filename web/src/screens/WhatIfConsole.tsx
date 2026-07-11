@@ -104,7 +104,6 @@ export default function WhatIfConsole() {
     queryKey: ["timeline", activeHandle],
     queryFn: () => getAdapter().scenarioTimeline(activeHandle!),
     enabled: !!activeHandle,
-    refetchInterval: 4000,
   });
 
   const steps: ScenarioStep[] = useMemo(() => {
@@ -135,7 +134,6 @@ export default function WhatIfConsole() {
   const handlesQ = useQuery({
     queryKey: ["scenario-handles"],
     queryFn: () => api.scenarioHandles(50),
-    refetchInterval: 15000,
   });
   function previewHandle(h: { handle_id: string; name: string }) {
     tourStore.stopScenario();

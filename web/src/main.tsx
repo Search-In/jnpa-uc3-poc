@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
 import { SocketProvider } from "./hooks/SocketContext";
 import { ScenarioProvider } from "./hooks/ScenarioContext";
+import { RefreshProvider } from "./lib/refresh";
 
 // --- Design-system + map foundation (load BEFORE app styles) ---
 // Calcite light design system. defineCustomElements() registers the Calcite web
@@ -38,11 +39,14 @@ document.documentElement.classList.add("calcite-mode-light");
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      // Live control room: keep data fresh but don't hammer the gateway. Most
-      // screens also receive push updates over the WebSocket.
-      refetchInterval: 5_000,
+      // Enterprise dashboard: refresh is EXPLICIT. No background polling by
+      // default — data moves only on a manual Refresh or when the user opts into
+      // Auto-Refresh (see RefreshProvider / AutoRefreshControl). We also suppress
+      // the implicit "refetch on focus/reconnect" triggers so inspecting or
+      // comparing values never gets clobbered by a stray refetch.
       refetchOnWindowFocus: false,
-      staleTime: 2_000,
+      refetchOnReconnect: false,
+      staleTime: 30_000,
       retry: 1,
     },
   },
@@ -51,13 +55,15 @@ const queryClient = new QueryClient({
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <ScenarioProvider>
-          <SocketProvider>
-            <App />
-          </SocketProvider>
-        </ScenarioProvider>
-      </BrowserRouter>
+      <RefreshProvider>
+        <BrowserRouter>
+          <ScenarioProvider>
+            <SocketProvider>
+              <App />
+            </SocketProvider>
+          </ScenarioProvider>
+        </BrowserRouter>
+      </RefreshProvider>
     </QueryClientProvider>
   </React.StrictMode>,
 );

@@ -63,8 +63,14 @@
     "etaMin": "{{n}} min",
     "note": "UC-III gate-crossing facts are the real Auto-LEO capture; UC-II, the cross-twin event and the derived UC-III steps are reconstructed deterministically from the container id and the cross-twin release contract (SIMULATED cross-twin transport).",
     "meta": {
-      "container": "Container", "correlation": "Correlation", "caseId": "Case ID",
-      "vehicle": "Vehicle", "gate": "Gate", "eta": "ETA", "topic": "Topic", "delivery": "Delivery"
+      "container": "Container",
+      "correlation": "Correlation",
+      "caseId": "Case ID",
+      "vehicle": "Vehicle",
+      "gate": "Gate",
+      "eta": "ETA",
+      "topic": "Topic",
+      "delivery": "Delivery"
     },
     "stage": {
       "vessel_discharge": "Vessel discharge",
@@ -623,5 +629,14 @@
     "roadmap": "roadmap",
     "fleetSize": "Fleet size",
     "fleetSizeAria": "Fleet size (disabled)"
+  },
+  "refresh": {
+    "auto": "Auto",
+    "autoTitle": "Auto refresh interval",
+    "off": "Off",
+    "10s": "10 sec",
+    "30s": "30 sec",
+    "1m": "1 min",
+    "5m": "5 min"
   }
 }

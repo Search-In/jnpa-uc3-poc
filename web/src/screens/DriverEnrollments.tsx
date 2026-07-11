@@ -69,7 +69,6 @@ export default function DriverEnrollments() {
   const listQ = useQuery({
     queryKey: ["enrollments"],
     queryFn: () => getAdapter().enrollments(),
-    refetchInterval: 8000,
   });
   const all = listQ.data ?? [];
 

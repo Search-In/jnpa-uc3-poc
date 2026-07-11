@@ -963,6 +963,17 @@ services:
       VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:ops@jnpa-uc3.example}
+      # Firebase Cloud Messaging (THIRD push transport, added alongside WebPush +
+      # WebSocket). The Admin-SDK service-account JSON is mounted read-only via the
+      # `volumes:` block below (host ${FIREBASE_SECRETS_DIR:-./secrets} ->
+      # /run/secrets/firebase); point FIREBASE_SERVICE_ACCOUNT_PATH at the file,
+      # e.g. /run/secrets/firebase/firebase-adminsdk.json. All blank -> FCM stays
+      # disabled and delivery falls back to WebPush/WS (demo-safe, gateway/firebase.py).
+      # GOOGLE_APPLICATION_CREDENTIALS / FIREBASE_CREDENTIALS_JSON are honoured too.
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
+      FIREBASE_SERVICE_ACCOUNT_PATH: ${FIREBASE_SERVICE_ACCOUNT_PATH:-}
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
+      FIREBASE_CREDENTIALS_JSON: ${FIREBASE_CREDENTIALS_JSON:-}
       LOG_LEVEL: ${GATEWAY_LOG_LEVEL:-INFO}
       OTEL_SERVICE_NAME: gateway
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4317}
@@ -975,6 +986,12 @@ services:
       # FASTag integration layer — imported by the /api/fastag router. Mounted
       # read-only so local edits are picked up (matches the ./gateway mount).
       - ./services:/app/services:ro
+      # Firebase Admin-SDK service-account key(s). Host dir (gitignored `secrets/`,
+      # override with FIREBASE_SECRETS_DIR) mounted read-only at /run/secrets/firebase.
+      # Drop the JSON in there and set FIREBASE_SERVICE_ACCOUNT_PATH to its container
+      # path. Absent/empty dir -> no key -> FCM stays disabled (graceful fallback);
+      # Docker auto-creates the dir so `up` never fails when no key is present.
+      - ${FIREBASE_SECRETS_DIR:-./secrets}:/run/secrets/firebase:ro
     networks:
       - jnpa
 

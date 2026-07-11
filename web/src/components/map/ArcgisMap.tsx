@@ -61,6 +61,10 @@ import { useClickOutside } from "@/hooks/useClickOutside";
 import { Scene3D } from "./scene3d/Scene3D";
 
 const DEFAULT_BASEMAP = "dark-gray-vector";
+// Soft outer road "shoulder" drawn under the corridor casing so the ribbon has a
+// graduated, anti-aliased edge (a real-road look) instead of a hard boundary.
+// Purely cosmetic; kept local alongside the other map-only colour constants.
+const CORRIDOR_SHOULDER = "rgba(6,14,24,0.28)";
 // Spotlight halo colour (CB-safe info blue, matching the guided-tour ring tone).
 const HIGHLIGHT_COLOUR = "#56B4E9";
 // Alert-focus halo colour (CB-safe orange) — distinct from the tour spotlight.
@@ -291,12 +295,41 @@ export function ArcgisMap({
       const path = roadIndex
         ? sliceBetween(roadIndex, seg.start as LngLat, seg.end as LngLat)
         : [seg.start, seg.end];
+      const geometry = new Polyline({
+        paths: [path],
+        spatialReference: WGS84,
+      });
+      // Layered road ribbon (bottom → top): a soft wide shoulder for a graduated
+      // edge, then a dark casing, then the coloured jam line. Both understrokes
+      // are purely cosmetic (no popup, no hit id), so clicks / hit-testing still
+      // resolve to the coloured segment line drawn on top of them.
       layer.add(
         new Graphic({
-          geometry: new Polyline({
-            paths: [path],
-            spatialReference: WGS84,
+          geometry,
+          symbol: new SimpleLineSymbol({
+            color: CORRIDOR_SHOULDER,
+            width: 13,
+            cap: "round",
+            join: "round",
           }),
+          attributes: { id: seg.id, shoulder: true },
+        }),
+      );
+      layer.add(
+        new Graphic({
+          geometry,
+          symbol: new SimpleLineSymbol({
+            color: MAP_TOKENS.corridorHalo,
+            width: 9,
+            cap: "round",
+            join: "round",
+          }),
+          attributes: { id: seg.id, casing: true },
+        }),
+      );
+      layer.add(
+        new Graphic({
+          geometry,
           symbol: new SimpleLineSymbol({
             color: jamColour(jf),
             width: 5,
@@ -364,8 +397,13 @@ export function ArcgisMap({
             spatialReference: WGS84,
           }),
           symbol: new SimpleFillSymbol({
-            color: hexToRgba(fill, 0.18),
-            outline: new SimpleLineSymbol({ color: fill, width: 1.5 }),
+            color: hexToRgba(fill, 0.2),
+            outline: new SimpleLineSymbol({
+              color: fill,
+              width: 2.25,
+              cap: "round",
+              join: "round",
+            }),
           }),
           attributes: { id: z.id, name: z.name, kind: z.kind },
           popupTemplate: { title: z.name, content: `Zone kind: ${z.kind}` },

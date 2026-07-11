@@ -180,11 +180,16 @@ function pointAlong(f: number): [number, number] {
 // Static fixture tables.
 // --------------------------------------------------------------------------
 
+// Gate markers positioned at the satellite-aligned JNPT terminal berth centroids
+// (methodology + reference values from the jnpa_poc_2 config/terminals.json, which
+// fine-tuned each berth onto the developed terminal rather than open water). These
+// are DISPLAY marker coordinates only — truck movement (corridor pointAlong),
+// gate throughput/utilisation and all KPIs are unchanged.
 const GATE_DEFS = [
-  { id: "G-NSICT", name: "NSICT Gate-1", lat: 18.9489, lon: 72.9492, target_vph: 60 },
-  { id: "G-JNPCT", name: "JNPCT Gate", lat: 18.9512, lon: 72.9505, target_vph: 55 },
-  { id: "G-NSIGT", name: "NSIGT Gate", lat: 18.9468, lon: 72.9528, target_vph: 50 },
-  { id: "G-BMCT", name: "BMCT (PSA) Gate", lat: 18.944, lon: 72.9555, target_vph: 70 },
+  { id: "G-NSICT", name: "NSICT Gate-1", lat: 18.9527, lon: 72.9505, target_vph: 60 },
+  { id: "G-JNPCT", name: "JNPCT Gate", lat: 18.9497, lon: 72.9479, target_vph: 55 },
+  { id: "G-NSIGT", name: "NSIGT Gate", lat: 18.955, lon: 72.9525, target_vph: 50 },
+  { id: "G-BMCT", name: "BMCT (PSA) Gate", lat: 18.9386, lon: 72.9383, target_vph: 70 },
 ] as const;
 
 const TRUCK_STATES = [
@@ -451,40 +456,40 @@ const PARKING_DEFS = [
     facility_id: "PK-NSICT-A",
     name: "NSICT Pre-Gate Apron A",
     gate_id: "G-NSICT",
-    lat: 18.9482,
-    lon: 72.9498,
+    lat: 18.952,
+    lon: 72.9511,
     capacity: 120,
   },
   {
     facility_id: "PK-JNPCT-B",
     name: "JNPCT Holding Yard B",
     gate_id: "G-JNPCT",
-    lat: 18.9505,
-    lon: 72.951,
+    lat: 18.949,
+    lon: 72.9484,
     capacity: 90,
   },
   {
     facility_id: "PK-NSIGT-C",
     name: "NSIGT Buffer C",
     gate_id: "G-NSIGT",
-    lat: 18.9462,
-    lon: 72.9532,
+    lat: 18.9544,
+    lon: 72.9529,
     capacity: 60,
   },
   {
     facility_id: "PK-BMCT-D",
     name: "BMCT Truck Park D",
     gate_id: "G-BMCT",
-    lat: 18.9435,
-    lon: 72.956,
+    lat: 18.9381,
+    lon: 72.9388,
     capacity: 150,
   },
   {
     facility_id: "PK-CENTRAL",
     name: "Central Multimodal Yard",
     gate_id: null,
-    lat: 18.945,
-    lon: 72.953,
+    lat: 18.9435,
+    lon: 72.9505,
     capacity: 200,
   },
   {

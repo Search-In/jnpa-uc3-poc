@@ -326,7 +326,8 @@ a {
   border: none;
   margin-bottom: 0;
 }
-.minimap .maplibregl-ctrl-attrib {
+/* Keep the ArcGIS attribution unobtrusive on the small driver map. */
+.minimap .esri-attribution {
   font-size: 9px;
 }
 

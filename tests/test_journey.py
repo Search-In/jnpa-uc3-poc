@@ -40,11 +40,13 @@ assert is_valid_container_no(CN) and not is_valid_container_no(BAD_CN)
 
 _NOW = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
 
-# The nine lifecycle stages the Follow-the-Box UI depends on (response contract).
+# The eleven lifecycle stages the Follow-the-Box UI depends on (response contract).
+# gate_crossing (=gate entry) is now followed by the LIVE parking_assignment and
+# gate_exit stages before eta_tracking (UC-3 audit R3 — full Follow-the-Box).
 _STAGE_KEYS = [
     "vessel_discharge", "yard_movement", "dpd_release", "cross_twin_published",
     "cross_twin_received", "truck_assignment", "anpr_detection", "gate_crossing",
-    "eta_tracking",
+    "parking_assignment", "gate_exit", "eta_tracking",
 ]
 
 
@@ -182,3 +184,43 @@ def test_invalid_iso_reports_not_found(client_with):
         j = c.get(f"/api/journey/container/{BAD_CN}").json()
     assert j["iso6346_valid"] is False
     assert j["found"] is False
+
+
+def test_journey_includes_parking_and_exit_stages(monkeypatch, client_with):
+    """UC-3 R3: the LIVE parking-assignment + gate-exit join populates the two new
+    stages and flips their journey_status steps to done."""
+    from gateway.routers import journey as journey_mod
+
+    async def fake_fetch(_state, _plate):
+        parking = {"facility_id": "P-NSICT", "slot_id": 42, "entry_time": _NOW,
+                   "exit_time": None, "status": "ACTIVE"}
+        exit_row = {"ts": _NOW, "gate_id": "GATE-4"}
+        return parking, exit_row
+
+    monkeypatch.setattr(journey_mod, "_fetch_parking_exit", fake_fetch)
+    with client_with([_cargo_row()]) as c:
+        j = c.get(f"/api/journey/container/{CN}").json()
+
+    stages = {s["stage"]: s for s in j["stages"]}
+    assert "parking_assignment" in stages and "gate_exit" in stages
+    assert stages["parking_assignment"]["facts"]["facility_id"] == "P-NSICT"
+    assert stages["parking_assignment"]["facts"]["slot_id"] == 42
+    assert stages["gate_exit"]["facts"]["gate"] == "GATE-4"
+    # Both new stages are LIVE-sourced (DB join), not simulated.
+    assert stages["parking_assignment"]["source"] == "live"
+    assert stages["gate_exit"]["source"] == "live"
+    done = {s["key"]: s["done"] for s in j["journey_status"]}
+    assert done["parking_assignment"] is True
+    assert done["gate_exit"] is True
+
+
+def test_journey_parking_exit_absent_when_no_records(client_with):
+    """No parking/gate-out on record (dummy DSN unreachable) -> stages present but
+    not done, and the box's journey still renders end-to-end."""
+    with client_with([_cargo_row()]) as c:
+        j = c.get(f"/api/journey/container/{CN}").json()
+    done = {s["key"]: s["done"] for s in j["journey_status"]}
+    assert done["parking_assignment"] is False
+    assert done["gate_exit"] is False
+    # The stages are still in the ordered timeline (UI shows an "awaiting" state).
+    assert [s["stage"] for s in j["stages"]] == _STAGE_KEYS

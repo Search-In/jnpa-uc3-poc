@@ -20,7 +20,14 @@ import type {
   ParkingFacility,
   ParkingSummary,
 } from "@/lib/types";
-import type { CongestionMetrics, ContainerJourney, DataAdapter, DataMode, OcrEval } from "./types";
+import type {
+  CarbonEmissionRecord,
+  CongestionMetrics,
+  ContainerJourney,
+  DataAdapter,
+  DataMode,
+  OcrEval,
+} from "./types";
 
 // Attach the bearer token when a session exists (auth-enabled builds), mirroring
 // lib/api.ts. When auth is disabled there is no token and the header is omitted.
@@ -116,6 +123,12 @@ export class LiveAdapter implements DataAdapter {
   emptyTrtKpi = async (): Promise<KpiResult> =>
     (await getJson<{ kpi: KpiResult }>("/api/empty/kpi")).kpi;
   carbonRollup = (): Promise<CarbonRollup> => getJson<CarbonRollup>("/api/carbon/rollup");
+  carbonHistory = async (vehicleId?: string, limit = 50): Promise<CarbonEmissionRecord[]> => {
+    const path = vehicleId
+      ? `/api/carbon/history/${encodeURIComponent(vehicleId)}?limit=${limit}`
+      : `/api/carbon/history?limit=${limit}`;
+    return (await getJson<{ records: CarbonEmissionRecord[] }>(path)).records ?? [];
+  };
   leoQueue = async (): Promise<AutoLeoResult[]> =>
     (await getJson<{ results: AutoLeoResult[] }>("/api/gate-data/leo/queue")).results;
   customsFlags = async (): Promise<Alert[]> =>

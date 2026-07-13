@@ -93,6 +93,47 @@ def _eta_iso(eta: Optional[datetime]) -> Optional[str]:
     return eta.isoformat()
 
 
+def _iso(value: Any) -> Optional[str]:
+    """ISO-format a datetime facts value (leave anything else as-is)."""
+    return value.isoformat() if isinstance(value, datetime) else value
+
+
+async def _fetch_parking_exit(state: GatewayState, plate: Optional[str]):
+    """Best-effort join of the LIVE parking + gate-exit records for a plate.
+
+    Uses the cargo's haulage plate (``jnpa.cargo.vehicle_number``) as the join key
+    into the existing ``jnpa.parking_transactions`` (vehicle_id) and
+    ``jnpa.gate_events`` (plate, event_type='GATE_OUT') — no new tables, no data
+    duplication. Returns ``(parking_row | None, exit_row | None)``; both None when
+    there is no DB or no plate."""
+    dsn = state.cfg.postgres_dsn
+    if not dsn or not plate:
+        return None, None
+    from jnpa_shared.db import fetch_one
+
+    parking = None
+    exit_row = None
+    try:
+        parking = await fetch_one(
+            """SELECT facility_id, slot_id, entry_time, exit_time, status
+               FROM jnpa.parking_transactions
+               WHERE vehicle_id = :p ORDER BY entry_time DESC LIMIT 1""",
+            {"p": plate}, dsn=dsn,
+        )
+    except Exception as exc:  # pragma: no cover - infra-timing dependent
+        log.debug("journey_parking_lookup_failed", plate=plate, error=str(exc))
+    try:
+        exit_row = await fetch_one(
+            """SELECT ts, gate_id FROM jnpa.gate_events
+               WHERE plate = :p AND event_type = 'GATE_OUT'
+               ORDER BY ts DESC LIMIT 1""",
+            {"p": plate}, dsn=dsn,
+        )
+    except Exception as exc:  # pragma: no cover - infra-timing dependent
+        log.debug("journey_exit_lookup_failed", plate=plate, error=str(exc))
+    return parking, exit_row
+
+
 def _stage(cn: str, corr: str, *, twin: str, stage: str, source: str,
            source_system: str, hours: float, title: str, detail: str,
            facts: Dict[str, Any]) -> Dict[str, Any]:
@@ -151,13 +192,31 @@ def _uc2_stages(cn: str, corr: str, cargo: Dict[str, Any]) -> List[Dict[str, Any
 
 
 def _uc3_stages(cn: str, corr: str, cargo: Dict[str, Any],
-                gate_record: Optional[dict]) -> List[Dict[str, Any]]:
+                gate_record: Optional[dict],
+                parking_row: Optional[dict] = None,
+                exit_row: Optional[dict] = None) -> List[Dict[str, Any]]:
     plate = cargo.get("vehicle_number")
     gate = cargo.get("gate")
     camera = cargo.get("camera_id")
     released = bool(cargo.get("is_released"))
     eta_min = _eta_minutes(cargo.get("eta"))
     eta_iso = _eta_iso(cargo.get("eta"))
+
+    # LIVE parking-assignment facts (jnpa.parking_transactions), joined by plate.
+    parked = bool(parking_row)
+    p = dict(parking_row) if parking_row else {}
+    parking_facts: Dict[str, Any] = {
+        "facility_id": p.get("facility_id"),
+        "slot_id": p.get("slot_id"),
+        "status": p.get("status"),
+        "entry_time": _iso(p.get("entry_time")),
+    }
+    # LIVE gate-exit facts (jnpa.gate_events, event_type='GATE_OUT'), joined by plate.
+    exited = bool(exit_row)
+    e = dict(exit_row) if exit_row else {}
+    exit_gate = e.get("gate_id") or gate
+    exit_ts = _iso(e.get("ts"))
+    exit_facts: Dict[str, Any] = {"gate": exit_gate, "exit_time": exit_ts, "vehicle_no": plate}
 
     # Gate-crossing facts come from the REAL Auto-LEO capture when available; the
     # gate itself is the live cargo gate.
@@ -199,12 +258,25 @@ def _uc3_stages(cn: str, corr: str, cargo: Dict[str, Any],
         _stage(cn, corr, twin="UC-III", stage="gate_crossing",
                source="gate-data" if gate_from_record else "live",
                source_system="UC-III gate-data (Auto-LEO)", hours=22,
-               title="Gate crossing (Auto-LEO)",
+               title="Gate entry (Auto-LEO)",
                detail=(f"Gate {gate}: Auto-LEO {'READY' if leo_ready else 'reconciled'}."
                        if leo_ready is not None else f"Gate {gate}: gate-in reconciled."),
                facts=gate_facts),
+        _stage(cn, corr, twin="UC-III", stage="parking_assignment",
+               source="live", source_system="UC-III parking", hours=22.4,
+               title="Parking assigned",
+               detail=(f"Assigned slot {p.get('slot_id')} at {p.get('facility_id')} "
+                       f"({p.get('status')})." if parked
+                       else "No parking allocation on record for this vehicle."),
+               facts=parking_facts),
+        _stage(cn, corr, twin="UC-III", stage="gate_exit",
+               source="live", source_system="UC-III gate-data", hours=23.5,
+               title="Gate exit",
+               detail=(f"Departed the port at {exit_gate}." if exited
+                       else "Awaiting gate-out (vehicle still inside the port AoI)."),
+               facts=exit_facts),
         _stage(cn, corr, twin="UC-III", stage="eta_tracking",
-               source="live", source_system="UC-III corridor", hours=22.2,
+               source="live", source_system="UC-III corridor", hours=23.8,
                title="ETA tracking",
                detail=(f"Corridor ETA ~{eta_min} min to Karal Phata under current conditions."
                        if eta_min is not None else "Corridor ETA pending."),
@@ -221,17 +293,21 @@ _JOURNEY_STEPS = [
     ("cross_twin_received", "Transferred to UC-III"),
     ("truck_assignment", "Truck assigned"),
     ("anpr_detection", "ANPR detection"),
-    ("gate_crossing", "Gate crossing"),
+    ("gate_crossing", "Gate entry"),
+    ("parking_assignment", "Parking assigned"),
+    ("gate_exit", "Gate exit"),
     ("eta_tracking", "ETA tracking"),
 ]
 
 
-def _done_map(cargo: Dict[str, Any], gate_from_record: bool) -> Dict[str, bool]:
+def _done_map(cargo: Dict[str, Any], gate_from_record: bool,
+              parked: bool = False, exited: bool = False) -> Dict[str, bool]:
     """Which lifecycle steps are complete, derived from the LIVE cargo state.
 
     Presence in the registry means the box has been discharged and yarded; the
     release flag drives the cross-twin handoff and the downstream UC-III steps;
-    the real gate record confirms the physical gate crossing."""
+    the real gate record confirms the physical gate crossing; ``parked``/``exited``
+    are the LIVE parking-transaction and gate-out joins."""
     released = bool(cargo.get("is_released"))
     customs = cargo.get("customs_status")
     has_vehicle = bool(cargo.get("vehicle_number"))
@@ -244,6 +320,8 @@ def _done_map(cargo: Dict[str, Any], gate_from_record: bool) -> Dict[str, bool]:
         "truck_assignment": released and has_vehicle,
         "anpr_detection": gate_from_record or (released and has_vehicle),
         "gate_crossing": gate_from_record,
+        "parking_assignment": parked,
+        "gate_exit": exited,
         "eta_tracking": cargo.get("eta") is not None,
     }
 
@@ -312,9 +390,14 @@ async def container_journey(
     gate_from_record = bool(gate_record and gate_record.get("record"))
     released = bool(cargo.get("is_released"))
 
+    # LIVE parking-assignment + gate-exit, joined by the cargo's haulage plate.
+    parking_row, exit_row = await _fetch_parking_exit(state, cargo.get("vehicle_number"))
+    parked = bool(parking_row)
+    exited = bool(exit_row)
+
     stages = (_uc2_stages(cn, corr, cargo)
-              + _uc3_stages(cn, corr, cargo, gate_record))
-    done = _done_map(cargo, gate_from_record)
+              + _uc3_stages(cn, corr, cargo, gate_record, parking_row, exit_row))
+    done = _done_map(cargo, gate_from_record, parked, exited)
     journey_status = [
         {"key": k, "label": label, "done": done.get(k, False)} for k, label in _JOURNEY_STEPS
     ]

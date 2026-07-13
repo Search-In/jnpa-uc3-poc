@@ -248,10 +248,20 @@ jobs:
               docker builder prune -f || true
             done
 
-            # 2d. Start the stack. Everything is already built above, so DO NOT pass
+            # 2d. Clear any stale fixed-name containers left by a prior partial or
+            #     failed `up`. Every service pins a container_name (jnpa-web, ...),
+            #     so a leftover container whose compose labels no longer match this
+            #     project makes `up -d` try to CREATE a duplicate name — which the
+            #     daemon rejects with "container name already in use". `down` alone
+            #     can't clear it (it only removes containers carrying THIS project's
+            #     labels), so force-remove by name. Named volumes (pgdata, minio-data,
+            #     kafka-data, ...) are NOT tied to containers and persist untouched.
+            docker ps -aq --filter 'name=^/jnpa-' | xargs -r docker rm -f || true
+
+            # 2e. Start the stack. Everything is already built above, so DO NOT pass
             #     --build (that would rebuild all services in parallel and re-create
             #     the disk spike). `up -d` just creates/starts the containers.
-            ${COMPOSE} up -d
+            ${COMPOSE} up -d --remove-orphans
 
             # 3. Reclaim space again post-build (old image layers + build cache).
             docker image prune -af || true

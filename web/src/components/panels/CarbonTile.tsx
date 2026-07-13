@@ -18,6 +18,73 @@ const CLASS_COLOURS = [
   OKABE_ITO.orange,
 ] as const;
 
+function fmtTs(iso?: string): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString();
+}
+
+// Persisted per-vehicle emission ledger (jnpa.carbon_emission via
+// GET /api/carbon/history). Shows Vehicle / Distance / CO2 / Timestamp / Source —
+// factual rows only, no improvement claims.
+function CarbonLedger() {
+  const { t } = useTranslation();
+  const q = useQuery({ queryKey: ["carbon-history"], queryFn: () => getAdapter().carbonHistory() });
+  const rows = q.data ?? [];
+  if (q.isLoading) return null;
+  if (!rows.length) return null;
+  return (
+    <div>
+      <div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+        {t("panels.carbon.ledger", { defaultValue: "Recent emissions" })}
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-[11px] tabular-nums">
+          <thead>
+            <tr className="text-left text-muted-foreground">
+              <th className="py-0.5 pr-2 font-medium">
+                {t("panels.carbon.colVehicle", { defaultValue: "Vehicle" })}
+              </th>
+              <th className="py-0.5 pr-2 text-right font-medium">
+                {t("panels.carbon.colDistance", { defaultValue: "Distance" })}
+              </th>
+              <th className="py-0.5 pr-2 text-right font-medium">CO₂</th>
+              <th className="py-0.5 pr-2 font-medium">
+                {t("panels.carbon.colTime", { defaultValue: "Time" })}
+              </th>
+              <th className="py-0.5 font-medium">
+                {t("panels.carbon.colSource", { defaultValue: "Source" })}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.slice(0, 8).map((r) => (
+              <tr
+                key={r.id ?? `${r.vehicle_id}-${r.created_at}`}
+                className="border-t border-border/50"
+              >
+                <td className="py-0.5 pr-2 font-mono">{r.vehicle_id}</td>
+                <td className="py-0.5 pr-2 text-right">
+                  {r.distance_km != null ? `${r.distance_km.toFixed(1)} km` : "—"}
+                </td>
+                <td className="py-0.5 pr-2 text-right">
+                  {r.co2_kg != null ? `${r.co2_kg.toFixed(1)} kg` : "—"}
+                </td>
+                <td className="py-0.5 pr-2 text-muted-foreground">{fmtTs(r.created_at)}</td>
+                <td className="py-0.5">
+                  <span className="rounded bg-muted px-1.5 py-0.5 text-[10px]">
+                    {r.source ?? "—"}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export function CarbonTile() {
   const { t } = useTranslation();
   const q = useQuery({ queryKey: ["carbon-rollup"], queryFn: () => getAdapter().carbonRollup() });
@@ -107,6 +174,9 @@ export function CarbonTile() {
               })}
             </div>
           </div>
+
+          {/* Persisted per-vehicle emission ledger (R6 durable store). */}
+          <CarbonLedger />
         </>
       )}
     </CollapsibleCard>

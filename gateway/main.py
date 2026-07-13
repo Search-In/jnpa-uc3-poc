@@ -58,6 +58,7 @@ from .routers import (
     journey,
     kpi,
     meta,
+    notifications as notifications_router,
     otp,
     parking,
     push,
@@ -316,6 +317,9 @@ app.include_router(alerts.router)
 app.include_router(scenarios.router)
 app.include_router(kpi.router)
 app.include_router(push.router)
+# Notification-pipeline health + delivery-trail introspection (read-only). Sits
+# above the push router + the dispatcher; adds GET /api/notifications/health.
+app.include_router(notifications_router.router)
 app.include_router(geo.router)
 app.include_router(reports.router)
 # Evidence proxy — streams private-MinIO evidence objects to the browser same-origin

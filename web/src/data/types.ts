@@ -153,6 +153,21 @@ export interface ContainerJourney {
   note?: string;
 }
 
+// Per-vehicle carbon-emission ledger row (jnpa.carbon_emission via
+// GET /api/carbon/history). Persisted output of POST /api/carbon/calculate.
+export interface CarbonEmissionRecord {
+  id?: number;
+  vehicle_id: string;
+  vehicle_type?: string;
+  distance_km?: number;
+  fuel_consumed_litre?: number;
+  idle_time_minutes?: number;
+  co2_kg?: number;
+  source?: string;
+  calculation_method?: string;
+  created_at?: string;
+}
+
 export interface DataAdapter {
   readonly mode: DataMode;
 
@@ -213,6 +228,8 @@ export interface DataAdapter {
   emptyAllocations(): Promise<EmptyAllocation[]>;
   emptyTrtKpi(): Promise<KpiResult>;
   carbonRollup(): Promise<CarbonRollup>;
+  // Persisted per-vehicle emission ledger (all recent, or one vehicle's history).
+  carbonHistory(vehicleId?: string, limit?: number): Promise<CarbonEmissionRecord[]>;
   leoQueue(): Promise<AutoLeoResult[]>;
   customsFlags(): Promise<Alert[]>;
   identityGallery(): Promise<

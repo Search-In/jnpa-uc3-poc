@@ -1170,3 +1170,21 @@ CREATE TABLE IF NOT EXISTS jnpa.cargo_reefer_plans (
 );
 CREATE INDEX IF NOT EXISTS idx_cargo_reefer_plan_container ON jnpa.cargo_reefer_plans (container_number);
 CREATE INDEX IF NOT EXISTS idx_cargo_reefer_plan_created   ON jnpa.cargo_reefer_plans (id DESC);
+
+-- Migration 0020: per-vehicle carbon-emission ledger (UC-3 audit R6). Gives the
+-- previously compute-only carbon calculator a durable store; written by
+-- POST /api/carbon/calculate, read by GET /api/carbon/history[/{vehicle_id}].
+CREATE TABLE IF NOT EXISTS jnpa.carbon_emission (
+    id                  bigserial PRIMARY KEY,
+    vehicle_id          text NOT NULL,
+    vehicle_type        text,
+    distance_km         numeric,
+    fuel_consumed_litre numeric,
+    idle_time_minutes   numeric,
+    co2_kg              numeric,
+    source              text,
+    calculation_method  text,
+    created_at          timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_carbon_emission_vehicle ON jnpa.carbon_emission (vehicle_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_carbon_emission_created ON jnpa.carbon_emission (created_at DESC);

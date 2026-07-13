@@ -6,7 +6,7 @@
   "description": "JNPA UC-III driver-side ETA / re-route advisory PWA (Prompt 11) — React + Vite + TS + vite-plugin-pwa",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 3002",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && node --max-old-space-size=8192 ./node_modules/vite/bin/vite.js build",
     "preview": "vite preview --host 0.0.0.0 --port 4173",
     "typecheck": "tsc -b --noEmit",
     "lint": "eslint . --ext ts,tsx",

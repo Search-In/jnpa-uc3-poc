@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { codeToDeviceId, clearToken, setPairing } from "@/lib/device";
 import { ensureDeviceToken, api } from "@/lib/api";
-import { enableFcm } from "@/lib/pwa";
+import { enablePush } from "@/lib/pwa";
 import { IconTruck, IconChevronRight } from "@/components/icons";
 
 // Production sign-in. The driver authenticates with their assigned Vehicle ID
@@ -86,9 +86,11 @@ export default function Pairing({ onPaired }: { onPaired: (deviceId: string) => 
       }
 
       setPairing(deviceId);
-      // Register this device for FCM push the moment it signs in. Fire-and-forget:
-      // the promise keeps running even after onPaired() unmounts this screen.
-      void enableFcm(deviceId);
+      // Register this device for push the moment it signs in. enablePush does the
+      // WebPush/VAPID leg (the primary transport — populates push_subscriptions.webpush)
+      // and, if Firebase is configured, the FCM leg too. Fire-and-forget: the
+      // promise keeps running even after onPaired() unmounts this screen.
+      void enablePush(deviceId);
       onPaired(deviceId);
     } finally {
       setBusy(false);

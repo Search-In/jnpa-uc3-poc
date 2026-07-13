@@ -31,6 +31,25 @@ EVENT_STATUS_CHANGED = "cargo.status_changed"
 EVENT_GATE_MOVEMENT = "cargo.gate_movement"
 EVENT_UPDATED = "cargo.updated"
 EVENT_DELETED = "cargo.deleted"
+# Granular lifecycle topics added for the POC-2 extension (all ADDITIVE — the
+# legacy topics above still fire unchanged, so existing consumers are unaffected):
+EVENT_CUSTOMS_STATUS_CHANGED = "cargo.customs_status_changed"
+EVENT_GATE_IN = "cargo.gate_in"
+EVENT_GATE_OUT = "cargo.gate_out"
+EVENT_PENDENCY_CREATED = "cargo.pendency_created"
+EVENT_QUEUE_UPDATED = "cargo.queue_updated"
+
+# Workflow action -> resulting status. The single source of truth for the
+# TRIGGER → APPROVE / REJECT lifecycle (migration 0016).
+WORKFLOW_TRANSITIONS: dict[str, str] = {
+    "TRIGGER": "TRIGGERED",
+    "APPROVE": "APPROVED",
+    "REJECT": "REJECTED",
+}
+
+# Nominal slots per yard block letter-zone — a POC capacity constant used only to
+# derive a 0..1 congestion score for GET /api/cargo/yard-optimization.
+_YARD_BLOCK_CAPACITY = 10
 
 
 # --------------------------------------------------------------------------- RBAC
@@ -103,14 +122,24 @@ class CargoService:
         if not old.get("is_released") and new.get("is_released"):
             events.append((EVENT_RELEASED, {"is_released": True}))
         if old.get("customs_status") != new.get("customs_status"):
-            events.append((EVENT_STATUS_CHANGED, {
-                "customs_status": new.get("customs_status"),
-                "previous_customs_status": old.get("customs_status")}))
+            payload = {"customs_status": new.get("customs_status"),
+                       "previous_customs_status": old.get("customs_status")}
+            # Legacy topic (unchanged) + the new granular one, both additive.
+            events.append((EVENT_STATUS_CHANGED, dict(payload)))
+            events.append((EVENT_CUSTOMS_STATUS_CHANGED, dict(payload)))
         if old.get("yard_block") != new.get("yard_block") and new.get("yard_block"):
             events.append((EVENT_YARD_ASSIGNED, {"yard_block": new.get("yard_block")}))
-        if old.get("gate") != new.get("gate") and new.get("gate"):
-            events.append((EVENT_GATE_MOVEMENT, {
-                "gate": new.get("gate"), "previous_gate": old.get("gate")}))
+        old_gate, new_gate = old.get("gate"), new.get("gate")
+        if old_gate != new_gate:
+            # Legacy gate_movement fires on any transition to a gate (unchanged);
+            # the new gate_in / gate_out classify the direction of the movement.
+            if new_gate:
+                events.append((EVENT_GATE_MOVEMENT, {
+                    "gate": new_gate, "previous_gate": old_gate}))
+            if not old_gate and new_gate:
+                events.append((EVENT_GATE_IN, {"gate": new_gate}))
+            elif old_gate and not new_gate:
+                events.append((EVENT_GATE_OUT, {"previous_gate": old_gate}))
         if not events:
             events.append((EVENT_UPDATED, {}))
         return events
@@ -223,3 +252,109 @@ class CargoService:
         if removed:
             await self._emit(EVENT_DELETED, container_number, {})
         return removed
+
+    # ----------------------------------------------------- notifications (0017)
+    async def create_notification(self, *, container_number: str, notification_type: str,
+                                  severity: str, message: Optional[str],
+                                  stakeholders: Any) -> dict:
+        """Persist a stakeholder notification and emit a ``cargo.pendency_created``
+        lifecycle event (so a notification is also visible on the events poll)."""
+        t0 = perf_counter()
+        row = await self._repo.create_notification(
+            container_number, notification_type, severity, message, stakeholders)
+        self._observe("notification.create", "success", t0, container=container_number)
+        await self._emit(EVENT_PENDENCY_CREATED, container_number, {
+            "notification_id": row.get("id"), "notification_type": notification_type,
+            "severity": severity})
+        return row
+
+    async def list_notifications(self, **filters: Any) -> list[dict]:
+        return await self._repo.list_notifications(**filters)
+
+    # --------------------------------------------------------- workflow (0016)
+    async def apply_workflow(self, container_number: str, action: str,
+                             comment: Optional[str]) -> Optional[dict]:
+        """Apply a workflow transition. Returns the stored workflow-event row, or
+        ``None`` if the container is unknown (router -> 404). ``action`` is already
+        validated (TRIGGER / APPROVE / REJECT) at the DTO layer."""
+        t0 = perf_counter()
+        new_status = WORKFLOW_TRANSITIONS[action]
+        row = await self._repo.record_workflow(container_number, action, new_status, comment)
+        self._observe("workflow", "success" if row else "not_found", t0,
+                      container=container_number)
+        return row
+
+    async def list_workflow_history(self, container_number: str, *,
+                                    limit: int = 100, offset: int = 0) -> list[dict]:
+        return await self._repo.list_workflow_history(
+            container_number, limit=limit, offset=offset)
+
+    # ------------------------------------------------------- planning (0018)
+    async def plan_yard(self, *, container_number: str, preferred_block: str,
+                        priority: str) -> dict:
+        """Allocate the next free slot in the preferred block (derived from live
+        occupancy + prior plans) and record the plan. Emits ``cargo.queue_updated``."""
+        t0 = perf_counter()
+        slot = await self._repo.next_yard_slot(preferred_block)
+        assigned_block = f"{preferred_block}-{slot:02d}"
+        row = await self._repo.create_yard_plan(
+            container_number, preferred_block, assigned_block, priority)
+        self._observe("yard_plan", "success", t0, container=container_number)
+        await self._emit(EVENT_QUEUE_UPDATED, container_number, {
+            "assigned_block": assigned_block, "priority": priority})
+        return row
+
+    async def optimize_yard(self) -> dict:
+        """Compute a yard congestion score + move recommendations from the live
+        jnpa.cargo yard occupancy. Deterministic: groups containers by block
+        letter-zone; recommends relieving the busiest zone (keep one, move the rest)."""
+        rows = await self._repo.list_yarded_containers()
+        zones: dict[str, list[str]] = {}
+        for r in rows:
+            yb = r.get("yard_block")
+            if not yb:
+                continue
+            zone = str(yb).split("-", 1)[0]
+            zones.setdefault(zone, []).append(r["container_number"])
+        if not zones:
+            return {"yard_congestion": 0.0, "recommendations": [], "priority_containers": []}
+        total = sum(len(v) for v in zones.values())
+        congestion = round(min(1.0, total / (len(zones) * _YARD_BLOCK_CAPACITY)), 2)
+        # Busiest zone (ties broken by zone name for determinism).
+        busiest_zone, busiest = max(zones.items(), key=lambda kv: (len(kv[1]), kv[0]))
+        movers = busiest[1:] if len(busiest) >= 2 else []
+        recommendations = [
+            {"container_number": cn, "action": "MOVE", "reason": "reduce congestion"}
+            for cn in movers
+        ]
+        return {
+            "yard_congestion": congestion,
+            "recommendations": recommendations,
+            "priority_containers": movers,
+            "busiest_block": busiest_zone,
+        }
+
+    async def plan_rake(self, *, rake_id: str, containers: Any) -> dict:
+        """Group containers onto a rail rake. Emits one ``cargo.queue_updated`` per
+        container so the assignment is visible on the events poll."""
+        t0 = perf_counter()
+        items = list(containers or [])
+        row = await self._repo.create_rake_plan(rake_id, items)
+        self._observe("rake_plan", "success", t0)
+        for cn in items:
+            await self._emit(EVENT_QUEUE_UPDATED, cn, {"rake_id": rake_id})
+        return row
+
+    async def list_rake_plans(self, **filters: Any) -> list[dict]:
+        return await self._repo.list_rake_plans(**filters)
+
+    async def plan_reefer(self, *, container_number: str, temperature: Any,
+                          power_required: bool) -> dict:
+        """Allocate the next powered reefer slot (REEFER-A<n>) for a container."""
+        t0 = perf_counter()
+        idx = await self._repo.next_reefer_index()
+        slot = f"REEFER-A{idx:02d}"
+        row = await self._repo.create_reefer_plan(
+            container_number, temperature, power_required, slot)
+        self._observe("reefer_plan", "success", t0, container=container_number)
+        return row

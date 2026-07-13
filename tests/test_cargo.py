@@ -58,6 +58,16 @@ class FakeCargoRepo:
         self._rows: dict[str, dict] = {}
         self._events: list[dict] = []
         self._event_seq = 0
+        self._notifications: list[dict] = []
+        self._notif_seq = 0
+        self._workflow: list[dict] = []
+        self._workflow_seq = 0
+        self._yard_plans: list[dict] = []
+        self._yard_plan_seq = 0
+        self._rake_plans: list[dict] = []
+        self._rake_plan_seq = 0
+        self._reefer_plans: list[dict] = []
+        self._reefer_plan_seq = 0
 
     async def create(self, row: Mapping[str, Any]) -> dict:
         cn = row["container_number"]
@@ -141,6 +151,95 @@ class FakeCargoRepo:
             rows = [r for r in rows if r["id"] > since_id]
         rows.sort(key=lambda r: r["id"], reverse=True)
         return [dict(r) for r in rows[offset:offset + limit]]
+
+    # ----- notifications (0017) -----
+    async def create_notification(self, container_number, notification_type, severity,
+                                  message, stakeholders) -> dict:
+        self._notif_seq += 1
+        rec = {"id": self._notif_seq, "container_number": container_number,
+               "notification_type": notification_type, "severity": severity,
+               "message": message, "stakeholders": list(stakeholders or []),
+               "status": "CREATED", "created_at": _NOW}
+        self._notifications.append(rec)
+        return dict(rec)
+
+    async def list_notifications(self, *, container_number=None, notification_type=None,
+                                 severity=None, status=None, limit=100, offset=0) -> list[dict]:
+        rows = list(self._notifications)
+        eq = {"container_number": container_number, "notification_type": notification_type,
+              "severity": severity, "status": status}
+        for col, val in eq.items():
+            if val is not None:
+                rows = [r for r in rows if r[col] == val]
+        rows.sort(key=lambda r: r["id"], reverse=True)
+        return [dict(r) for r in rows[offset:offset + limit]]
+
+    # ----- workflow (0016) -----
+    async def record_workflow(self, container_number, action, new_status, comment):
+        if container_number not in self._rows:
+            return None
+        old_status = self._rows[container_number].get("workflow_status")
+        self._rows[container_number]["workflow_status"] = new_status
+        self._workflow_seq += 1
+        rec = {"id": self._workflow_seq, "container_number": container_number,
+               "action": action, "old_status": old_status, "new_status": new_status,
+               "comment": comment, "created_at": _NOW}
+        self._workflow.append(rec)
+        return dict(rec)
+
+    async def list_workflow_history(self, container_number, *, limit=100, offset=0) -> list[dict]:
+        rows = [r for r in self._workflow if r["container_number"] == container_number]
+        rows.sort(key=lambda r: r["id"], reverse=True)
+        return [dict(r) for r in rows[offset:offset + limit]]
+
+    # ----- planning (0018) -----
+    async def next_yard_slot(self, block) -> int:
+        pref = f"{block}-"
+        occ = sum(1 for r in self._rows.values()
+                  if (r.get("yard_block") or "").startswith(pref))
+        planned = sum(1 for p in self._yard_plans
+                      if p["assigned_block"].startswith(pref))
+        return occ + planned + 1
+
+    async def create_yard_plan(self, container_number, preferred_block,
+                               assigned_block, priority) -> dict:
+        self._yard_plan_seq += 1
+        rec = {"id": self._yard_plan_seq, "container_number": container_number,
+               "preferred_block": preferred_block, "assigned_block": assigned_block,
+               "priority": priority, "status": "PLANNED", "created_at": _NOW}
+        self._yard_plans.append(rec)
+        return dict(rec)
+
+    async def list_yarded_containers(self) -> list[dict]:
+        return [{"container_number": cn, "yard_block": r.get("yard_block")}
+                for cn, r in self._rows.items() if r.get("yard_block")]
+
+    async def create_rake_plan(self, rake_id, containers) -> dict:
+        items = list(containers or [])
+        self._rake_plan_seq += 1
+        rec = {"id": self._rake_plan_seq, "rake_id": rake_id, "containers": items,
+               "planned_containers": len(items), "status": "PLANNED", "created_at": _NOW}
+        self._rake_plans.append(rec)
+        return dict(rec)
+
+    async def list_rake_plans(self, *, rake_id=None, limit=100, offset=0) -> list[dict]:
+        rows = list(self._rake_plans)
+        if rake_id is not None:
+            rows = [r for r in rows if r["rake_id"] == rake_id]
+        rows.sort(key=lambda r: r["id"], reverse=True)
+        return [dict(r) for r in rows[offset:offset + limit]]
+
+    async def next_reefer_index(self) -> int:
+        return len(self._reefer_plans) + 1
+
+    async def create_reefer_plan(self, container_number, temperature,
+                                 power_required, slot) -> dict:
+        self._reefer_plan_seq += 1
+        rec = {"id": self._reefer_plan_seq, "container_number": container_number,
+               "temperature": temperature, "power_required": power_required,
+               "slot": slot, "status": "ALLOCATED", "created_at": _NOW}
+        self._reefer_plans.append(rec)
+        return dict(rec)
 
 
 @pytest.fixture()
@@ -484,6 +583,185 @@ def test_events_scoped_to_one_container(client):
     client.post("/api/cargo", json=_payload(container_number="MSCU7789010"))
     one = client.get("/api/cargo/events", params={"container_number": VALID_CN}).json()
     assert one and all(e["container_number"] == VALID_CN for e in one)
+
+
+# ================================================ POC-2 extension APIs (fake repo)
+# ---- 1. Stakeholder notifications --------------------------------------------
+def test_notification_create_and_list(client):
+    r = client.post("/api/cargo/notifications", json={
+        "container_number": VALID_CN, "notification_type": "CUSTOMS_ALERT",
+        "severity": "HIGH", "message": "Container pending customs approval",
+        "stakeholders": ["operator", "customs", "control_room"]})
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["status"] == "CREATED" and isinstance(body["notification_id"], int)
+    rows = client.get("/api/cargo/notifications").json()
+    assert len(rows) == 1
+    n = rows[0]
+    assert n["container_number"] == VALID_CN
+    assert n["notification_type"] == "CUSTOMS_ALERT"
+    assert n["severity"] == "HIGH"
+    assert n["stakeholders"] == ["operator", "customs", "control_room"]
+    assert n["status"] == "CREATED"
+    assert n["notification_id"] == body["notification_id"]
+
+
+def test_notification_filters(client):
+    client.post("/api/cargo/notifications", json={"container_number": VALID_CN,
+                "notification_type": "CUSTOMS_ALERT", "severity": "HIGH", "stakeholders": []})
+    client.post("/api/cargo/notifications", json={"container_number": "MSCU7789010",
+                "notification_type": "YARD_WARNING", "severity": "LOW", "stakeholders": []})
+    assert len(client.get("/api/cargo/notifications", params={"severity": "HIGH"}).json()) == 1
+    assert [n["container_number"] for n in client.get(
+        "/api/cargo/notifications", params={"notification_type": "YARD_WARNING"}).json()] == ["MSCU7789010"]
+    assert len(client.get("/api/cargo/notifications", params={"container_number": VALID_CN}).json()) == 1
+    assert len(client.get("/api/cargo/notifications", params={"status": "CREATED"}).json()) == 2
+
+
+def test_notification_emits_pendency_event(client):
+    client.post("/api/cargo", json=_payload())
+    client.post("/api/cargo/notifications", json={"container_number": VALID_CN,
+                "notification_type": "CUSTOMS_ALERT", "severity": "HIGH", "stakeholders": ["customs"]})
+    kinds = {e["event"] for e in client.get("/api/cargo/events").json()}
+    assert "cargo.pendency_created" in kinds
+
+
+def test_notification_invalid_iso_400(client):
+    assert client.post("/api/cargo/notifications", json={"container_number": BAD_CN,
+                       "notification_type": "CUSTOMS_ALERT"}).status_code == 400
+
+
+# ---- 2. Workflow lifecycle ----------------------------------------------------
+def test_workflow_trigger_approve_history(client):
+    client.post("/api/cargo", json=_payload())
+    r1 = client.post(f"/api/cargo/{VALID_CN}/workflow", json={"action": "TRIGGER"})
+    assert r1.status_code == 200, r1.text
+    assert r1.json() == {"container_number": VALID_CN, "workflow_status": "TRIGGERED"}
+    r2 = client.post(f"/api/cargo/{VALID_CN}/workflow",
+                     json={"action": "APPROVE", "comment": "Customs cleared"})
+    assert r2.json()["workflow_status"] == "APPROVED"
+    hist = client.get(f"/api/cargo/{VALID_CN}/workflow/history").json()
+    assert [h["action"] for h in hist] == ["APPROVE", "TRIGGER"]  # newest first
+    approve = hist[0]
+    assert approve["old_status"] == "TRIGGERED" and approve["new_status"] == "APPROVED"
+    assert approve["comment"] == "Customs cleared"
+
+
+def test_workflow_reject(client):
+    client.post("/api/cargo", json=_payload())
+    r = client.post(f"/api/cargo/{VALID_CN}/workflow",
+                    json={"action": "REJECT", "comment": "docs missing"})
+    assert r.status_code == 200 and r.json()["workflow_status"] == "REJECTED"
+
+
+def test_workflow_unknown_container_404(client):
+    r = client.post("/api/cargo/MSCU7789010/workflow", json={"action": "APPROVE"})
+    assert r.status_code == 404
+
+
+def test_workflow_invalid_action_400(client):
+    client.post("/api/cargo", json=_payload())
+    assert client.post(f"/api/cargo/{VALID_CN}/workflow",
+                       json={"action": "MAYBE"}).status_code == 400
+
+
+# ---- 3. Yard planning ---------------------------------------------------------
+def test_yard_planning(client):
+    r = client.post("/api/cargo/yard-planning", json={
+        "container_number": VALID_CN, "preferred_block": "B", "priority": "HIGH"})
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["container_number"] == VALID_CN
+    assert body["assigned_block"].startswith("B-")
+    assert body["status"] == "PLANNED"
+
+
+def test_yard_planning_slot_increments(client):
+    a = client.post("/api/cargo/yard-planning",
+                    json={"container_number": VALID_CN, "preferred_block": "C"}).json()
+    b = client.post("/api/cargo/yard-planning",
+                    json={"container_number": "MSCU7789010", "preferred_block": "C"}).json()
+    assert a["assigned_block"] == "C-01"
+    assert b["assigned_block"] == "C-02"
+
+
+def test_yard_planning_invalid_400(client):
+    # preferred_block must be a letter-zone, not a full slot.
+    assert client.post("/api/cargo/yard-planning",
+                       json={"container_number": VALID_CN, "preferred_block": "B-01"}).status_code == 400
+    # bad ISO container.
+    assert client.post("/api/cargo/yard-planning",
+                       json={"container_number": BAD_CN, "preferred_block": "B"}).status_code == 400
+
+
+# ---- 4. Yard optimization -----------------------------------------------------
+def test_yard_optimization_shape_and_recs(client):
+    client.post("/api/cargo", json=_payload(yard_block="A-01"))
+    client.post("/api/cargo", json=_payload(container_number="MSCU7789010", yard_block="A-02"))
+    body = client.get("/api/cargo/yard-optimization").json()
+    assert 0.0 <= body["yard_congestion"] <= 1.0
+    assert isinstance(body["recommendations"], list) and body["recommendations"]
+    rec = body["recommendations"][0]
+    assert rec["action"] == "MOVE" and "reason" in rec and "container_number" in rec
+
+
+def test_yard_optimization_empty(client):
+    body = client.get("/api/cargo/yard-optimization").json()
+    assert body["yard_congestion"] == 0.0
+    assert body["recommendations"] == []
+
+
+# ---- 5. Rake planning ---------------------------------------------------------
+def test_rake_planning_create_and_list(client):
+    r = client.post("/api/cargo/rake-planning", json={
+        "rake_id": "RKE001", "containers": [VALID_CN, "MSCU7789010"]})
+    assert r.status_code == 201, r.text
+    assert r.json() == {"rake_id": "RKE001", "planned_containers": 2, "status": "PLANNED"}
+    rows = client.get("/api/cargo/rake-planning").json()
+    assert len(rows) == 1 and rows[0]["rake_id"] == "RKE001"
+    assert set(rows[0]["containers"]) == {VALID_CN, "MSCU7789010"}
+    assert len(client.get("/api/cargo/rake-planning", params={"rake_id": "RKE001"}).json()) == 1
+    assert client.get("/api/cargo/rake-planning", params={"rake_id": "RKE999"}).json() == []
+
+
+def test_rake_planning_emits_queue_events(client):
+    client.post("/api/cargo/rake-planning", json={"rake_id": "RKE002", "containers": [VALID_CN]})
+    kinds = {e["event"] for e in client.get("/api/cargo/events").json()}
+    assert "cargo.queue_updated" in kinds
+
+
+def test_rake_planning_invalid_container_400(client):
+    assert client.post("/api/cargo/rake-planning",
+                       json={"rake_id": "RKE003", "containers": [BAD_CN]}).status_code == 400
+
+
+# ---- 6. Reefer planning -------------------------------------------------------
+def test_reefer_planning(client):
+    r = client.post("/api/cargo/reefer-planning", json={
+        "container_number": "MSCU7789010", "temperature": 4, "power_required": True})
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["container_number"] == "MSCU7789010"
+    assert body["slot"].startswith("REEFER-A")
+    assert body["status"] == "ALLOCATED"
+
+
+def test_reefer_planning_slot_increments(client):
+    a = client.post("/api/cargo/reefer-planning", json={"container_number": VALID_CN}).json()
+    b = client.post("/api/cargo/reefer-planning", json={"container_number": "MSCU7789010"}).json()
+    assert a["slot"] == "REEFER-A01" and b["slot"] == "REEFER-A02"
+
+
+# ---- 7. New lifecycle events --------------------------------------------------
+def test_new_lifecycle_events_emitted(client):
+    client.post("/api/cargo", json=_payload(is_released=False, customs_status="PENDING", gate=None))
+    client.put(f"/api/cargo/{VALID_CN}", json={"customs_status": "CLEARED"})   # customs_status_changed
+    client.put(f"/api/cargo/{VALID_CN}", json={"gate": "GATE-3"})              # gate_in
+    client.put(f"/api/cargo/{VALID_CN}", json={"gate": None})                  # gate_out
+    kinds = {e["event"] for e in client.get("/api/cargo/events").json()}
+    assert {"cargo.customs_status_changed", "cargo.gate_in", "cargo.gate_out"} <= kinds
+    # legacy topics still fire (backward compatible)
+    assert {"cargo.status_changed", "cargo.gate_movement"} <= kinds
 
 
 # --------------------------------------------------- real-DB integration (opt-in)

@@ -75,6 +75,31 @@ VALUES (:event, :container_number, CAST(:payload AS jsonb))
 RETURNING {_EVENT_SELECT}
 """
 
+# Cargo workflow transition log (migration 0016). Append-only; the CURRENT status
+# lives on jnpa.cargo.workflow_status.
+_WORKFLOW_COLS = ("id", "container_number", "action", "old_status", "new_status",
+                  "comment", "created_at")
+_WORKFLOW_SELECT = ", ".join(_WORKFLOW_COLS)
+
+# Stakeholder notifications (migration 0017).
+_NOTIF_COLS = ("id", "container_number", "notification_type", "severity",
+               "message", "stakeholders", "status", "created_at")
+_NOTIF_SELECT = ", ".join(_NOTIF_COLS)
+# Whitelisted equality filters for the notifications list (keys are fixed
+# identifiers, values always bound — injection-safe by construction).
+_NOTIF_FILTER_COLS = ("container_number", "notification_type", "severity", "status")
+
+# Planning tables (migration 0018).
+_YARD_PLAN_COLS = ("id", "container_number", "preferred_block", "assigned_block",
+                   "priority", "status", "created_at")
+_YARD_PLAN_SELECT = ", ".join(_YARD_PLAN_COLS)
+_RAKE_PLAN_COLS = ("id", "rake_id", "containers", "planned_containers", "status",
+                   "created_at")
+_RAKE_PLAN_SELECT = ", ".join(_RAKE_PLAN_COLS)
+_REEFER_PLAN_COLS = ("id", "container_number", "temperature", "power_required",
+                     "slot", "status", "created_at")
+_REEFER_PLAN_SELECT = ", ".join(_REEFER_PLAN_COLS)
+
 
 class CargoRepository:
     """Raw-SQL CRUD for ``jnpa.cargo``. Stateless apart from the DSN, so a single
@@ -252,3 +277,193 @@ class CargoRepository:
         async with get_engine(self._dsn).connect() as conn:
             result = await conn.execute(text(sql), params)
             return [dict(r) for r in result.mappings().all()]
+
+    # ----------------------------------------------------- notifications (0017)
+    async def create_notification(self, container_number: str, notification_type: str,
+                                  severity: str, message: Optional[str],
+                                  stakeholders: Any) -> dict:
+        """Insert one stakeholder notification and return the stored row (with its
+        monotonic id + server timestamp). ``stakeholders`` is stored as jsonb."""
+        import json as _json
+        params = {
+            "container_number": container_number,
+            "notification_type": notification_type,
+            "severity": severity,
+            "message": message,
+            "stakeholders": _json.dumps(list(stakeholders or [])),
+        }
+        sql = (
+            "INSERT INTO jnpa.cargo_notifications "
+            "(container_number, notification_type, severity, message, stakeholders) "
+            "VALUES (:container_number, :notification_type, :severity, :message, "
+            "CAST(:stakeholders AS jsonb)) "
+            f"RETURNING {_NOTIF_SELECT}"
+        )
+        async with get_engine(self._dsn).begin() as conn:
+            result = await conn.execute(text(sql), params)
+            row = result.mappings().first()
+        return dict(row) if row else dict(params)
+
+    async def list_notifications(
+        self,
+        *,
+        container_number: Optional[str] = None,
+        notification_type: Optional[str] = None,
+        severity: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict]:
+        """List notifications newest-first with optional equality filters."""
+        filters = locals()
+        conds: list[str] = []
+        params: dict[str, Any] = {}
+        for col in _NOTIF_FILTER_COLS:
+            val = filters.get(col)
+            if val is not None:
+                conds.append(f"{col} = :{col}")
+                params[col] = val
+        clause = ("WHERE " + " AND ".join(conds)) if conds else ""
+        params.update({"limit": limit, "offset": offset})
+        sql = (
+            f"SELECT {_NOTIF_SELECT} FROM jnpa.cargo_notifications {clause} "
+            "ORDER BY id DESC LIMIT :limit OFFSET :offset"
+        )
+        async with get_engine(self._dsn).connect() as conn:
+            result = await conn.execute(text(sql), params)
+            return [dict(r) for r in result.mappings().all()]
+
+    # --------------------------------------------------------- workflow (0016)
+    async def record_workflow(self, container_number: str, action: str,
+                              new_status: str, comment: Optional[str]) -> Optional[dict]:
+        """Apply a workflow transition atomically: read the current status (locking
+        the cargo row), set ``jnpa.cargo.workflow_status`` to ``new_status``, and
+        append the transition to the log. Returns the stored workflow-event row, or
+        ``None`` if the container does not exist (so the service maps it to 404)."""
+        async with get_engine(self._dsn).begin() as conn:
+            cur = await conn.execute(
+                text("SELECT workflow_status FROM jnpa.cargo "
+                     "WHERE container_number = :cn FOR UPDATE"),
+                {"cn": container_number})
+            existing = cur.mappings().first()
+            if existing is None:
+                return None
+            old_status = existing["workflow_status"]
+            await conn.execute(
+                text("UPDATE jnpa.cargo SET workflow_status = :ns "
+                     "WHERE container_number = :cn"),
+                {"ns": new_status, "cn": container_number})
+            ev = await conn.execute(
+                text("INSERT INTO jnpa.cargo_workflow_events "
+                     "(container_number, action, old_status, new_status, comment) "
+                     "VALUES (:cn, :action, :old_status, :new_status, :comment) "
+                     f"RETURNING {_WORKFLOW_SELECT}"),
+                {"cn": container_number, "action": action, "old_status": old_status,
+                 "new_status": new_status, "comment": comment})
+            row = ev.mappings().first()
+        return dict(row) if row else None
+
+    async def list_workflow_history(self, container_number: str, *,
+                                    limit: int = 100, offset: int = 0) -> list[dict]:
+        """Append-only workflow transitions for one container, newest-first."""
+        sql = (
+            f"SELECT {_WORKFLOW_SELECT} FROM jnpa.cargo_workflow_events "
+            "WHERE container_number = :cn ORDER BY id DESC LIMIT :limit OFFSET :offset"
+        )
+        async with get_engine(self._dsn).connect() as conn:
+            result = await conn.execute(
+                text(sql), {"cn": container_number, "limit": limit, "offset": offset})
+            return [dict(r) for r in result.mappings().all()]
+
+    # ------------------------------------------------------- planning (0018)
+    async def next_yard_slot(self, block: str) -> int:
+        """Next free slot number in a yard block, derived from BOTH live cargo
+        occupancy (jnpa.cargo.yard_block LIKE 'B-%') and prior plans for the block —
+        so repeated planning does not collide."""
+        like = f"{block}-%"
+        sql = (
+            "SELECT (SELECT count(*) FROM jnpa.cargo WHERE yard_block LIKE :like) + "
+            "(SELECT count(*) FROM jnpa.cargo_yard_plans WHERE assigned_block LIKE :like) AS n"
+        )
+        async with get_engine(self._dsn).connect() as conn:
+            result = await conn.execute(text(sql), {"like": like})
+            row = result.mappings().first()
+        return (int(row["n"]) if row else 0) + 1
+
+    async def create_yard_plan(self, container_number: str, preferred_block: Optional[str],
+                               assigned_block: str, priority: str) -> dict:
+        params = {"container_number": container_number, "preferred_block": preferred_block,
+                  "assigned_block": assigned_block, "priority": priority}
+        sql = (
+            "INSERT INTO jnpa.cargo_yard_plans "
+            "(container_number, preferred_block, assigned_block, priority) "
+            "VALUES (:container_number, :preferred_block, :assigned_block, :priority) "
+            f"RETURNING {_YARD_PLAN_SELECT}"
+        )
+        async with get_engine(self._dsn).begin() as conn:
+            result = await conn.execute(text(sql), params)
+            row = result.mappings().first()
+        return dict(row) if row else dict(params)
+
+    async def list_yarded_containers(self) -> list[dict]:
+        """Every container with a live yard_block — the input to yard-optimization."""
+        sql = ("SELECT container_number, yard_block FROM jnpa.cargo "
+               "WHERE yard_block IS NOT NULL ORDER BY yard_block")
+        async with get_engine(self._dsn).connect() as conn:
+            result = await conn.execute(text(sql))
+            return [dict(r) for r in result.mappings().all()]
+
+    async def create_rake_plan(self, rake_id: str, containers: Any) -> dict:
+        import json as _json
+        items = list(containers or [])
+        params = {"rake_id": rake_id, "containers": _json.dumps(items),
+                  "planned_containers": len(items)}
+        sql = (
+            "INSERT INTO jnpa.cargo_rake_plans (rake_id, containers, planned_containers) "
+            "VALUES (:rake_id, CAST(:containers AS jsonb), :planned_containers) "
+            f"RETURNING {_RAKE_PLAN_SELECT}"
+        )
+        async with get_engine(self._dsn).begin() as conn:
+            result = await conn.execute(text(sql), params)
+            row = result.mappings().first()
+        return dict(row) if row else dict(params)
+
+    async def list_rake_plans(self, *, rake_id: Optional[str] = None,
+                              limit: int = 100, offset: int = 0) -> list[dict]:
+        conds: list[str] = []
+        params: dict[str, Any] = {}
+        if rake_id is not None:
+            conds.append("rake_id = :rake_id")
+            params["rake_id"] = rake_id
+        clause = ("WHERE " + " AND ".join(conds)) if conds else ""
+        params.update({"limit": limit, "offset": offset})
+        sql = (
+            f"SELECT {_RAKE_PLAN_SELECT} FROM jnpa.cargo_rake_plans {clause} "
+            "ORDER BY id DESC LIMIT :limit OFFSET :offset"
+        )
+        async with get_engine(self._dsn).connect() as conn:
+            result = await conn.execute(text(sql), params)
+            return [dict(r) for r in result.mappings().all()]
+
+    async def next_reefer_index(self) -> int:
+        """Next reefer slot number, derived from prior reefer allocations."""
+        async with get_engine(self._dsn).connect() as conn:
+            result = await conn.execute(
+                text("SELECT count(*) AS n FROM jnpa.cargo_reefer_plans"))
+            row = result.mappings().first()
+        return (int(row["n"]) if row else 0) + 1
+
+    async def create_reefer_plan(self, container_number: str, temperature: Any,
+                                 power_required: bool, slot: str) -> dict:
+        params = {"container_number": container_number, "temperature": temperature,
+                  "power_required": power_required, "slot": slot}
+        sql = (
+            "INSERT INTO jnpa.cargo_reefer_plans "
+            "(container_number, temperature, power_required, slot) "
+            "VALUES (:container_number, :temperature, :power_required, :slot) "
+            f"RETURNING {_REEFER_PLAN_SELECT}"
+        )
+        async with get_engine(self._dsn).begin() as conn:
+            result = await conn.execute(text(sql), params)
+            row = result.mappings().first()
+        return dict(row) if row else dict(params)

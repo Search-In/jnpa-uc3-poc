@@ -103,6 +103,8 @@ CREATE TABLE IF NOT EXISTS jnpa.driver_enrollments (
     reviewed_at       timestamptz,
     reviewed_by       text,
     rejection_reason  text,
+    created_by        text,                     -- admin actor when source='ADMIN' (0019)
+    source            text NOT NULL DEFAULT 'PWA',  -- 'PWA' | 'ADMIN' (0019)
     updated_at        timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_driver_enrol_status
@@ -138,11 +140,23 @@ CREATE TABLE IF NOT EXISTS jnpa.drivers (
     photo_url         text,                -- MinIO object URL (drivers/ bucket)
     reference_image   text,                -- base64 reference frame (dev fallback only)
     template_dim      int,
-    provider          text,                -- onnx | synthetic
+    provider          text,                -- onnx | synthetic | admin
+    vehicle_no_norm   text,                -- UPPER(TRIM(vehicle_no)); PWA-login match key (0019)
     enrolled_at       timestamptz NOT NULL DEFAULT now(),
     approved_by       text,
+    created_by        text,                -- admin actor when created via Control-Room (0019)
     updated_at        timestamptz NOT NULL DEFAULT now()
 );
+-- PWA login gate: entered Vehicle ID -> active driver (0019).
+CREATE INDEX IF NOT EXISTS idx_drivers_vehicle_no
+    ON jnpa.drivers (vehicle_no);
+CREATE INDEX IF NOT EXISTS idx_drivers_vehicle_no_norm
+    ON jnpa.drivers (vehicle_no_norm);
+-- At most one ACTIVE driver per vehicle — makes the Vehicle ID an unambiguous
+-- login credential (0019).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_drivers_vehicle_active
+    ON jnpa.drivers (vehicle_no_norm)
+    WHERE status = 'ACTIVE' AND vehicle_no_norm IS NOT NULL;
 
 -- Biometric template store for 1:N identification. One unit-norm ArcFace
 -- embedding per active driver; a captured face is matched by nearest cosine

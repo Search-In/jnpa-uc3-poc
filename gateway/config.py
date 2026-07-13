@@ -80,6 +80,13 @@ class GatewayConfig:
     # --- Provisional vehicle flow ---
     provisional_window_h: int = 24           # 24-hour cure window (spec)
 
+    # --- PWA login eligibility gate ---
+    # When true, POST /api/auth/device-token only mints a DRIVER token if the
+    # entered Vehicle ID is assigned to an ACTIVE driver in jnpa.drivers. Default
+    # false for migration safety (the existing truck-sim/ULIP gate is unchanged);
+    # set REQUIRE_DRIVER_PROFILE=true in production to enforce the assignment.
+    require_driver_profile: bool = False
+
     # --- Elevated-scrutiny gate boom delay (trucking-app TERTIARY) ---
     gate_boom_delay_s: int = 5
 
@@ -140,6 +147,7 @@ class GatewayConfig:
             cache_ttl_anpr_s=_as_int(os.environ.get("GATEWAY_CACHE_TTL_ANPR_S"), 60),
             cache_ttl_traffic_s=_as_int(os.environ.get("GATEWAY_CACHE_TTL_TRAFFIC_S"), 90),
             provisional_window_h=_as_int(os.environ.get("GATEWAY_PROVISIONAL_WINDOW_H"), 24),
+            require_driver_profile=_as_bool(os.environ.get("REQUIRE_DRIVER_PROFILE"), False),
             gate_boom_delay_s=_as_int(os.environ.get("GATEWAY_GATE_BOOM_DELAY_S"), 5),
             decision_ring_size=_as_int(os.environ.get("GATEWAY_DECISION_RING_SIZE"), 1000),
             truck_position_sample=_as_int(os.environ.get("GATEWAY_TRUCK_SAMPLE"), 50),

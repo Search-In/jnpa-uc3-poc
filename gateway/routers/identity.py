@@ -16,11 +16,15 @@ docs/ASSUMPTIONS.md). No real driver biometrics are processed.
 """
 from __future__ import annotations
 
+import re
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
+import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from pydantic import BaseModel
 
 from .. import enrollment, objectstore
 from ..dpdp import audit_identity_access, enforce_dpdp
@@ -441,6 +445,133 @@ async def list_drivers(state: GatewayState = Depends(get_state)) -> dict:
     return {"drivers": items, "count": len(items)}
 
 
+# --------------------------------------------------------------------------- admin driver-profile creation
+# A Control-Room admin (CUSTOMS / DTCCC_ADMIN — enforced by the /api/identity RBAC
+# policy) can create a driver profile directly and assign it a Vehicle ID. This
+# produces a PENDING enrolment (source=ADMIN) that flows through the SAME approval
+# workflow; on approval the driver is promoted to jnpa.drivers and the assigned
+# Vehicle ID becomes eligible for PWA login. The vehicle list is the truck fleet;
+# already-assigned vehicles are excluded so an admin can only pick an available one.
+
+_VEHICLE_ID_RE = re.compile(r"^TRK-\d{6}$")
+
+
+class CreateDriverBody(BaseModel):
+    name: str
+    vehicle_no: str
+    license_no: Optional[str] = None
+    mobile: Optional[str] = None
+    emergency_contact: Optional[str] = None
+    driver_id: Optional[str] = None  # optional; auto-generated when absent
+
+
+async def _fleet_vehicles(state: GatewayState, limit: int) -> List[dict]:
+    """Fleet vehicle snapshots from the truck-sim (the vehicle registry in the
+    PoC). Degrades to an empty list if the sim is unreachable."""
+    url = state.cfg.truck_api_url.rstrip("/") + "/devices/list"
+    try:
+        resp = await state.http.get(url, params={"limit": str(limit)})
+    except httpx.HTTPError as exc:
+        log.warning("available_vehicles_fleet_unreachable", error=str(exc))
+        return []
+    if resp.status_code == 200:
+        return list(resp.json().get("devices", []))
+    return []
+
+
+async def _vehicle_exists(state: GatewayState, vehicle_id: str) -> bool:
+    """True if the Vehicle ID is a known fleet vehicle. Fail-closed: if the vehicle
+    registry (truck-sim) is unreachable we 503 rather than accept an unverifiable id."""
+    url = state.cfg.truck_api_url.rstrip("/") + f"/devices/{vehicle_id}"
+    try:
+        resp = await state.http.get(url)
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "vehicle_registry_unavailable",
+                    "message": "Cannot verify the vehicle right now; try again shortly."},
+        ) from exc
+    if resp.status_code == 200:
+        return True
+    if resp.status_code == 404:
+        return False
+    raise HTTPException(
+        status_code=503,
+        detail={"error": "vehicle_registry_unavailable",
+                "message": "Vehicle registry returned an unexpected status."})
+
+
+@router.get("/available-vehicles")
+async def available_vehicles(q: Optional[str] = Query(default=None),
+                             limit: int = Query(default=50, ge=1, le=500),
+                             state: GatewayState = Depends(get_state)) -> dict:
+    """Fleet vehicles NOT already assigned to an active driver or open enrolment —
+    the source for the Control-Room 'assign vehicle' dropdown. ``q`` filters by
+    Vehicle ID / plate substring."""
+    taken = await enrollment.assigned_vehicles(state.cfg.postgres_dsn)
+    fleet = await _fleet_vehicles(state, max(limit * 4, 200))
+    needle = (q or "").strip().upper()
+    out: List[dict] = []
+    for dev in fleet:
+        vid = enrollment.normalize_vehicle_no(dev.get("device_id"))
+        if not vid or vid in taken:
+            continue
+        if needle and needle not in vid and needle not in str(dev.get("plate") or "").upper():
+            continue
+        out.append({"vehicle_id": dev.get("device_id"), "plate": dev.get("plate"),
+                    "state": dev.get("state")})
+        if len(out) >= limit:
+            break
+    REQUESTS.labels("identity", "ok").inc()
+    return {"vehicles": out, "count": len(out)}
+
+
+@router.post("/drivers")
+async def create_driver_profile(request: Request, body: CreateDriverBody,
+                                state: GatewayState = Depends(get_state)) -> dict:
+    """Create an admin-originated driver profile + vehicle assignment (PENDING).
+
+    Validates the vehicle exists and is not already assigned, then records a
+    PENDING enrolment (source=ADMIN). Approval is NOT bypassed — the existing
+    approve endpoint promotes the driver to ACTIVE. Admin-only via RBAC."""
+    actor = _actor(request)
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    vehicle_no = enrollment.normalize_vehicle_no(body.vehicle_no)
+    if not _VEHICLE_ID_RE.match(vehicle_no):
+        raise HTTPException(status_code=400,
+                            detail="vehicle_no must be a valid Vehicle ID, e.g. TRK-000123")
+    if not await _vehicle_exists(state, vehicle_no):
+        raise HTTPException(status_code=404,
+                            detail=f"vehicle {vehicle_no} is not in the fleet")
+    conflict = await enrollment.vehicle_assignment_conflict(state.cfg.postgres_dsn, vehicle_no)
+    if conflict:
+        raise HTTPException(status_code=409, detail={
+            "error": "vehicle_already_assigned", "vehicle_no": vehicle_no,
+            "held_by": conflict,
+            "message": f"Vehicle {vehicle_no} is already assigned to "
+                       f"{conflict.get('name') or conflict.get('driver_id')} "
+                       f"({str(conflict.get('kind'))})."})
+    driver_id = (body.driver_id or "").strip() or f"DRV-{uuid.uuid4().hex[:8].upper()}"
+    if await enrollment.get(state.cfg.postgres_dsn, driver_id, include_faces=False):
+        raise HTTPException(status_code=409, detail=f"driver_id {driver_id} already exists")
+
+    rec = await enrollment.submit(
+        state.cfg.postgres_dsn, driver_id=driver_id, name=name,
+        license_no=(body.license_no or "").strip(),
+        mobile=(body.mobile or "").strip(),
+        vehicle_no=vehicle_no,
+        emergency_contact=(body.emergency_contact or "").strip(),
+        consent=False, face_images=[], documents=[],
+        source=enrollment.SOURCE_ADMIN, created_by=actor)
+    REQUESTS.labels("identity", "ok").inc()
+    audit_identity_access(actor=actor, driver_id=driver_id, purpose="ENROLMENT",
+                          is_synthetic=True, decision="ADMIN_CREATED")
+    return {"created": True, "driver_id": driver_id,
+            "status": rec.get("status", enrollment.PENDING), "enrollment": rec}
+
+
 @router.get("/verifications")
 async def verification_log(driver_id: Optional[str] = Query(default=None),
                            limit: int = Query(default=50),
@@ -464,7 +595,36 @@ async def approve_enrollment(driver_id: str, request: Request,
     faces = rec.get("face_images") or []
     reference_image = faces[0] if faces else rec.get("reference_image")
     if not reference_image:
-        raise HTTPException(status_code=400, detail="no reference frame to enrol")
+        # A PWA submission MUST carry a reference frame (face enrolment is the whole
+        # point). An ADMIN-created profile has none by design: it is approved
+        # "profile-only" — activated + promoted to the master driver table so the
+        # assigned Vehicle ID becomes eligible for PWA login, with no biometric
+        # template. Face enrolment can be completed later from the PWA.
+        if str(rec.get("source") or "").upper() != enrollment.SOURCE_ADMIN:
+            raise HTTPException(status_code=400, detail="no reference frame to enrol")
+        actor = _actor(request)
+        # Promote FIRST: the jnpa.drivers insert is what enforces one-active-driver-
+        # per-vehicle (uq_drivers_vehicle_active). If it conflicts we abort before
+        # flipping the enrolment to ACTIVE, so the record never lands in an
+        # inconsistent "ACTIVE enrolment, no driver row" state.
+        try:
+            await enrollment.promote_to_driver(
+                state.cfg.postgres_dsn, rec, actor=actor, photo_url=None,
+                reference_image=None, template_dim=None, provider="admin")
+        except Exception as exc:  # noqa: BLE001 — most likely uq_drivers_vehicle_active
+            log.warning("admin_profile_promote_failed", driver_id=driver_id, error=str(exc))
+            raise HTTPException(
+                status_code=409,
+                detail={"error": "vehicle_already_assigned",
+                        "message": "This vehicle is already assigned to another active "
+                                   "driver; cannot activate."}) from exc
+        updated = await enrollment.mark_active(
+            state.cfg.postgres_dsn, driver_id, actor=actor, photo_url=None,
+            reference_image=None, template_dim=None, provider="admin")
+        REQUESTS.labels("identity", "ok").inc()
+        audit_identity_access(actor=actor, driver_id=driver_id, purpose=purpose,
+                              is_synthetic=True, decision="APPROVED_PROFILE_ONLY")
+        return {"approved": True, "profile_only": True, "enrollment": updated}
 
     # Reference photo -> MinIO (drivers/ bucket). In PRODUCTION object storage is
     # REQUIRED: a failed upload is a hard error (no base64 fallback). In DEV the

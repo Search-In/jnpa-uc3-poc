@@ -181,6 +181,9 @@ class Fleet:
                 truck.dwell_left_s = truck._jittered(self.cfg.gate_queue_dwell_s)
             else:
                 truck.position = profile.origin
+            # Seed an ETA so the truck carries one before the 30 s ETA loop first
+            # ticks it (else the Driver-Advisory queue shows a blank ETA).
+            truck.eta_s = self.estimate_eta_s(truck)
             self.trucks[profile.device_id] = truck
             self._order.append(profile.device_id)
             new_ids.append(profile.device_id)
@@ -235,6 +238,20 @@ class Fleet:
         log.info("route_overridden", device_id=device_id, dest=dest, points=len(route.points))
         return True
 
+    def estimate_eta_s(self, truck: Truck) -> float:
+        """Cheap, OSRM-free ETA-to-gate estimate (seconds): remaining route
+        distance at the highway free-flow speed.
+
+        Used to seed ``eta_s`` for freshly injected / queued trucks and as a
+        serializer fallback so ``/devices/*`` never reports a null ETA. The 30 s
+        ETA loop later refines this with a live OSRM/HERE duration via
+        :meth:`compute_eta_s`. A truck parked at its gate queue has ~0 km
+        remaining, so this yields ~0 s ("<1 min" / at gate)."""
+        if truck.state in {TruckState.INSIDE_PORT, TruckState.IDLE}:
+            return 0.0
+        rem_km = truck.remaining_km or 0.0
+        return (rem_km / max(1e-6, self.cfg.speed_highway_kmh)) * 3600.0
+
     async def compute_eta_s(self, truck: Truck) -> Optional[float]:
         """ETA to the target gate (seconds), preferring a live OSRM/HERE duration."""
         if truck.state in {TruckState.INSIDE_PORT, TruckState.IDLE}:
@@ -245,8 +262,7 @@ class Fleet:
             truck.eta_s = live
             return live
         # Fallback: remaining route distance at the highway free-flow speed.
-        rem_km = truck.remaining_km or 0.0
-        eta = (rem_km / max(1e-6, self.cfg.speed_highway_kmh)) * 3600.0
+        eta = self.estimate_eta_s(truck)
         truck.eta_s = eta
         return eta
 

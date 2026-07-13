@@ -21,6 +21,12 @@ volumes:
   congestion-artifacts:
   anomaly-artifacts:
   kafka-data:
+  # ZooKeeper state (the Kafka cluster ID lives here). WITHOUT these, recreating
+  # the ZK container — e.g. the deploy's stale-container force-remove sweep — makes
+  # ZK come up with a NEW cluster ID while Kafka's persisted kafka-data still holds
+  # the old one, so the broker crash-loops on InconsistentClusterIdException.
+  zk-data:
+  zk-log:
 
 services:
   # --------------------------------------------------------------------------
@@ -89,6 +95,11 @@ services:
       TZ: Etc/UTC
     networks:
       - jnpa
+    # Persist ZK state so the cluster ID is stable across container recreation.
+    # A fresh ZK would mint a new cluster ID and desync Kafka's persisted kafka-data.
+    volumes:
+      - zk-data:/var/lib/zookeeper/data
+      - zk-log:/var/lib/zookeeper/log
     healthcheck:
       # "srvr" is enabled by default; querying it proves ZK is serving on 2181.
       test: ["CMD-SHELL", "echo srvr | nc -w 2 localhost 2181 | grep -q Zookeeper"]

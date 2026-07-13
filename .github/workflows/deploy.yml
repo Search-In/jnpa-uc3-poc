@@ -258,9 +258,35 @@ jobs:
             #     kafka-data, ...) are NOT tied to containers and persist untouched.
             docker ps -aq --filter 'name=^/jnpa-' | xargs -r docker rm -f || true
 
-            # 2e. Start the stack. Everything is already built above, so DO NOT pass
-            #     --build (that would rebuild all services in parallel and re-create
-            #     the disk spike). `up -d` just creates/starts the containers.
+            # 2e. Bring up ZooKeeper + Kafka FIRST, with a one-time self-heal for a
+            #     stale broker cluster ID. A kafka-data volume created before ZK state
+            #     was persisted holds an OLD cluster ID; against a fresh ZK the broker
+            #     crash-loops on InconsistentClusterId, its healthcheck never passes,
+            #     and the full `up -d` below aborts under `set -e` on the dependency
+            #     wait. So reconcile Kafka here: if it won't go healthy AND its log
+            #     shows the mismatch, reset kafka-data ONCE (it holds only transient
+            #     event streams — 6h retention — so this is safe) and restart. This
+            #     is idempotent: once ZK state is persisted the mismatch never recurs.
+            #     `up -d kafka` waits for ZK to be healthy, then returns after Kafka
+            #     starts (it does not block on Kafka's own healthcheck).
+            ${COMPOSE} up -d kafka || true
+            for _ in $(seq 1 18); do
+              status="$(docker inspect -f '{{.State.Health.Status}}' jnpa-kafka 2>/dev/null || echo none)"
+              [ "${status}" = "healthy" ] && { echo "Kafka healthy."; break; }
+              if docker logs jnpa-kafka 2>&1 | grep -qi 'InconsistentClusterId'; then
+                echo "Kafka cluster-id mismatch detected — resetting kafka-data volume once."
+                ${COMPOSE} rm -sf kafka || true
+                docker volume rm jnpa-uc3-poc_kafka-data 2>/dev/null || \
+                  docker volume ls -q --filter name=kafka-data | xargs -r docker volume rm || true
+                ${COMPOSE} up -d kafka || true
+              fi
+              sleep 10
+            done
+
+            # 2f. Start the rest of the stack. Kafka is already healthy above, so the
+            #     dependent services' `service_healthy` waits pass. DO NOT pass --build
+            #     (that would rebuild all services in parallel and re-create the disk
+            #     spike). `up -d` just creates/starts the remaining containers.
             ${COMPOSE} up -d --remove-orphans
 
             # 3. Reclaim space again post-build (old image layers + build cache).

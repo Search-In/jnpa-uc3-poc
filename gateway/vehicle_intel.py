@@ -11,6 +11,7 @@ Best-effort writers; idempotent DDL applied at boot.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
@@ -155,53 +156,74 @@ def dl_status(record: Dict[str, Any]) -> str:
 
 # --- aggregate reads (dashboards) ------------------------------------------
 async def vehicle_intel(plate: str, *, dsn: Optional[str]) -> dict:
-    """Everything known about a vehicle: RC + tracking + violations + challans + alerts."""
+    """Everything known about a vehicle: RC + tracking + violations + challans + alerts.
+
+    The six lookups are mutually independent (different tables, all keyed by the
+    plate), so they run CONCURRENTLY via asyncio.gather rather than as six serial
+    round-trips — the dominant cost when the DB is a remote RDS. Latency drops from
+    the SUM of the six queries to the MAX of them. Each still degrades independently:
+    return_exceptions=True means one failing lookup yields its own empty default
+    without failing the others (identical fallback behaviour to the prior per-try
+    version). Output shape is unchanged."""
     if not dsn:
         return {}
     from jnpa_shared.db import fetch_all, fetch_one
 
-    out: Dict[str, Any] = {"vehicle_number": plate}
-    try:
-        rc = await fetch_one("SELECT * FROM jnpa.vehicle_master WHERE plate = :p", {"p": plate}, dsn=dsn)
-        out["rc"] = _row(rc) if rc else None
-    except Exception:  # noqa: BLE001
-        out["rc"] = None
-    try:
-        track = await fetch_all(
+    async def _rc():
+        r = await fetch_one("SELECT * FROM jnpa.vehicle_master WHERE plate = :p", {"p": plate}, dsn=dsn)
+        return _row(r) if r else None
+
+    async def _tracking():
+        rows = await fetch_all(
             "SELECT ts, lat, lon, speed_kmh FROM jnpa.truck_telemetry WHERE plate = :p ORDER BY ts DESC LIMIT 20",
             {"p": plate}, dsn=dsn)
-        out["tracking"] = [_row(r) for r in track]
-    except Exception:  # noqa: BLE001
-        out["tracking"] = []
-    try:
-        cases = await fetch_all(
+        return [_row(r) for r in rows]
+
+    async def _violations():
+        rows = await fetch_all(
             "SELECT case_id, status, total_fine, first_detected_at FROM jnpa.violation_cases WHERE vehicle_number = :p ORDER BY first_detected_at DESC LIMIT 20",
             {"p": plate}, dsn=dsn)
-        out["violations"] = [_row(r) for r in cases]
-    except Exception:  # noqa: BLE001
-        out["violations"] = []
-    try:
-        challans = await fetch_all(
+        return [_row(r) for r in rows]
+
+    async def _challans():
+        rows = await fetch_all(
             "SELECT challan_no, total_fine, status, issued_at FROM jnpa.challans WHERE vehicle_number = :p ORDER BY issued_at DESC LIMIT 20",
             {"p": plate}, dsn=dsn)
-        out["challans"] = [_row(r) for r in challans]
-    except Exception:  # noqa: BLE001
-        out["challans"] = []
-    try:
-        alerts = await fetch_all(
+        return [_row(r) for r in rows]
+
+    async def _alerts():
+        rows = await fetch_all(
             "SELECT id, kind, severity, ts, payload FROM jnpa.alerts WHERE plate = :p ORDER BY ts DESC LIMIT 20",
             {"p": plate}, dsn=dsn)
-        out["alerts"] = [_row(r) for r in alerts]
-    except Exception:  # noqa: BLE001
-        out["alerts"] = []
-    try:
-        hist = await fetch_all(
+        return [_row(r) for r in rows]
+
+    async def _history():
+        rows = await fetch_all(
             "SELECT verification_status, source, created_at FROM jnpa.vehicle_verification_history WHERE vehicle_number = :p ORDER BY created_at DESC LIMIT 10",
             {"p": plate}, dsn=dsn)
-        out["verification_history"] = [_row(r) for r in hist]
-    except Exception:  # noqa: BLE001
-        out["verification_history"] = []
-    return out
+        return [_row(r) for r in rows]
+
+    rc, tracking, violations, challans, alerts, hist = await asyncio.gather(
+        _rc(), _tracking(), _violations(), _challans(), _alerts(), _history(),
+        return_exceptions=True,
+    )
+    return {
+        "vehicle_number": plate,
+        "rc": _default(rc, None),
+        "tracking": _default(tracking, []),
+        "violations": _default(violations, []),
+        "challans": _default(challans, []),
+        "alerts": _default(alerts, []),
+        "verification_history": _default(hist, []),
+    }
+
+
+def _default(value: Any, fallback: Any) -> Any:
+    """gather(return_exceptions=True) result -> value, or the fallback if the
+    query raised (preserves per-lookup graceful degradation)."""
+    if isinstance(value, BaseException):
+        return fallback
+    return value
 
 
 async def driver_intel(driver_key: str, *, dsn: Optional[str]) -> dict:
@@ -218,33 +240,41 @@ async def driver_intel(driver_key: str, *, dsn: Optional[str]) -> dict:
         out["driver"] = _row(drv) if drv else None
     except Exception:  # noqa: BLE001
         out["driver"] = None
-    dl_no = (out.get("driver") or {}).get("license_no") or driver_key.replace("DL:", "")
-    try:
-        dlh = await fetch_all(
+
+    # The remaining three lookups depend only on fields already resolved from the
+    # driver row, so they run CONCURRENTLY (was three serial round-trips).
+    driver = out.get("driver") or {}
+    dl_no = driver.get("license_no") or driver_key.replace("DL:", "")
+    driver_id = driver.get("driver_id") or driver_key
+    vehicle_no = driver.get("vehicle_no")
+    out["vehicle_no"] = vehicle_no
+
+    async def _dl_history():
+        rows = await fetch_all(
             "SELECT status, source, response_payload, created_at FROM jnpa.driver_license_lookup_history WHERE dl_number = :d ORDER BY created_at DESC LIMIT 10",
             {"d": dl_no}, dsn=dsn)
-        out["dl_history"] = [_row(r) for r in dlh]
-    except Exception:  # noqa: BLE001
-        out["dl_history"] = []
-    try:
-        vlog = await fetch_all(
+        return [_row(r) for r in rows]
+
+    async def _activity():
+        rows = await fetch_all(
             "SELECT decision, score, ts FROM jnpa.verification_logs WHERE driver_id = :k ORDER BY ts DESC LIMIT 20",
-            {"k": (out.get("driver") or {}).get("driver_id") or driver_key}, dsn=dsn)
-        out["activity"] = [_row(r) for r in vlog]
-    except Exception:  # noqa: BLE001
-        out["activity"] = []
-    vehicle_no = (out.get("driver") or {}).get("vehicle_no")
-    out["vehicle_no"] = vehicle_no
-    if vehicle_no:
-        try:
-            cases = await fetch_all(
-                "SELECT case_id, status, total_fine FROM jnpa.violation_cases WHERE vehicle_number = :p ORDER BY first_detected_at DESC LIMIT 20",
-                {"p": vehicle_no}, dsn=dsn)
-            out["violations"] = [_row(r) for r in cases]
-        except Exception:  # noqa: BLE001
-            out["violations"] = []
-    else:
-        out["violations"] = []
+            {"k": driver_id}, dsn=dsn)
+        return [_row(r) for r in rows]
+
+    async def _violations():
+        if not vehicle_no:
+            return []
+        rows = await fetch_all(
+            "SELECT case_id, status, total_fine FROM jnpa.violation_cases WHERE vehicle_number = :p ORDER BY first_detected_at DESC LIMIT 20",
+            {"p": vehicle_no}, dsn=dsn)
+        return [_row(r) for r in rows]
+
+    dlh, vlog, cases = await asyncio.gather(
+        _dl_history(), _activity(), _violations(), return_exceptions=True,
+    )
+    out["dl_history"] = _default(dlh, [])
+    out["activity"] = _default(vlog, [])
+    out["violations"] = _default(cases, [])
     return out
 
 

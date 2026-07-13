@@ -283,7 +283,30 @@ jobs:
               sleep 10
             done
 
-            # 2f. Start the rest of the stack. Kafka is already healthy above, so the
+            # 2f. Free host ports 80/443 before starting the web container, which
+            #     terminates TLS by binding them directly (docker-compose.aws.yml).
+            #     nginx runs INSIDE the web image, so that container is the ONLY
+            #     intended owner of 80/443 — nothing on the host should compete. A
+            #     prior partial deploy can leave a container still publishing them, or
+            #     a force-removed container's docker-proxy can stay bound, so web's
+            #     bind fails with "address already in use". Remove any container
+            #     publishing them (safe), then force-free any residual holder so the
+            #     bind below always succeeds. pgdata/minio-data/etc. are untouched.
+            for p in 80 443; do
+              cids="$(docker ps -q --filter "publish=${p}")"
+              if [ -n "${cids}" ]; then
+                echo "Freeing host port ${p}: removing container(s) ${cids}"
+                docker rm -f ${cids} || true
+              fi
+              # Kill any residual holder (lingering docker-proxy / stray host process)
+              # still bound to the port. On a dedicated PoC host the web container is
+              # the sole intended owner, so this is safe and decisive.
+              sudo fuser -k "${p}/tcp" 2>/dev/null || \
+                { pid="$(sudo ss -ltnpH "sport = :${p}" 2>/dev/null | grep -oE 'pid=[0-9]+' | head -n1 | cut -d= -f2)"; \
+                  [ -n "${pid}" ] && { echo "Killing PID ${pid} holding port ${p}"; sudo kill -9 "${pid}" || true; }; }
+            done
+
+            # 2g. Start the rest of the stack. Kafka is already healthy above, so the
             #     dependent services' `service_healthy` waits pass. DO NOT pass --build
             #     (that would rebuild all services in parallel and re-create the disk
             #     spike). `up -d` just creates/starts the remaining containers.

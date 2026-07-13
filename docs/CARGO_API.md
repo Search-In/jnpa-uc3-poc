@@ -110,7 +110,21 @@ PUT /api/cargo/MAEU6123458
 → 400 Bad Request
 ```
 
-### 5. Delete — `DELETE /api/cargo/{container_number}`
+### 5. Assign yard block — `PUT /api/cargo/{container_number}/yard-assignment`
+Single-purpose write that parks a container in a yard block and persists it to
+`jnpa.cargo.yard_block` (same column/record `PUT` patches; no separate yard
+table). Returns a compact confirmation rather than the full record. `yard_block`
+is required and format-checked (`<LETTERS>-<DIGITS>`, e.g. `A-01`; normalised to
+upper-case) — a missing/malformed block is a 400.
+```
+PUT /api/cargo/GESU5123996/yard-assignment
+{ "yard_block": "A-01" }
+→ 200 OK { "container_number": "GESU5123996", "yard_block": "A-01", "status": "ASSIGNED" }
+→ 404 Not Found { "detail": { "error": "not_found", "container_number": "GESU5123996" } }
+→ 400 Bad Request (missing/invalid yard_block, or malformed container id)
+```
+
+### 6. Delete — `DELETE /api/cargo/{container_number}`
 ```
 DELETE /api/cargo/MAEU6123458
 → 200 OK { "deleted": true, "container_number": "MAEU6123458" }
@@ -147,5 +161,7 @@ DELETE /api/cargo/MAEU6123458
 ## Suggested POC-2 wiring
 Add one block to your existing API wrapper (do **not** duplicate fetch logic):
 `list → GET /api/cargo`, `details → GET /api/cargo/{id}`, `release → PUT /api/cargo/{id} {is_released:true}`,
+`assign-yard → PUT /api/cargo/{id}/yard-assignment {yard_block:"A-01"}`,
 `search → GET /api/cargo?container_number=...`. Cargo List → Details → Release →
-Container Search → Journey all read from these same endpoints.
+Yard Assignment → Container Search → Journey all read from these same endpoints —
+POC-2 adds no Cargo backend or DB of its own.

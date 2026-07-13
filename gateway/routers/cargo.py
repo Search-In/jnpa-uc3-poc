@@ -10,11 +10,18 @@ router in the same mould as :mod:`gateway.routers.fastag`:
      (the single orchestration point; raw SQL lives in the repository),
   3. maps the service's typed errors to clean HTTP status codes.
 
-    POST   /api/cargo                      -> 201 Created (409 on duplicate)
-    GET    /api/cargo                      -> 200 list (filter + paginate)
-    GET    /api/cargo/{container_number}   -> 200 one (404 if absent)
-    PUT    /api/cargo/{container_number}   -> 200 updated (404 if absent)
-    DELETE /api/cargo/{container_number}   -> 200 deleted (404 if absent)
+    POST   /api/cargo                                  -> 201 Created (409 on duplicate)
+    GET    /api/cargo                                  -> 200 list (filter + paginate)
+    GET    /api/cargo/{container_number}               -> 200 one (404 if absent)
+    PUT    /api/cargo/{container_number}               -> 200 updated (404 if absent)
+    PUT    /api/cargo/{container_number}/yard-assignment -> 200 assigned (404/400)
+    DELETE /api/cargo/{container_number}               -> 200 deleted (404 if absent)
+
+The yard-assignment endpoint is a narrow, single-purpose write over the same
+``jnpa.cargo.yard_block`` column that PUT already patches — it exists so POC-2
+(Cargo Twin) has one intent-revealing call for "put this box in a block" that
+returns a compact {container_number, yard_block, status} envelope. It reuses the
+CargoService/CargoRepository update path; no separate yard table or service.
 
 Invalid payloads (bad ISO-6346, bad enum, bad types) surface as 400 via the
 gateway's shared validation handler (see gateway/main.py — /api/cargo/ is mapped
@@ -22,6 +29,7 @@ to 400 alongside /api/fastag/).
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from enum import Enum
 from typing import Optional
@@ -78,6 +86,24 @@ def _clean_vehicle(value: Optional[str]) -> Optional[str]:
         return None
     norm = str(value).strip().upper().replace(" ", "")
     return norm or None
+
+
+# Yard block identifier: a letter/letter-pair, a hyphen, then a 1-3 digit slot
+# (e.g. A-01, B-9, AB-123). A required, format-checked value — so an empty or
+# malformed block is rejected as a validation error (-> 400) rather than silently
+# persisted. Normalised to upper-case with internal spaces stripped.
+_YARD_BLOCK_RE = re.compile(r"^[A-Z]{1,2}-\d{1,3}$")
+
+
+def _clean_yard_block(value: str) -> str:
+    """Normalise + validate a yard block. Raises ValueError (-> 400) if empty or
+    not matching the ``<LETTERS>-<DIGITS>`` shape."""
+    if value is None or not str(value).strip():
+        raise ValueError("yard_block is required")
+    norm = str(value).strip().upper().replace(" ", "")
+    if not _YARD_BLOCK_RE.match(norm):
+        raise ValueError("invalid yard_block (expected e.g. 'A-01')")
+    return norm
 
 
 # --------------------------------------------------------------------------- DTOs
@@ -146,6 +172,31 @@ class CargoOut(BaseModel):
     eta: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
+
+
+class YardAssignmentIn(BaseModel):
+    """Body for PUT /api/cargo/{container_number}/yard-assignment — the block to
+    park the container in. Format-checked so an invalid block is a 400."""
+    yard_block: str = Field(..., max_length=50, description="Yard block id, e.g. 'A-01'")
+
+    model_config = ConfigDict(json_schema_extra={"example": {"yard_block": "A-01"}})
+
+    @field_validator("yard_block")
+    @classmethod
+    def _v_yard_block(cls, v: str) -> str:
+        return _clean_yard_block(v)
+
+
+class YardAssignmentOut(BaseModel):
+    """Compact yard-assignment confirmation returned to the Cargo Twin (POC-2)."""
+    container_number: str
+    yard_block: str
+    status: str = "ASSIGNED"
+
+    model_config = ConfigDict(json_schema_extra={
+        "example": {"container_number": "GESU5123996", "yard_block": "A-01",
+                    "status": "ASSIGNED"}
+    })
 
 
 _ERROR_RESPONSES = {
@@ -242,6 +293,27 @@ async def update_cargo(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "not_found", "container_number": cn})
     return _to_out(row)
+
+
+@router.put("/{container_number}/yard-assignment", response_model=YardAssignmentOut,
+            responses=_ERROR_RESPONSES, summary="Assign a container to a yard block")
+async def assign_yard(
+    container_number: str,
+    body: YardAssignmentIn,
+    service: CargoService = Depends(get_service),
+) -> YardAssignmentOut:
+    """Persist ``jnpa.cargo.yard_block`` for one container and confirm the
+    assignment. Reuses the same CargoService.update_cargo path as the generic
+    PUT — no separate yard table/service. 404 if the container is unknown; 400
+    (via the shared validation handler) if the block is missing/malformed."""
+    cn = _require_container_no(container_number)
+    try:
+        row = await service.update_cargo(cn, {"yard_block": body.yard_block})
+    except CargoNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail={"error": "not_found", "container_number": cn})
+    return YardAssignmentOut(container_number=row["container_number"],
+                             yard_block=row["yard_block"], status="ASSIGNED")
 
 
 @router.delete("/{container_number}", responses=_ERROR_RESPONSES,

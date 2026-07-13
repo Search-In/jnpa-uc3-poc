@@ -260,6 +260,55 @@ def test_invalid_payload_400(client):
     assert client.post("/api/cargo", json=p).status_code == 400
 
 
+# ------------------------------------------------------------- yard assignment
+def test_yard_assignment_success(client):
+    client.post("/api/cargo", json=_payload(yard_block=None))
+    r = client.put(f"/api/cargo/{VALID_CN}/yard-assignment", json={"yard_block": "A-01"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body == {"container_number": VALID_CN, "yard_block": "A-01", "status": "ASSIGNED"}
+
+
+def test_yard_assignment_normalises_block(client):
+    client.post("/api/cargo", json=_payload())
+    # lower-case is normalised to the canonical upper form.
+    r = client.put(f"/api/cargo/{VALID_CN}/yard-assignment", json={"yard_block": "b-02"})
+    assert r.status_code == 200
+    assert r.json()["yard_block"] == "B-02"
+
+
+def test_yard_assignment_persists(client):
+    """The assigned block is durably written — a follow-up GET reflects it."""
+    client.post("/api/cargo", json=_payload(yard_block="A-01"))
+    assert client.put(f"/api/cargo/{VALID_CN}/yard-assignment",
+                      json={"yard_block": "C-07"}).status_code == 200
+    got = client.get(f"/api/cargo/{VALID_CN}")
+    assert got.status_code == 200
+    assert got.json()["yard_block"] == "C-07"
+
+
+def test_yard_assignment_container_not_found_404(client):
+    # Valid, well-formed container that was never created.
+    r = client.put("/api/cargo/MSCU7789010/yard-assignment", json={"yard_block": "A-01"})
+    assert r.status_code == 404
+    assert r.json()["detail"]["error"] == "not_found"
+
+
+def test_yard_assignment_invalid_payload_400(client):
+    client.post("/api/cargo", json=_payload())
+    # Malformed block shape.
+    assert client.put(f"/api/cargo/{VALID_CN}/yard-assignment",
+                      json={"yard_block": "not a block"}).status_code == 400
+    # Empty block.
+    assert client.put(f"/api/cargo/{VALID_CN}/yard-assignment",
+                      json={"yard_block": ""}).status_code == 400
+    # Missing yard_block field.
+    assert client.put(f"/api/cargo/{VALID_CN}/yard-assignment", json={}).status_code == 400
+    # Bad ISO-6346 on the path -> 400 (never 500).
+    assert client.put(f"/api/cargo/{BAD_CN}/yard-assignment",
+                      json={"yard_block": "A-01"}).status_code == 400
+
+
 # --------------------------------------------------- real-DB integration (opt-in)
 def _pg_reachable(host: str = "127.0.0.1", port: int = 5433) -> bool:
     try:
@@ -286,6 +335,10 @@ def test_real_db_roundtrip():
             assert c.get(f"/api/cargo/{cn}").json()["container_number"] == cn
             up = c.put(f"/api/cargo/{cn}", json={"customs_status": "CLEARED"})
             assert up.status_code == 200 and up.json()["customs_status"] == "CLEARED"
+            # Yard assignment persists through the real repository/DB.
+            ya = c.put(f"/api/cargo/{cn}/yard-assignment", json={"yard_block": "D-04"})
+            assert ya.status_code == 200 and ya.json()["status"] == "ASSIGNED"
+            assert c.get(f"/api/cargo/{cn}").json()["yard_block"] == "D-04"
             assert c.delete(f"/api/cargo/{cn}").status_code == 200
             assert c.get(f"/api/cargo/{cn}").status_code == 404
     finally:

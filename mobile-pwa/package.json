@@ -6,7 +6,7 @@
   "description": "JNPA UC-III driver-side ETA / re-route advisory PWA (Prompt 11) — React + Vite + TS + vite-plugin-pwa",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 3002",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && node --max-old-space-size=8192 ./node_modules/vite/bin/vite.js build",
     "preview": "vite preview --host 0.0.0.0 --port 4173",
     "typecheck": "tsc -b --noEmit",
     "lint": "eslint . --ext ts,tsx",
@@ -14,11 +14,13 @@
     "test:e2e:install": "playwright install --with-deps chromium"
   },
   "dependencies": {
+    "@arcgis/core": "^4.31.6",
+    "@arcgis/map-components": "^4.31.8",
+    "@arcgis/map-components-react": "^4.31.8",
     "firebase": "^10.14.1",
     "i18next": "^23.16.4",
     "i18next-browser-languagedetector": "^8.0.0",
     "idb-keyval": "^6.2.1",
-    "maplibre-gl": "^4.7.1",
     "qrcode": "^1.5.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

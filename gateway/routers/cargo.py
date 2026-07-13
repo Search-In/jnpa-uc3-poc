@@ -18,6 +18,22 @@ router in the same mould as :mod:`gateway.routers.fastag`:
     PUT    /api/cargo/{container_number}/yard-assignment -> 200 assigned (404/400)
     DELETE /api/cargo/{container_number}               -> 200 deleted (404 if absent)
 
+  POC-2 extension surface (all ADDITIVE; migrations 0016-0018):
+
+    POST   /api/cargo/notifications                    -> 201 stakeholder notification
+    GET    /api/cargo/notifications                    -> 200 list (container/type/severity/status)
+    POST   /api/cargo/{container_number}/workflow      -> 200 TRIGGER/APPROVE/REJECT (404 if absent)
+    GET    /api/cargo/{container_number}/workflow/history -> 200 append-only transitions
+    POST   /api/cargo/yard-planning                    -> 201 plan a yard slot
+    GET    /api/cargo/yard-optimization                -> 200 congestion + move recommendations
+    POST   /api/cargo/rake-planning                    -> 201 plan a rail rake
+    GET    /api/cargo/rake-planning                    -> 200 list rake plans
+    POST   /api/cargo/reefer-planning                  -> 201 allocate a reefer slot
+
+  IMPORTANT (route ordering): the static-path GET routes above (/notifications,
+  /yard-optimization, /rake-planning) are declared BEFORE GET /{container_number},
+  which would otherwise capture them as a container number — same as /events.
+
 Migration 0015 adds four backward-compatible fields (eseal_status, eseal_number,
 pre_document_status, origin_stream) and a cargo lifecycle event log that backs the
 UC-2 notifications contract (GET /api/cargo/events). GET /api/cargo also accepts an
@@ -289,6 +305,227 @@ class CargoEventOut(BaseModel):
     })
 
 
+# ------------------------------------------------- POC-2 extension DTOs / enums
+class Severity(str, Enum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
+
+
+class Priority(str, Enum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
+
+
+class WorkflowAction(str, Enum):
+    TRIGGER = "TRIGGER"
+    APPROVE = "APPROVE"
+    REJECT = "REJECT"
+
+
+# Yard block LETTER-zone (e.g. 'B', 'AB') — the preferred_block on a yard plan. A
+# slot number is appended by the service (-> 'B-09'), so only the zone is given.
+_YARD_ZONE_RE = re.compile(r"^[A-Z]{1,2}$")
+
+
+def _clean_yard_zone(value: str) -> str:
+    if value is None or not str(value).strip():
+        raise ValueError("preferred_block is required")
+    norm = str(value).strip().upper().replace(" ", "")
+    if not _YARD_ZONE_RE.match(norm):
+        raise ValueError("invalid preferred_block (expected a letter zone, e.g. 'B')")
+    return norm
+
+
+# ---- 1. Stakeholder notifications --------------------------------------------
+class NotificationCreate(BaseModel):
+    container_number: str = Field(..., description="ISO-6346 container number")
+    notification_type: str = Field(..., max_length=64, description="e.g. 'CUSTOMS_ALERT'")
+    severity: Severity = Field(default=Severity.MEDIUM)
+    message: Optional[str] = Field(default=None, max_length=1000)
+    stakeholders: list[str] = Field(default_factory=list,
+                                    description="Recipient roles, e.g. ['operator','customs']")
+
+    model_config = ConfigDict(json_schema_extra={"example": {
+        "container_number": "GESU5123996", "notification_type": "CUSTOMS_ALERT",
+        "severity": "HIGH", "message": "Container pending customs approval",
+        "stakeholders": ["operator", "customs", "control_room"]}})
+
+    @field_validator("container_number")
+    @classmethod
+    def _v_container(cls, v: str) -> str:
+        return _clean_container_no(v)
+
+    @field_validator("notification_type")
+    @classmethod
+    def _v_type(cls, v: str) -> str:
+        norm = str(v).strip().upper().replace(" ", "_") if v else ""
+        if not norm:
+            raise ValueError("notification_type is required")
+        return norm
+
+    @field_validator("stakeholders")
+    @classmethod
+    def _v_stakeholders(cls, v: list[str]) -> list[str]:
+        return [s.strip() for s in (v or []) if s and s.strip()]
+
+
+class NotificationCreateOut(BaseModel):
+    notification_id: int
+    status: str = "CREATED"
+
+    model_config = ConfigDict(json_schema_extra={
+        "example": {"notification_id": 1, "status": "CREATED"}})
+
+
+class NotificationOut(BaseModel):
+    notification_id: int
+    container_number: str
+    notification_type: str
+    severity: str
+    message: Optional[str] = None
+    stakeholders: list[str] = Field(default_factory=list)
+    status: str
+    created_at: datetime
+
+
+# ---- 2. Workflow --------------------------------------------------------------
+class WorkflowIn(BaseModel):
+    action: WorkflowAction
+    comment: Optional[str] = Field(default=None, max_length=1000)
+
+    model_config = ConfigDict(json_schema_extra={
+        "example": {"action": "APPROVE", "comment": "Customs cleared"}})
+
+
+class WorkflowOut(BaseModel):
+    container_number: str
+    workflow_status: str
+
+    model_config = ConfigDict(json_schema_extra={
+        "example": {"container_number": "GESU5123996", "workflow_status": "APPROVED"}})
+
+
+class WorkflowHistoryOut(BaseModel):
+    id: int
+    container_number: str
+    action: str
+    old_status: Optional[str] = None
+    new_status: Optional[str] = None
+    comment: Optional[str] = None
+    created_at: datetime
+
+
+# ---- 3. Yard planning ---------------------------------------------------------
+class YardPlanIn(BaseModel):
+    container_number: str
+    preferred_block: str = Field(..., description="Yard block letter-zone, e.g. 'B'")
+    priority: Priority = Field(default=Priority.MEDIUM)
+
+    model_config = ConfigDict(json_schema_extra={"example": {
+        "container_number": "GESU5123996", "preferred_block": "B", "priority": "HIGH"}})
+
+    @field_validator("container_number")
+    @classmethod
+    def _v_container(cls, v: str) -> str:
+        return _clean_container_no(v)
+
+    @field_validator("preferred_block")
+    @classmethod
+    def _v_block(cls, v: str) -> str:
+        return _clean_yard_zone(v)
+
+
+class YardPlanOut(BaseModel):
+    container_number: str
+    assigned_block: str
+    status: str = "PLANNED"
+
+    model_config = ConfigDict(json_schema_extra={"example": {
+        "container_number": "GESU5123996", "assigned_block": "B-09", "status": "PLANNED"}})
+
+
+# ---- 4. Yard optimization -----------------------------------------------------
+class YardOptimizationOut(BaseModel):
+    yard_congestion: float
+    recommendations: list[dict] = Field(default_factory=list)
+    priority_containers: list[str] = Field(default_factory=list)
+    busiest_block: Optional[str] = None
+
+    model_config = ConfigDict(json_schema_extra={"example": {
+        "yard_congestion": 0.72,
+        "recommendations": [{"container_number": "GESU5123996", "action": "MOVE",
+                             "reason": "reduce congestion"}],
+        "priority_containers": ["GESU5123996"], "busiest_block": "B"}})
+
+
+# ---- 5. Rake planning ---------------------------------------------------------
+class RakePlanIn(BaseModel):
+    rake_id: str = Field(..., max_length=64)
+    containers: list[str] = Field(default_factory=list)
+
+    model_config = ConfigDict(json_schema_extra={"example": {
+        "rake_id": "RKE001", "containers": ["GESU5123996", "OOLU9050118"]}})
+
+    @field_validator("rake_id")
+    @classmethod
+    def _v_rake(cls, v: str) -> str:
+        norm = str(v).strip().upper().replace(" ", "") if v else ""
+        if not norm:
+            raise ValueError("rake_id is required")
+        return norm
+
+    @field_validator("containers")
+    @classmethod
+    def _v_containers(cls, v: list[str]) -> list[str]:
+        return [_clean_container_no(c) for c in (v or [])]
+
+
+class RakePlanOut(BaseModel):
+    rake_id: str
+    planned_containers: int
+    status: str = "PLANNED"
+
+    model_config = ConfigDict(json_schema_extra={"example": {
+        "rake_id": "RKE001", "planned_containers": 2, "status": "PLANNED"}})
+
+
+class RakePlanRecordOut(BaseModel):
+    id: int
+    rake_id: str
+    containers: list[str] = Field(default_factory=list)
+    planned_containers: int
+    status: str
+    created_at: datetime
+
+
+# ---- 6. Reefer planning -------------------------------------------------------
+class ReeferPlanIn(BaseModel):
+    container_number: str
+    temperature: Optional[float] = Field(default=None, description="Set-point, degrees C")
+    power_required: bool = Field(default=True)
+
+    model_config = ConfigDict(json_schema_extra={"example": {
+        "container_number": "MSCU7789010", "temperature": 4, "power_required": True}})
+
+    @field_validator("container_number")
+    @classmethod
+    def _v_container(cls, v: str) -> str:
+        return _clean_container_no(v)
+
+
+class ReeferPlanOut(BaseModel):
+    container_number: str
+    slot: str
+    status: str = "ALLOCATED"
+
+    model_config = ConfigDict(json_schema_extra={"example": {
+        "container_number": "MSCU7789010", "slot": "REEFER-A12", "status": "ALLOCATED"}})
+
+
 _ERROR_RESPONSES = {
     400: {"description": "Validation error (bad ISO-6346 / enum / types)"},
     404: {"description": "Container not found"},
@@ -311,6 +548,37 @@ def _to_event_out(row: dict) -> CargoEventOut:
 
 def _to_out(row: dict) -> CargoOut:
     return CargoOut(**row)
+
+
+def _as_list(value: object) -> list:
+    """Coerce a jsonb column to a Python list. asyncpg usually parses jsonb into a
+    list already; a fake repo may hand back a list; a raw string is decoded."""
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        import json as _json
+        try:
+            parsed = _json.loads(value)
+            return parsed if isinstance(parsed, list) else []
+        except (ValueError, TypeError):
+            return []
+    return []
+
+
+def _to_notification_out(row: dict) -> NotificationOut:
+    return NotificationOut(
+        notification_id=int(row["id"]), container_number=row["container_number"],
+        notification_type=row["notification_type"], severity=row["severity"],
+        message=row.get("message"), stakeholders=_as_list(row.get("stakeholders")),
+        status=row["status"], created_at=row["created_at"])
+
+
+def _to_rake_record_out(row: dict) -> RakePlanRecordOut:
+    return RakePlanRecordOut(
+        id=int(row["id"]), rake_id=row["rake_id"],
+        containers=_as_list(row.get("containers")),
+        planned_containers=int(row["planned_containers"]), status=row["status"],
+        created_at=row["created_at"])
 
 
 def _require_container_no(value: str) -> str:
@@ -406,6 +674,114 @@ async def list_cargo_events(
     return [_to_event_out(r) for r in rows]
 
 
+# ======================================================= POC-2 extension endpoints
+# Stakeholder notifications, workflow lifecycle, and yard/rake/reefer planning —
+# all ADDITIVE to the CRUD contract above. The static-path GET routes here MUST be
+# declared BEFORE GET /{container_number} (below) or the router would parse
+# 'notifications' / 'yard-optimization' / 'rake-planning' as a container number.
+
+# ---- 1. Stakeholder notifications --------------------------------------------
+@router.post("/notifications", response_model=NotificationCreateOut,
+             status_code=status.HTTP_201_CREATED, responses=_ERROR_RESPONSES,
+             summary="Create a stakeholder notification event")
+async def create_notification(
+    body: NotificationCreate,
+    service: CargoService = Depends(get_service),
+) -> NotificationCreateOut:
+    row = await service.create_notification(
+        container_number=body.container_number, notification_type=body.notification_type,
+        severity=body.severity.value, message=body.message, stakeholders=body.stakeholders)
+    return NotificationCreateOut(notification_id=int(row["id"]),
+                                 status=row.get("status", "CREATED"))
+
+
+@router.get("/notifications", response_model=list[NotificationOut],
+            summary="List stakeholder notifications (filter: container/type/severity/status)")
+async def list_notifications(
+    container_number: Optional[str] = Query(default=None),
+    notification_type: Optional[str] = Query(default=None),
+    severity: Optional[Severity] = Query(default=None),
+    status_filter: Optional[str] = Query(default=None, alias="status"),
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    service: CargoService = Depends(get_service),
+) -> list[NotificationOut]:
+    cn = _require_container_no(container_number) if container_number else None
+    ntype = notification_type.strip().upper().replace(" ", "_") if notification_type else None
+    rows = await service.list_notifications(
+        container_number=cn, notification_type=ntype,
+        severity=severity.value if severity else None,
+        status=status_filter, limit=limit, offset=offset)
+    return [_to_notification_out(r) for r in rows]
+
+
+# ---- 3. Yard planning ---------------------------------------------------------
+@router.post("/yard-planning", response_model=YardPlanOut,
+             status_code=status.HTTP_201_CREATED, responses=_ERROR_RESPONSES,
+             summary="Plan a yard slot for a container in a preferred block")
+async def create_yard_planning(
+    body: YardPlanIn,
+    service: CargoService = Depends(get_service),
+) -> YardPlanOut:
+    row = await service.plan_yard(container_number=body.container_number,
+                                  preferred_block=body.preferred_block,
+                                  priority=body.priority.value)
+    return YardPlanOut(container_number=row["container_number"],
+                       assigned_block=row["assigned_block"],
+                       status=row.get("status", "PLANNED"))
+
+
+# ---- 4. Yard operation optimization ------------------------------------------
+@router.get("/yard-optimization", response_model=YardOptimizationOut,
+            summary="Yard congestion score + move recommendations")
+async def yard_optimization(
+    service: CargoService = Depends(get_service),
+) -> YardOptimizationOut:
+    return YardOptimizationOut(**await service.optimize_yard())
+
+
+# ---- 5. Rake planning ---------------------------------------------------------
+@router.post("/rake-planning", response_model=RakePlanOut,
+             status_code=status.HTTP_201_CREATED, responses=_ERROR_RESPONSES,
+             summary="Plan a rail rake over a set of containers")
+async def create_rake_planning(
+    body: RakePlanIn,
+    service: CargoService = Depends(get_service),
+) -> RakePlanOut:
+    row = await service.plan_rake(rake_id=body.rake_id, containers=body.containers)
+    return RakePlanOut(rake_id=row["rake_id"],
+                       planned_containers=int(row["planned_containers"]),
+                       status=row.get("status", "PLANNED"))
+
+
+@router.get("/rake-planning", response_model=list[RakePlanRecordOut],
+            summary="List rake plans (optional rake_id filter)")
+async def list_rake_planning(
+    rake_id: Optional[str] = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    service: CargoService = Depends(get_service),
+) -> list[RakePlanRecordOut]:
+    rid = rake_id.strip().upper().replace(" ", "") if rake_id else None
+    rows = await service.list_rake_plans(rake_id=rid, limit=limit, offset=offset)
+    return [_to_rake_record_out(r) for r in rows]
+
+
+# ---- 6. Reefer planning -------------------------------------------------------
+@router.post("/reefer-planning", response_model=ReeferPlanOut,
+             status_code=status.HTTP_201_CREATED, responses=_ERROR_RESPONSES,
+             summary="Allocate a powered reefer slot for a container")
+async def create_reefer_planning(
+    body: ReeferPlanIn,
+    service: CargoService = Depends(get_service),
+) -> ReeferPlanOut:
+    row = await service.plan_reefer(container_number=body.container_number,
+                                    temperature=body.temperature,
+                                    power_required=body.power_required)
+    return ReeferPlanOut(container_number=row["container_number"], slot=row["slot"],
+                         status=row.get("status", "ALLOCATED"))
+
+
 @router.get("/{container_number}", response_model=CargoOut, responses=_ERROR_RESPONSES,
             summary="Get one cargo record by container number")
 async def get_cargo(
@@ -454,6 +830,38 @@ async def assign_yard(
                             detail={"error": "not_found", "container_number": cn})
     return YardAssignmentOut(container_number=row["container_number"],
                              yard_block=row["yard_block"], status="ASSIGNED")
+
+
+# ---- 2. Workflow lifecycle (TRIGGER -> APPROVE / REJECT) ----------------------
+@router.post("/{container_number}/workflow", response_model=WorkflowOut,
+             responses=_ERROR_RESPONSES, summary="Advance a container's workflow")
+async def cargo_workflow(
+    container_number: str,
+    body: WorkflowIn,
+    service: CargoService = Depends(get_service),
+) -> WorkflowOut:
+    """Apply a workflow action and return the new status. 404 if the container is
+    unknown; the transition is also written to the append-only workflow history."""
+    cn = _require_container_no(container_number)
+    row = await service.apply_workflow(cn, body.action.value, body.comment)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail={"error": "not_found", "container_number": cn})
+    return WorkflowOut(container_number=cn, workflow_status=row["new_status"])
+
+
+@router.get("/{container_number}/workflow/history",
+            response_model=list[WorkflowHistoryOut], responses=_ERROR_RESPONSES,
+            summary="Append-only workflow transition history for a container")
+async def cargo_workflow_history(
+    container_number: str,
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    service: CargoService = Depends(get_service),
+) -> list[WorkflowHistoryOut]:
+    cn = _require_container_no(container_number)
+    rows = await service.list_workflow_history(cn, limit=limit, offset=offset)
+    return [WorkflowHistoryOut(**r) for r in rows]
 
 
 @router.delete("/{container_number}", responses=_ERROR_RESPONSES,

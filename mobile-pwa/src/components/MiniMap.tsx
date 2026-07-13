@@ -1,7 +1,19 @@
-import { useEffect, useRef } from "react";
-import maplibregl from "maplibre-gl";
-import "maplibre-gl/dist/maplibre-gl.css";
-import { mapStyle, roadStyle } from "@/lib/basemap";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+// Register the <arcgis-map> custom element + bundle its runtime locally (the
+// same side-effect import the dashboard uses in web/src/components/map/
+// ArcgisMap.tsx). The React wrapper below only creates the React->element
+// binding; this import is what actually defines/upgrades the element.
+import "@arcgis/map-components/components/arcgis-map";
+import { ArcgisMap as ArcgisMapWC } from "@arcgis/map-components-react";
+import GraphicsLayer from "@arcgis/core/layers/GraphicsLayer";
+import Graphic from "@arcgis/core/Graphic";
+import Point from "@arcgis/core/geometry/Point";
+import Polyline from "@arcgis/core/geometry/Polyline";
+import SimpleMarkerSymbol from "@arcgis/core/symbols/SimpleMarkerSymbol";
+import SimpleLineSymbol from "@arcgis/core/symbols/SimpleLineSymbol";
+import PictureMarkerSymbol from "@arcgis/core/symbols/PictureMarkerSymbol";
+import type MapView from "@arcgis/core/views/MapView";
+import { basemapId } from "@/lib/basemap";
 import type { CorridorGeometry, DevicePosition, Gate } from "@/lib/types";
 
 // One route option to draw (Google-Maps-style): a polyline in [lon,lat] pairs,
@@ -12,12 +24,12 @@ export interface RouteLine {
   primary?: boolean;
 }
 
-// "Traffic ahead" mini-map. It loads the SAME basemap as the dashboard (Carto
-// Positron raster by default, token-free; Mapbox/Bhuvan optional via the shared
-// VITE_* contract — see lib/basemap.ts) so the driver sees real roads, the port
-// area and surrounding geography. On top of the basemap it overlays GeoJSON
-// layers for the corridor polyline, the four gates, the segment "traffic ahead"
-// colouring, and the live truck marker.
+// "Traffic ahead" mini-map — now rendered on the ArcGIS Maps SDK (Esri), the
+// SAME engine as the operations dashboard, so the driver PWA and control room
+// share one map stack (not just the same imagery). It loads an Esri basemap
+// (imagery+labels hybrid by default; see lib/basemap.ts) and overlays ArcGIS
+// GraphicsLayers for the corridor polyline, the four gates, route options, the
+// destination pin, parking POIs and the live directional truck marker.
 
 interface Props {
   corridor?: CorridorGeometry;
@@ -28,7 +40,7 @@ interface Props {
   jam?: Record<string, number>;
   // Fill the parent container (full-screen nav map) instead of the fixed 200px.
   fill?: boolean;
-  // Use the Google-Maps-style road basemap instead of the default (satellite).
+  // Use the Esri street navigation basemap instead of the default (imagery).
   roads?: boolean;
   // Multiple route options to draw (primary highlighted, alternates greyed).
   routes?: RouteLine[];
@@ -42,10 +54,42 @@ interface Props {
   frameToTrip?: boolean;
 }
 
+const WGS84 = { wkid: 4326 } as const;
+// Opening camera — the JNPA corridor framing the old MapLibre map used.
+const INITIAL_CENTER: [number, number] = [72.952, 18.948];
+const INITIAL_ZOOM = 11.5;
+
 function jamColor(j: number): string {
   if (j >= 0.66) return "#d55e00"; // vermillion — heavy
   if (j >= 0.33) return "#e69f00"; // orange — moderate
   return "#009e73"; // green — free-flow
+}
+
+/** Encode an inline SVG as a data URI for a PictureMarkerSymbol. */
+function svgUri(svg: string): string {
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+// Directional navigation puck (points north at angle 0; PictureMarkerSymbol
+// `angle` rotates it clockwise to the compass heading).
+const TRUCK_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 24 24">' +
+  '<circle cx="12" cy="12" r="10" fill="#1f78c2" stroke="#fff" stroke-width="2.5"/>' +
+  '<path d="M12 6.5 15.5 15 12 13 8.5 15Z" fill="#fff"/></svg>';
+
+// Maps-style teardrop destination pin (tip at the bottom).
+const DEST_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="38" viewBox="0 0 24 30">' +
+  '<path d="M12 0C6.5 0 2 4.4 2 9.9 2 17 12 30 12 30s10-13 10-20.1C22 4.4 17.5 0 12 0Z" fill="#c4441f" stroke="#fff" stroke-width="2"/>' +
+  '<circle cx="12" cy="10" r="4" fill="#fff"/></svg>';
+
+function parkingSvg(full: boolean): string {
+  return (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22">' +
+    `<circle cx="11" cy="11" r="9" fill="${full ? "#8a94a6" : "#007a5a"}" stroke="#fff" stroke-width="2"/>` +
+    '<text x="11" y="15.5" font-family="Arial, sans-serif" font-size="13" font-weight="800" ' +
+    'fill="#fff" text-anchor="middle">P</text></svg>'
+  );
 }
 
 export default function MiniMap({
@@ -62,302 +106,286 @@ export default function MiniMap({
   parking,
   frameToTrip,
 }: Props) {
-  const el = useRef<HTMLDivElement>(null);
-  const map = useRef<maplibregl.Map | null>(null);
-  const truckMarker = useRef<maplibregl.Marker | null>(null);
-  const truckArrow = useRef<HTMLDivElement | null>(null);
-  const destMarker = useRef<maplibregl.Marker | null>(null);
-  const parkingMarkers = useRef<maplibregl.Marker[]>([]);
+  const viewRef = useRef<MapView | null>(null);
+  const layers = useRef<{
+    corridor: GraphicsLayer;
+    routes: GraphicsLayer;
+    gates: GraphicsLayer;
+    parking: GraphicsLayer;
+    destination: GraphicsLayer;
+    truck: GraphicsLayer;
+  } | null>(null);
+  // Flips true once the MapView is ready so the render effects (re)run and paint
+  // whatever data props already exist on this mount.
+  const [ready, setReady] = useState(false);
+  // Fit-once guards, mirroring the previous MapLibre implementation.
+  const didCorridorFit = useRef(false);
   const framedTrip = useRef(false);
 
-  useEffect(() => {
-    if (!el.current || map.current) return;
-    const m = new maplibregl.Map({
-      container: el.current,
-      style: roads ? roadStyle() : mapStyle(),
-      center: [72.952, 18.948],
-      zoom: 11.5,
-      // Carto/OSM tiles require attribution; use the compact "ⓘ" toggle so it
-      // stays unobtrusive on the small driver map.
-      attributionControl: { compact: true },
-      interactive: true,
-      dragRotate: false,
-      pitchWithRotate: false,
-    });
-    map.current = m;
-    m.on("load", () => m.resize());
-    // Full-screen/flex containers settle their size AFTER mount, so observe the
-    // container and resize the map whenever it changes (fixes a map that renders
-    // at the wrong height and leaves blank space).
-    const ro = new ResizeObserver(() => m.resize());
-    ro.observe(el.current);
-    return () => {
-      ro.disconnect();
-      m.remove();
-      map.current = null;
-    };
+  // ---- view ready: build the GraphicsLayer stack ------------------------
+  const handleReady = useCallback(
+    (event: { target: { view: MapView } }) => {
+      const view = event.target.view;
+      if (!view || !view.map) return;
+      viewRef.current = view;
+      if (view.constraints) view.constraints.snapToZoom = false;
+      // Keep only the compact zoom + attribution UI on the small driver map.
+      view.ui.components = ["zoom", "attribution"];
+
+      const mk = (id: string) => new GraphicsLayer({ id });
+      const set = {
+        corridor: mk("mm-corridor"),
+        routes: mk("mm-routes"),
+        gates: mk("mm-gates"),
+        parking: mk("mm-parking"),
+        destination: mk("mm-destination"),
+        truck: mk("mm-truck"),
+      };
+      layers.current = set;
+      // Bottom -> top: corridor/routes under markers; truck drawn topmost.
+      view.map.addMany([
+        set.corridor,
+        set.routes,
+        set.gates,
+        set.parking,
+        set.destination,
+        set.truck,
+      ]);
+      setReady(true);
+    },
+    [],
+  );
+
+  // ---- render helpers ---------------------------------------------------
+  const goTo = useCallback((target: unknown, zoom?: number) => {
+    const view = viewRef.current;
+    if (!view) return;
+    void view
+      .when(() =>
+        view.goTo(
+          zoom != null ? { target, zoom } : (target as never),
+          { duration: 500, easing: "ease-in-out" },
+        ),
+      )
+      // goTo rejects when a newer animation interrupts it — expected, ignore.
+      .catch(() => {});
   }, []);
 
-  // Corridor line (tinted by the worst "traffic ahead" jam factor). Drawn on its
-  // own so it can be hidden/shown WITHOUT affecting the gate markers below.
-  const didCorridorFit = useRef(false);
-  useEffect(() => {
-    const m = map.current;
-    if (!m) return;
-    const draw = () => {
-      if (!corridor) {
-        // Corridor hidden (e.g. Navigate once a route is drawn) — clear the line.
-        if (m.getLayer("corridor-line")) m.removeLayer("corridor-line");
-        if (m.getSource("corridor")) m.removeSource("corridor");
-        return;
-      }
-      const worstJam = jam ? Math.max(0, ...Object.values(jam)) : 0;
-      const lineFc: GeoJSON.Feature = {
-        type: "Feature",
-        properties: {},
-        geometry: { type: "LineString", coordinates: corridor.polyline },
-      };
-      if (!m.getSource("corridor")) {
-        m.addSource("corridor", { type: "geojson", data: lineFc });
-        m.addLayer({
-          id: "corridor-line",
-          type: "line",
-          source: "corridor",
-          paint: { "line-color": jam ? jamColor(worstJam) : "#94a3b8", "line-width": 4 },
-        });
-      } else {
-        (m.getSource("corridor") as maplibregl.GeoJSONSource).setData(lineFc);
-        if (jam) m.setPaintProperty("corridor-line", "line-color", jamColor(worstJam));
-      }
-      // Fit to the corridor once (only when the caller isn't framing the trip).
-      if (!frameToTrip && !didCorridorFit.current) {
-        try {
-          const lons = corridor.polyline.map((p) => p[0]);
-          const lats = corridor.polyline.map((p) => p[1]);
-          m.fitBounds(
-            [
-              [Math.min(...lons), Math.min(...lats)],
-              [Math.max(...lons), Math.max(...lats)],
-            ],
-            { padding: 28, animate: false, maxZoom: 13 },
-          );
-          didCorridorFit.current = true;
-        } catch {
-          /* degenerate geometry */
-        }
-      }
-    };
-    if (m.isStyleLoaded()) draw();
-    else m.once("load", draw);
-  }, [corridor, jam, frameToTrip]);
+  const renderCorridor = useCallback(() => {
+    const layer = layers.current?.corridor;
+    if (!layer) return;
+    layer.removeAll();
+    // Corridor hidden (e.g. Navigate once a route is drawn) — leave it cleared.
+    if (!corridor) return;
+    const worstJam = jam ? Math.max(0, ...Object.values(jam)) : 0;
+    const geometry = new Polyline({ paths: [corridor.polyline], spatialReference: WGS84 });
+    layer.add(
+      new Graphic({
+        geometry,
+        symbol: new SimpleLineSymbol({
+          color: jam ? jamColor(worstJam) : "#94a3b8",
+          width: 4,
+          cap: "round",
+          join: "round",
+        }),
+      }),
+    );
+    // Fit to the corridor once (only when the caller isn't framing the trip).
+    if (!frameToTrip && !didCorridorFit.current) {
+      didCorridorFit.current = true;
+      goTo(geometry);
+    }
+  }, [corridor, jam, frameToTrip, goTo]);
 
-  // Gate markers — INDEPENDENT of the corridor so they always render (this is the
-  // fix for "Navigate loses all markers": gates used to be drawn inside the
-  // corridor effect, which bailed out whenever `corridor` was absent).
-  useEffect(() => {
-    const m = map.current;
-    if (!m || !gates || !gates.length) return;
-    const draw = () => {
-      const gateFc: GeoJSON.FeatureCollection = {
-        type: "FeatureCollection",
-        features: gates.map((g) => ({
-          type: "Feature",
-          properties: { id: g.id, target: g.id === targetGateId },
-          geometry: { type: "Point", coordinates: [g.lon, g.lat] },
-        })),
-      };
-      if (!m.getSource("gates")) {
-        m.addSource("gates", { type: "geojson", data: gateFc });
-        m.addLayer({
-          id: "gates-pt",
-          type: "circle",
-          source: "gates",
-          paint: {
-            "circle-radius": ["case", ["get", "target"], 8, 5],
-            "circle-color": ["case", ["get", "target"], "#1f78c2", "#64748b"],
-            "circle-stroke-color": "#ffffff",
-            "circle-stroke-width": 2,
-          },
-        });
-      } else {
-        (m.getSource("gates") as maplibregl.GeoJSONSource).setData(gateFc);
-      }
-    };
-    if (m.isStyleLoaded()) draw();
-    else m.once("load", draw);
+  const renderGates = useCallback(() => {
+    const layer = layers.current?.gates;
+    if (!layer) return;
+    layer.removeAll();
+    for (const g of gates ?? []) {
+      const target = g.id === targetGateId;
+      layer.add(
+        new Graphic({
+          geometry: new Point({ longitude: g.lon, latitude: g.lat, spatialReference: WGS84 }),
+          symbol: new SimpleMarkerSymbol({
+            style: "circle",
+            color: target ? "#1f78c2" : "#64748b",
+            size: target ? 16 : 10,
+            outline: { color: "#ffffff", width: 2 },
+          }),
+          attributes: { id: g.id },
+        }),
+      );
+    }
   }, [gates, targetGateId]);
 
-  // Multiple route options (Google-Maps-style): alternates greyed, primary blue
-  // on top. Fits the map to the routes when present.
-  useEffect(() => {
-    const m = map.current;
-    if (!m || !routes || !routes.length) return;
-    const draw = () => {
-      // Order so the primary route draws last (on top).
-      const ordered = [...routes].sort((a, b) => Number(!!a.primary) - Number(!!b.primary));
-      const fc: GeoJSON.FeatureCollection = {
-        type: "FeatureCollection",
-        features: ordered.map((r) => ({
-          type: "Feature",
-          properties: { primary: !!r.primary, id: r.id },
-          geometry: { type: "LineString", coordinates: r.coords },
-        })),
-      };
-      if (!m.getSource("routes")) {
-        m.addSource("routes", { type: "geojson", data: fc });
-        // Casing under the line for a clean Google-Maps look.
-        m.addLayer({
-          id: "routes-casing",
-          type: "line",
-          source: "routes",
-          layout: { "line-cap": "round", "line-join": "round" },
-          paint: {
-            "line-color": ["case", ["get", "primary"], "#1a56db", "#9aa4b2"],
-            "line-width": ["case", ["get", "primary"], 9, 6],
-            "line-opacity": ["case", ["get", "primary"], 0.35, 0.25],
-          },
-        });
-        m.addLayer({
-          id: "routes-line",
-          type: "line",
-          source: "routes",
-          layout: { "line-cap": "round", "line-join": "round" },
-          paint: {
-            "line-color": ["case", ["get", "primary"], "#1a56db", "#7b8794"],
-            "line-width": ["case", ["get", "primary"], 5, 3.5],
-          },
-        });
-      } else {
-        (m.getSource("routes") as maplibregl.GeoJSONSource).setData(fc);
-      }
-      // Fit to all route coordinates.
-      try {
-        const all = ordered.flatMap((r) => r.coords);
-        const lons = all.map((p) => p[0]);
-        const lats = all.map((p) => p[1]);
-        m.fitBounds(
-          [
-            [Math.min(...lons), Math.min(...lats)],
-            [Math.max(...lons), Math.max(...lats)],
-          ],
-          // Reserve room for the floating destination card (top) and the bottom
-          // instruction sheet so the route line is never hidden behind them.
-          { padding: { top: 96, bottom: 190, left: 40, right: 40 }, animate: true, maxZoom: 14 },
-        );
-      } catch {
-        /* degenerate */
-      }
-    };
-    if (m.isStyleLoaded()) draw();
-    else m.once("load", draw);
-  }, [routes]);
+  const renderRoutes = useCallback(() => {
+    const layer = layers.current?.routes;
+    if (!layer) return;
+    layer.removeAll();
+    if (!routes || !routes.length) return;
+    // Order so the primary route draws last (on top).
+    const ordered = [...routes].sort((a, b) => Number(!!a.primary) - Number(!!b.primary));
+    // Casings first (all under the coloured lines) for a clean Maps-style look.
+    for (const r of ordered) {
+      const geometry = new Polyline({ paths: [r.coords], spatialReference: WGS84 });
+      layer.add(
+        new Graphic({
+          geometry,
+          symbol: new SimpleLineSymbol({
+            color: r.primary ? [26, 86, 219, 0.35] : [154, 164, 178, 0.25],
+            width: r.primary ? 9 : 6,
+            cap: "round",
+            join: "round",
+          }),
+        }),
+      );
+    }
+    for (const r of ordered) {
+      const geometry = new Polyline({ paths: [r.coords], spatialReference: WGS84 });
+      layer.add(
+        new Graphic({
+          geometry,
+          symbol: new SimpleLineSymbol({
+            color: r.primary ? "#1a56db" : "#7b8794",
+            width: r.primary ? 5 : 3.5,
+            cap: "round",
+            join: "round",
+          }),
+          attributes: { id: r.id, primary: !!r.primary },
+        }),
+      );
+    }
+    // Frame all route geometries together.
+    goTo(ordered.map((r) => new Polyline({ paths: [r.coords], spatialReference: WGS84 })));
+  }, [routes, goTo]);
 
-  // Live truck marker — a directional "navigation puck" (Google-Maps style) that
-  // rotates to the heading and eases between positions.
-  useEffect(() => {
-    const m = map.current;
-    if (!m || !truck) return;
-    const lngLat: [number, number] = [truck.lon, truck.lat];
-    if (!truckMarker.current) {
-      const node = document.createElement("div");
-      node.style.cssText = "width:30px;height:30px;position:relative";
-      const arrow = document.createElement("div");
-      arrow.style.cssText =
-        "position:absolute;inset:0;display:grid;place-items:center;transition:transform .5s ease-out";
-      arrow.innerHTML =
-        '<svg width="30" height="30" viewBox="0 0 24 24" style="filter:drop-shadow(0 1px 2px rgba(0,0,0,.35))">' +
-        '<circle cx="12" cy="12" r="10" fill="#1f78c2" stroke="#fff" stroke-width="2.5"/>' +
-        '<path d="M12 6.5 15.5 15 12 13 8.5 15Z" fill="#fff"/></svg>';
-      node.appendChild(arrow);
-      truckArrow.current = arrow;
-      truckMarker.current = new maplibregl.Marker({ element: node }).setLngLat(lngLat).addTo(m);
-    } else {
-      truckMarker.current.setLngLat(lngLat);
-    }
-    if (truckArrow.current && heading != null && Number.isFinite(heading)) {
-      truckArrow.current.style.transform = `rotate(${heading}deg)`;
-    }
+  const renderTruck = useCallback(() => {
+    const layer = layers.current?.truck;
+    if (!layer) return;
+    layer.removeAll();
+    if (!truck) return;
+    const angle = heading != null && Number.isFinite(heading) ? heading : 0;
+    layer.add(
+      new Graphic({
+        geometry: new Point({ longitude: truck.lon, latitude: truck.lat, spatialReference: WGS84 }),
+        symbol: new PictureMarkerSymbol({ url: svgUri(TRUCK_SVG), width: 30, height: 30, angle }),
+      }),
+    );
   }, [truck, heading]);
 
-  // Destination pin (Maps-style teardrop) at the target gate.
-  useEffect(() => {
-    const m = map.current;
-    if (!m) return;
-    if (!destination) {
-      destMarker.current?.remove();
-      destMarker.current = null;
-      return;
-    }
-    const lngLat: [number, number] = [destination.lon, destination.lat];
-    if (!destMarker.current) {
-      const node = document.createElement("div");
-      node.style.cssText = "transform:translateY(2px)";
-      node.innerHTML =
-        '<svg width="30" height="38" viewBox="0 0 24 30" style="filter:drop-shadow(0 2px 3px rgba(0,0,0,.4))">' +
-        '<path d="M12 0C6.5 0 2 4.4 2 9.9 2 17 12 30 12 30s10-13 10-20.1C22 4.4 17.5 0 12 0Z" fill="#c4441f" stroke="#fff" stroke-width="2"/>' +
-        '<circle cx="12" cy="10" r="4" fill="#fff"/></svg>';
-      destMarker.current = new maplibregl.Marker({ element: node, anchor: "bottom" })
-        .setLngLat(lngLat)
-        .addTo(m);
-    } else {
-      destMarker.current.setLngLat(lngLat);
-    }
+  const renderDestination = useCallback(() => {
+    const layer = layers.current?.destination;
+    if (!layer) return;
+    layer.removeAll();
+    if (!destination) return;
+    layer.add(
+      new Graphic({
+        geometry: new Point({
+          longitude: destination.lon,
+          latitude: destination.lat,
+          spatialReference: WGS84,
+        }),
+        // yoffset lifts the 38px teardrop so its tip (bottom) sits on the point.
+        symbol: new PictureMarkerSymbol({
+          url: svgUri(DEST_SVG),
+          width: 30,
+          height: 38,
+          yoffset: 19,
+        }),
+      }),
+    );
   }, [destination]);
 
-  // Parking POI markers (green "P").
-  useEffect(() => {
-    const m = map.current;
-    if (!m) return;
-    // Rebuild from scratch whenever the set changes (small N).
-    parkingMarkers.current.forEach((mk) => mk.remove());
-    parkingMarkers.current = [];
-    for (const p of parking || []) {
+  const renderParking = useCallback(() => {
+    const layer = layers.current?.parking;
+    if (!layer) return;
+    layer.removeAll();
+    for (const p of parking ?? []) {
       if (p.lat == null || p.lon == null) continue;
       const full = (p.available ?? 1) <= 0;
-      const node = document.createElement("div");
-      node.style.cssText =
-        `width:22px;height:22px;border-radius:50%;border:2px solid #fff;color:#fff;` +
-        `font-weight:800;font-size:12px;display:grid;place-items:center;` +
-        `box-shadow:0 1px 3px rgba(0,0,0,.45);background:${full ? "#8a94a6" : "#007a5a"}`;
-      node.textContent = "P";
-      parkingMarkers.current.push(
-        new maplibregl.Marker({ element: node }).setLngLat([p.lon, p.lat]).addTo(m),
+      layer.add(
+        new Graphic({
+          geometry: new Point({ longitude: p.lon, latitude: p.lat, spatialReference: WGS84 }),
+          symbol: new PictureMarkerSymbol({ url: svgUri(parkingSvg(full)), width: 22, height: 22 }),
+          attributes: { id: p.id },
+        }),
       );
     }
   }, [parking]);
 
+  // ---- reactive prop -> layer updates -----------------------------------
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (ready) renderCorridor(); }, [ready, renderCorridor]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (ready) renderGates(); }, [ready, renderGates]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (ready) renderRoutes(); }, [ready, renderRoutes]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (ready) renderTruck(); }, [ready, renderTruck]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (ready) renderDestination(); }, [ready, renderDestination]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (ready) renderParking(); }, [ready, renderParking]);
+
+  // Reserve room for the floating cards (top destination card + bottom sheet) on
+  // the full-screen nav map so framing never hides the route/markers behind them.
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!ready || !view) return;
+    view.padding =
+      fill && (frameToTrip || (routes && routes.length))
+        ? { top: 96, bottom: 190, left: 40, right: 40 }
+        : { top: 12, bottom: 12, left: 12, right: 12 };
+  }, [ready, fill, frameToTrip, routes]);
+
   // Open framed on truck → destination (once), so the driver sees the whole trip
   // before the route tightens the view.
   useEffect(() => {
-    const m = map.current;
-    if (!m || !frameToTrip || framedTrip.current || !destination) return;
-    const pts: [number, number][] = [[destination.lon, destination.lat]];
-    if (truck) pts.push([truck.lon, truck.lat]);
-    const fit = () => {
-      try {
-        if (pts.length === 1) {
-          // Only the gate is known so far — centre on it, but DON'T lock framing
-          // so a proper truck→gate fit still runs once the first fix arrives.
-          m.easeTo({ center: pts[0], zoom: 13.5, duration: 400 });
-        } else {
-          const lons = pts.map((p) => p[0]);
-          const lats = pts.map((p) => p[1]);
-          m.fitBounds(
-            [
-              [Math.min(...lons), Math.min(...lats)],
-              [Math.max(...lons), Math.max(...lats)],
-            ],
-            { padding: { top: 96, bottom: 190, left: 46, right: 46 }, animate: false, maxZoom: 14 },
-          );
-          framedTrip.current = true;
-        }
-      } catch {
-        /* degenerate */
-      }
-    };
-    if (m.isStyleLoaded()) fit();
-    else m.once("load", fit);
-  }, [truck, destination, frameToTrip]);
+    if (!ready || !frameToTrip || framedTrip.current || !destination) return;
+    const destPt = new Point({
+      longitude: destination.lon,
+      latitude: destination.lat,
+      spatialReference: WGS84,
+    });
+    if (!truck) {
+      // Only the gate is known so far — centre on it, but DON'T lock framing so a
+      // proper truck→gate fit still runs once the first fix arrives.
+      goTo(destPt, 13.5);
+      return;
+    }
+    const truckPt = new Point({
+      longitude: truck.lon,
+      latitude: truck.lat,
+      spatialReference: WGS84,
+    });
+    goTo([destPt, truckPt]);
+    framedTrip.current = true;
+  }, [ready, truck, destination, frameToTrip, goTo]);
 
-  return <div className={fill ? "minimap minimap-fill" : "minimap"} ref={el} />;
+  // The map element is created EXACTLY ONCE and reused across re-renders. The
+  // @arcgis/map-components-react wrapper re-applies element props (center/zoom)
+  // on every React render; because this component re-renders on each truck/
+  // heading tick, freezing the element keeps the wrapper from re-commanding the
+  // camera and snapping back to the initial framing. All later updates flow
+  // through the GraphicsLayers + imperative goTo above. (Same guard the
+  // dashboard's ArcgisMap uses.)
+  const initialCenter = useMemo(
+    () => new Point({ longitude: INITIAL_CENTER[0], latitude: INITIAL_CENTER[1] }),
+    [],
+  );
+  const mapElement = useMemo(
+    () => (
+      <ArcgisMapWC
+        basemap={basemapId(roads)}
+        center={initialCenter}
+        zoom={INITIAL_ZOOM}
+        onArcgisViewReadyChange={handleReady}
+        style={{ height: "100%", width: "100%" }}
+      />
+    ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  return <div className={fill ? "minimap minimap-fill" : "minimap"}>{mapElement}</div>;
 }

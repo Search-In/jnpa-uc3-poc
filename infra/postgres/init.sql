@@ -1083,3 +1083,76 @@ CREATE TABLE IF NOT EXISTS jnpa.cargo_events (
 CREATE INDEX IF NOT EXISTS idx_cargo_events_created   ON jnpa.cargo_events (id DESC);
 CREATE INDEX IF NOT EXISTS idx_cargo_events_container ON jnpa.cargo_events (container_number);
 CREATE INDEX IF NOT EXISTS idx_cargo_events_event     ON jnpa.cargo_events (event);
+
+-- Cargo workflow lifecycle (migration 0016): current status on the record + an
+-- append-only transition log. TRIGGER -> APPROVE / REJECT, driven by POC-2.
+ALTER TABLE jnpa.cargo
+    ADD COLUMN IF NOT EXISTS workflow_status text
+        CHECK (workflow_status IN ('TRIGGERED','APPROVED','REJECTED'));
+CREATE TABLE IF NOT EXISTS jnpa.cargo_workflow_events (
+    id               bigserial PRIMARY KEY,
+    container_number text NOT NULL,
+    action           text NOT NULL CHECK (action IN ('TRIGGER','APPROVE','REJECT')),
+    old_status       text,
+    new_status       text,
+    comment          text,
+    created_at       timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cargo_workflow_container ON jnpa.cargo_workflow_events (container_number);
+CREATE INDEX IF NOT EXISTS idx_cargo_workflow_created   ON jnpa.cargo_workflow_events (id DESC);
+
+-- Cargo stakeholder notifications (migration 0017): addressed, severity-tagged
+-- notification events raised by POC-2 (customs alerts, pendency, escalations).
+CREATE TABLE IF NOT EXISTS jnpa.cargo_notifications (
+    id                bigserial PRIMARY KEY,
+    container_number  text NOT NULL,
+    notification_type text NOT NULL,
+    severity          text NOT NULL DEFAULT 'MEDIUM'
+                      CHECK (severity IN ('LOW','MEDIUM','HIGH','CRITICAL')),
+    message           text,
+    stakeholders      jsonb NOT NULL DEFAULT '[]'::jsonb,
+    status            text NOT NULL DEFAULT 'CREATED'
+                      CHECK (status IN ('CREATED','ACKNOWLEDGED','RESOLVED')),
+    created_at        timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cargo_notif_container ON jnpa.cargo_notifications (container_number);
+CREATE INDEX IF NOT EXISTS idx_cargo_notif_type      ON jnpa.cargo_notifications (notification_type);
+CREATE INDEX IF NOT EXISTS idx_cargo_notif_severity  ON jnpa.cargo_notifications (severity);
+CREATE INDEX IF NOT EXISTS idx_cargo_notif_status    ON jnpa.cargo_notifications (status);
+CREATE INDEX IF NOT EXISTS idx_cargo_notif_created   ON jnpa.cargo_notifications (id DESC);
+
+-- Cargo planning (migration 0018): forward-looking yard / rake / reefer plans.
+CREATE TABLE IF NOT EXISTS jnpa.cargo_yard_plans (
+    id                bigserial PRIMARY KEY,
+    container_number  text NOT NULL,
+    preferred_block   text,
+    assigned_block    text NOT NULL,
+    priority          text NOT NULL DEFAULT 'MEDIUM'
+                      CHECK (priority IN ('LOW','MEDIUM','HIGH','CRITICAL')),
+    status            text NOT NULL DEFAULT 'PLANNED',
+    created_at        timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cargo_yard_plan_container ON jnpa.cargo_yard_plans (container_number);
+CREATE INDEX IF NOT EXISTS idx_cargo_yard_plan_block     ON jnpa.cargo_yard_plans (assigned_block);
+CREATE INDEX IF NOT EXISTS idx_cargo_yard_plan_created   ON jnpa.cargo_yard_plans (id DESC);
+CREATE TABLE IF NOT EXISTS jnpa.cargo_rake_plans (
+    id                 bigserial PRIMARY KEY,
+    rake_id            text NOT NULL,
+    containers         jsonb NOT NULL DEFAULT '[]'::jsonb,
+    planned_containers integer NOT NULL DEFAULT 0,
+    status             text NOT NULL DEFAULT 'PLANNED',
+    created_at         timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cargo_rake_plan_rake    ON jnpa.cargo_rake_plans (rake_id);
+CREATE INDEX IF NOT EXISTS idx_cargo_rake_plan_created ON jnpa.cargo_rake_plans (id DESC);
+CREATE TABLE IF NOT EXISTS jnpa.cargo_reefer_plans (
+    id                bigserial PRIMARY KEY,
+    container_number  text NOT NULL,
+    temperature       numeric,
+    power_required    boolean NOT NULL DEFAULT true,
+    slot              text NOT NULL,
+    status            text NOT NULL DEFAULT 'ALLOCATED',
+    created_at        timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cargo_reefer_plan_container ON jnpa.cargo_reefer_plans (container_number);
+CREATE INDEX IF NOT EXISTS idx_cargo_reefer_plan_created   ON jnpa.cargo_reefer_plans (id DESC);

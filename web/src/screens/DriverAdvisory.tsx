@@ -19,6 +19,19 @@ import { Navigation, CheckCircle2, AlertCircle, Route, DoorOpen } from "lucide-r
 
 const GATES = ["G-NSICT", "G-JNPCT", "G-NSIGT", "G-BMCT"];
 
+// Free-flow highway speed (km/h) used as a client-side safety net when the
+// truck-sim payload lacks `eta_s`. The backend now always supplies one (seeded
+// at inject + a serializer fallback), so this rarely triggers; the value mirrors
+// the backend's speed_highway_kmh so the estimate stays consistent if it does.
+const FREE_FLOW_KMH = 55;
+
+// ETA-to-gate in seconds: prefer the live `eta_s`; otherwise fall back to the
+// remaining distance at free-flow speed (0 km remaining -> ~0 s -> "<1 min").
+function etaSeconds(truck: TruckDevice): number {
+  if (truck.eta_s != null) return truck.eta_s;
+  return (truck.remaining_km / FREE_FLOW_KMH) * 3600;
+}
+
 // Trucks AT_GATE_QUEUE with ETA-to-gate and a re-routing recommendation. The
 // recommendation picks the least-loaded alternative gate; "Push Re-route" forces
 // it via POST /api/trucks/{id}/route (used in the TFC-3 scenario).
@@ -167,7 +180,7 @@ function QueueRow({
       <td className="px-4 py-2 font-mono text-xs">{truck.device_id}</td>
       <td className="px-4 py-2 font-mono text-xs">{truck.plate ?? "—"}</td>
       <td className="px-4 py-2">{truck.gate_id?.replace("G-", "") ?? "—"}</td>
-      <td className="px-4 py-2 tabular-nums">{fmtEta(truck.eta_s)}</td>
+      <td className="px-4 py-2 tabular-nums">{fmtEta(etaSeconds(truck))}</td>
       <td className="px-4 py-2 tabular-nums">{truck.remaining_km.toFixed(1)} km</td>
       <td className="px-4 py-2">
         <Select value={gate} onValueChange={onGateChange} disabled={reroute.isPending}>

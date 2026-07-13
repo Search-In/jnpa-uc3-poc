@@ -116,38 +116,49 @@ export type PushState = "subscribed" | "denied" | "unsupported" | "not-configure
 export async function enablePush(deviceId: string): Promise<PushState> {
   if (!("serviceWorker" in navigator) || !("PushManager" in window)) return "unsupported";
 
-  let configured: { key: string | null; configured: boolean };
-  try {
-    configured = await api.vapidKey();
-  } catch {
-    configured = { key: null, configured: false };
-  }
-
   // One permission prompt covers both transports.
   let permission = Notification.permission;
   if (permission === "default") permission = await Notification.requestPermission();
   if (permission !== "granted") return "denied";
 
-  // Firebase FCM leg (production transport) — best-effort, independent of VAPID.
-  const fcmOk = await enableFcm(deviceId);
-
-  // WebPush/VAPID leg (kept as-is). Skipped cleanly when VAPID is unconfigured.
-  if (!configured.configured || !configured.key) {
-    return fcmOk ? "subscribed" : "not-configured";
-  }
+  // ---- WebPush/VAPID leg — the PRIMARY transport. Runs FIRST and is fully
+  // independent of Firebase: when VAPID is configured we subscribe and store the
+  // subscription regardless of whether FCM is configured or succeeds. This is the
+  // leg that populates push_subscriptions.webpush.
+  let webpushOk = false;
+  let vapid: { key: string | null; configured: boolean };
   try {
-    const reg = await navigator.serviceWorker.ready;
-    const existing = await reg.pushManager.getSubscription();
-    const sub =
-      existing ??
-      (await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(configured.key),
-      }));
-    await api.pushSubscribe(deviceId, sub.toJSON() as PushSubscriptionJSON);
-    return "subscribed";
-  } catch (err) {
-    console.warn("push subscribe failed", err);
-    return fcmOk ? "subscribed" : "error";
+    vapid = await api.vapidKey();
+  } catch {
+    vapid = { key: null, configured: false };
   }
+  if (vapid.configured && vapid.key) {
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const existing = await reg.pushManager.getSubscription();
+      const sub =
+        existing ??
+        (await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(vapid.key),
+        }));
+      await api.pushSubscribe(deviceId, sub.toJSON() as PushSubscriptionJSON);
+      webpushOk = true;
+    } catch (err) {
+      console.warn("push subscribe failed", err);
+    }
+  }
+
+  // ---- Firebase FCM leg — OPTIONAL, best-effort. When Firebase is unconfigured
+  // enableFcm() returns false immediately; any failure here is swallowed so it can
+  // NEVER abort or roll back the WebPush registration above.
+  let fcmOk = false;
+  try {
+    fcmOk = await enableFcm(deviceId);
+  } catch (err) {
+    console.warn("[fcm] enable threw (ignored, WebPush unaffected)", err);
+  }
+
+  if (webpushOk || fcmOk) return "subscribed";
+  return vapid.configured ? "error" : "not-configured";
 }

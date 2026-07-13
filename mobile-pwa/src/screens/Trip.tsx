@@ -10,8 +10,8 @@ import { statusFromState, verifiedLabel } from "@/lib/driverLang";
 import { useRealtime } from "@/hooks/RealtimeContext";
 import { useTranslation } from "react-i18next";
 
-// maplibre-gl is ~700 KB; lazy-load it so it never blocks first paint (FCP
-// target on Fast 3G). The map slots in once the chunk lands.
+// The ArcGIS Maps SDK is heavy; lazy-load MiniMap so it never blocks first paint
+// (FCP target on Fast 3G). The map slots in once the chunk lands.
 const MiniMap = lazy(() => import("@/components/MiniMap"));
 
 // Trip — the driver's home screen: current target gate, ETA, speed, traffic

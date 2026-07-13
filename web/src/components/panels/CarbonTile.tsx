@@ -59,7 +59,10 @@ function CarbonLedger() {
           </thead>
           <tbody>
             {rows.slice(0, 8).map((r) => (
-              <tr key={r.id ?? `${r.vehicle_id}-${r.created_at}`} className="border-t border-border/50">
+              <tr
+                key={r.id ?? `${r.vehicle_id}-${r.created_at}`}
+                className="border-t border-border/50"
+              >
                 <td className="py-0.5 pr-2 font-mono">{r.vehicle_id}</td>
                 <td className="py-0.5 pr-2 text-right">
                   {r.distance_km != null ? `${r.distance_km.toFixed(1)} km` : "—"}
@@ -69,7 +72,9 @@ function CarbonLedger() {
                 </td>
                 <td className="py-0.5 pr-2 text-muted-foreground">{fmtTs(r.created_at)}</td>
                 <td className="py-0.5">
-                  <span className="rounded bg-muted px-1.5 py-0.5 text-[10px]">{r.source ?? "—"}</span>
+                  <span className="rounded bg-muted px-1.5 py-0.5 text-[10px]">
+                    {r.source ?? "—"}
+                  </span>
                 </td>
               </tr>
             ))}

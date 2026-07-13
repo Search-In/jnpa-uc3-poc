@@ -123,38 +123,35 @@ export default function MiniMap({
   const framedTrip = useRef(false);
 
   // ---- view ready: build the GraphicsLayer stack ------------------------
-  const handleReady = useCallback(
-    (event: { target: { view: MapView } }) => {
-      const view = event.target.view;
-      if (!view || !view.map) return;
-      viewRef.current = view;
-      if (view.constraints) view.constraints.snapToZoom = false;
-      // Keep only the compact zoom + attribution UI on the small driver map.
-      view.ui.components = ["zoom", "attribution"];
+  const handleReady = useCallback((event: { target: { view: MapView } }) => {
+    const view = event.target.view;
+    if (!view || !view.map) return;
+    viewRef.current = view;
+    if (view.constraints) view.constraints.snapToZoom = false;
+    // Keep only the compact zoom + attribution UI on the small driver map.
+    view.ui.components = ["zoom", "attribution"];
 
-      const mk = (id: string) => new GraphicsLayer({ id });
-      const set = {
-        corridor: mk("mm-corridor"),
-        routes: mk("mm-routes"),
-        gates: mk("mm-gates"),
-        parking: mk("mm-parking"),
-        destination: mk("mm-destination"),
-        truck: mk("mm-truck"),
-      };
-      layers.current = set;
-      // Bottom -> top: corridor/routes under markers; truck drawn topmost.
-      view.map.addMany([
-        set.corridor,
-        set.routes,
-        set.gates,
-        set.parking,
-        set.destination,
-        set.truck,
-      ]);
-      setReady(true);
-    },
-    [],
-  );
+    const mk = (id: string) => new GraphicsLayer({ id });
+    const set = {
+      corridor: mk("mm-corridor"),
+      routes: mk("mm-routes"),
+      gates: mk("mm-gates"),
+      parking: mk("mm-parking"),
+      destination: mk("mm-destination"),
+      truck: mk("mm-truck"),
+    };
+    layers.current = set;
+    // Bottom -> top: corridor/routes under markers; truck drawn topmost.
+    view.map.addMany([
+      set.corridor,
+      set.routes,
+      set.gates,
+      set.parking,
+      set.destination,
+      set.truck,
+    ]);
+    setReady(true);
+  }, []);
 
   // ---- render helpers ---------------------------------------------------
   const goTo = useCallback((target: unknown, zoom?: number) => {
@@ -162,10 +159,10 @@ export default function MiniMap({
     if (!view) return;
     void view
       .when(() =>
-        view.goTo(
-          zoom != null ? { target, zoom } : (target as never),
-          { duration: 500, easing: "ease-in-out" },
-        ),
+        view.goTo(zoom != null ? { target, zoom } : (target as never), {
+          duration: 500,
+          easing: "ease-in-out",
+        }),
       )
       // goTo rejects when a newer animation interrupts it — expected, ignore.
       .catch(() => {});
@@ -315,17 +312,29 @@ export default function MiniMap({
 
   // ---- reactive prop -> layer updates -----------------------------------
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (ready) renderCorridor(); }, [ready, renderCorridor]);
+  useEffect(() => {
+    if (ready) renderCorridor();
+  }, [ready, renderCorridor]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (ready) renderGates(); }, [ready, renderGates]);
+  useEffect(() => {
+    if (ready) renderGates();
+  }, [ready, renderGates]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (ready) renderRoutes(); }, [ready, renderRoutes]);
+  useEffect(() => {
+    if (ready) renderRoutes();
+  }, [ready, renderRoutes]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (ready) renderTruck(); }, [ready, renderTruck]);
+  useEffect(() => {
+    if (ready) renderTruck();
+  }, [ready, renderTruck]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (ready) renderDestination(); }, [ready, renderDestination]);
+  useEffect(() => {
+    if (ready) renderDestination();
+  }, [ready, renderDestination]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (ready) renderParking(); }, [ready, renderParking]);
+  useEffect(() => {
+    if (ready) renderParking();
+  }, [ready, renderParking]);
 
   // Reserve room for the floating cards (top destination card + bottom sheet) on
   // the full-screen nav map so framing never hides the route/markers behind them.

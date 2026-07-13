@@ -316,7 +316,11 @@ function CreateDriverForm({ onClose, onCreated }: { onClose: () => void; onCreat
           />
         </Labeled>
         <Labeled label={t("enrollments.license", "License Number")}>
-          <input className={inputCls} value={license} onChange={(e) => setLicense(e.target.value)} />
+          <input
+            className={inputCls}
+            value={license}
+            onChange={(e) => setLicense(e.target.value)}
+          />
         </Labeled>
         <Labeled label={t("enrollments.mobile", "Mobile Number")}>
           <input
@@ -335,7 +339,11 @@ function CreateDriverForm({ onClose, onCreated }: { onClose: () => void; onCreat
         </Labeled>
 
         {/* Vehicle assignment — searchable dropdown of AVAILABLE vehicles only. */}
-        <Labeled label={t("enrollments.assignVehicle", "Assign Vehicle")} required className="col-span-2">
+        <Labeled
+          label={t("enrollments.assignVehicle", "Assign Vehicle")}
+          required
+          className="col-span-2"
+        >
           <div className="relative">
             <div className="flex items-center gap-2 rounded-md border border-border bg-background px-2.5 py-1.5">
               {vehicle ? (
@@ -430,7 +438,11 @@ function CreateDriverForm({ onClose, onCreated }: { onClose: () => void; onCreat
           onClick={() => create.mutate()}
           className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-[13px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
         >
-          {create.isPending ? <Spinner className="text-primary-foreground" /> : <Plus className="h-4 w-4" />}
+          {create.isPending ? (
+            <Spinner className="text-primary-foreground" />
+          ) : (
+            <Plus className="h-4 w-4" />
+          )}
           {t("enrollments.createSubmit", "Create Profile")}
         </button>
       </div>

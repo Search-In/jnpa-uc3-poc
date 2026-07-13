@@ -21,7 +21,7 @@ import { STATUS } from "@/lib/tokens";
 import { fmtDateTimeIST } from "@/lib/utils";
 import type { ContainerJourney, JourneyStage } from "@/data/types";
 
-const DEMO_CONTAINER = "MSCU1234566"; // pinned valid ISO 6346 demo box
+const DEMO_CONTAINER = "GESU5123996"; // seeded ISO 6346 box present in jnpa.cargo
 
 function StageItem({ s, accent }: { s: JourneyStage; accent: string }) {
   const { t } = useTranslation();

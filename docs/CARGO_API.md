@@ -40,8 +40,18 @@ is accepted). Mint/refresh tokens via the gateway's `/api/auth` surface.
 | `gate` | string \| null | gate id |
 | `camera_id` | string \| null | ANPR camera id |
 | `eta` | string (ISO-8601) \| null | timestamp, e.g. `2026-07-12T08:30:00Z` |
+| `eseal_status` | enum string \| null | e-Seal state: `ACTIVE` \| `ARMED` \| `TAMPERED` \| `REMOVED` \| `NONE` |
+| `eseal_number` | string \| null | electronic-seal id / number |
+| `pre_document_status` | enum string \| null | `NOT_STARTED` \| `PENDING` \| `IN_PROGRESS` \| `COMPLETED` |
+| `origin_stream` | string \| null | cargo source stream, e.g. `UC-II`. Input also accepts `originStream`. |
 | `created_at` | string (ISO-8601) | server-set |
 | `updated_at` | string (ISO-8601) | server-set (DB trigger) |
+
+> **Contract extension (migration 0015).** `eseal_status`, `eseal_number`,
+> `pre_document_status`, and `origin_stream` are **additive and nullable** — every
+> existing request/response is unchanged. Create/patch them like any other field;
+> `origin_stream` accepts either snake_case (`origin_stream`) or camelCase
+> (`originStream`) on input and always serialises back as `origin_stream`.
 
 > **ETA note:** `eta` is a full ISO-8601 **timestamp** (`timestamptz`). If the UI
 > works in "minutes to arrival", convert to/from a timestamp at the edge
@@ -63,11 +73,27 @@ Returns `CargoOut[]`. Supports filtering + pagination (all optional, backward co
 | `yard_block` | string | — | exact match |
 | `is_released` | boolean | — | `true` / `false` |
 | `vehicle_number` | string | — | exact match (normalised: upper, de-spaced) |
+| `eseal_status` | enum | — | one of the five e-Seal states |
+| `pre_document_status` | enum | — | one of the four pre-document states |
+| `origin_stream` | string | — | exact match, e.g. `UC-II` |
+| `role` | string | — | scope results to a user role (see **Role-based filtering** below) |
 | `limit` | int (1–1000) | 100 | page size |
 | `offset` | int (≥0) | 0 | page start |
 
 **Response header:** `X-Total-Count` — total rows matching the filters *before*
 pagination (use it to render page controls).
+
+**Role-based filtering.** Pass `?role=<role>` to scope the list to the records a
+role may see. When the gateway runs with `AUTH_ENABLED=true` the **authenticated
+principal's role wins** over the query param (a token's scope can never be widened
+by the URL). A role's scope is a **hard constraint** — it overrides any conflicting
+client filter. The contract is unchanged for callers that pass no role.
+
+| Role (`?role=`) | Sees |
+|---|---|
+| `operator` / `terminal_ops` / control room / `police` / *(none)* | all records |
+| `customs` | pre-release pipeline only (`is_released=false`) |
+| `driver` | released boxes only (`is_released=true`) |
 
 ```
 GET /api/cargo?customs_status=CLEARED&is_released=true&limit=25&offset=0
@@ -94,8 +120,9 @@ POST /api/cargo
 { "container_number": "MAEU6123458", "vessel_name": "MAERSK SEMBAWANG",
   "customs_status": "PENDING", "yard_block": "A-01", "is_released": false,
   "vehicle_number": "MH04AB1234", "gate": "GATE-1", "camera_id": "CAM-ANPR-01",
-  "eta": "2026-07-12T08:30:00Z" }
-→ 201 Created  (CargoOut)
+  "eta": "2026-07-12T08:30:00Z", "eseal_status": "ACTIVE", "eseal_number": "ES-88213",
+  "pre_document_status": "COMPLETED", "origin_stream": "UC-II" }
+→ 201 Created  (CargoOut — includes the new fields, echoing null when omitted)
 → 409 Conflict { "detail": { "error": "duplicate_container", "container_number": "MAEU6123458" } }
 → 400 Bad Request (invalid ISO-6346 / bad enum / bad type / malformed JSON)
 ```
@@ -110,13 +137,76 @@ PUT /api/cargo/MAEU6123458
 → 400 Bad Request
 ```
 
-### 5. Delete — `DELETE /api/cargo/{container_number}`
+### 5. Assign yard block — `PUT /api/cargo/{container_number}/yard-assignment`
+Single-purpose write that parks a container in a yard block and persists it to
+`jnpa.cargo.yard_block` (same column/record `PUT` patches; no separate yard
+table). Returns a compact confirmation rather than the full record. `yard_block`
+is required and format-checked (`<LETTERS>-<DIGITS>`, e.g. `A-01`; normalised to
+upper-case) — a missing/malformed block is a 400.
+```
+PUT /api/cargo/GESU5123996/yard-assignment
+{ "yard_block": "A-01" }
+→ 200 OK { "container_number": "GESU5123996", "yard_block": "A-01", "status": "ASSIGNED" }
+→ 404 Not Found { "detail": { "error": "not_found", "container_number": "GESU5123996" } }
+→ 400 Bad Request (missing/invalid yard_block, or malformed container id)
+```
+
+### 6. Delete — `DELETE /api/cargo/{container_number}`
 ```
 DELETE /api/cargo/MAEU6123458
 → 200 OK { "deleted": true, "container_number": "MAEU6123458" }
 → 404 Not Found
 → 400 Bad Request (malformed id)
 ```
+
+### 7. Cargo events (notifications) — `GET /api/cargo/events`
+Every cargo mutation appends to an **append-only lifecycle event log**. UC-2 polls
+this endpoint (no backend/queue of its own) and advances a cursor to receive only
+what is new. Events are returned **newest-first**.
+
+**Event types** (`event` field):
+
+| `event` | Emitted when | `payload` |
+|---|---|---|
+| `cargo.created` | a cargo record is created | `{ customs_status, is_released, origin_stream }` |
+| `cargo.released` | `is_released` transitions `false → true` | `{ is_released: true }` |
+| `cargo.yard_assigned` | `yard_block` is set/changed (incl. the yard-assignment endpoint) | `{ yard_block }` |
+| `cargo.status_changed` | `customs_status` changes | `{ customs_status, previous_customs_status }` |
+| `cargo.gate_movement` | `gate` is set/changed | `{ gate, previous_gate }` |
+| `cargo.updated` | an update changed something with no more-specific event | `{}` |
+| `cargo.deleted` | a cargo record is deleted | `{}` |
+
+> A single `PUT` can emit several events (e.g. cleared **and** released **and**
+> yarded). Event recording is best-effort and never blocks or fails the underlying
+> cargo write.
+
+**Query parameters**
+
+| Param | Type | Default | Meaning |
+|---|---|---|---|
+| `container_number` | string | — | only events for this container (normalised) |
+| `event` | string | — | only this event type, e.g. `cargo.released` |
+| `since` | int (≥0) | — | only events with `id` greater than this cursor |
+| `limit` | int (1–1000) | 100 | page size |
+| `offset` | int (≥0) | 0 | page start |
+
+**Response header:** `X-Cargo-Event-Cursor` — the largest `id` in the response;
+persist it and pass it back as `?since=` on the next poll.
+
+```
+GET /api/cargo/events?container_number=GESU5123996
+→ 200 OK
+X-Cargo-Event-Cursor: 2
+[ { "id": 2, "event": "cargo.released", "container_number": "GESU5123996",
+    "timestamp": "2026-07-13T10:00:00Z", "payload": { "is_released": true } },
+  { "id": 1, "event": "cargo.created", "container_number": "GESU5123996",
+    "timestamp": "2026-07-13T09:55:00Z",
+    "payload": { "customs_status": "PENDING", "is_released": false, "origin_stream": "UC-II" } } ]
+```
+
+**Suggested UC-2 poll loop:** keep the last `id` seen; call
+`GET /api/cargo/events?since=<last_id>` on an interval; render each returned event
+as a notification and advance `last_id` to `X-Cargo-Event-Cursor`.
 
 ---
 
@@ -139,6 +229,9 @@ DELETE /api/cargo/MAEU6123458
 - `customs_status`: must be one of `PENDING | CLEARED | HELD | UNDER_INSPECTION`.
 - `is_released`: boolean; `eta`: ISO-8601 datetime; string fields length-capped.
 - `vehicle_number`: normalised (upper, de-spaced), nullable.
+- `eseal_status`: one of `ACTIVE | ARMED | TAMPERED | REMOVED | NONE`, nullable.
+- `pre_document_status`: one of `NOT_STARTED | PENDING | IN_PROGRESS | COMPLETED`, nullable.
+- `eseal_number` / `origin_stream`: free text, trimmed (empty → null); `origin_stream` also accepts `originStream` on input.
 
 ## Interactive reference
 - **Swagger UI:** `{BASE_URL}/docs` (tag: **cargo**)
@@ -147,5 +240,9 @@ DELETE /api/cargo/MAEU6123458
 ## Suggested POC-2 wiring
 Add one block to your existing API wrapper (do **not** duplicate fetch logic):
 `list → GET /api/cargo`, `details → GET /api/cargo/{id}`, `release → PUT /api/cargo/{id} {is_released:true}`,
-`search → GET /api/cargo?container_number=...`. Cargo List → Details → Release →
-Container Search → Journey all read from these same endpoints.
+`assign-yard → PUT /api/cargo/{id}/yard-assignment {yard_block:"A-01"}`,
+`search → GET /api/cargo?container_number=...`, `scoped list → GET /api/cargo?role=<role>`,
+`notifications → GET /api/cargo/events?since=<cursor>`. Cargo List → Details → Release →
+Yard Assignment → Container Search → Journey → Notifications all read from these same
+endpoints — POC-2 adds no Cargo backend or DB of its own. e-Seal, pre-document, and
+origin-stream data ride on the same `CargoOut` record (fields above).

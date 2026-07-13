@@ -12,11 +12,29 @@ Layering mirrors :mod:`services.fastag`:
 """
 
 from .repository import CargoConflict, CargoNotFound, CargoRepository
-from .service import CargoService
+from .service import (
+    EVENT_CREATED,
+    EVENT_DELETED,
+    EVENT_GATE_MOVEMENT,
+    EVENT_RELEASED,
+    EVENT_STATUS_CHANGED,
+    EVENT_UPDATED,
+    EVENT_YARD_ASSIGNED,
+    CargoService,
+    scope_filters_for_role,
+)
 
 __all__ = [
     "CargoRepository",
     "CargoService",
     "CargoConflict",
     "CargoNotFound",
+    "scope_filters_for_role",
+    "EVENT_CREATED",
+    "EVENT_RELEASED",
+    "EVENT_YARD_ASSIGNED",
+    "EVENT_STATUS_CHANGED",
+    "EVENT_GATE_MOVEMENT",
+    "EVENT_UPDATED",
+    "EVENT_DELETED",
 ]

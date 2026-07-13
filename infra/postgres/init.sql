@@ -1051,12 +1051,35 @@ CREATE TABLE IF NOT EXISTS jnpa.cargo (
     created_at       timestamptz NOT NULL DEFAULT now(),
     updated_at       timestamptz NOT NULL DEFAULT now()
 );
+-- Contract extensions (migration 0015): e-Seal, pre-document status, origin stream.
+ALTER TABLE jnpa.cargo
+    ADD COLUMN IF NOT EXISTS eseal_status text
+        CHECK (eseal_status IN ('ACTIVE','ARMED','TAMPERED','REMOVED','NONE'));
+ALTER TABLE jnpa.cargo ADD COLUMN IF NOT EXISTS eseal_number text;
+ALTER TABLE jnpa.cargo
+    ADD COLUMN IF NOT EXISTS pre_document_status text
+        CHECK (pre_document_status IN ('NOT_STARTED','PENDING','IN_PROGRESS','COMPLETED'));
+ALTER TABLE jnpa.cargo ADD COLUMN IF NOT EXISTS origin_stream text;
 CREATE INDEX IF NOT EXISTS idx_cargo_customs_status ON jnpa.cargo (customs_status);
 CREATE INDEX IF NOT EXISTS idx_cargo_is_released    ON jnpa.cargo (is_released);
 CREATE INDEX IF NOT EXISTS idx_cargo_yard_block     ON jnpa.cargo (yard_block);
 CREATE INDEX IF NOT EXISTS idx_cargo_vehicle        ON jnpa.cargo (vehicle_number) WHERE vehicle_number IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_cargo_eta            ON jnpa.cargo (eta DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_cargo_origin_stream       ON jnpa.cargo (origin_stream);
+CREATE INDEX IF NOT EXISTS idx_cargo_eseal_status        ON jnpa.cargo (eseal_status);
+CREATE INDEX IF NOT EXISTS idx_cargo_pre_document_status ON jnpa.cargo (pre_document_status);
 DROP TRIGGER IF EXISTS trg_cargo_updated_at ON jnpa.cargo;
 CREATE TRIGGER trg_cargo_updated_at
     BEFORE UPDATE ON jnpa.cargo
     FOR EACH ROW EXECUTE FUNCTION jnpa.set_updated_at();
+-- Append-only cargo lifecycle event log (notifications contract; migration 0015).
+CREATE TABLE IF NOT EXISTS jnpa.cargo_events (
+    id               bigserial PRIMARY KEY,
+    event            text NOT NULL,
+    container_number text NOT NULL,
+    payload          jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at       timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cargo_events_created   ON jnpa.cargo_events (id DESC);
+CREATE INDEX IF NOT EXISTS idx_cargo_events_container ON jnpa.cargo_events (container_number);
+CREATE INDEX IF NOT EXISTS idx_cargo_events_event     ON jnpa.cargo_events (event);

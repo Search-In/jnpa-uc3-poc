@@ -32,10 +32,12 @@ class CargoNotFound(Exception):
 
 # Every column the API round-trips, in a stable order. `created_at`/`updated_at`
 # are server-managed (DEFAULT now() + the BEFORE-UPDATE trigger) and never set by
-# a client write.
+# a client write. The e-Seal / pre-document / origin-stream columns were added by
+# migration 0015 (all NULLable — backward compatible).
 _COLUMNS = (
     "container_number", "vessel_name", "customs_status", "yard_block",
     "is_released", "vehicle_number", "gate", "camera_id", "eta",
+    "eseal_status", "eseal_number", "pre_document_status", "origin_stream",
     "created_at", "updated_at",
 )
 _SELECT_COLS = ", ".join(_COLUMNS)
@@ -45,21 +47,33 @@ _SELECT_COLS = ", ".join(_COLUMNS)
 _WRITABLE = (
     "vessel_name", "customs_status", "yard_block", "is_released",
     "vehicle_number", "gate", "camera_id", "eta",
+    "eseal_status", "eseal_number", "pre_document_status", "origin_stream",
 )
 
 _INSERT = f"""
 INSERT INTO jnpa.cargo
     (container_number, vessel_name, customs_status, yard_block, is_released,
-     vehicle_number, gate, camera_id, eta)
+     vehicle_number, gate, camera_id, eta,
+     eseal_status, eseal_number, pre_document_status, origin_stream)
 VALUES
     (:container_number, :vessel_name, :customs_status, :yard_block, :is_released,
-     :vehicle_number, :gate, :camera_id, :eta)
+     :vehicle_number, :gate, :camera_id, :eta,
+     :eseal_status, :eseal_number, :pre_document_status, :origin_stream)
 RETURNING {_SELECT_COLS}
 """
 
 _SELECT_ONE = f"SELECT {_SELECT_COLS} FROM jnpa.cargo WHERE container_number = :container_number"
 
 _DELETE = "DELETE FROM jnpa.cargo WHERE container_number = :container_number"
+
+# Cargo lifecycle event log (notifications contract, migration 0015).
+_EVENT_COLS = ("id", "event", "container_number", "payload", "created_at")
+_EVENT_SELECT = ", ".join(_EVENT_COLS)
+_EVENT_INSERT = f"""
+INSERT INTO jnpa.cargo_events (event, container_number, payload)
+VALUES (:event, :container_number, CAST(:payload AS jsonb))
+RETURNING {_EVENT_SELECT}
+"""
 
 
 class CargoRepository:
@@ -96,7 +110,7 @@ class CargoRepository:
     # WHERE clause is injection-safe by construction.
     _FILTER_COLS = (
         "container_number", "customs_status", "yard_block", "is_released",
-        "vehicle_number",
+        "vehicle_number", "eseal_status", "pre_document_status", "origin_stream",
     )
 
     def _where(self, filters: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -120,6 +134,9 @@ class CargoRepository:
         yard_block: Optional[str] = None,
         is_released: Optional[bool] = None,
         vehicle_number: Optional[str] = None,
+        eseal_status: Optional[str] = None,
+        pre_document_status: Optional[str] = None,
+        origin_stream: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict]:
@@ -145,6 +162,9 @@ class CargoRepository:
         yard_block: Optional[str] = None,
         is_released: Optional[bool] = None,
         vehicle_number: Optional[str] = None,
+        eseal_status: Optional[str] = None,
+        pre_document_status: Optional[str] = None,
+        origin_stream: Optional[str] = None,
     ) -> int:
         """Total rows matching the same filters as list() (ignores limit/offset).
         Powers the X-Total-Count header so a paginated UI knows the full size."""
@@ -186,3 +206,49 @@ class CargoRepository:
             result = await conn.execute(text(_DELETE),
                                         {"container_number": container_number})
             return bool(result.rowcount)
+
+    # --------------------------------------------------------------- events (log)
+    async def record_event(self, event: str, container_number: str,
+                           payload: Mapping[str, Any]) -> dict:
+        """Append one cargo lifecycle event to ``jnpa.cargo_events`` and return the
+        stored row (with its monotonic id + server timestamp). Backs the UC-2
+        notifications contract (GET /api/cargo/events)."""
+        import json as _json
+        params = {"event": event, "container_number": container_number,
+                  "payload": _json.dumps(dict(payload or {}))}
+        async with get_engine(self._dsn).begin() as conn:
+            result = await conn.execute(text(_EVENT_INSERT), params)
+            row = result.mappings().first()
+        return dict(row) if row else dict(params)
+
+    async def list_events(
+        self,
+        *,
+        container_number: Optional[str] = None,
+        event: Optional[str] = None,
+        since_id: Optional[int] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict]:
+        """List cargo events newest-first. ``since_id`` returns only events with a
+        larger id (the poll cursor UC-2 advances each pull)."""
+        conds: list[str] = []
+        params: dict[str, Any] = {}
+        if container_number is not None:
+            conds.append("container_number = :container_number")
+            params["container_number"] = container_number
+        if event is not None:
+            conds.append("event = :event")
+            params["event"] = event
+        if since_id is not None:
+            conds.append("id > :since_id")
+            params["since_id"] = since_id
+        clause = ("WHERE " + " AND ".join(conds)) if conds else ""
+        params.update({"limit": limit, "offset": offset})
+        sql = (
+            f"SELECT {_EVENT_SELECT} FROM jnpa.cargo_events {clause} "
+            "ORDER BY id DESC LIMIT :limit OFFSET :offset"
+        )
+        async with get_engine(self._dsn).connect() as conn:
+            result = await conn.execute(text(sql), params)
+            return [dict(r) for r in result.mappings().all()]

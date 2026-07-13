@@ -50,7 +50,14 @@ import type {
 } from "@/lib/types";
 import type { TasSlot } from "@/lib/types";
 import type { AvailableVehicle, CreateDriverInput, DriverEnrollment } from "@/lib/types";
-import type { CongestionMetrics, ContainerJourney, DataAdapter, DataMode, OcrEval } from "./types";
+import type {
+  CarbonEmissionRecord,
+  CongestionMetrics,
+  ContainerJourney,
+  DataAdapter,
+  DataMode,
+  OcrEval,
+} from "./types";
 import { isValidContainerNo } from "@/lib/iso6346";
 import { buildKpiResult } from "@/kpi/compute";
 
@@ -1319,6 +1326,48 @@ export class MockAdapter implements DataAdapter {
       by_class,
       by_source: { moving, idle },
     });
+  }
+
+  carbonHistory(vehicleId?: string, limit = 50): Promise<CarbonEmissionRecord[]> {
+    // Deterministic sample ledger (mock mode) — no RNG, no fake improvement claims;
+    // just a few recent per-vehicle emission rows so the UI ledger renders offline.
+    const base: CarbonEmissionRecord[] = [
+      {
+        id: 3,
+        vehicle_id: "MH04AB1234",
+        vehicle_type: "HGV",
+        distance_km: 38.0,
+        idle_time_minutes: 42.0,
+        fuel_consumed_litre: 22.4,
+        co2_kg: 60.0,
+        source: "telemetry",
+        created_at: "2026-07-13T09:12:00+00:00",
+      },
+      {
+        id: 2,
+        vehicle_id: "MH12CD5678",
+        vehicle_type: "REEFER",
+        distance_km: 27.5,
+        idle_time_minutes: 65.0,
+        fuel_consumed_litre: 31.9,
+        co2_kg: 85.4,
+        source: "telemetry",
+        created_at: "2026-07-13T08:47:00+00:00",
+      },
+      {
+        id: 1,
+        vehicle_id: "MH04AB1234",
+        vehicle_type: "HGV",
+        distance_km: 40.0,
+        idle_time_minutes: 18.0,
+        fuel_consumed_litre: 19.1,
+        co2_kg: 51.2,
+        source: "manual",
+        created_at: "2026-07-13T07:30:00+00:00",
+      },
+    ];
+    const rows = vehicleId ? base.filter((r) => r.vehicle_id === vehicleId) : base;
+    return Promise.resolve(rows.slice(0, limit));
   }
 
   leoQueue(): Promise<AutoLeoResult[]> {

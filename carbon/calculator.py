@@ -114,6 +114,66 @@ def aoi_rollup(trips: Iterable[dict]) -> dict:
     }
 
 
+# ------------------------------------------------------------ single-vehicle record
+# Nominal laden payload (tonnes) applied to the moving leg of a per-vehicle
+# calculation when the caller does not supply one. These are typical container-haul
+# laden masses per class (documented assumption, see docs/ASSUMPTIONS.md "Carbon"),
+# used ONLY so a distance-and-idle request yields a grounded figure — a supplied
+# ``payload_tonnes`` always overrides.
+_NOMINAL_PAYLOAD_T: dict[str, float] = {
+    factors.HGV: 20.0,
+    factors.RIGID: 10.0,
+    factors.LGV: 1.0,
+    factors.REEFER: 18.0,
+}
+
+
+def _nominal_payload(vehicle_class: str) -> float:
+    return _NOMINAL_PAYLOAD_T.get((vehicle_class or "").upper(), _NOMINAL_PAYLOAD_T[factors.DEFAULT_CLASS])
+
+
+def emission_record(
+    *,
+    vehicle_id: str,
+    distance_km: float,
+    idle_minutes: float,
+    vehicle_type: str,
+    payload_tonnes: float | None = None,
+) -> dict:
+    """Compute one vehicle's emission ledger entry from an activity record.
+
+    Pure (no I/O, no clock): the moving leg uses the published gCO2e/tonne-km
+    factor over the distance and (supplied or nominal) laden payload; the idle leg
+    uses the published gCO2e/idle-minute factor. Fuel is back-derived from the
+    total via the documented diesel factor (``DIESEL_GCO2E_PER_LITRE``) so the
+    ledger's ``fuel_consumed_litre`` is consistent with its ``co2_kg``. Returns the
+    exact column-set ``jnpa.carbon_emission`` persists (minus id/created_at).
+    """
+    vclass = (vehicle_type or factors.DEFAULT_CLASS).upper()
+    payload = _nominal_payload(vclass) if payload_tonnes is None else max(0.0, float(payload_tonnes))
+    moving = trip_emissions_kg(distance_km, payload, vclass)
+    idle = idle_emissions_kg(idle_minutes, vclass)
+    co2_kg = round(moving + idle, _ROUND_KG)
+    # Back-derive litres of diesel from the total CO2e via the published factor.
+    fuel_litre = round(co2_kg * _G_PER_KG / factors.DIESEL_GCO2E_PER_LITRE, _ROUND_KG)
+    method = (
+        "moving=distance*payload*gCO2e_per_tonne_km + idle=minutes*gCO2e_per_idle_minute; "
+        "fuel=CO2e/diesel_gCO2e_per_litre (IPCC/DEFRA/GLEC factors)"
+    )
+    return {
+        "vehicle_id": vehicle_id,
+        "vehicle_type": vclass,
+        "distance_km": round(max(0.0, float(distance_km)), 3),
+        "idle_time_minutes": round(max(0.0, float(idle_minutes)), 3),
+        "payload_tonnes": round(payload, 3),
+        "co2_kg": co2_kg,
+        "moving_kg": moving,
+        "idle_kg": idle,
+        "fuel_consumed_litre": fuel_litre,
+        "calculation_method": method,
+    }
+
+
 # --------------------------------------------------------------------------- seed
 # Deterministic synthetic fleet of trailers currently in the Area of Interest.
 # Stands in for the fleet-transporter telematics + CPP/parking dwell feeds
@@ -178,6 +238,7 @@ __all__ = [
     "trip_emissions_kg",
     "idle_emissions_kg",
     "vehicle_emissions_kg",
+    "emission_record",
     "aoi_rollup",
     "seed_aoi_fleet",
     "SEED",

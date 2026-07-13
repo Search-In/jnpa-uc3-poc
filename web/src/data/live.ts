@@ -6,7 +6,9 @@ import { getToken } from "@/lib/auth";
 import type {
   Alert,
   AutoLeoResult,
+  AvailableVehicle,
   CarbonRollup,
+  CreateDriverInput,
   DriverEnrollment,
   EmptyAllocation,
   FaultControlResult,
@@ -166,6 +168,21 @@ export class LiveAdapter implements DataAdapter {
       `/api/identity/enrollments/${encodeURIComponent(driverId)}/reenroll`,
       { reason: reason ?? "re-enrolment requested" },
     );
+  createDriverProfile = (input: CreateDriverInput) =>
+    postJson<{ created: boolean; driver_id: string; status: string }>(
+      "/api/identity/drivers",
+      input,
+    );
+  availableVehicles = async (q?: string, limit = 50): Promise<AvailableVehicle[]> => {
+    const params = new URLSearchParams();
+    if (q) params.set("q", q);
+    params.set("limit", String(limit));
+    return (
+      await getJson<{ vehicles: AvailableVehicle[] }>(
+        `/api/identity/available-vehicles?${params.toString()}`,
+      )
+    ).vehicles;
+  };
   parkingAvailability = async (minuteOfDay?: number): Promise<ParkingFacility[]> =>
     (
       await getJson<{ facilities: ParkingFacility[] }>(

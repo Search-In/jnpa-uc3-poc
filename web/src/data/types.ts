@@ -10,9 +10,11 @@
 import type {
   Alert,
   AutoLeoResult,
+  AvailableVehicle,
   CameraHealth,
   CarbonRollup,
   CorridorGeometry,
+  CreateDriverInput,
   Decision,
   DriverEnrollment,
   EmptyAllocation,
@@ -231,6 +233,12 @@ export interface DataAdapter {
   approveEnrollment(driverId: string): Promise<{ approved: boolean }>;
   rejectEnrollment(driverId: string, reason: string): Promise<{ rejected: boolean }>;
   reenrollEnrollment(driverId: string, reason?: string): Promise<{ reenroll: boolean }>;
+  // Admin creates a driver profile + vehicle assignment (source=ADMIN, PENDING).
+  createDriverProfile(
+    input: CreateDriverInput,
+  ): Promise<{ created: boolean; driver_id: string; status: string }>;
+  // Fleet vehicles not yet assigned to an active driver (assign-vehicle dropdown).
+  availableVehicles(q?: string, limit?: number): Promise<AvailableVehicle[]>;
 
   parkingAvailability(minuteOfDay?: number): Promise<ParkingFacility[]>;
   parkingSummary(minuteOfDay?: number): Promise<ParkingSummary>;

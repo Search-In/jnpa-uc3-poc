@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import os
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from .. import enrollment
 from ..auth import (
     ALL_ROLES,
     Role,
@@ -23,6 +24,7 @@ from ..auth import (
     encode_token,
     is_production_like,
 )
+from ..state import GatewayState, get_state
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -99,7 +101,8 @@ class DeviceTokenBody(BaseModel):
 
 
 @router.post("/device-token", response_model=TokenResponse)
-async def device_token(body: DeviceTokenBody) -> TokenResponse:
+async def device_token(body: DeviceTokenBody,
+                       state: GatewayState = Depends(get_state)) -> TokenResponse:
     """Mint a DRIVER-scoped, device-bound JWT for the Driver PWA at pairing.
 
     Unlike ``/dev-token`` this can ONLY ever issue the ``DRIVER`` role (never a
@@ -110,6 +113,12 @@ async def device_token(body: DeviceTokenBody) -> TokenResponse:
         ``pairing_secret`` (401 otherwise);
       * in a production-like environment the secret is REQUIRED — without it the
         endpoint 404s, exactly like ``/dev-token``.
+
+    Driver-profile eligibility gate: when ``REQUIRE_DRIVER_PROFILE`` is enabled the
+    entered Vehicle ID (== ``device_id``) MUST be assigned to an ACTIVE driver in
+    jnpa.drivers, otherwise the pairing is refused with 403. This closes the gap
+    where any well-formed ``TRK-######`` could pair; the assignment is created by a
+    Control-Room admin and confirmed on approval. Default-off for migration safety.
 
     This is the seam where a real OTP / device-attestation flow plugs in
     post-award; the token shape and DRIVER scoping stay the same.
@@ -123,6 +132,13 @@ async def device_token(body: DeviceTokenBody) -> TokenResponse:
     device_id = body.device_id.strip()
     if not device_id:
         raise HTTPException(status_code=400, detail="device_id required")
+    # Eligibility gate: the Vehicle ID must belong to an ACTIVE driver.
+    if state.cfg.require_driver_profile:
+        driver = await enrollment.get_active_driver_by_vehicle(
+            state.cfg.postgres_dsn, device_id)
+        if not driver:
+            raise HTTPException(
+                status_code=403, detail="Vehicle is not assigned to an active driver")
     # 12 h TTL: long enough for a driving shift, short enough to bound exposure.
     token = encode_token(
         sub=f"device:{device_id}", role=Role.DRIVER.value, device_id=device_id, ttl_s=12 * 3600

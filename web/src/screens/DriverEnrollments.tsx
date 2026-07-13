@@ -19,9 +19,12 @@ import {
   Clock,
   ShieldCheck,
   Ban,
+  Plus,
+  Truck,
+  Search,
 } from "lucide-react";
 import { getAdapter } from "@/data";
-import type { DriverEnrollment } from "@/lib/types";
+import type { AvailableVehicle, DriverEnrollment } from "@/lib/types";
 import { Card } from "@/components/ui/card";
 import { Spinner, ErrorState } from "@/components/ui/misc";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -62,6 +65,7 @@ export default function DriverEnrollments() {
   const qc = useQueryClient();
   const [filter, setFilter] = useState<Filter>("PENDING");
   const [openId, setOpenId] = useState<string | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
 
   // Fetch the full set once (small table); filter client-side for the tabs so
   // per-status counts stay live. Key stays under the ["enrollments"] prefix that
@@ -152,6 +156,16 @@ export default function DriverEnrollments() {
         updatedAt={listQ.dataUpdatedAt}
         isFetching={listQ.isFetching && !listQ.isLoading}
         onRefresh={invalidate}
+        actions={
+          <button
+            type="button"
+            onClick={() => setCreateOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            {t("enrollments.create", "Create Driver Profile")}
+          </button>
+        }
       />
 
       <div className="px-4 pt-3">
@@ -231,7 +245,218 @@ export default function DriverEnrollments() {
           )}
         </DialogContent>
       </Dialog>
+
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent className="p-0">
+          <DialogHeader>
+            <DialogTitle>{t("enrollments.create", "Create Driver Profile")}</DialogTitle>
+          </DialogHeader>
+          {createOpen && (
+            <CreateDriverForm
+              onClose={() => setCreateOpen(false)}
+              onCreated={() => {
+                invalidate();
+                setFilter("PENDING");
+                setCreateOpen(false);
+              }}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </PageContainer>
+  );
+}
+
+// Admin-originated driver-profile creation: capture the profile + assign an
+// available Vehicle ID (searchable dropdown — no free typing), then POST to
+// /api/identity/drivers which creates a PENDING enrolment (source=ADMIN). The
+// driver flows through the SAME approve action; on approval the Vehicle ID
+// becomes eligible for PWA login.
+function CreateDriverForm({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+  const { t } = useTranslation();
+  const [name, setName] = useState("");
+  const [license, setLicense] = useState("");
+  const [mobile, setMobile] = useState("");
+  const [emergency, setEmergency] = useState("");
+  const [vehicle, setVehicle] = useState<string>("");
+  const [vehicleQuery, setVehicleQuery] = useState("");
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+
+  const vehiclesQ = useQuery({
+    queryKey: ["available-vehicles", vehicleQuery],
+    queryFn: () => getAdapter().availableVehicles(vehicleQuery || undefined, 50),
+  });
+
+  const create = useMutation({
+    mutationFn: () =>
+      getAdapter().createDriverProfile({
+        name: name.trim(),
+        vehicle_no: vehicle,
+        license_no: license.trim() || undefined,
+        mobile: mobile.trim() || undefined,
+        emergency_contact: emergency.trim() || undefined,
+      }),
+    onSuccess: onCreated,
+  });
+
+  const canSubmit = name.trim().length > 0 && /^TRK-\d{6}$/.test(vehicle) && !create.isPending;
+  const inputCls =
+    "w-full rounded-md border border-border bg-background px-3 py-1.5 text-sm outline-none focus:border-primary";
+
+  return (
+    <div className="space-y-3 p-4">
+      <div className="grid grid-cols-2 gap-3">
+        <Labeled label={t("enrollments.name", "Driver Name")} required className="col-span-2">
+          <input
+            className={inputCls}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. Ramesh Kumar"
+            autoFocus
+          />
+        </Labeled>
+        <Labeled label={t("enrollments.license", "License Number")}>
+          <input className={inputCls} value={license} onChange={(e) => setLicense(e.target.value)} />
+        </Labeled>
+        <Labeled label={t("enrollments.mobile", "Mobile Number")}>
+          <input
+            className={inputCls}
+            value={mobile}
+            onChange={(e) => setMobile(e.target.value)}
+            placeholder="+91 …"
+          />
+        </Labeled>
+        <Labeled label={t("enrollments.emergency", "Emergency Contact")} className="col-span-2">
+          <input
+            className={inputCls}
+            value={emergency}
+            onChange={(e) => setEmergency(e.target.value)}
+          />
+        </Labeled>
+
+        {/* Vehicle assignment — searchable dropdown of AVAILABLE vehicles only. */}
+        <Labeled label={t("enrollments.assignVehicle", "Assign Vehicle")} required className="col-span-2">
+          <div className="relative">
+            <div className="flex items-center gap-2 rounded-md border border-border bg-background px-2.5 py-1.5">
+              {vehicle ? (
+                <Truck className="h-4 w-4 text-primary" />
+              ) : (
+                <Search className="h-4 w-4 text-muted-foreground" />
+              )}
+              <input
+                className="flex-1 bg-transparent text-sm outline-none"
+                value={dropdownOpen ? vehicleQuery : vehicle || vehicleQuery}
+                onFocus={() => setDropdownOpen(true)}
+                onChange={(e) => {
+                  setVehicleQuery(e.target.value);
+                  setDropdownOpen(true);
+                  if (vehicle) setVehicle("");
+                }}
+                placeholder={t("enrollments.searchVehicle", "Search available Vehicle ID…")}
+              />
+              {vehicle && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setVehicle("");
+                    setVehicleQuery("");
+                  }}
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+            {dropdownOpen && (
+              <div className="absolute z-10 mt-1 max-h-52 w-full overflow-auto rounded-md border border-border bg-card shadow-lg">
+                {vehiclesQ.isLoading ? (
+                  <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
+                    <Spinner /> {t("common.loading", "Loading…")}
+                  </div>
+                ) : (vehiclesQ.data ?? []).length === 0 ? (
+                  <div className="p-3 text-xs text-muted-foreground">
+                    {t("enrollments.noVehicles", "No available vehicles match.")}
+                  </div>
+                ) : (
+                  (vehiclesQ.data ?? []).map((v: AvailableVehicle) => (
+                    <button
+                      key={v.vehicle_id}
+                      type="button"
+                      onClick={() => {
+                        setVehicle(v.vehicle_id);
+                        setVehicleQuery("");
+                        setDropdownOpen(false);
+                      }}
+                      className="flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-sm hover:bg-muted"
+                    >
+                      <span className="font-mono">{v.vehicle_id}</span>
+                      {v.plate && (
+                        <span className="text-[10px] text-muted-foreground">{v.plate}</span>
+                      )}
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+        </Labeled>
+      </div>
+
+      <div
+        className="rounded-md border px-3 py-2 text-[11px]"
+        style={{ borderColor: `${STATUS.info}80`, backgroundColor: `${STATUS.info}1a` }}
+      >
+        {t(
+          "enrollments.createNote",
+          "Creates a PENDING profile. After you approve it, the assigned Vehicle ID becomes eligible for Driver PWA login.",
+        )}
+      </div>
+
+      {create.error && (
+        <div className="text-xs text-red-500">{(create.error as Error).message}</div>
+      )}
+
+      <div className="flex justify-end gap-2 pt-1">
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-md border border-border px-3 py-1.5 text-[13px] font-medium hover:bg-muted"
+        >
+          {t("common.cancel", "Cancel")}
+        </button>
+        <button
+          type="button"
+          disabled={!canSubmit}
+          onClick={() => create.mutate()}
+          className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-[13px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+        >
+          {create.isPending ? <Spinner className="text-primary-foreground" /> : <Plus className="h-4 w-4" />}
+          {t("enrollments.createSubmit", "Create Profile")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Labeled({
+  label,
+  required,
+  className,
+  children,
+}: {
+  label: string;
+  required?: boolean;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className={`block ${className ?? ""}`}>
+      <span className="mb-1 block text-[10px] uppercase tracking-wide text-muted-foreground">
+        {label}
+        {required && <span className="ml-0.5 text-red-500">*</span>}
+      </span>
+      {children}
+    </label>
   );
 }
 
@@ -377,6 +602,17 @@ function EnrollmentDetail({
           k={t("enrollments.submitted", "Submitted")}
           v={rec.submitted_at ? fmtDateTimeIST(rec.submitted_at) : "—"}
         />
+        <Field
+          k={t("enrollments.source", "Source")}
+          v={
+            (rec.source ?? "").toUpperCase() === "ADMIN"
+              ? t("enrollments.sourceAdmin", "Admin-created")
+              : t("enrollments.sourcePwa", "Driver app")
+          }
+        />
+        {rec.created_by && (
+          <Field k={t("enrollments.createdBy", "Created by")} v={rec.created_by} />
+        )}
         {rec.reviewed_by && (
           <Field k={t("enrollments.reviewedBy", "Reviewed by")} v={rec.reviewed_by} />
         )}

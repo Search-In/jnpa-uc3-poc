@@ -350,10 +350,30 @@ export interface DriverEnrollment {
   documents?: { kind: string; image: string }[];
   template_dim?: number | null;
   provider?: string | null;
+  /** Provenance: "PWA" (driver self-service) or "ADMIN" (Control-Room created). */
+  source?: string | null;
+  /** Admin actor who created the profile (ADMIN source only). */
+  created_by?: string | null;
   submitted_at?: string;
   reviewed_at?: string | null;
   reviewed_by?: string | null;
   rejection_reason?: string | null;
+}
+
+// A fleet vehicle available for admin assignment (Control-Room dropdown).
+export interface AvailableVehicle {
+  vehicle_id: string;
+  plate?: string | null;
+  state?: string | null;
+}
+
+// Payload for admin-originated driver-profile creation.
+export interface CreateDriverInput {
+  name: string;
+  vehicle_no: string;
+  license_no?: string;
+  mobile?: string;
+  emergency_contact?: string;
 }
 
 // Parking (/api/parking)

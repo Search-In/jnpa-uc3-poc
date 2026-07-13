@@ -27,6 +27,16 @@ ACTIVE = "ACTIVE"
 REJECTED = "REJECTED"
 REENROLL = "REENROLL"
 
+# Enrolment provenance (jnpa.driver_enrollments.source).
+SOURCE_PWA = "PWA"      # driver self-submitted from the mobile app
+SOURCE_ADMIN = "ADMIN"  # created by a Control-Room admin on the enrolment page
+
+
+def normalize_vehicle_no(vehicle_no: Optional[str]) -> str:
+    """Canonical form used for vehicle matching + the one-active-driver-per-vehicle
+    constraint. UPPER + trimmed so ``trk-000001`` and ``TRK-000001 `` collide."""
+    return (vehicle_no or "").strip().upper()
+
 # --- schema (idempotent; also applied here so an existing volume gains the tables
 # without an init.sql re-run) ------------------------------------------------
 _DDL = """
@@ -57,6 +67,8 @@ CREATE TABLE IF NOT EXISTS jnpa.driver_enrollments (
 );
 CREATE INDEX IF NOT EXISTS idx_driver_enrol_status
     ON jnpa.driver_enrollments (status, submitted_at DESC);
+ALTER TABLE jnpa.driver_enrollments ADD COLUMN IF NOT EXISTS created_by text;
+ALTER TABLE jnpa.driver_enrollments ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'PWA';
 CREATE TABLE IF NOT EXISTS jnpa.enrollment_audit (
     id        bigserial PRIMARY KEY,
     driver_id text NOT NULL,
@@ -85,6 +97,13 @@ CREATE TABLE IF NOT EXISTS jnpa.drivers (
     approved_by       text,
     updated_at        timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE jnpa.drivers ADD COLUMN IF NOT EXISTS created_by text;
+ALTER TABLE jnpa.drivers ADD COLUMN IF NOT EXISTS vehicle_no_norm text;
+CREATE INDEX IF NOT EXISTS idx_drivers_vehicle_no ON jnpa.drivers (vehicle_no);
+CREATE INDEX IF NOT EXISTS idx_drivers_vehicle_no_norm ON jnpa.drivers (vehicle_no_norm);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_drivers_vehicle_active
+    ON jnpa.drivers (vehicle_no_norm)
+    WHERE status = 'ACTIVE' AND vehicle_no_norm IS NOT NULL;
 CREATE TABLE IF NOT EXISTS jnpa.driver_faces (
     driver_id     text PRIMARY KEY,
     embedding     jsonb NOT NULL,
@@ -125,7 +144,8 @@ _BACKEND: Dict[str, str] = {}
 _SUMMARY_COLS = (
     "driver_id, name, license_no, mobile, vehicle_no, aadhaar_masked, "
     "emergency_contact, status, consent, consent_at, photo_url, template_dim, "
-    "provider, submitted_at, reviewed_at, reviewed_by, rejection_reason, updated_at"
+    "provider, source, created_by, submitted_at, reviewed_at, reviewed_by, "
+    "rejection_reason, updated_at"
 )
 
 
@@ -231,13 +251,21 @@ async def submit(dsn: str, *, driver_id: str, name: str, license_no: str = "",
                  mobile: str = "", vehicle_no: str = "", aadhaar_masked: str = "",
                  emergency_contact: str = "", consent: bool = False,
                  face_images: Optional[List[str]] = None,
-                 documents: Optional[List[Any]] = None) -> dict:
+                 documents: Optional[List[Any]] = None,
+                 source: str = SOURCE_PWA, created_by: Optional[str] = None) -> dict:
     """Create/refresh a PENDING enrolment request. Re-submitting overwrites a
-    prior PENDING/REJECTED/REENROLL record (a driver may re-enrol after rejection)."""
+    prior PENDING/REJECTED/REENROLL record (a driver may re-enrol after rejection).
+
+    ``source`` records provenance: ``PWA`` (driver self-service, the default) or
+    ``ADMIN`` (created from the Control-Room enrolment page); ``created_by`` is the
+    admin actor for the ADMIN path. The actor stamped on the audit trail follows
+    the source so the DPDP log shows who really originated the request."""
     face_images = face_images or []
     documents = documents or []
     now = _now()
     consent_at = now if consent else None
+    submit_actor = created_by if source == SOURCE_ADMIN and created_by else f"driver:{driver_id}"
+    audit_detail = {"images": len(face_images), "consent": consent, "source": source}
     if await _backend(dsn) == "db":
         try:
             from jnpa_shared.db import execute
@@ -247,11 +275,12 @@ async def submit(dsn: str, *, driver_id: str, name: str, license_no: str = "",
                 INSERT INTO jnpa.driver_enrollments
                     (driver_id, name, license_no, mobile, vehicle_no, aadhaar_masked,
                      emergency_contact, status, consent, consent_at, face_images,
-                     documents, submitted_at, updated_at)
+                     documents, source, created_by, submitted_at, updated_at)
                 VALUES
                     (:driver_id, :name, :license_no, :mobile, :vehicle_no, :aadhaar,
                      :emergency, 'PENDING', :consent, :consent_at,
-                     CAST(:faces AS jsonb), CAST(:docs AS jsonb), :now, :now)
+                     CAST(:faces AS jsonb), CAST(:docs AS jsonb), :source, :created_by,
+                     :now, :now)
                 ON CONFLICT (driver_id) DO UPDATE SET
                     name = EXCLUDED.name,
                     license_no = EXCLUDED.license_no,
@@ -264,6 +293,8 @@ async def submit(dsn: str, *, driver_id: str, name: str, license_no: str = "",
                     consent_at = EXCLUDED.consent_at,
                     face_images = EXCLUDED.face_images,
                     documents = EXCLUDED.documents,
+                    source = EXCLUDED.source,
+                    created_by = EXCLUDED.created_by,
                     reference_image = NULL,
                     photo_url = NULL,
                     template_dim = NULL,
@@ -278,11 +309,11 @@ async def submit(dsn: str, *, driver_id: str, name: str, license_no: str = "",
                  "mobile": mobile, "vehicle_no": vehicle_no, "aadhaar": aadhaar_masked,
                  "emergency": emergency_contact, "consent": consent,
                  "consent_at": consent_at, "faces": _dumps(face_images),
-                 "docs": _dumps(documents), "now": now},
+                 "docs": _dumps(documents), "source": source, "created_by": created_by,
+                 "now": now},
                 dsn=dsn,
             )
-            await audit(dsn, driver_id, "SUBMITTED", actor=f"driver:{driver_id}",
-                        detail={"images": len(face_images), "consent": consent})
+            await audit(dsn, driver_id, "SUBMITTED", actor=submit_actor, detail=audit_detail)
             return await get(dsn, driver_id) or {}
         except Exception as exc:  # noqa: BLE001
             log.warning("enrollment_submit_db_failed_using_memory", error=str(exc))
@@ -293,12 +324,12 @@ async def submit(dsn: str, *, driver_id: str, name: str, license_no: str = "",
         "consent_at": consent_at.isoformat() if consent_at else None,
         "face_images": face_images, "reference_image": None, "photo_url": None,
         "documents": documents, "template_dim": None, "provider": None,
+        "source": source, "created_by": created_by,
         "submitted_at": now.isoformat(), "reviewed_at": None, "reviewed_by": None,
         "rejection_reason": None, "updated_at": now.isoformat(),
     }
     _MEM[driver_id] = rec
-    await audit(dsn, driver_id, "SUBMITTED", actor=f"driver:{driver_id}",
-                detail={"images": len(face_images), "consent": consent})
+    await audit(dsn, driver_id, "SUBMITTED", actor=submit_actor, detail=audit_detail)
     return _public(rec, include_faces=False)
 
 
@@ -437,17 +468,19 @@ async def promote_to_driver(dsn: str, rec: Mapping[str, Any], *, actor: str,
         await execute(
             """
             INSERT INTO jnpa.drivers
-                (driver_id, name, license_no, mobile, vehicle_no, aadhaar_masked,
-                 emergency_contact, status, photo_url, reference_image, template_dim,
-                 provider, enrolled_at, approved_by, updated_at)
+                (driver_id, name, license_no, mobile, vehicle_no, vehicle_no_norm,
+                 aadhaar_masked, emergency_contact, status, photo_url, reference_image,
+                 template_dim, provider, enrolled_at, approved_by, created_by, updated_at)
             VALUES
-                (:driver_id, :name, :license_no, :mobile, :vehicle_no, :aadhaar,
-                 :emergency, 'ACTIVE', :photo_url, :ref, :dim, :provider, :now, :actor, :now)
+                (:driver_id, :name, :license_no, :mobile, :vehicle_no, :vehicle_norm,
+                 :aadhaar, :emergency, 'ACTIVE', :photo_url, :ref, :dim, :provider,
+                 :now, :actor, :created_by, :now)
             ON CONFLICT (driver_id) DO UPDATE SET
                 name = EXCLUDED.name,
                 license_no = EXCLUDED.license_no,
                 mobile = EXCLUDED.mobile,
                 vehicle_no = EXCLUDED.vehicle_no,
+                vehicle_no_norm = EXCLUDED.vehicle_no_norm,
                 aadhaar_masked = EXCLUDED.aadhaar_masked,
                 emergency_contact = EXCLUDED.emergency_contact,
                 status = 'ACTIVE',
@@ -456,25 +489,31 @@ async def promote_to_driver(dsn: str, rec: Mapping[str, Any], *, actor: str,
                 template_dim = EXCLUDED.template_dim,
                 provider = EXCLUDED.provider,
                 approved_by = EXCLUDED.approved_by,
+                created_by = COALESCE(jnpa.drivers.created_by, EXCLUDED.created_by),
                 updated_at = EXCLUDED.updated_at
             """,
             {"driver_id": rec.get("driver_id"), "name": rec.get("name") or rec.get("driver_id"),
              "license_no": rec.get("license_no"), "mobile": rec.get("mobile"),
-             "vehicle_no": rec.get("vehicle_no"), "aadhaar": rec.get("aadhaar_masked"),
+             "vehicle_no": rec.get("vehicle_no"),
+             "vehicle_norm": normalize_vehicle_no(rec.get("vehicle_no")) or None,
+             "aadhaar": rec.get("aadhaar_masked"),
              "emergency": rec.get("emergency_contact"), "photo_url": photo_url,
              "ref": reference_image, "dim": template_dim, "provider": provider,
-             "now": now, "actor": actor},
+             "now": now, "actor": actor, "created_by": rec.get("created_by")},
             dsn=dsn,
         )
         return
     _MEM_DRIVERS[rec.get("driver_id")] = {
         "driver_id": rec.get("driver_id"), "name": rec.get("name"),
         "license_no": rec.get("license_no"), "mobile": rec.get("mobile"),
-        "vehicle_no": rec.get("vehicle_no"), "aadhaar_masked": rec.get("aadhaar_masked"),
+        "vehicle_no": rec.get("vehicle_no"),
+        "vehicle_no_norm": normalize_vehicle_no(rec.get("vehicle_no")) or None,
+        "aadhaar_masked": rec.get("aadhaar_masked"),
         "emergency_contact": rec.get("emergency_contact"), "status": "ACTIVE",
         "photo_url": photo_url, "reference_image": reference_image,
         "template_dim": template_dim, "provider": provider,
-        "enrolled_at": now.isoformat(), "approved_by": actor, "updated_at": now.isoformat(),
+        "enrolled_at": now.isoformat(), "approved_by": actor,
+        "created_by": rec.get("created_by"), "updated_at": now.isoformat(),
     }
 
 
@@ -504,6 +543,106 @@ async def list_active_drivers(dsn: str) -> List[dict]:
     return [{"driver_id": d["driver_id"], "name": d.get("name"),
              "license_no": d.get("license_no"), "photo_url": d.get("photo_url")}
             for d in _MEM_DRIVERS.values() if d.get("status") == "ACTIVE"]
+
+
+# Open enrolment states that still "hold" an assigned vehicle (not yet resolved).
+_OPEN_ENROL_STATES = (PENDING, REENROLL)
+
+
+async def get_active_driver_by_vehicle(dsn: str, vehicle_no: str) -> Optional[dict]:
+    """PWA-login gate: resolve the ACTIVE master driver a Vehicle ID is assigned to.
+
+    Returns the driver row (or ``None`` if no ACTIVE driver holds this vehicle).
+    The uq_drivers_vehicle_active constraint guarantees at most one match. Matching
+    is on the normalised Vehicle ID so casing/whitespace never causes a false 403."""
+    norm = normalize_vehicle_no(vehicle_no)
+    if not norm:
+        return None
+    if await _backend(dsn) == "db":
+        from jnpa_shared.db import fetch_one
+
+        row = await fetch_one(
+            "SELECT driver_id, name, license_no, mobile, vehicle_no, status, "
+            "photo_url, provider FROM jnpa.drivers "
+            "WHERE vehicle_no_norm = :v AND status = 'ACTIVE' LIMIT 1",
+            {"v": norm}, dsn=dsn)
+        return _iso_row(dict(row)) if row else None
+    for d in _MEM_DRIVERS.values():
+        if d.get("status") == ACTIVE and normalize_vehicle_no(d.get("vehicle_no")) == norm:
+            return dict(d)
+    return None
+
+
+async def vehicle_assignment_conflict(dsn: str, vehicle_no: str, *,
+                                      exclude_driver_id: Optional[str] = None) -> Optional[dict]:
+    """Return the conflicting holder ``{driver_id, name, status, kind}`` if this
+    Vehicle ID is already taken, else ``None``. "Taken" = an ACTIVE master driver
+    OR an open (PENDING/REENROLL) enrolment holds it. Used to block a double
+    assignment at admin-create time (belt-and-braces with uq_drivers_vehicle_active)."""
+    norm = normalize_vehicle_no(vehicle_no)
+    if not norm:
+        return None
+    if await _backend(dsn) == "db":
+        from jnpa_shared.db import fetch_one
+
+        row = await fetch_one(
+            "SELECT driver_id, name, status FROM jnpa.drivers "
+            "WHERE vehicle_no_norm = :v AND status = 'ACTIVE' "
+            "AND (:excl IS NULL OR driver_id <> :excl) LIMIT 1",
+            {"v": norm, "excl": exclude_driver_id}, dsn=dsn)
+        if row:
+            return {**_iso_row(dict(row)), "kind": "driver"}
+        row = await fetch_one(
+            "SELECT driver_id, name, status FROM jnpa.driver_enrollments "
+            "WHERE UPPER(TRIM(vehicle_no)) = :v AND status = ANY(:states) "
+            "AND (:excl IS NULL OR driver_id <> :excl) LIMIT 1",
+            {"v": norm, "states": list(_OPEN_ENROL_STATES), "excl": exclude_driver_id}, dsn=dsn)
+        if row:
+            return {**_iso_row(dict(row)), "kind": "enrolment"}
+        return None
+    for d in _MEM_DRIVERS.values():
+        if (d.get("status") == ACTIVE and normalize_vehicle_no(d.get("vehicle_no")) == norm
+                and d.get("driver_id") != exclude_driver_id):
+            return {"driver_id": d.get("driver_id"), "name": d.get("name"),
+                    "status": d.get("status"), "kind": "driver"}
+    for e in _MEM.values():
+        if (e.get("status") in _OPEN_ENROL_STATES
+                and normalize_vehicle_no(e.get("vehicle_no")) == norm
+                and e.get("driver_id") != exclude_driver_id):
+            return {"driver_id": e.get("driver_id"), "name": e.get("name"),
+                    "status": e.get("status"), "kind": "enrolment"}
+    return None
+
+
+async def assigned_vehicles(dsn: str) -> set:
+    """Normalised Vehicle IDs already taken (ACTIVE drivers + open enrolments).
+    The Control-Room "available vehicles" dropdown subtracts this set so an admin
+    can never pick an already-assigned vehicle."""
+    taken: set = set()
+    if await _backend(dsn) == "db":
+        from jnpa_shared.db import fetch_all
+
+        rows = await fetch_all(
+            "SELECT vehicle_no_norm AS v FROM jnpa.drivers "
+            "WHERE status = 'ACTIVE' AND vehicle_no_norm IS NOT NULL", dsn=dsn)
+        taken.update(r["v"] for r in rows if r["v"])
+        rows = await fetch_all(
+            "SELECT UPPER(TRIM(vehicle_no)) AS v FROM jnpa.driver_enrollments "
+            "WHERE status = ANY(:states) AND vehicle_no IS NOT NULL "
+            "AND TRIM(vehicle_no) <> ''", {"states": list(_OPEN_ENROL_STATES)}, dsn=dsn)
+        taken.update(r["v"] for r in rows if r["v"])
+        return taken
+    for d in _MEM_DRIVERS.values():
+        if d.get("status") == ACTIVE:
+            v = normalize_vehicle_no(d.get("vehicle_no"))
+            if v:
+                taken.add(v)
+    for e in _MEM.values():
+        if e.get("status") in _OPEN_ENROL_STATES:
+            v = normalize_vehicle_no(e.get("vehicle_no"))
+            if v:
+                taken.add(v)
+    return taken
 
 
 # --------------------------------------------------------------------------- biometric templates (1:N)
@@ -637,9 +776,10 @@ def _public(rec: dict, *, include_faces: bool) -> dict:
 
 
 __all__ = [
-    "PENDING", "ACTIVE", "REJECTED", "REENROLL",
-    "ensure_backend",
+    "PENDING", "ACTIVE", "REJECTED", "REENROLL", "SOURCE_PWA", "SOURCE_ADMIN",
+    "ensure_backend", "normalize_vehicle_no",
     "submit", "mark_active", "set_status", "get", "list_requests", "audit",
     "decode_data_url", "promote_to_driver", "get_driver", "list_active_drivers",
+    "get_active_driver_by_vehicle", "vehicle_assignment_conflict", "assigned_vehicles",
     "log_verification", "recent_verifications", "store_face", "load_faces",
 ]

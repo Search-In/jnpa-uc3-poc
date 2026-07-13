@@ -49,7 +49,7 @@ import type {
   TollEnrouteInput,
 } from "@/lib/types";
 import type { TasSlot } from "@/lib/types";
-import type { DriverEnrollment } from "@/lib/types";
+import type { AvailableVehicle, CreateDriverInput, DriverEnrollment } from "@/lib/types";
 import type { CongestionMetrics, ContainerJourney, DataAdapter, DataMode, OcrEval } from "./types";
 import { isValidContainerNo } from "@/lib/iso6346";
 import { buildKpiResult } from "@/kpi/compute";
@@ -309,6 +309,24 @@ const MOCK_ENROLLMENTS: DriverEnrollment[] = [
     submitted_at: new Date(NOW - 7200 * 1000).toISOString(),
   },
 ];
+
+// Monotonic counter for admin-created driver ids in the mock store (no Math.random).
+let mockDriverSeq = 0;
+
+/** Normalised Vehicle IDs already held by an ACTIVE driver or open enrolment —
+ *  mirrors the gateway's assigned_vehicles() so the mock dropdown never offers a
+ *  taken vehicle and create() rejects a duplicate. */
+function mockAssignedVehicles(): Set<string> {
+  const taken = new Set<string>();
+  for (const e of MOCK_ENROLLMENTS) {
+    const s = (e.status ?? "").toUpperCase();
+    if (s === "ACTIVE" || s === "PENDING" || s === "REENROLL") {
+      const v = (e.vehicle_no ?? "").trim().toUpperCase();
+      if (v) taken.add(v);
+    }
+  }
+  return taken;
+}
 
 // --------------------------------------------------------------------------
 // KPI strip — mirrors shared/jnpa_shared/kpi.py KPI_TARGETS exactly. Each value
@@ -1438,6 +1456,48 @@ export class MockAdapter implements DataAdapter {
       rec.reviewed_by = "admin:mock";
     }
     return Promise.resolve({ reenroll: true });
+  }
+
+  createDriverProfile(
+    input: CreateDriverInput,
+  ): Promise<{ created: boolean; driver_id: string; status: string }> {
+    const vehicle = (input.vehicle_no ?? "").trim().toUpperCase();
+    if (!/^TRK-\d{6}$/.test(vehicle))
+      return Promise.reject(new Error("vehicle_no must be a valid Vehicle ID, e.g. TRK-000123"));
+    const taken = mockAssignedVehicles();
+    if (taken.has(vehicle))
+      return Promise.reject(new Error(`Vehicle ${vehicle} is already assigned`));
+    // Deterministic id (no Math.random): monotonically increasing counter.
+    const driver_id = `DRV-${String(9000 + ++mockDriverSeq)}`;
+    MOCK_ENROLLMENTS.unshift({
+      driver_id,
+      name: (input.name ?? "").trim(),
+      license_no: (input.license_no ?? "").trim() || undefined,
+      mobile: (input.mobile ?? "").trim() || undefined,
+      vehicle_no: vehicle,
+      emergency_contact: (input.emergency_contact ?? "").trim() || undefined,
+      status: "PENDING",
+      consent: false,
+      source: "ADMIN",
+      created_by: "admin:mock",
+      documents: [],
+      submitted_at: new Date(NOW).toISOString(),
+    });
+    return Promise.resolve({ created: true, driver_id, status: "PENDING" });
+  }
+
+  availableVehicles(q?: string, limit = 50): Promise<AvailableVehicle[]> {
+    const taken = mockAssignedVehicles();
+    const needle = (q ?? "").trim().toUpperCase();
+    const out: AvailableVehicle[] = [];
+    // Deterministic candidate fleet TRK-000001..TRK-000300.
+    for (let i = 1; i <= 300 && out.length < limit; i++) {
+      const vid = `TRK-${String(i).padStart(6, "0")}`;
+      if (taken.has(vid)) continue;
+      if (needle && !vid.includes(needle)) continue;
+      out.push({ vehicle_id: vid, plate: null, state: "EN_ROUTE" });
+    }
+    return Promise.resolve(out);
   }
 
   parkingAvailability(minuteOfDay?: number): Promise<ParkingFacility[]> {

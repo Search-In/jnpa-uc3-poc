@@ -274,6 +274,8 @@ CREATE INDEX IF NOT EXISTS idx_scenario_steps_handle ON jnpa.scenario_steps (han
 CREATE INDEX IF NOT EXISTS idx_anpr_plate_ts ON jnpa.anpr_reads (plate, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_telemetry_plate_ts ON jnpa.truck_telemetry (plate, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_alerts_ts ON jnpa.alerts (ts DESC);
+-- Vehicle-intel read path: alerts by plate, newest first (migration 0014).
+CREATE INDEX IF NOT EXISTS idx_alerts_plate ON jnpa.alerts (plate, ts DESC);
 
 -- ===========================================================================
 -- Seed data
@@ -568,6 +570,8 @@ CREATE TABLE IF NOT EXISTS jnpa.challans (
     created_by      text
 );
 CREATE INDEX IF NOT EXISTS idx_challans_case ON jnpa.challans (case_id);
+-- Vehicle-intel read path: challans by vehicle, newest first (migration 0014).
+CREATE INDEX IF NOT EXISTS idx_challans_vehicle ON jnpa.challans (vehicle_number, issued_at DESC);
 
 CREATE TABLE IF NOT EXISTS jnpa.case_audit (
     id          bigserial PRIMARY KEY,

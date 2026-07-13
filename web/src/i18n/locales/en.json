@@ -61,7 +61,7 @@
     "simulated": "simulated",
     "real": "real",
     "etaMin": "{{n}} min",
-    "note": "UC-III gate-crossing facts are the real Auto-LEO capture; UC-II, the cross-twin event and the derived UC-III steps are reconstructed deterministically from the container id and the cross-twin release contract (SIMULATED cross-twin transport).",
+    "note": "Live journey backed by the shared cargo record (jnpa.cargo); every UC-II / UC-III stage reflects the current cargo state. UC-III gate-crossing facts are the real Auto-LEO capture.",
     "meta": {
       "container": "Container",
       "correlation": "Correlation",

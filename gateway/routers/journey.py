@@ -6,15 +6,16 @@ the same container number can be searched and followed continuously:
     UC-II (cargo twin)   vessel discharge -> yard movement -> release
     UC-III (traffic twin) truck assignment -> ANPR detection -> gate crossing -> ETA
 
-The UC-III gate-crossing facts are the REAL Auto-LEO capture for the container
-(via the gate-data service, with the same in-process deterministic fallback the
-gate_data router uses). The UC-II segment is reconstructed from the cross-twin
-release contract (``cargo.dpd_release`` — the one event UC-II publishes to
-UC-III, see scenarios/uc2_bridge.py); live UC-II runs as a separate twin, so
-those stages are deterministically derived from the container id and clearly
-tagged ``source="derived"``. Every container number is validated with the
+The journey is now backed by the LIVE shared cargo record. Every UC-II / UC-III
+stage is populated from the one ``jnpa.cargo`` row (vessel, yard block, customs
+status, release flag, vehicle, gate, ETA) via the SAME ``CargoService`` that
+serves ``GET /api/cargo`` — there is no second copy of the cargo logic and no
+deterministic "mock" container generation. The UC-III gate-crossing facts remain
+the REAL Auto-LEO capture (via the gate-data service, with the same in-process
+fallback the gate_data router uses). Every container number is validated with the
 shared ISO 6346 check-digit validator (jnpa_shared.iso6346) so "follow the box"
-only ever tracks a structurally valid box.
+only ever tracks a structurally valid box, and only a box that exists in the
+cargo registry yields a journey (``found`` reports whether the record exists).
 """
 from __future__ import annotations
 
@@ -26,46 +27,40 @@ from fastapi import APIRouter, Depends
 
 from jnpa_shared.iso6346 import is_valid_container_no, parse_container_no
 
+from services.cargo import CargoService
+
 from ..config import GatewayConfig  # noqa: F401  (typing aid)
 from ..logging import get_logger
 from ..metrics import REQUESTS
 from ..state import GatewayState, get_state
+from .cargo import get_service  # reuse the ONE cargo DI seam (no duplicate logic)
 from .gate_data import _local, _result_dict, _upstream
 
 log = get_logger("gateway.journey")
 
 router = APIRouter(prefix="/api/journey", tags=["journey"])
 
+# The journey is now DB-backed, so the response mode is always "live" — the mock
+# generation that produced ``data_mode="mock"`` / ``simulated=True`` is gone.
+LIVE_MODE = "live"
+
 # Journey timeline anchor (mirrors gate-data's REFERENCE_DATE) so a box's
-# UC-II -> UC-III stages are chronological and reproducible run-to-run.
+# UC-II -> UC-III stages render in a stable, chronological order. The stage
+# timestamps are display-only layout; the FACTS are the live cargo values.
 _ANCHOR = datetime(2026, 6, 13, 6, 0, tzinfo=timezone.utc)
 
-_VESSELS = ["MV MAERSK SELETAR", "MV MSC ANNA", "MV CMA CGM MARCO", "MV ONE OLYMPUS", "MV HMM ALGECIRAS"]
-_YARD_BLOCKS = ["A-12", "B-07", "C-21", "D-04", "E-16"]
-_GATES = ["G-NSICT", "G-JNPCT", "G-NSIGT", "G-BMCT"]
-_CAMERAS = ["CAM-NSICT-ENT", "CAM-JNPCT-ENT", "CAM-COR-03", "CAM-COR-05"]
+CROSS_TWIN_TOPIC = "cargo.dpd_release"
 
 
 def _h(container_no: str, salt: str) -> int:
     return int.from_bytes(hashlib.sha256(f"{salt}:{container_no}".encode()).digest()[:4], "big")
 
 
-def _ts(container_no: str, hours_from_anchor: float) -> str:
+def _ts(hours_from_anchor: float) -> str:
     return (_ANCHOR + timedelta(hours=hours_from_anchor)).isoformat()
 
 
-def _derived_plate(container_no: str) -> str:
-    letters = "ABCDEFGHJKLMNPQRSTUVWXYZ"
-    a = letters[_h(container_no, "pa") % len(letters)]
-    b = letters[_h(container_no, "pb") % len(letters)]
-    num = _h(container_no, "pn") % 10000
-    series = _h(container_no, "ps") % 100
-    return f"MH{series:02d}{a}{b}{num:04d}"
-
-
-CROSS_TWIN_TOPIC = "cargo.dpd_release"
-
-
+# --- Deterministic ids (kept until a real event store exists) -----------------
 def _corr_id(cn: str) -> str:
     """One correlation id per box, shared by every stage + the cross-twin event."""
     return "XT-" + hashlib.sha256(f"corr:{cn}".encode()).hexdigest()[:8].upper()
@@ -79,24 +74,32 @@ def _event_id(cn: str, stage: str) -> str:
     return "EVT-" + hashlib.sha256(f"{stage}:{cn}".encode()).hexdigest()[:10].upper()
 
 
-def _anchors(cn: str) -> Dict[str, Any]:
-    """Consistency anchors reused at top-level AND inside the UC-III stages so the
-    same vehicle / gate / ETA appear everywhere for the box."""
-    return {
-        "vehicle_no": _derived_plate(cn),
-        "gate": _GATES[_h(cn, "gate") % len(_GATES)],
-        "camera": _CAMERAS[_h(cn, "cam") % len(_CAMERAS)],
-        "conf": round(0.9 + (_h(cn, "conf") % 90) / 1000.0, 3),  # 0.900..0.989
-        "eta_min": 30 + _h(cn, "eta") % 60,
-    }
+def _eta_minutes(eta: Optional[datetime]) -> Optional[int]:
+    """Minutes from now until the cargo ETA (0 if already due/past). Live value —
+    None when the cargo record carries no ETA."""
+    if eta is None:
+        return None
+    if eta.tzinfo is None:
+        eta = eta.replace(tzinfo=timezone.utc)
+    delta = (eta - datetime.now(timezone.utc)).total_seconds() / 60.0
+    return max(0, int(round(delta)))
 
 
-def _stage(cn: str, corr: str, data_mode: str, *, twin: str, stage: str,
-           source_system: str, source: str, hours: float, title: str, detail: str,
+def _eta_iso(eta: Optional[datetime]) -> Optional[str]:
+    if eta is None:
+        return None
+    if eta.tzinfo is None:
+        eta = eta.replace(tzinfo=timezone.utc)
+    return eta.isoformat()
+
+
+def _stage(cn: str, corr: str, *, twin: str, stage: str, source: str,
+           source_system: str, hours: float, title: str, detail: str,
            facts: Dict[str, Any]) -> Dict[str, Any]:
-    """Build one journey stage with the FULL cross-twin metadata every stage
+    """Build one journey stage with the full cross-twin metadata every stage
     carries: timestamp, source system, event id, container no, correlation id,
-    data mode."""
+    data mode. ``source`` is "live" for cargo-backed stages (the UI renders them
+    as REAL) and "gate-data" for the real Auto-LEO capture."""
     return {
         "twin": twin,
         "stage": stage,
@@ -105,49 +108,59 @@ def _stage(cn: str, corr: str, data_mode: str, *, twin: str, stage: str,
         "event_id": _event_id(cn, stage),
         "correlation_id": corr,
         "container_no": cn,
-        "ts": _ts(cn, hours),
-        "data_mode": data_mode,
+        "ts": _ts(hours),
+        "data_mode": LIVE_MODE,
         "title": title,
         "detail": detail,
         "facts": facts,
     }
 
 
-def _uc2_stages(cn: str, corr: str, data_mode: str) -> List[Dict[str, Any]]:
-    vessel = _VESSELS[_h(cn, "vessel") % len(_VESSELS)]
-    block = _YARD_BLOCKS[_h(cn, "yard") % len(_YARD_BLOCKS)]
+def _uc2_stages(cn: str, corr: str, cargo: Dict[str, Any]) -> List[Dict[str, Any]]:
+    vessel = cargo.get("vessel_name")
+    block = cargo.get("yard_block")
+    customs = cargo.get("customs_status")
+    released = bool(cargo.get("is_released"))
     return [
-        _stage(cn, corr, data_mode, twin="UC-II", stage="vessel_discharge",
-               source_system="UC-II cargo twin", source="derived", hours=0,
+        _stage(cn, corr, twin="UC-II", stage="vessel_discharge",
+               source="live", source_system="UC-II cargo twin", hours=0,
                title="Vessel discharge",
-               detail=f"Discharged from {vessel} at the quay crane.",
+               detail=(f"Discharged from {vessel} at the quay crane." if vessel
+                       else "Discharged at the quay crane."),
                facts={"vessel": vessel}),
-        _stage(cn, corr, data_mode, twin="UC-II", stage="yard_movement",
-               source_system="UC-II cargo twin", source="derived", hours=3.5,
+        _stage(cn, corr, twin="UC-II", stage="yard_movement",
+               source="live", source_system="UC-II cargo twin", hours=3.5,
                title="Yard movement",
-               detail=f"Moved by RTG to import stack block {block}.",
+               detail=(f"Moved by RTG to import stack block {block}." if block
+                       else "Moved by RTG to the import stack."),
                facts={"yard_block": block}),
-        _stage(cn, corr, data_mode, twin="UC-II", stage="dpd_release",
-               source_system="UC-II cargo twin", source="derived", hours=20,
+        _stage(cn, corr, twin="UC-II", stage="dpd_release",
+               source="live", source_system="UC-II cargo twin", hours=20,
                title="Release (DPD)",
-               detail="Customs-cleared and released for Direct Port Delivery.",
-               facts={"customs": "CLEARED"}),
+               detail=(f"Customs {customs}; released for Direct Port Delivery."
+                       if released else f"Customs {customs}; awaiting release."),
+               facts={"customs": customs, "is_released": released}),
         # Explicit cross-twin PUBLISH (UC-II side of the handoff).
-        _stage(cn, corr, data_mode, twin="UC-II", stage="cross_twin_published",
-               source_system="UC-II cargo twin", source="derived", hours=20.5,
+        _stage(cn, corr, twin="UC-II", stage="cross_twin_published",
+               source="live", source_system="UC-II cargo twin", hours=20.5,
                title="Cross-twin event published",
                detail=f"UC-II published the release to UC-III on {CROSS_TWIN_TOPIC}.",
                facts={"topic": CROSS_TWIN_TOPIC, "publishing_twin": "UC-II",
-                      "delivery_status": "Published", "simulated": True}),
+                      "delivery_status": "Published" if released else "Pending"}),
     ]
 
 
-def _uc3_stages(cn: str, corr: str, data_mode: str, anchors: Dict[str, Any],
+def _uc3_stages(cn: str, corr: str, cargo: Dict[str, Any],
                 gate_record: Optional[dict]) -> List[Dict[str, Any]]:
-    plate, gate = anchors["vehicle_no"], anchors["gate"]
-    camera, conf, eta_min = anchors["camera"], anchors["conf"], anchors["eta_min"]
+    plate = cargo.get("vehicle_number")
+    gate = cargo.get("gate")
+    camera = cargo.get("camera_id")
+    released = bool(cargo.get("is_released"))
+    eta_min = _eta_minutes(cargo.get("eta"))
+    eta_iso = _eta_iso(cargo.get("eta"))
 
-    # Gate-crossing facts come from the REAL Auto-LEO capture when available.
+    # Gate-crossing facts come from the REAL Auto-LEO capture when available; the
+    # gate itself is the live cargo gate.
     leo_ready = None
     gate_facts: Dict[str, Any] = {"gate": gate, "vehicle_no": plate}
     if gate_record:
@@ -164,34 +177,38 @@ def _uc3_stages(cn: str, corr: str, data_mode: str, anchors: Dict[str, Any],
     gate_from_record = bool(gate_record and gate_record.get("record"))
     return [
         # Explicit cross-twin RECEIVE (UC-III side of the handoff).
-        _stage(cn, corr, data_mode, twin="UC-III", stage="cross_twin_received",
-               source_system="UC-III traffic twin", source="derived", hours=20.8,
+        _stage(cn, corr, twin="UC-III", stage="cross_twin_received",
+               source="live", source_system="UC-III traffic twin", hours=20.8,
                title="Cross-twin event received",
                detail=f"UC-III consumed the {CROSS_TWIN_TOPIC} event; truck demand recorded.",
                facts={"topic": CROSS_TWIN_TOPIC, "receiving_twin": "UC-III",
-                      "delivery_status": "Delivered", "simulated": True}),
-        _stage(cn, corr, data_mode, twin="UC-III", stage="truck_assignment",
-               source_system="UC-III TAS", source="derived", hours=21,
+                      "delivery_status": "Delivered" if released else "Pending"}),
+        _stage(cn, corr, twin="UC-III", stage="truck_assignment",
+               source="live", source_system="UC-III TAS", hours=21,
                title="Truck assignment",
-               detail=f"TAS assigned tractor {plate} and a gate-in slot at {gate}.",
+               detail=(f"TAS assigned tractor {plate} and a gate-in slot at {gate}."
+                       if plate else f"TAS reserved a gate-in slot at {gate}."),
                facts={"vehicle_no": plate, "gate": gate}),
-        _stage(cn, corr, data_mode, twin="UC-III", stage="anpr_detection",
-               source_system="UC-III ANPR", source="derived", hours=21.8,
+        _stage(cn, corr, twin="UC-III", stage="anpr_detection",
+               source="live", source_system="UC-III ANPR", hours=21.8,
                title="ANPR detection",
-               detail=f"Plate {plate} read at {camera} (conf {conf}).",
-               facts={"vehicle_no": plate, "camera_id": camera, "conf": conf}),
-        _stage(cn, corr, data_mode, twin="UC-III", stage="gate_crossing",
-               source_system="UC-III gate-data (Auto-LEO)",
-               source="gate-data" if gate_from_record else "derived", hours=22,
+               detail=(f"Plate {plate} read at {camera}." if plate and camera
+                       else f"Plate {plate} read at the corridor camera." if plate
+                       else "Awaiting ANPR read."),
+               facts={"vehicle_no": plate, "camera_id": camera}),
+        _stage(cn, corr, twin="UC-III", stage="gate_crossing",
+               source="gate-data" if gate_from_record else "live",
+               source_system="UC-III gate-data (Auto-LEO)", hours=22,
                title="Gate crossing (Auto-LEO)",
                detail=(f"Gate {gate}: Auto-LEO {'READY' if leo_ready else 'reconciled'}."
                        if leo_ready is not None else f"Gate {gate}: gate-in reconciled."),
                facts=gate_facts),
-        _stage(cn, corr, data_mode, twin="UC-III", stage="eta_tracking",
-               source_system="UC-III corridor", source="derived", hours=22.2,
+        _stage(cn, corr, twin="UC-III", stage="eta_tracking",
+               source="live", source_system="UC-III corridor", hours=22.2,
                title="ETA tracking",
-               detail=f"Corridor ETA ~{eta_min} min to Karal Phata under current conditions.",
-               facts={"eta_min": eta_min}),
+               detail=(f"Corridor ETA ~{eta_min} min to Karal Phata under current conditions."
+                       if eta_min is not None else "Corridor ETA pending."),
+               facts={"eta_min": eta_min, "eta": eta_iso}),
     ]
 
 
@@ -209,19 +226,74 @@ _JOURNEY_STEPS = [
 ]
 
 
+def _done_map(cargo: Dict[str, Any], gate_from_record: bool) -> Dict[str, bool]:
+    """Which lifecycle steps are complete, derived from the LIVE cargo state.
+
+    Presence in the registry means the box has been discharged and yarded; the
+    release flag drives the cross-twin handoff and the downstream UC-III steps;
+    the real gate record confirms the physical gate crossing."""
+    released = bool(cargo.get("is_released"))
+    customs = cargo.get("customs_status")
+    has_vehicle = bool(cargo.get("vehicle_number"))
+    return {
+        "vessel_discharge": True,
+        "yard_movement": bool(cargo.get("yard_block")),
+        "dpd_release": released or customs == "CLEARED",
+        "cross_twin_published": released,
+        "cross_twin_received": released,
+        "truck_assignment": released and has_vehicle,
+        "anpr_detection": gate_from_record or (released and has_vehicle),
+        "gate_crossing": gate_from_record,
+        "eta_tracking": cargo.get("eta") is not None,
+    }
+
+
 @router.get("/container/{container_no}")
 async def container_journey(
-    container_no: str, state: GatewayState = Depends(get_state)
+    container_no: str,
+    state: GatewayState = Depends(get_state),
+    service: CargoService = Depends(get_service),
 ) -> dict:
     """Follow one container across UC-II -> UC-III as an ordered stage timeline
-    with a shared correlation id and an explicit cross-twin handoff event."""
+    with a shared correlation id and an explicit cross-twin handoff event, backed
+    by the live shared cargo record."""
     cn = container_no.strip().upper()
     valid = is_valid_container_no(cn)
     parts = parse_container_no(cn)
     corr = _corr_id(cn)
     case_id = _case_id(cn)
-    data_mode = _data_mode()
-    anchors = _anchors(cn)
+
+    # Resolve the box against the SINGLE source of truth — the shared cargo record
+    # (same CargoService that serves GET /api/cargo). No mock generation.
+    cargo: Optional[dict] = await service.get_cargo(cn) if valid else None
+
+    if cargo is None:
+        # A structurally valid box that isn't in the cargo registry (or an invalid
+        # ISO): nothing to follow. Backward-compatible shape, empty timeline.
+        REQUESTS.labels("journey", "not_found").inc()
+        return {
+            "container_no": cn,
+            "iso6346_valid": valid,
+            "owner_code": parts["owner_code"] if parts else None,
+            "found": False,
+            "correlation_id": corr,
+            "case_id": case_id,
+            "vehicle_no": None,
+            "gate": None,
+            "eta_min": None,
+            "gate_record_source": "none",
+            "data_mode": LIVE_MODE,
+            "cross_twin": None,
+            "journey_status": [
+                {"key": k, "label": label, "done": False} for k, label in _JOURNEY_STEPS
+            ],
+            "stages": [],
+            "note": (
+                "No cargo record for this container in jnpa.cargo — create it via "
+                "POST /api/cargo to follow the box. The journey is sourced live "
+                "from the shared cargo registry."
+            ),
+        }
 
     # Pull the real UC-III gate-crossing capture (LIVE proxy, else in-process seed).
     gate_record: Optional[dict] = None
@@ -237,11 +309,14 @@ async def container_journey(
         except Exception as exc:  # pragma: no cover - infra-timing dependent
             log.debug("journey_gate_lookup_failed", container_no=cn, error=str(exc))
 
-    stages = (_uc2_stages(cn, corr, data_mode)
-              + _uc3_stages(cn, corr, data_mode, anchors, gate_record))
-    present = {s["stage"] for s in stages}
+    gate_from_record = bool(gate_record and gate_record.get("record"))
+    released = bool(cargo.get("is_released"))
+
+    stages = (_uc2_stages(cn, corr, cargo)
+              + _uc3_stages(cn, corr, cargo, gate_record))
+    done = _done_map(cargo, gate_from_record)
     journey_status = [
-        {"key": k, "label": label, "done": k in present} for k, label in _JOURNEY_STEPS
+        {"key": k, "label": label, "done": done.get(k, False)} for k, label in _JOURNEY_STEPS
     ]
 
     REQUESTS.labels("journey", "ok").inc()
@@ -249,17 +324,17 @@ async def container_journey(
         "container_no": cn,
         "iso6346_valid": valid,
         "owner_code": parts["owner_code"] if parts else None,
-        "found": True,  # the twin can always reconstruct a journey for a valid box
+        "found": True,
         "correlation_id": corr,
         "case_id": case_id,
-        # Consistency anchors (same values echoed inside the stages).
-        "vehicle_no": anchors["vehicle_no"],
-        "gate": anchors["gate"],
-        "eta_min": anchors["eta_min"],
+        # Consistency anchors (same live values echoed inside the stages).
+        "vehicle_no": cargo.get("vehicle_number"),
+        "gate": cargo.get("gate"),
+        "eta_min": _eta_minutes(cargo.get("eta")),
         "gate_record_source": (
             "live" if data is not None else ("seed" if gate_record else "none")
         ),
-        "data_mode": data_mode,
+        "data_mode": LIVE_MODE,
         # The cross-twin handoff, surfaced as a first-class object for the UI.
         "cross_twin": {
             "topic": CROSS_TWIN_TOPIC,
@@ -268,23 +343,17 @@ async def container_journey(
             "correlation_id": corr,
             "case_id": case_id,
             "event_id": _event_id(cn, "cross_twin"),
-            "event_time": _ts(cn, 20.5),
+            "event_time": _ts(20.5),
             "container_no": cn,
-            "status": "Delivered",
-            "data_mode": data_mode,
-            "simulated": True,
+            "status": "Delivered" if released else "Pending",
+            "data_mode": LIVE_MODE,
+            "simulated": False,
         },
         "journey_status": journey_status,
         "stages": stages,
         "note": (
-            "UC-III gate-crossing facts are the real Auto-LEO capture; UC-II, the "
-            "cross-twin event and the derived UC-III steps are reconstructed "
-            "deterministically from the container id and the cross-twin release "
-            "contract (SIMULATED cross-twin transport)."
+            "Live journey backed by the shared cargo record (jnpa.cargo); every "
+            "UC-II / UC-III stage reflects the current cargo state. UC-III "
+            "gate-crossing facts are the real Auto-LEO capture."
         ),
     }
-
-
-def _data_mode() -> str:
-    from jnpa_shared.config import get_settings
-    return get_settings().data_mode

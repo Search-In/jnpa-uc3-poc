@@ -43,7 +43,8 @@ assert is_valid_container_no(VALID_CN) and not is_valid_container_no(BAD_CN)
 
 _NOW = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
 _WRITABLE = ("vessel_name", "customs_status", "yard_block", "is_released",
-             "vehicle_number", "gate", "camera_id", "eta")
+             "vehicle_number", "gate", "camera_id", "eta",
+             "eseal_status", "eseal_number", "pre_document_status", "origin_stream")
 
 
 def _enum_val(v: Any) -> Any:
@@ -55,6 +56,8 @@ class FakeCargoRepo:
 
     def __init__(self) -> None:
         self._rows: dict[str, dict] = {}
+        self._events: list[dict] = []
+        self._event_seq = 0
 
     async def create(self, row: Mapping[str, Any]) -> dict:
         cn = row["container_number"]
@@ -70,6 +73,10 @@ class FakeCargoRepo:
             "gate": row.get("gate"),
             "camera_id": row.get("camera_id"),
             "eta": row.get("eta"),
+            "eseal_status": _enum_val(row.get("eseal_status")),
+            "eseal_number": row.get("eseal_number"),
+            "pre_document_status": _enum_val(row.get("pre_document_status")),
+            "origin_stream": row.get("origin_stream"),
             "created_at": _NOW,
             "updated_at": _NOW,
         }
@@ -81,11 +88,14 @@ class FakeCargoRepo:
         return dict(r) if r else None
 
     def _filtered(self, *, container_number=None, customs_status=None,
-                  yard_block=None, is_released=None, vehicle_number=None) -> list[dict]:
+                  yard_block=None, is_released=None, vehicle_number=None,
+                  eseal_status=None, pre_document_status=None,
+                  origin_stream=None) -> list[dict]:
         rows = list(self._rows.values())
         eq = {"container_number": container_number, "customs_status": customs_status,
               "yard_block": yard_block, "is_released": is_released,
-              "vehicle_number": vehicle_number}
+              "vehicle_number": vehicle_number, "eseal_status": eseal_status,
+              "pre_document_status": pre_document_status, "origin_stream": origin_stream}
         for col, val in eq.items():
             if val is not None:
                 rows = [r for r in rows if r[col] == val]
@@ -111,6 +121,26 @@ class FakeCargoRepo:
 
     async def delete(self, container_number: str) -> bool:
         return self._rows.pop(container_number, None) is not None
+
+    async def record_event(self, event: str, container_number: str, payload) -> dict:
+        self._event_seq += 1
+        rec = {"id": self._event_seq, "event": event,
+               "container_number": container_number, "payload": dict(payload or {}),
+               "created_at": _NOW}
+        self._events.append(rec)
+        return dict(rec)
+
+    async def list_events(self, *, container_number=None, event=None, since_id=None,
+                          limit=100, offset=0) -> list[dict]:
+        rows = list(self._events)
+        if container_number is not None:
+            rows = [r for r in rows if r["container_number"] == container_number]
+        if event is not None:
+            rows = [r for r in rows if r["event"] == event]
+        if since_id is not None:
+            rows = [r for r in rows if r["id"] > since_id]
+        rows.sort(key=lambda r: r["id"], reverse=True)
+        return [dict(r) for r in rows[offset:offset + limit]]
 
 
 @pytest.fixture()
@@ -309,6 +339,153 @@ def test_yard_assignment_invalid_payload_400(client):
                       json={"yard_block": "A-01"}).status_code == 400
 
 
+# --------------------------------------------- contract extensions (0015 fields)
+def test_new_fields_roundtrip_on_create(client):
+    """e-Seal / pre-document / origin_stream persist through create + get."""
+    r = client.post("/api/cargo", json=_payload(
+        eseal_status="ACTIVE", eseal_number="ES-88213",
+        pre_document_status="COMPLETED", origin_stream="UC-II"))
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["eseal_status"] == "ACTIVE"
+    assert body["eseal_number"] == "ES-88213"
+    assert body["pre_document_status"] == "COMPLETED"
+    assert body["origin_stream"] == "UC-II"
+    # And on a follow-up GET.
+    got = client.get(f"/api/cargo/{VALID_CN}").json()
+    assert got["eseal_status"] == "ACTIVE" and got["origin_stream"] == "UC-II"
+
+
+def test_new_fields_default_null_backward_compatible(client):
+    """A create WITHOUT the new fields still succeeds; the fields serialise null —
+    the existing UC-2 contract is unchanged."""
+    body = client.post("/api/cargo", json=_payload()).json()
+    for k in ("eseal_status", "eseal_number", "pre_document_status", "origin_stream"):
+        assert k in body and body[k] is None
+    # Every legacy field is still present.
+    for k in ("container_number", "vessel_name", "customs_status", "yard_block",
+              "is_released", "vehicle_number", "gate", "camera_id", "eta",
+              "created_at", "updated_at"):
+        assert k in body
+
+
+def test_origin_stream_camelcase_alias_accepted(client):
+    """Input may use camelCase ``originStream``; output is always ``origin_stream``."""
+    r = client.post("/api/cargo", json=_payload(originStream="UC-II"))
+    assert r.status_code == 201, r.text
+    assert r.json()["origin_stream"] == "UC-II"
+    assert client.put(f"/api/cargo/{VALID_CN}",
+                      json={"originStream": "UC-III"}).json()["origin_stream"] == "UC-III"
+
+
+def test_new_field_filters(client):
+    client.post("/api/cargo", json=_payload(origin_stream="UC-II",
+                                            eseal_status="ACTIVE",
+                                            pre_document_status="COMPLETED"))
+    client.post("/api/cargo", json=_payload(container_number="MSCU7789010",
+                                            origin_stream="UC-III",
+                                            eseal_status="ARMED",
+                                            pre_document_status="PENDING"))
+    assert [x["container_number"] for x in
+            client.get("/api/cargo", params={"origin_stream": "UC-III"}).json()] == ["MSCU7789010"]
+    assert [x["container_number"] for x in
+            client.get("/api/cargo", params={"eseal_status": "ACTIVE"}).json()] == [VALID_CN]
+    assert [x["container_number"] for x in
+            client.get("/api/cargo", params={"pre_document_status": "PENDING"}).json()] == ["MSCU7789010"]
+
+
+def test_invalid_new_enum_400(client):
+    assert client.post("/api/cargo", json=_payload(eseal_status="BOGUS")).status_code == 400
+    assert client.post("/api/cargo", json=_payload(pre_document_status="BOGUS")).status_code == 400
+
+
+# ------------------------------------------------------------- role-based filtering
+def test_role_filtering_scopes_visibility(client):
+    # One released + one held/unreleased box.
+    client.post("/api/cargo", json=_payload(is_released=True))
+    client.post("/api/cargo", json=_payload(container_number="MSCU7789010",
+                                            is_released=False, customs_status="HELD"))
+    # operator / control room see everything (existing contract unchanged).
+    assert len(client.get("/api/cargo", params={"role": "operator"}).json()) == 2
+    assert len(client.get("/api/cargo").json()) == 2  # no role -> all
+    # driver only sees released boxes (ready for haulage).
+    driver = client.get("/api/cargo", params={"role": "driver"}).json()
+    assert [x["container_number"] for x in driver] == [VALID_CN]
+    assert driver[0]["is_released"] is True
+    # customs only sees the pre-release pipeline.
+    customs = client.get("/api/cargo", params={"role": "customs"}).json()
+    assert [x["container_number"] for x in customs] == ["MSCU7789010"]
+
+
+def test_role_scope_overrides_conflicting_filter(client):
+    """A role's scope is a hard constraint — it wins over a conflicting client
+    filter (a driver cannot ask to see unreleased boxes)."""
+    client.post("/api/cargo", json=_payload(is_released=True))
+    client.post("/api/cargo", json=_payload(container_number="MSCU7789010", is_released=False))
+    rows = client.get("/api/cargo", params={"role": "driver", "is_released": "false"}).json()
+    assert [x["container_number"] for x in rows] == [VALID_CN]  # released only, role wins
+
+
+# ---------------------------------------------------- notifications (event log)
+def test_events_emitted_on_lifecycle(client):
+    # created
+    client.post("/api/cargo", json=_payload(is_released=False, customs_status="PENDING"))
+    # yard_assigned + status_changed + released in one PUT
+    client.put(f"/api/cargo/{VALID_CN}",
+               json={"customs_status": "CLEARED", "is_released": True, "yard_block": "B-09"})
+    # gate movement
+    client.put(f"/api/cargo/{VALID_CN}", json={"gate": "GATE-7"})
+    events = client.get("/api/cargo/events").json()
+    kinds = {e["event"] for e in events}
+    assert {"cargo.created", "cargo.released", "cargo.status_changed",
+            "cargo.yard_assigned", "cargo.gate_movement"} <= kinds
+    # Every event carries the container + a timestamp + monotonic id.
+    for e in events:
+        assert e["container_number"] == VALID_CN
+        assert "timestamp" in e and isinstance(e["id"], int)
+    # newest-first ordering
+    ids = [e["id"] for e in events]
+    assert ids == sorted(ids, reverse=True)
+
+
+def test_events_delete_emits(client):
+    client.post("/api/cargo", json=_payload())
+    client.delete(f"/api/cargo/{VALID_CN}")
+    kinds = {e["event"] for e in client.get("/api/cargo/events").json()}
+    assert "cargo.deleted" in kinds
+
+
+def test_events_filter_by_type_and_since(client):
+    client.post("/api/cargo", json=_payload())
+    client.put(f"/api/cargo/{VALID_CN}", json={"is_released": True})
+    all_events = client.get("/api/cargo/events").json()
+    # filter by type
+    released = client.get("/api/cargo/events", params={"event": "cargo.released"}).json()
+    assert released and all(e["event"] == "cargo.released" for e in released)
+    # since cursor returns only newer events
+    lowest = min(e["id"] for e in all_events)
+    newer = client.get("/api/cargo/events", params={"since": lowest}).json()
+    assert all(e["id"] > lowest for e in newer)
+    # cursor header exposes the high-water mark
+    r = client.get("/api/cargo/events")
+    assert r.headers.get("X-Cargo-Event-Cursor") == str(max(e["id"] for e in all_events))
+
+
+def test_events_route_not_shadowed_by_container_lookup(client):
+    """GET /api/cargo/events must resolve to the events list, not be parsed as a
+    container-number lookup (route ordering)."""
+    r = client.get("/api/cargo/events")
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)
+
+
+def test_events_scoped_to_one_container(client):
+    client.post("/api/cargo", json=_payload())
+    client.post("/api/cargo", json=_payload(container_number="MSCU7789010"))
+    one = client.get("/api/cargo/events", params={"container_number": VALID_CN}).json()
+    assert one and all(e["container_number"] == VALID_CN for e in one)
+
+
 # --------------------------------------------------- real-DB integration (opt-in)
 def _pg_reachable(host: str = "127.0.0.1", port: int = 5433) -> bool:
     try:
@@ -330,15 +507,25 @@ def test_real_db_roundtrip():
     try:
         with TestClient(app) as c:
             c.delete(f"/api/cargo/{cn}")  # clean slate
-            assert c.post("/api/cargo", json=_payload(container_number=cn)).status_code == 201
+            # Create WITH the new contract fields; they must persist through real SQL.
+            created = c.post("/api/cargo", json=_payload(
+                container_number=cn, eseal_status="ACTIVE", eseal_number="ES-1",
+                pre_document_status="COMPLETED", origin_stream="UC-II"))
+            assert created.status_code == 201, created.text
+            assert created.json()["eseal_status"] == "ACTIVE"
+            assert created.json()["origin_stream"] == "UC-II"
             assert c.post("/api/cargo", json=_payload(container_number=cn)).status_code == 409
             assert c.get(f"/api/cargo/{cn}").json()["container_number"] == cn
-            up = c.put(f"/api/cargo/{cn}", json={"customs_status": "CLEARED"})
+            up = c.put(f"/api/cargo/{cn}", json={"customs_status": "CLEARED", "is_released": True})
             assert up.status_code == 200 and up.json()["customs_status"] == "CLEARED"
             # Yard assignment persists through the real repository/DB.
             ya = c.put(f"/api/cargo/{cn}/yard-assignment", json={"yard_block": "D-04"})
             assert ya.status_code == 200 and ya.json()["status"] == "ASSIGNED"
             assert c.get(f"/api/cargo/{cn}").json()["yard_block"] == "D-04"
+            # Lifecycle events were recorded in jnpa.cargo_events for this container.
+            evs = c.get("/api/cargo/events", params={"container_number": cn}).json()
+            kinds = {e["event"] for e in evs}
+            assert {"cargo.created", "cargo.released", "cargo.yard_assigned"} <= kinds
             assert c.delete(f"/api/cargo/{cn}").status_code == 200
             assert c.get(f"/api/cargo/{cn}").status_code == 404
     finally:

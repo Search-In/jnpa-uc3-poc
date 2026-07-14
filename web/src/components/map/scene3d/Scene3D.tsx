@@ -38,6 +38,7 @@ import type {
 } from "@/lib/types";
 import { gateColour, jamColour, MAP_TOKENS, parkingStatusColour, zoneColour } from "@/lib/tokens";
 import { JNPA_CENTER, JNPA_ZOOM } from "@/lib/basemap";
+import { SATELLITE_BASEMAP, corridorExtent } from "@/lib/mapConfig";
 import { installBasemapFallback, isOfflineRequested, initialBasemap } from "./basemapFallback";
 import { applyGraphics, stableOid } from "./sceneUtils";
 // Static, display-only port-context assets (UC2-parity): quay aprons, yard
@@ -129,7 +130,7 @@ export function Scene3D({
     if (!containerRef.current) return;
     const offline = isOfflineRequested();
     const map = new EsriMap({
-      basemap: basemap ?? initialBasemap("dark-gray-vector"),
+      basemap: basemap ?? initialBasemap(SATELLITE_BASEMAP),
       ...(offline ? {} : { ground: "world-elevation" }),
     });
 
@@ -176,6 +177,14 @@ export function Scene3D({
         heading: 0,
       },
       qualityProfile: "high",
+      // Corridor lock (3D): SceneView has no extent/minZoom pan-clamp like the 2D
+      // MapView, but `constraints.clip` hard-clips rendering to a bounding extent
+      // and `altitude.max` caps zoom-out — together they keep the 3D scene focused
+      // on the JNPA corridor and stop the wider region being pulled into frame.
+      constraints: {
+        altitude: { min: 150, max: 45000 },
+        clip: { geometry: corridorExtent() },
+      } as never,
       environment: {
         atmosphereEnabled: true,
         lighting: {

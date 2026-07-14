@@ -19,7 +19,12 @@ import esriConfig from "@arcgis/core/config";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getAdapter } from "@/data";
 import type { Zone } from "@/lib/types";
-import { JNPA_CENTER, JNPA_ZOOM } from "@/lib/basemap";
+import {
+  SATELLITE_BASEMAP,
+  applyCorridorView,
+  CORRIDOR_CENTER,
+  CORRIDOR_ZOOM,
+} from "@/lib/mapConfig";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -29,9 +34,9 @@ import { Pencil, MousePointer2, Save, Trash2 } from "lucide-react";
 const WGS84 = { wkid: 4326 } as const;
 // Zone fill/outline — the CB-safe info blue used across the map surfaces.
 const ZONE_COLOUR = "#56B4E9";
-// Token-free basemap that renders in dev without an ArcGIS API key (same choice
-// as the operations map). A key, if provided, is a graceful upgrade only.
-const DEFAULT_BASEMAP = "dark-gray-vector";
+// Esri satellite basemap (same choice as the operations map). Token-free World
+// Imagery; a key, if provided, is a graceful upgrade only.
+const DEFAULT_BASEMAP = SATELLITE_BASEMAP;
 
 const ARCGIS_API_KEY = (() => {
   const key = import.meta.env.VITE_ARCGIS_API_KEY;
@@ -146,7 +151,10 @@ export default function GeofencingManager() {
       const view = event.target.view;
       if (!view || !view.map) return;
       viewRef.current = view;
-      if (view.constraints) view.constraints.snapToZoom = false;
+      // Frame + hard-clamp the editor view to the JNPA operational corridor so
+      // zones are always drawn within the port corridor and the surrounding
+      // region never comes into frame.
+      applyCorridorView(view);
       view.ui.components = ["zoom", "attribution"];
 
       const layer = new GraphicsLayer({ id: "uc3-geofence-edit", title: "Geo-fence zones" });
@@ -257,7 +265,7 @@ export default function GeofencingManager() {
   // time (the @lit/react wrapper re-applies element props on every render, which
   // would otherwise re-command the camera — see ArcgisMap.tsx for the full note).
   const initialCenter = useMemo(
-    () => new Point({ longitude: JNPA_CENTER[0], latitude: JNPA_CENTER[1] }),
+    () => new Point({ longitude: CORRIDOR_CENTER[0], latitude: CORRIDOR_CENTER[1] }),
     [],
   );
   const mapElement = useMemo(
@@ -265,7 +273,7 @@ export default function GeofencingManager() {
       <ArcgisMapWC
         basemap={DEFAULT_BASEMAP}
         center={initialCenter}
-        zoom={JNPA_ZOOM}
+        zoom={CORRIDOR_ZOOM}
         onArcgisViewReadyChange={handleReady}
         style={{ height: "100%", width: "100%" }}
       />

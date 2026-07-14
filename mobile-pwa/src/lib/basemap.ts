@@ -4,9 +4,8 @@
 // MiniMap consumes `basemapId()` to pick a well-known Esri basemap id; the SDK
 // streams the tiles token-free for these ids.
 //
-//   default -> "hybrid"  : Esri World Imagery + a road/label reference overlay,
-//                          so the driver sees real satellite imagery AND can
-//                          still read street/gate names (best for navigation).
+//   default -> "satellite" : Esri World Imagery (satellite), so the driver sees
+//                          real satellite imagery of the JNPA corridor.
 //   roads   -> "streets-navigation-vector" : Esri vector street basemap, opt-in
 //                          via the MiniMap `roads` prop for a clean road map.
 //
@@ -15,14 +14,14 @@
 // with separate build graphs. Keep the Esri basemap ids aligned with the
 // dashboard's BASEMAP_OPTIONS (web/src/lib/mapSettings.ts) when either changes.
 
-const BASEMAP = (import.meta.env.VITE_BASEMAP as string | undefined) || "hybrid";
+const BASEMAP = (import.meta.env.VITE_BASEMAP as string | undefined) || "satellite";
 
 export const JNPA_CENTER: [number, number] = [73.0, 18.86]; // [lon, lat] corridor mid
 export const JNPA_ZOOM = 11.2;
 
 // Well-known Esri basemap id for the ArcGIS SDK. `roads` forces the vector
 // street basemap; otherwise an env override (VITE_BASEMAP) wins, defaulting to
-// the imagery+labels hybrid.
+// the Esri satellite imagery.
 export function basemapId(roads?: boolean): string {
   if (roads) return "streets-navigation-vector";
   return BASEMAP;

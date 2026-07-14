@@ -32,6 +32,16 @@ log = get_logger("gateway.trucks")
 
 router = APIRouter(prefix="/api/trucks", tags=["trucks"])
 
+# The gateway's global upstream timeout (``cfg.upstream_timeout_s``, ~2 s) is
+# calibrated for the ANPR *liveness* budget — a lookup slower than 2 s is treated
+# as "not LIVE". That budget is wrong for the trucking-app control plane: listing
+# / re-routing aggregates over a large in-memory fleet and legitimately takes
+# longer than an ANPR frame lookup. Using the 2 s budget here made a healthy
+# truck-sim look "unreachable" (``degraded:[]`` on the advisory list, 502
+# ``truck_sim_unreachable`` on Push Re-route). Give the truck-sim calls their own,
+# generous budget so a busy-but-alive sim is never mistaken for a dead one.
+TRUCK_UPSTREAM_TIMEOUT_S = 12.0
+
 # Most-recent /checkin submission per device (TERTIARY source). In-memory ring;
 # the dashboard reads it back through /api/trucks/{id}. Demo-scale.
 CHECKINS: Dict[str, dict] = {}
@@ -64,7 +74,7 @@ async def _primary(state: GatewayState, device_id: str) -> Optional[dict]:
     log.info("trucks_primary_begin", device_id=device_id, url=url)
     t0 = time.perf_counter()
     try:
-        resp = await state.http.get(url)
+        resp = await state.http.get(url, timeout=TRUCK_UPSTREAM_TIMEOUT_S)
     except BaseException as exc:  # noqa: BLE001 — surface EVERYTHING, swallow nothing
         # repr(exc) exposes the concrete class (e.g. ConnectError('') / ReadError())
         # that str(exc)="" was hiding; the traceback pins the exact failing frame.
@@ -136,7 +146,7 @@ async def list_trucks(
     if state:
         params["state"] = state
     try:
-        resp = await gw.http.get(url, params=params)
+        resp = await gw.http.get(url, params=params, timeout=TRUCK_UPSTREAM_TIMEOUT_S)
         if resp.status_code == 200:
             REQUESTS.labels("trucks", "ok").inc()
             return resp.json()
@@ -175,7 +185,7 @@ async def reroute_truck(
     """
     url = gw.cfg.truck_api_url.rstrip("/") + f"/devices/{device_id}/route"
     try:
-        resp = await gw.http.post(url, json=body)
+        resp = await gw.http.post(url, json=body, timeout=TRUCK_UPSTREAM_TIMEOUT_S)
     except httpx.HTTPError as exc:
         log.warning("trucks_reroute_unreachable", url=url, error=str(exc))
         raise HTTPException(status_code=502, detail={"error": "truck_sim_unreachable"})

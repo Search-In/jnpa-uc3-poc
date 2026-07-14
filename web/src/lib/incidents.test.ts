@@ -3,12 +3,7 @@
 // click-time aggregation the heatmap popup relies on.
 
 import { describe, expect, it } from "vitest";
-import {
-  incidentsNear,
-  resolveIncidents,
-  summariseIncidents,
-  zoneCentroid,
-} from "./incidents";
+import { incidentsNear, resolveIncidents, summariseIncidents, zoneCentroid } from "./incidents";
 import type { AiEvent, GeofenceEvent, TruckDevice, Zone } from "./types";
 
 const zone = (id: string, ring: [number, number][]): Zone => ({
@@ -93,7 +88,12 @@ describe("resolveIncidents — location fallback chain", () => {
       created_at: "2026-07-14T11:00:00Z",
     };
     const out = resolveIncidents({ aiEvents: [ai], zones: [zone("Z1", square)] });
-    expect(out[0]).toMatchObject({ lon: 73.05, lat: 18.95, located_by: "coords", severity: "MEDIUM" });
+    expect(out[0]).toMatchObject({
+      lon: 73.05,
+      lat: 18.95,
+      located_by: "coords",
+      severity: "MEDIUM",
+    });
   });
 
   it("drops incidents that cannot be located at all", () => {

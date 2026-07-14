@@ -314,9 +314,7 @@ export function ArcgisMap({
           }
           // A templated graphic under the cursor owns the popup — don't stack the
           // hotspot popup on top of a zone/gate/segment popup.
-          const templated = graphics.some(
-            (r) => r.type === "graphic" && r.graphic?.popupTemplate,
-          );
+          const templated = graphics.some((r) => r.type === "graphic" && r.graphic?.popupTemplate);
           if (templated) return;
           const mp = e.mapPoint;
           if (!mp || !layers.current?.violationHeatmap.visible) {
@@ -335,7 +333,7 @@ export function ArcgisMap({
           }
           const summary = summariseIncidents(near);
           const zoneName = summary.dominantZone
-            ? zoneNameRef.current.get(summary.dominantZone) ?? summary.dominantZone
+            ? (zoneNameRef.current.get(summary.dominantZone) ?? summary.dominantZone)
             : null;
           view.openPopup({
             title: hotspotTitle(summary, zoneName),

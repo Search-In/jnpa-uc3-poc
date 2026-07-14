@@ -59,14 +59,17 @@ export function zoneCentroid(polygon?: [number, number][]): [number, number] | n
 }
 
 /** Pull explicit [lon,lat] from an AI event's free-form `location` blob. */
-function coordsFromLocation(loc: Record<string, unknown> | null | undefined): [number, number] | null {
+function coordsFromLocation(
+  loc: Record<string, unknown> | null | undefined,
+): [number, number] | null {
   if (!loc || typeof loc !== "object") return null;
   const lat = (loc as any).lat ?? (loc as any).latitude;
   const lon = (loc as any).lon ?? (loc as any).lng ?? (loc as any).longitude;
   if (typeof lat === "number" && typeof lon === "number") return [lon, lat];
   const nlat = Number(lat);
   const nlon = Number(lon);
-  if (Number.isFinite(nlat) && Number.isFinite(nlon) && lat != null && lon != null) return [nlon, nlat];
+  if (Number.isFinite(nlat) && Number.isFinite(nlon) && lat != null && lon != null)
+    return [nlon, nlat];
   return null;
 }
 

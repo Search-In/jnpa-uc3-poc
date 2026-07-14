@@ -18,6 +18,8 @@ import type {
   CreateVehicleInput,
   FleetVehicle,
   UpdateVehicleInput,
+  VehicleDetectionResult,
+  VehicleIdentityResult,
   VehicleStats,
   Decision,
   DriverEnrollment,
@@ -271,6 +273,10 @@ export interface DataAdapter {
     vehicleId: string,
     input: UpdateVehicleInput,
   ): Promise<{ updated: boolean; vehicle: FleetVehicle }>;
+
+  // --- Vehicle Intelligence Identity & Detection (camera workflows) ---
+  vehicleIdentity(vehicleNumber: string, image: string): Promise<VehicleIdentityResult>;
+  vehicleDetection(image: string, expected?: string): Promise<VehicleDetectionResult>;
 
   parkingAvailability(minuteOfDay?: number): Promise<ParkingFacility[]>;
   parkingSummary(minuteOfDay?: number): Promise<ParkingSummary>;

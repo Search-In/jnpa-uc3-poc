@@ -423,6 +423,31 @@ export interface CreateDriverInput {
   emergency_contact?: string;
 }
 
+// Vehicle Intelligence — Identity face-match result (POST /api/vehicle/{n}/identity).
+export interface VehicleIdentityResult {
+  driver_name: string | null;
+  driver_id?: string | null;
+  vehicle_number?: string | null;
+  vehicle_id?: string | null;
+  confidence: number;
+  status: "MATCHED" | "NOT_MATCHED" | string;
+  matched: boolean;
+  decision?: string;
+  reason?: string | null;
+  message?: string;
+}
+
+// Vehicle Intelligence — ANPR detection result (POST /api/vehicle/detection).
+export interface VehicleDetectionResult {
+  detected_vehicle: string | null;
+  confidence: number;
+  /** null when no expected plate was supplied (client compares instead). */
+  match: boolean | null;
+  expected?: string | null;
+  decision_path?: string;
+  message?: string;
+}
+
 // Parking (/api/parking)
 export interface ParkingFacility {
   facility_id: string;

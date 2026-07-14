@@ -56,6 +56,8 @@ import type {
   DriverEnrollment,
   FleetVehicle,
   UpdateVehicleInput,
+  VehicleDetectionResult,
+  VehicleIdentityResult,
   VehicleStats,
 } from "@/lib/types";
 import type {
@@ -1666,6 +1668,80 @@ export class MockAdapter implements DataAdapter {
     if (nextStatus) rec.status = nextStatus;
     rec.updated_at = new Date(NOW).toISOString();
     return Promise.resolve({ updated: true, vehicle: { ...rec } });
+  }
+
+  vehicleIdentity(vehicleNumber: string, image: string): Promise<VehicleIdentityResult> {
+    if (!image)
+      return Promise.resolve({
+        driver_name: null,
+        confidence: 0,
+        status: "NOT_MATCHED",
+        matched: false,
+        vehicle_number: vehicleNumber,
+        reason: "no_image",
+        message: "No camera frame captured.",
+      });
+    // Resolve the vehicle -> its ACTIVE assigned driver (server-side in prod).
+    const key = vehicleNumber.trim().toUpperCase();
+    const vehicle = MOCK_FLEET.find(
+      (v) =>
+        (v.vehicle_number ?? "").toUpperCase() === key ||
+        v.vehicle_id.toUpperCase() === key,
+    );
+    const driver = vehicle
+      ? MOCK_ENROLLMENTS.find(
+          (e) =>
+            (e.status ?? "").toUpperCase() === "ACTIVE" &&
+            (e.vehicle_no ?? "").toUpperCase() === vehicle.vehicle_id.toUpperCase(),
+        )
+      : undefined;
+    if (!driver)
+      return Promise.resolve({
+        driver_name: null,
+        confidence: 0,
+        status: "NOT_MATCHED",
+        matched: false,
+        vehicle_number: vehicleNumber,
+        vehicle_id: vehicle?.vehicle_id ?? null,
+        reason: "no_active_driver",
+        message: "No active driver linked to this vehicle.",
+      });
+    return Promise.resolve({
+      driver_name: driver.name,
+      driver_id: driver.driver_id,
+      vehicle_number: vehicle?.vehicle_number ?? vehicleNumber,
+      vehicle_id: vehicle?.vehicle_id ?? null,
+      confidence: 98,
+      status: "MATCHED",
+      matched: true,
+      decision: "VERIFIED",
+      message: "Identity verified.",
+    });
+  }
+
+  vehicleDetection(image: string, expected?: string): Promise<VehicleDetectionResult> {
+    if (!image)
+      return Promise.resolve({
+        detected_vehicle: null,
+        confidence: 0,
+        match: null,
+        reason: "no_image",
+        message: "No camera frame captured.",
+      } as VehicleDetectionResult);
+    // Deterministic demo read: detect the expected plate (a matching read).
+    const detected = (expected ?? "MH04AB1234").toUpperCase();
+    const match =
+      expected != null
+        ? detected.replace(/[^A-Z0-9]/g, "") === expected.toUpperCase().replace(/[^A-Z0-9]/g, "")
+        : null;
+    return Promise.resolve({
+      detected_vehicle: detected,
+      confidence: 99,
+      match,
+      expected: expected ?? null,
+      decision_path: "SYNTHETIC",
+      message: match ? "Vehicle verified." : "Plate detected.",
+    });
   }
 
   parkingAvailability(minuteOfDay?: number): Promise<ParkingFacility[]> {

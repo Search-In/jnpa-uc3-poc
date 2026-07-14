@@ -70,6 +70,7 @@ from .routers import (
     trucks,
     ulip,
     vahan,
+    vehicle_identity,
     vehicles,
     violations,
     workflows,
@@ -373,6 +374,7 @@ app.include_router(meta.router)
 app.include_router(workflows.router)
 app.include_router(identity.router)
 app.include_router(driver_router.router)
+app.include_router(vehicle_identity.router)
 app.include_router(vehicles.router)
 app.include_router(parking.router)
 app.include_router(debug.router)

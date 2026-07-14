@@ -96,6 +96,9 @@ _POLICY: tuple[tuple[str, frozenset[str]], ...] = (
     # Vehicle Master administration — same audience as the enrollment surface it
     # feeds (customs + admin create/manage vehicles + the assign-vehicle dropdown).
     ("/api/vehicles", {Role.CUSTOMS.value, Role.DTCCC_ADMIN.value}),
+    # Vehicle Intelligence Identity/Detection (singular /api/vehicle) — same
+    # audience as the Intelligence screen (control room + police + customs).
+    ("/api/vehicle/", CONTROL_ROOM | {Role.TRAFFIC_POLICE.value, Role.CUSTOMS.value}),
     ("/api/control", CONTROL_ROOM),
     ("/api/scenarios", CONTROL_ROOM),
     ("/api/scenario", CONTROL_ROOM),

@@ -13,6 +13,8 @@ import type {
   DriverEnrollment,
   FleetVehicle,
   UpdateVehicleInput,
+  VehicleDetectionResult,
+  VehicleIdentityResult,
   VehicleStats,
   EmptyAllocation,
   FaultControlResult,
@@ -244,6 +246,16 @@ export class LiveAdapter implements DataAdapter {
       `/api/vehicles/${encodeURIComponent(vehicleId)}`,
       input,
     );
+
+  // --- Vehicle Intelligence Identity & Detection ---
+  vehicleIdentity = (vehicleNumber: string, image: string) =>
+    sendJson<VehicleIdentityResult>(
+      "POST",
+      `/api/vehicle/${encodeURIComponent(vehicleNumber)}/identity`,
+      { image, vehicle_number: vehicleNumber },
+    );
+  vehicleDetection = (image: string, expected?: string) =>
+    sendJson<VehicleDetectionResult>("POST", "/api/vehicle/detection", { image, expected });
   parkingAvailability = async (minuteOfDay?: number): Promise<ParkingFacility[]> =>
     (
       await getJson<{ facilities: ParkingFacility[] }>(

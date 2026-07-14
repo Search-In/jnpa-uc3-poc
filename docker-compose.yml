@@ -884,6 +884,11 @@ services:
       PYTHONPATH: /app
       PORT: "8000"
       PWA_PAIRING_SECRET: ${PWA_PAIRING_SECRET}
+      # PWA login eligibility gate. When true, POST /api/auth/device-token only
+      # mints a DRIVER token if the entered Vehicle ID is assigned to an ACTIVE
+      # driver (jnpa.drivers); otherwise 403 "Vehicle is not assigned to an active
+      # driver". Default false for migration safety; set true in production/demo.
+      REQUIRE_DRIVER_PROFILE: ${REQUIRE_DRIVER_PROFILE:-false}
       # Upstream services (jnpa network names).
       GATEWAY_ANPR_URL: ${GATEWAY_ANPR_URL:-http://anpr:8301}
       GATEWAY_VAHAN_SIM_URL: ${GATEWAY_VAHAN_SIM_URL:-http://vahan-sim:8201}

@@ -1,28 +1,68 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import maplibregl, { Map as MlMap } from "maplibre-gl";
-import { TerraDraw, TerraDrawPolygonMode, TerraDrawSelectMode } from "terra-draw";
-import { TerraDrawMapLibreGLAdapter } from "terra-draw-maplibre-gl-adapter";
+// Register the <arcgis-map> custom element + bundle its runtime locally (the
+// side-effect import is what actually defines the element). This is the SAME
+// ESRI / ArcGIS Maps SDK surface used by the operations map (ArcgisMap.tsx), so
+// the whole app now draws on one map technology.
+import "@arcgis/map-components/components/arcgis-map";
+import { ArcgisMap as ArcgisMapWC } from "@arcgis/map-components-react";
+import GraphicsLayer from "@arcgis/core/layers/GraphicsLayer";
+import Graphic from "@arcgis/core/Graphic";
+import Polygon from "@arcgis/core/geometry/Polygon";
+import Point from "@arcgis/core/geometry/Point";
+import SimpleFillSymbol from "@arcgis/core/symbols/SimpleFillSymbol";
+import SimpleLineSymbol from "@arcgis/core/symbols/SimpleLineSymbol";
+import SketchViewModel from "@arcgis/core/widgets/Sketch/SketchViewModel";
+import { webMercatorToGeographic } from "@arcgis/core/geometry/support/webMercatorUtils";
+import type MapView from "@arcgis/core/views/MapView";
+import esriConfig from "@arcgis/core/config";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getAdapter } from "@/data";
 import type { Zone } from "@/lib/types";
-import { mapStyle, JNPA_CENTER, JNPA_ZOOM } from "@/lib/basemap";
+import { JNPA_CENTER, JNPA_ZOOM } from "@/lib/basemap";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/misc";
 import { Pencil, MousePointer2, Save, Trash2 } from "lucide-react";
 
-// Map editor (terra-draw) for no-parking / restricted polygons. Drawing or
+const WGS84 = { wkid: 4326 } as const;
+// Zone fill/outline — the CB-safe info blue used across the map surfaces.
+const ZONE_COLOUR = "#56B4E9";
+// Token-free basemap that renders in dev without an ArcGIS API key (same choice
+// as the operations map). A key, if provided, is a graceful upgrade only.
+const DEFAULT_BASEMAP = "dark-gray-vector";
+
+const ARCGIS_API_KEY = (() => {
+  const key = import.meta.env.VITE_ARCGIS_API_KEY;
+  return typeof key === "string" && key.trim() ? key.trim() : undefined;
+})();
+if (ARCGIS_API_KEY) {
+  esriConfig.apiKey = ARCGIS_API_KEY;
+}
+
+/** Handle returned by view.on(...) — typed without naming the module-scoped IHandle. */
+type ViewHandle = ReturnType<MapView["on"]>;
+
+// Geo-fence editor on the ESRI / ArcGIS map. The on-map "geofencing menu"
+// (Select / edit · Draw zone) drives ArcGIS's native SketchViewModel to draw and
+// reshape no-parking / restricted polygons directly on the map. Drawing or
 // editing a polygon updates the local zone set; "Save zones" PUTs the whole set
 // to /api/zones (Postgres) which the anomaly service then reads live. The
 // escalation timeline (5/15/30 min) is editable per zone.
 export default function GeofencingManager() {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const mapEl = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<MlMap | null>(null);
-  const drawRef = useRef<TerraDraw | null>(null);
+  const viewRef = useRef<MapView | null>(null);
+  const layerRef = useRef<GraphicsLayer | null>(null);
+  const svmRef = useRef<SketchViewModel | null>(null);
+  const clickHandle = useRef<ViewHandle | null>(null);
+  // Read the live mode inside imperative ArcGIS event handlers (which close over
+  // the mount-time value otherwise).
+  const modeRef = useRef<"select" | "polygon">("select");
+  // Load the server zones onto the canvas exactly once (later edits are local
+  // until saved, so a background refetch must never clobber in-flight drawing).
+  const loadedRef = useRef(false);
   const [mode, setMode] = useState<"select" | "polygon">("select");
   const [zones, setZones] = useState<Zone[]>([]);
   const [dirty, setDirty] = useState(false);
@@ -41,123 +81,206 @@ export default function GeofencingManager() {
     },
   });
 
-  // Initialise the map + terra-draw once.
-  useEffect(() => {
-    if (!mapEl.current || mapRef.current) return;
-    const map = new maplibregl.Map({
-      container: mapEl.current,
-      style: mapStyle(),
-      center: JNPA_CENTER,
-      zoom: JNPA_ZOOM,
-      attributionControl: { compact: true },
-    });
-    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
-    mapRef.current = map;
+  const zoneSymbol = useMemo(
+    () =>
+      new SimpleFillSymbol({
+        color: hexToRgba(ZONE_COLOUR, 0.2),
+        outline: new SimpleLineSymbol({
+          color: ZONE_COLOUR,
+          width: 2.25,
+          cap: "round",
+          join: "round",
+        }),
+      }),
+    [],
+  );
 
-    map.on("load", () => {
-      const draw = new TerraDraw({
-        adapter: new TerraDrawMapLibreGLAdapter({ map }),
-        modes: [
-          new TerraDrawSelectMode({
-            flags: {
-              polygon: {
-                feature: {
-                  draggable: true,
-                  coordinates: { midpoints: true, draggable: true, deletable: true },
-                },
-              },
-            },
-          }),
-          new TerraDrawPolygonMode({
-            styles: { fillColor: "#56B4E9", outlineColor: "#56B4E9", fillOpacity: 0.2 },
-          }),
-        ],
+  // Find the polygon graphic on the sketch layer that backs a given zone id.
+  const graphicFor = useCallback((id: string): Graphic | undefined => {
+    return layerRef.current?.graphics.find((g) => g.getAttribute("zoneId") === id) as
+      | Graphic
+      | undefined;
+  }, []);
+
+  // Extract the outer ring of a sketch graphic as a [lon,lat][] ring in WGS84
+  // (the sketch geometry comes back in the view's Web-Mercator SR, so project).
+  function ringOf(g: Graphic): [number, number][] {
+    const geom = g.geometry as Polygon;
+    if (!geom || geom.type !== "polygon") return [];
+    const geo = geom.spatialReference?.isWGS84 ? geom : (webMercatorToGeographic(geom) as Polygon);
+    return (geo.rings[0] as [number, number][]) ?? [];
+  }
+
+  // Upsert the zone backing a freshly-drawn / reshaped graphic. New graphics get
+  // a generated zone id (stamped back onto the graphic so future edits match).
+  const syncZoneFromGraphic = useCallback((g: Graphic, isNew: boolean) => {
+    const ring = ringOf(g);
+    if (ring.length < 4) return; // a closed ring has >= 4 points
+    setZones((prev) => {
+      if (!isNew) {
+        const id = g.getAttribute("zoneId") as string | undefined;
+        return prev.map((z) => (z.id === id ? { ...z, polygon: ring } : z));
+      }
+      const n = prev.filter((z) => z.id.startsWith("NPZ-DRAWN-")).length + 1;
+      const id = `NPZ-DRAWN-${n}`;
+      g.setAttribute("zoneId", id);
+      g.setAttribute("kind", "no_parking");
+      return [
+        ...prev,
+        {
+          id,
+          name: `Drawn zone ${n}`,
+          kind: "no_parking",
+          polygon: ring,
+          escalation: { warn_min: 5, notice_min: 15, challan_min: 30 },
+          enabled: true,
+        },
+      ];
+    });
+    setDirty(true);
+  }, []);
+
+  // ---- create the sketch layer + SketchViewModel once the view is ready ----
+  const handleReady = useCallback(
+    (event: { target: { view: MapView } }) => {
+      const view = event.target.view;
+      if (!view || !view.map) return;
+      viewRef.current = view;
+      if (view.constraints) view.constraints.snapToZoom = false;
+      view.ui.components = ["zoom", "attribution"];
+
+      const layer = new GraphicsLayer({ id: "uc3-geofence-edit", title: "Geo-fence zones" });
+      view.map.add(layer);
+      layerRef.current = layer;
+
+      const svm = new SketchViewModel({
+        view,
+        layer,
+        polygonSymbol: zoneSymbol,
+        defaultUpdateOptions: { tool: "reshape", enableRotation: false, toggleToolOnClick: false },
       });
-      draw.start();
-      draw.setMode("select");
-      drawRef.current = draw;
+      svmRef.current = svm;
 
-      // Any change to the drawn features marks the set dirty + syncs local zones.
-      draw.on("finish", () => syncFromDraw());
-      draw.on("change", () => setDirty(true));
-    });
+      // A completed draw becomes a new zone; staying in draw mode lets the
+      // operator lay down several zones in a row (matching the old editor).
+      svm.on("create", (e) => {
+        if (e.state !== "complete") return;
+        syncZoneFromGraphic(e.graphic, true);
+        if (modeRef.current === "polygon") svm.create("polygon");
+      });
+      // A completed reshape/move writes the new geometry back to its zone.
+      svm.on("update", (e) => {
+        if (e.state !== "complete") return;
+        for (const g of e.graphics) syncZoneFromGraphic(g, false);
+      });
+      // Deleting a graphic (Sketch delete key) drops its zone.
+      svm.on("delete", (e) => {
+        const ids = e.graphics
+          .map((g) => g.getAttribute("zoneId") as string | undefined)
+          .filter(Boolean) as string[];
+        if (!ids.length) return;
+        setZones((zs) => zs.filter((z) => !ids.includes(z.id)));
+        setDirty(true);
+      });
 
+      // In select mode, clicking a zone graphic opens it for reshape/move.
+      clickHandle.current?.remove();
+      clickHandle.current = view.on("click", (e) => {
+        if (modeRef.current !== "select") return;
+        void view.hitTest(e).then((res) => {
+          const hit = res.results.find(
+            (r) => r.type === "graphic" && r.graphic?.layer === layerRef.current,
+          );
+          if (hit && hit.type === "graphic") svm.update([hit.graphic]);
+        });
+      });
+
+      loadZonesToLayer(zonesQ.data);
+    },
+    // Stable deps: refs + memoised symbol; render helpers close over refs only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  // Draw the saved zones onto the sketch layer + seed local state, exactly once.
+  const loadZonesToLayer = useCallback((data: Zone[] | undefined) => {
+    const layer = layerRef.current;
+    if (!layer || !data || loadedRef.current) return;
+    loadedRef.current = true;
+    setZones(data);
+    layer.removeAll();
+    for (const z of data) {
+      if (!z.polygon || z.polygon.length < 3) continue;
+      layer.add(
+        new Graphic({
+          geometry: new Polygon({ rings: [closeRing(z.polygon)], spatialReference: WGS84 }),
+          symbol: zoneSymbol,
+          attributes: { zoneId: z.id, kind: z.kind, name: z.name },
+        }),
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Server data may arrive after the view — load it whenever both are ready.
+  useEffect(() => {
+    if (zonesQ.data) loadZonesToLayer(zonesQ.data);
+  }, [zonesQ.data, loadZonesToLayer]);
+
+  // Clean up the sketch model + click handler on unmount.
+  useEffect(() => {
     return () => {
-      drawRef.current?.stop();
-      drawRef.current = null;
-      map.remove();
-      mapRef.current = null;
+      clickHandle.current?.remove();
+      clickHandle.current = null;
+      svmRef.current?.destroy();
+      svmRef.current = null;
     };
   }, []);
 
-  // Load the saved zones into both local state and the draw canvas.
-  useEffect(() => {
-    const draw = drawRef.current;
-    if (!zonesQ.data || !draw) return;
-    const loaded = zonesQ.data;
-    setZones(loaded);
-    try {
-      draw.clear();
-      draw.addFeatures(
-        loaded
-          .filter((z) => z.polygon?.length >= 3)
-          .map((z) => ({
-            type: "Feature" as const,
-            id: z.id,
-            properties: { mode: "polygon", zoneId: z.id, kind: z.kind, name: z.name },
-            geometry: { type: "Polygon" as const, coordinates: [closeRing(z.polygon)] },
-          })),
-      );
-    } catch {
-      /* draw not ready yet — retried on next data tick */
-    }
-  }, [zonesQ.data, drawRef.current]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  function syncFromDraw() {
-    const draw = drawRef.current;
-    if (!draw) return;
-    const snapshot = draw.getSnapshot();
-    const existing = new Map(zones.map((z) => [z.id, z]));
-    const next: Zone[] = [];
-    let nNew = 0;
-    for (const f of snapshot) {
-      if (f.geometry.type !== "Polygon") continue;
-      const ring = (f.geometry.coordinates[0] as [number, number][]) ?? [];
-      if (ring.length < 4) continue; // closed ring has >=4 points
-      const id = (f.properties?.zoneId as string) || String(f.id);
-      const prev = existing.get(id);
-      next.push(
-        prev
-          ? { ...prev, polygon: ring }
-          : {
-              id: `NPZ-DRAWN-${++nNew}-${String(f.id).slice(0, 6)}`,
-              name: `Drawn zone ${nNew}`,
-              kind: "no_parking",
-              polygon: ring,
-              escalation: { warn_min: 5, notice_min: 15, challan_min: 30 },
-              enabled: true,
-            },
-      );
-    }
-    setZones(next);
-    setDirty(true);
-  }
-
   function patchZone(id: string, patch: Partial<Zone>) {
     setZones((zs) => zs.map((z) => (z.id === id ? { ...z, ...patch } : z)));
+    // Keep the graphic's kind attribute in step so its future edits carry it.
+    if (patch.kind != null) graphicFor(id)?.setAttribute("kind", patch.kind);
     setDirty(true);
   }
 
   function setDrawMode(m: "select" | "polygon") {
     setMode(m);
-    drawRef.current?.setMode(m);
+    modeRef.current = m;
+    const svm = svmRef.current;
+    if (!svm) return;
+    svm.cancel();
+    if (m === "polygon") svm.create("polygon");
   }
+
+  // The centre Point, built once so the memoised element receives it a single
+  // time (the @lit/react wrapper re-applies element props on every render, which
+  // would otherwise re-command the camera — see ArcgisMap.tsx for the full note).
+  const initialCenter = useMemo(
+    () => new Point({ longitude: JNPA_CENTER[0], latitude: JNPA_CENTER[1] }),
+    [],
+  );
+  const mapElement = useMemo(
+    () => (
+      <ArcgisMapWC
+        basemap={DEFAULT_BASEMAP}
+        center={initialCenter}
+        zoom={JNPA_ZOOM}
+        onArcgisViewReadyChange={handleReady}
+        style={{ height: "100%", width: "100%" }}
+      />
+    ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
 
   return (
     <div className="flex h-full">
       <div className="relative min-w-0 flex-1">
-        <div ref={mapEl} className="h-full w-full" data-testid="geofence-map" />
-        <div className="absolute left-3 top-3 flex gap-2 rounded-md border border-border bg-card/85 p-1.5 backdrop-blur">
+        <div className="h-full w-full" data-testid="geofence-map">
+          {mapElement}
+        </div>
+        <div className="absolute left-3 top-3 z-10 flex gap-2 rounded-md border border-border bg-card/85 p-1.5 backdrop-blur">
           <Button
             size="sm"
             variant={mode === "select" ? "default" : "ghost"}
@@ -206,11 +329,8 @@ export default function GeofencingManager() {
               onPatch={(p) => patchZone(z.id, p)}
               onDelete={() => {
                 setZones((zs) => zs.filter((x) => x.id !== z.id));
-                try {
-                  drawRef.current?.removeFeatures([z.id]);
-                } catch {
-                  /* not on canvas */
-                }
+                const g = graphicFor(z.id);
+                if (g) layerRef.current?.remove(g);
                 setDirty(true);
               }}
             />
@@ -353,4 +473,15 @@ function closeRing(ring: [number, number][]): [number, number][] {
     return [...ring, ring[0]];
   }
   return ring;
+}
+
+/** Convert "#RRGGBB" + alpha → [r,g,b,a] tuple for an ArcGIS Color. */
+function hexToRgba(hex: string, alpha: number): [number, number, number, number] {
+  const h = hex.replace("#", "");
+  return [
+    parseInt(h.slice(0, 2), 16),
+    parseInt(h.slice(2, 4), 16),
+    parseInt(h.slice(4, 6), 16),
+    alpha,
+  ];
 }

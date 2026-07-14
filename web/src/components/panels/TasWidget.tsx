@@ -9,6 +9,7 @@ import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { getAdapter } from "@/data";
 import { CollapsibleCard } from "@/components/ui/CollapsibleCard";
+import { Pagination, usePagination } from "@/components/ui/Pagination";
 import { Badge } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/misc";
 import { fmtTimeIST } from "@/lib/utils";
@@ -46,6 +47,8 @@ export function TasWidget() {
   const pending = slots.filter((s) => s.status !== "BOOKED" && s.status !== "RESCHEDULED").length;
   const slotStatus = rescheduled > 0 ? t("tas.rescheduledStatus") : t("tas.onSchedule");
   const updatedTs = q.dataUpdatedAt ? new Date(q.dataUpdatedAt).toISOString() : undefined;
+  // 10-per-page client-side paging; page index survives refreshes (see usePagination).
+  const pg = usePagination(slots, 10);
 
   return (
     <CollapsibleCard
@@ -58,7 +61,7 @@ export function TasWidget() {
           {t("tas.gate")} {GATE.replace("G-", "")}
         </Badge>
       }
-      bodyClassName="flex-1 space-y-3"
+      bodyClassName="flex flex-1 flex-col space-y-3"
     >
       {/* Active / Rescheduled / Pending slot counts */}
       <div className="grid grid-cols-3 gap-2">
@@ -75,40 +78,51 @@ export function TasWidget() {
         </Badge>
       </div>
 
-      {/* Slot table */}
-      <div className="max-h-32 overflow-y-auto rounded-md border border-border">
-        {q.isLoading ? (
-          <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
-            <Spinner /> {t("tas.loadingSlots")}
-          </div>
-        ) : slots.length === 0 ? (
-          <div className="p-3 text-xs text-muted-foreground">{t("tas.noSlots")}</div>
-        ) : (
-          <table className="w-full text-xs">
-            <thead className="sticky top-0 border-b border-border bg-card text-left text-[10px] uppercase text-muted-foreground">
-              <tr>
-                <th className="px-3 py-1.5">{t("tas.colSlot")}</th>
-                <th className="px-3 py-1.5">{t("tas.colGate")}</th>
-                <th className="px-3 py-1.5">{t("tas.colWindow")}</th>
-                <th className="px-3 py-1.5">{t("tas.colStatus")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {slots.slice(0, 12).map((s) => (
-                <tr key={s.slot_id} className="border-b border-border/40">
-                  <td className="px-3 py-1.5 font-mono">
-                    {s.slot_id.replace(`TAS-${GATE}-`, "#")}
-                  </td>
-                  <td className="px-3 py-1.5">{s.gate_id.replace("G-", "")}</td>
-                  <td className="px-3 py-1.5 tabular-nums">{fmtTimeIST(s.start)}</td>
-                  <td className="px-3 py-1.5">
-                    <Badge colour={STATUS_COLOUR[s.status] ?? "#56B4E9"}>{s.status}</Badge>
-                  </td>
+      {/* Slot table — fixed-height list + pinned pagination, so the panel height
+          never changes as pages turn (matches Auto-LEO / Customs cards). */}
+      <div className="flex flex-1 flex-col">
+        <div className="min-h-[18rem] flex-1 overflow-y-auto rounded-md border border-border">
+          {q.isLoading ? (
+            <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
+              <Spinner /> {t("tas.loadingSlots")}
+            </div>
+          ) : slots.length === 0 ? (
+            <div className="p-3 text-xs text-muted-foreground">{t("tas.noSlots")}</div>
+          ) : (
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 border-b border-border bg-card text-left text-[10px] uppercase text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-1.5">{t("tas.colSlot")}</th>
+                  <th className="px-3 py-1.5">{t("tas.colGate")}</th>
+                  <th className="px-3 py-1.5">{t("tas.colWindow")}</th>
+                  <th className="px-3 py-1.5">{t("tas.colStatus")}</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+              </thead>
+              <tbody>
+                {pg.pageRows.map((s) => (
+                  <tr key={s.slot_id} className="border-b border-border/40">
+                    <td className="px-3 py-1.5 font-mono">
+                      {s.slot_id.replace(`TAS-${GATE}-`, "#")}
+                    </td>
+                    <td className="px-3 py-1.5">{s.gate_id.replace("G-", "")}</td>
+                    <td className="px-3 py-1.5 tabular-nums">{fmtTimeIST(s.start)}</td>
+                    <td className="px-3 py-1.5">
+                      <Badge colour={STATUS_COLOUR[s.status] ?? "#56B4E9"}>{s.status}</Badge>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+        <Pagination
+          page={pg.page}
+          pageCount={pg.pageCount}
+          from={pg.from}
+          to={pg.to}
+          total={pg.total}
+          onPage={pg.setPage}
+        />
       </div>
 
       {/* Last updated */}

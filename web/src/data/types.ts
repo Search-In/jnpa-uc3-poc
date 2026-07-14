@@ -266,9 +266,7 @@ export interface DataAdapter {
   // --- Vehicle Master (fleet registry, admin portal) ---
   vehicles(q?: string, status?: string): Promise<FleetVehicle[]>;
   vehicleStats(): Promise<VehicleStats>;
-  createVehicle(
-    input: CreateVehicleInput,
-  ): Promise<{ created: boolean; vehicle: FleetVehicle }>;
+  createVehicle(input: CreateVehicleInput): Promise<{ created: boolean; vehicle: FleetVehicle }>;
   updateVehicle(
     vehicleId: string,
     input: UpdateVehicleInput,

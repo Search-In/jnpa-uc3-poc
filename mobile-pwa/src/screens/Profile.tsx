@@ -168,7 +168,11 @@ export default function Profile({ deviceId, plate }: { deviceId: string; plate?:
             />
             <Row
               k={t("driverProfile.status", { defaultValue: "Status" })}
-              v={<Chip status={statusTone(profile.driver.status)}>{profile.driver.status || "—"}</Chip>}
+              v={
+                <Chip status={statusTone(profile.driver.status)}>
+                  {profile.driver.status || "—"}
+                </Chip>
+              }
             />
           </Card>
 

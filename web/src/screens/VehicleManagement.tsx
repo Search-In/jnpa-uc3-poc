@@ -7,16 +7,7 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  Truck,
-  Plus,
-  Pencil,
-  Eye,
-  Power,
-  Wrench,
-  CheckCircle2,
-  CircleSlash,
-} from "lucide-react";
+import { Truck, Plus, Pencil, Eye, Power, Wrench, CheckCircle2, CircleSlash } from "lucide-react";
 import { getAdapter } from "@/data";
 import type { FleetVehicle, VehicleStatus } from "@/lib/types";
 import { Card } from "@/components/ui/card";
@@ -360,7 +351,11 @@ function VehicleForm({
           />
         </Labeled>
         <Labeled label={t("vehicles.type", "Vehicle Type")}>
-          <input className={inputCls} value={type ?? ""} onChange={(e) => setType(e.target.value)} />
+          <input
+            className={inputCls}
+            value={type ?? ""}
+            onChange={(e) => setType(e.target.value)}
+          />
         </Labeled>
         <Labeled label={t("vehicles.chassis", "Chassis Number")}>
           <input
@@ -370,7 +365,11 @@ function VehicleForm({
           />
         </Labeled>
         <Labeled label={t("vehicles.rfid", "RFID / FASTag ID")}>
-          <input className={inputCls} value={rfid ?? ""} onChange={(e) => setRfid(e.target.value)} />
+          <input
+            className={inputCls}
+            value={rfid ?? ""}
+            onChange={(e) => setRfid(e.target.value)}
+          />
         </Labeled>
         <Labeled label={t("vehicles.status", "Status")}>
           <select

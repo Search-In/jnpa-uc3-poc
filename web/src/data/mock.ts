@@ -1615,9 +1615,7 @@ export class MockAdapter implements DataAdapter {
     });
   }
 
-  createVehicle(
-    input: CreateVehicleInput,
-  ): Promise<{ created: boolean; vehicle: FleetVehicle }> {
+  createVehicle(input: CreateVehicleInput): Promise<{ created: boolean; vehicle: FleetVehicle }> {
     const number = (input.vehicle_number ?? "").trim();
     if (!number) return Promise.reject(new Error("vehicle_number is required"));
     const dup = MOCK_FLEET.find(
@@ -1684,9 +1682,7 @@ export class MockAdapter implements DataAdapter {
     // Resolve the vehicle -> its ACTIVE assigned driver (server-side in prod).
     const key = vehicleNumber.trim().toUpperCase();
     const vehicle = MOCK_FLEET.find(
-      (v) =>
-        (v.vehicle_number ?? "").toUpperCase() === key ||
-        v.vehicle_id.toUpperCase() === key,
+      (v) => (v.vehicle_number ?? "").toUpperCase() === key || v.vehicle_id.toUpperCase() === key,
     );
     const driver = vehicle
       ? MOCK_ENROLLMENTS.find(

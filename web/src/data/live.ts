@@ -233,9 +233,8 @@ export class LiveAdapter implements DataAdapter {
     if (q) params.set("q", q);
     if (status && status !== "ALL") params.set("status", status);
     const qs = params.toString();
-    return (
-      await getJson<{ vehicles: FleetVehicle[] }>(`/api/vehicles${qs ? `?${qs}` : ""}`)
-    ).vehicles;
+    return (await getJson<{ vehicles: FleetVehicle[] }>(`/api/vehicles${qs ? `?${qs}` : ""}`))
+      .vehicles;
   };
   vehicleStats = (): Promise<VehicleStats> => getJson<VehicleStats>("/api/vehicles/stats");
   createVehicle = (input: CreateVehicleInput) =>

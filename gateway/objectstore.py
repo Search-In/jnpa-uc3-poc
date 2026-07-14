@@ -1,11 +1,11 @@
 """MinIO persistence for driver-enrolment reference photos (Identity / C2).
 
 A driver's approved reference frame is stored in the ``driver-enrolment`` bucket
-as ``{driver_id}.jpg`` and an object URL is returned for the enrolment record.
+as ``{driver_id}.jpg`` and an object URL is returned for the enrollment record.
 
 All operations are best-effort and degrade gracefully: if the ``minio`` client is
 absent or MinIO is unreachable, ``put_reference_photo`` returns ``None`` and the
-caller keeps the base64 frame in Postgres instead — the enrolment still completes.
+caller keeps the base64 frame in Postgres instead — the enrollment still completes.
 Mirrors ai/anomaly/storage.py's approach (lazy import, never crash the request).
 """
 from __future__ import annotations

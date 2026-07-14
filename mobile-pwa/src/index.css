@@ -733,13 +733,13 @@ a {
   color: var(--orange);
 }
 
-/* ---------------- driver enrolment wizard ---------------- */
-.enrol-steps {
+/* ---------------- driver enrollment wizard ---------------- */
+.enroll-steps {
   display: flex;
   gap: 8px;
   align-items: center;
 }
-.enrol-step {
+.enroll-step {
   width: 26px;
   height: 26px;
   border-radius: 50%;
@@ -752,33 +752,33 @@ a {
   color: var(--muted);
   border: 1px solid var(--border);
 }
-.enrol-step.active {
+.enroll-step.active {
   background: var(--blue);
   color: #fff;
   border-color: var(--blue);
 }
-.enrol-step.done {
+.enroll-step.done {
   background: var(--green);
   color: #fff;
   border-color: var(--green);
 }
-.enrol-form {
+.enroll-form {
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
-.enrol-field {
+.enroll-field {
   display: flex;
   flex-direction: column;
   gap: 4px;
   font-size: 12px;
   color: var(--muted);
 }
-.enrol-field em {
+.enroll-field em {
   color: var(--red);
   font-style: normal;
 }
-.enrol-field input {
+.enroll-field input {
   padding: 10px;
   font-size: 15px;
   border-radius: 10px;
@@ -786,37 +786,37 @@ a {
   background: var(--surface);
   color: var(--text);
 }
-.enrol-field input:focus {
+.enroll-field input:focus {
   outline: 2px solid var(--blue);
   border-color: var(--blue);
 }
-.enrol-field.locked input,
-.enrol-field input[readonly] {
+.enroll-field.locked input,
+.enroll-field input[readonly] {
   background: var(--surface-2);
   color: var(--muted);
   cursor: not-allowed;
 }
-.enrol-lock {
+.enroll-lock {
   font-size: 10px;
 }
-.enrol-autofill {
+.enroll-autofill {
   background: var(--surface-2);
   border-radius: 8px;
   padding: 8px 10px;
 }
-.enrol-consent {
+.enroll-consent {
   display: flex;
   gap: 10px;
   align-items: flex-start;
   font-size: 14px;
   margin-top: 10px;
 }
-.enrol-consent input {
+.enroll-consent input {
   width: 20px;
   height: 20px;
   margin-top: 1px;
 }
-.enrol-cam {
+.enroll-cam {
   position: relative;
   width: 100%;
   aspect-ratio: 4 / 3;
@@ -824,13 +824,13 @@ a {
   overflow: hidden;
   background: #000;
 }
-.enrol-cam video {
+.enroll-cam video {
   width: 100%;
   height: 100%;
   object-fit: cover;
   transform: scaleX(-1);
 }
-.enrol-faceguide {
+.enroll-faceguide {
   position: absolute;
   left: 50%;
   top: 50%;
@@ -842,7 +842,7 @@ a {
   box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.28);
   pointer-events: none;
 }
-.enrol-cam-overlay {
+.enroll-cam-overlay {
   position: absolute;
   inset: 0;
   display: flex;
@@ -853,7 +853,7 @@ a {
   color: rgba(255, 255, 255, 0.85);
   font-size: 13px;
 }
-.enrol-cam-chip {
+.enroll-cam-chip {
   position: absolute;
   left: 8px;
   top: 8px;
@@ -863,13 +863,13 @@ a {
   padding: 2px 8px;
   border-radius: 999px;
 }
-.enrol-thumbs {
+.enroll-thumbs {
   display: flex;
   gap: 8px;
   margin-top: 10px;
   flex-wrap: wrap;
 }
-.enrol-thumb {
+.enroll-thumb {
   position: relative;
   width: 64px;
   height: 64px;
@@ -877,13 +877,13 @@ a {
   overflow: hidden;
   border: 1px solid var(--border);
 }
-.enrol-thumb img {
+.enroll-thumb img {
   width: 100%;
   height: 100%;
   object-fit: cover;
   transform: scaleX(-1);
 }
-.enrol-thumb button {
+.enroll-thumb button {
   position: absolute;
   top: 2px;
   right: 2px;
@@ -899,7 +899,7 @@ a {
   align-items: center;
   justify-content: center;
 }
-.enrol-doc {
+.enroll-doc {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -907,17 +907,17 @@ a {
   border-bottom: 1px solid var(--border);
   font-size: 13px;
 }
-.enrol-doc span:first-child {
+.enroll-doc span:first-child {
   flex: 1;
 }
-.enrol-doc img {
+.enroll-doc img {
   width: 40px;
   height: 40px;
   object-fit: cover;
   border-radius: 6px;
   border: 1px solid var(--border);
 }
-.enrol-doc-btn {
+.enroll-doc-btn {
   padding: 6px 12px;
   font-size: 13px;
 }

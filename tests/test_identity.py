@@ -73,13 +73,13 @@ def test_capture_is_deterministic():
 # (a) Genuine capture -> high score
 # ---------------------------------------------------------------------------
 def test_genuine_capture_matches_enrolled_driver():
-    """A genuine live capture is close-but-not-identical to enrolment (~0.97)."""
+    """A genuine live capture is close-but-not-identical to enrollment (~0.97)."""
     gallery = generate_gallery(10)
     for driver_id, rec in gallery.items():
         capture = capture_embedding(driver_id, genuine=True)
         score = cosine(rec.embedding, capture)
         assert score >= 0.9, f"{driver_id} genuine score {score} should be VERIFIED"
-        assert score < 1.0, "a genuine capture is NOT identical to enrolment"
+        assert score < 1.0, "a genuine capture is NOT identical to enrollment"
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +184,7 @@ def test_verification_counter_increments(client):
 
 
 # ---------------------------------------------------------------------------
-# Pluggable embedding provider + camera enrolment (production seam)
+# Pluggable embedding provider + camera enrollment (production seam)
 # ---------------------------------------------------------------------------
 def test_build_provider_defaults_to_synthetic():
     from identity.embeddings import (
@@ -202,7 +202,7 @@ def test_build_provider_defaults_to_synthetic():
 
 
 def test_synthetic_provider_reference_matches_capture():
-    """Synthetic reference (enrolment) vs a genuine capture clears the threshold."""
+    """Synthetic reference (enrollment) vs a genuine capture clears the threshold."""
     from identity.embeddings import SyntheticEmbeddingProvider, cosine
 
     p = SyntheticEmbeddingProvider()
@@ -223,7 +223,7 @@ def test_verify_with_image_uses_provider_and_reports_it(client):
     assert body["provider"] == "synthetic"
 
 
-def test_enrol_then_verify_roundtrip(client):
+def test_enroll_then_verify_roundtrip(client):
     """Enrolling a reference returns ok; a subsequent verify clears the threshold."""
     import base64
 
@@ -236,21 +236,21 @@ def test_enrol_then_verify_roundtrip(client):
     assert v["decision"] == "VERIFIED"
 
 
-def test_enrol_new_driver_absent_from_gallery_then_verify(client):
+def test_enroll_new_driver_absent_from_gallery_then_verify(client):
     """A driver NOT in the synthetic gallery (the admin-approval path) becomes
-    verifiable once a reference template is enrolled — a reference enrolment alone
+    verifiable once a reference template is enrolled — a reference enrollment alone
     counts as 'enrolled', no gallery row required."""
     import base64
 
     img = base64.b64encode(b"\xff\xd8\xff\xfake-ref-new-driver").decode()
     new_id = "DRV-ENROLLED-9001"
 
-    # Before enrolment: unknown driver -> PROVISIONAL (not enrolled).
+    # Before enrollment: unknown driver -> PROVISIONAL (not enrolled).
     pre = client.post("/verify", json={"driver_id": new_id, "image": img}).json()
     assert pre["decision"] == "PROVISIONAL"
     assert pre["reason"] == "driver_not_enrolled"
 
-    # Enrol a reference template, then verify -> VERIFIED (reference == enrolled).
+    # Enroll a reference template, then verify -> VERIFIED (reference == enrolled).
     e = client.post("/enrol", json={"driver_id": new_id, "image": img}).json()
     assert e["enrolled"] is True
     v = client.post("/verify", json={"driver_id": new_id, "image": img}).json()

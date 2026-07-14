@@ -1,4 +1,4 @@
-"""Driver-enrolment store + lifecycle (Identity / face-recognition, Appendix C #2).
+"""Driver-enrollment store + lifecycle (Identity / face-recognition, Appendix C #2).
 
 Backs the PWA submit -> admin approve/reject workflow that sits in front of the
 identity service. Records live in ``jnpa.driver_enrollments`` (+ an append-only
@@ -27,9 +27,9 @@ ACTIVE = "ACTIVE"
 REJECTED = "REJECTED"
 REENROLL = "REENROLL"
 
-# Enrolment provenance (jnpa.driver_enrollments.source).
+# Enrollment provenance (jnpa.driver_enrollments.source).
 SOURCE_PWA = "PWA"      # driver self-submitted from the mobile app
-SOURCE_ADMIN = "ADMIN"  # created by a Control-Room admin on the enrolment page
+SOURCE_ADMIN = "ADMIN"  # created by a Control-Room admin on the enrollment page
 
 
 def normalize_vehicle_no(vehicle_no: Optional[str]) -> str:
@@ -253,11 +253,11 @@ async def submit(dsn: str, *, driver_id: str, name: str, license_no: str = "",
                  face_images: Optional[List[str]] = None,
                  documents: Optional[List[Any]] = None,
                  source: str = SOURCE_PWA, created_by: Optional[str] = None) -> dict:
-    """Create/refresh a PENDING enrolment request. Re-submitting overwrites a
-    prior PENDING/REJECTED/REENROLL record (a driver may re-enrol after rejection).
+    """Create/refresh a PENDING enrollment request. Re-submitting overwrites a
+    prior PENDING/REJECTED/REENROLL record (a driver may re-enroll after rejection).
 
     ``source`` records provenance: ``PWA`` (driver self-service, the default) or
-    ``ADMIN`` (created from the Control-Room enrolment page); ``created_by`` is the
+    ``ADMIN`` (created from the Control-Room enrollment page); ``created_by`` is the
     admin actor for the ADMIN path. The actor stamped on the audit trail follows
     the source so the DPDP log shows who really originated the request."""
     face_images = face_images or []
@@ -382,7 +382,7 @@ async def mark_active(dsn: str, driver_id: str, *, actor: str, photo_url: Option
 
 async def set_status(dsn: str, driver_id: str, status: str, *, actor: str,
                      reason: str = "") -> dict:
-    """Reject or request re-enrolment. Keeps the record so the driver can re-submit."""
+    """Reject or request re-enrollment. Keeps the record so the driver can re-submit."""
     event = "REJECTED" if status == REJECTED else "REENROLL_REQUESTED"
     now = _now()
     if await _backend(dsn) == "db":
@@ -435,7 +435,7 @@ async def get(dsn: str, driver_id: str, *, include_faces: bool = True) -> Option
 
 
 async def list_requests(dsn: str, *, status: Optional[str] = None) -> List[dict]:
-    """List enrolment requests (summary only — no raw frames) newest-first."""
+    """List enrollment requests (summary only — no raw frames) newest-first."""
     if await _backend(dsn) == "db":
         try:
             from jnpa_shared.db import fetch_all
@@ -545,7 +545,7 @@ async def list_active_drivers(dsn: str) -> List[dict]:
             for d in _MEM_DRIVERS.values() if d.get("status") == "ACTIVE"]
 
 
-# Open enrolment states that still "hold" an assigned vehicle (not yet resolved).
+# Open enrollment states that still "hold" an assigned vehicle (not yet resolved).
 _OPEN_ENROL_STATES = (PENDING, REENROLL)
 
 
@@ -577,7 +577,7 @@ async def vehicle_assignment_conflict(dsn: str, vehicle_no: str, *,
                                       exclude_driver_id: Optional[str] = None) -> Optional[dict]:
     """Return the conflicting holder ``{driver_id, name, status, kind}`` if this
     Vehicle ID is already taken, else ``None``. "Taken" = an ACTIVE master driver
-    OR an open (PENDING/REENROLL) enrolment holds it. Used to block a double
+    OR an open (PENDING/REENROLL) enrollment holds it. Used to block a double
     assignment at admin-create time (belt-and-braces with uq_drivers_vehicle_active)."""
     norm = normalize_vehicle_no(vehicle_no)
     if not norm:
@@ -598,7 +598,7 @@ async def vehicle_assignment_conflict(dsn: str, vehicle_no: str, *,
             "AND (:excl IS NULL OR driver_id <> :excl) LIMIT 1",
             {"v": norm, "states": list(_OPEN_ENROL_STATES), "excl": exclude_driver_id}, dsn=dsn)
         if row:
-            return {**_iso_row(dict(row)), "kind": "enrolment"}
+            return {**_iso_row(dict(row)), "kind": "enrollment"}
         return None
     for d in _MEM_DRIVERS.values():
         if (d.get("status") == ACTIVE and normalize_vehicle_no(d.get("vehicle_no")) == norm
@@ -610,12 +610,12 @@ async def vehicle_assignment_conflict(dsn: str, vehicle_no: str, *,
                 and normalize_vehicle_no(e.get("vehicle_no")) == norm
                 and e.get("driver_id") != exclude_driver_id):
             return {"driver_id": e.get("driver_id"), "name": e.get("name"),
-                    "status": e.get("status"), "kind": "enrolment"}
+                    "status": e.get("status"), "kind": "enrollment"}
     return None
 
 
 async def assigned_vehicles(dsn: str) -> set:
-    """Normalised Vehicle IDs already taken (ACTIVE drivers + open enrolments).
+    """Normalised Vehicle IDs already taken (ACTIVE drivers + open enrollments).
     The Control-Room "available vehicles" dropdown subtracts this set so an admin
     can never pick an already-assigned vehicle."""
     taken: set = set()
@@ -738,7 +738,7 @@ def _iso_row(d: dict) -> dict:
 def _with_browser_photo(d: dict, fallback: Optional[str]) -> dict:
     """Common photo mapping: turn the stored ``photo_url`` (which may be an
     ``s3://`` pointer) into a browser-loadable presigned URL, and mirror it onto
-    ``photo``. Applies to every read path (demo + real enrolment) so the UI never
+    ``photo``. Applies to every read path (demo + real enrollment) so the UI never
     receives an ``s3://`` URL it cannot fetch. Falls back to a captured frame when
     no object URL exists yet."""
     from . import objectstore

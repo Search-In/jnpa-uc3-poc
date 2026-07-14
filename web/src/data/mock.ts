@@ -25,7 +25,7 @@ import type {
   Gate,
   IdentityVerifyArg,
   IdentityVerifyResult,
-  IdentityEnrolResult,
+  IdentityEnrollResult,
   KpiResult,
   OperatorBanner,
   ParkingFacility,
@@ -272,7 +272,7 @@ const DRIVERS = [
   { driver_id: "DRV-1006", name: "Prakash More", license_no: "MH14 20210099887" },
 ] as const;
 
-// A tiny placeholder "face" frame (data-URL) so the mock enrolment queue renders
+// A tiny placeholder "face" frame (data-URL) so the mock enrollment queue renders
 // review thumbnails without bundling real images.
 const MOCK_FACE =
   "data:image/svg+xml;base64," +
@@ -280,8 +280,8 @@ const MOCK_FACE =
     '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160"><rect width="160" height="160" fill="#1f78c2"/><circle cx="80" cy="64" r="34" fill="#cfe3f5"/><rect x="36" y="104" width="88" height="56" rx="28" fill="#cfe3f5"/></svg>',
   );
 
-// In-memory enrolment queue for mock mode — seeded with two PENDING requests so
-// the admin Driver Enrolment screen has something to review with no backend.
+// In-memory enrollment queue for mock mode — seeded with two PENDING requests so
+// the admin Driver Enrollment screen has something to review with no backend.
 const MOCK_ENROLLMENTS: DriverEnrollment[] = [
   {
     driver_id: "DRV-2001",
@@ -320,7 +320,7 @@ const MOCK_ENROLLMENTS: DriverEnrollment[] = [
 // Monotonic counter for admin-created driver ids in the mock store (no Math.random).
 let mockDriverSeq = 0;
 
-/** Normalised Vehicle IDs already held by an ACTIVE driver or open enrolment —
+/** Normalised Vehicle IDs already held by an ACTIVE driver or open enrollment —
  *  mirrors the gateway's assigned_vehicles() so the mock dropdown never offers a
  *  taken vehicle and create() rejects a duplicate. */
 function mockAssignedVehicles(): Set<string> {
@@ -1443,18 +1443,18 @@ export class MockAdapter implements DataAdapter {
       decision: "PROVISIONAL",
       provisional_until,
       cure_window_h: 24,
-      reason: "No gallery enrolment; provisional entry granted pending KYC.",
+      reason: "No gallery enrollment; provisional entry granted pending KYC.",
       provider,
     });
   }
 
-  identityEnrol(driverId: string, _image: string): Promise<IdentityEnrolResult> {
-    // Mock enrolment — the real reference template is stored server-side; here we
+  identityEnroll(driverId: string, _image: string): Promise<IdentityEnrollResult> {
+    // Mock enrollment — the real reference template is stored server-side; here we
     // just acknowledge so the camera flow works end-to-end in mock mode.
     return Promise.resolve({ enrolled: true, driver_id: driverId, provider: "onnx" });
   }
 
-  // --- Driver enrolment approval workflow (mock store) ---
+  // --- Driver enrollment approval workflow (mock store) ---
   enrollments(status?: string): Promise<DriverEnrollment[]> {
     const want = status?.toUpperCase();
     const out = MOCK_ENROLLMENTS.filter((e) => !want || e.status === want)
@@ -1467,7 +1467,7 @@ export class MockAdapter implements DataAdapter {
 
   enrollmentDetail(driverId: string): Promise<DriverEnrollment> {
     const rec = MOCK_ENROLLMENTS.find((e) => e.driver_id === driverId);
-    if (!rec) return Promise.reject(new Error("enrolment not found"));
+    if (!rec) return Promise.reject(new Error("enrollment not found"));
     return Promise.resolve({ ...rec });
   }
 
@@ -1500,7 +1500,7 @@ export class MockAdapter implements DataAdapter {
     const rec = MOCK_ENROLLMENTS.find((e) => e.driver_id === driverId);
     if (rec) {
       rec.status = "REENROLL";
-      rec.rejection_reason = reason ?? "re-enrolment requested";
+      rec.rejection_reason = reason ?? "re-enrollment requested";
       rec.reviewed_at = new Date(NOW).toISOString();
       rec.reviewed_by = "admin:mock";
     }

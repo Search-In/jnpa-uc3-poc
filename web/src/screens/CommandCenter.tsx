@@ -112,7 +112,7 @@ export default function CommandCenter() {
   const alerts = alertsQ.data ?? [];
   const enrollments = enrollQ.data ?? [];
 
-  // plate → driver name, from the enrolment register (real RDS link).
+  // plate → driver name, from the enrollment register (real RDS link).
   const driverByPlate = useMemo(() => {
     const m = new Map<string, string>();
     for (const e of enrollments)

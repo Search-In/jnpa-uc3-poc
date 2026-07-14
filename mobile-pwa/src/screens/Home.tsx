@@ -277,9 +277,9 @@ export default function Home({ deviceId, plate }: { deviceId: string; plate?: st
         <button
           className="btn primary"
           style={{ width: "100%", marginBottom: 12 }}
-          onClick={() => navigate("/enrol")}
+          onClick={() => navigate("/enroll")}
         >
-          {t("home.completeEnrol", { defaultValue: "Complete enrolment" })}
+          {t("home.completeEnrol", { defaultValue: "Complete enrollment" })}
         </button>
       )}
 

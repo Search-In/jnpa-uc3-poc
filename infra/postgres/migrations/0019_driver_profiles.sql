@@ -2,11 +2,11 @@
 -- Admin-created driver profiles + vehicle-assignment integrity for PWA login.
 --
 -- Background: driver identities are created two ways today — the Driver PWA
--- self-submits an enrolment (jnpa.driver_enrollments, source PWA) which an admin
+-- self-submits an enrollment (jnpa.driver_enrollments, source PWA) which an admin
 -- approves and promotes into jnpa.drivers. This migration lets a Control-Room
--- admin ALSO create a driver profile directly from the Driver Enrolment page and
+-- admin ALSO create a driver profile directly from the Driver Enrollment page and
 -- assign it a Vehicle ID, then run it through the SAME approval workflow. No new
--- driver table is introduced — the existing enrolment/driver tables are reused;
+-- driver table is introduced — the existing enrollment/driver tables are reused;
 -- this migration only adds provenance columns + the integrity constraint that the
 -- PWA login gate depends on.
 --
@@ -22,7 +22,7 @@ CREATE SCHEMA IF NOT EXISTS jnpa;
 -- Provenance: who created the record and where it came from.
 --   source     = 'PWA'   -> driver self-submitted from the mobile app (default,
 --                            preserves existing rows)
---              = 'ADMIN' -> created by a Control-Room admin on the enrolment page
+--              = 'ADMIN' -> created by a Control-Room admin on the enrollment page
 --   created_by = actor id of the admin who created it ("<role>:<sub>")
 -- --------------------------------------------------------------------------
 ALTER TABLE jnpa.driver_enrollments

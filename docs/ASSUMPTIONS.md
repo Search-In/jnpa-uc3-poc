@@ -57,7 +57,7 @@ configuration change, not a rewrite.
 ## Identity / face-recognition (C2) — DPDP posture
 
 - **PoC biometrics use synthetic, consented faces only.** No real driver biometrics are processed.
-  Given DPDP Act exposure (bid §7.4), real PDP biometric enrolment is a **post-award, consent-gated**
+  Given DPDP Act exposure (bid §7.4), real PDP biometric enrollment is a **post-award, consent-gated**
   workflow. The PoC demonstrates the *verification pipeline* (embed → match → PROVISIONAL on miss)
   on a synthetic gallery so the mechanism is provable without handling personal data.
 

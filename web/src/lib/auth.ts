@@ -45,7 +45,7 @@ export const SCREEN_ROLES: Record<string, Role[]> = {
   "/gate-customs": [...CONTROL_ROOM, "CUSTOMS"],
   // Parking Management dashboard — control room + traffic police.
   "/parking": [...CONTROL_ROOM, "TRAFFIC_POLICE"],
-  // Driver enrolment approval — biometric-sensitive, mirrors the gateway
+  // Driver enrollment approval — biometric-sensitive, mirrors the gateway
   // /api/identity policy (customs + admin only).
   "/enrollments": ["DTCCC_ADMIN", "CUSTOMS"],
   "/health": CONTROL_ROOM,

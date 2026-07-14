@@ -17,6 +17,7 @@ import { getAdapter } from "@/data";
 import { Card } from "@/components/ui/card";
 import { ArcgisMap } from "@/components/map/ArcgisMap";
 import { useMapSettings } from "@/lib/mapSettings";
+import { resolveIncidents } from "@/lib/incidents";
 import GeofencingManager from "@/screens/GeofencingManager";
 import {
   PageContainer,
@@ -178,7 +179,13 @@ export default function GeoAnalytics({ defaultTab = "zones" }: { defaultTab?: Ta
             <AiTable rows={aiQ.data?.events ?? []} status={aiQ} onRetry={() => aiQ.refetch()} />
           </Card>
         )}
-        {tab === "heatmap" && <HeatmapTab violations={violQ.data?.violations ?? []} />}
+        {tab === "heatmap" && (
+          <HeatmapTab
+            violations={violQ.data?.violations ?? []}
+            aiEvents={aiQ.data?.events ?? []}
+            events={eventsQ.data?.events ?? []}
+          />
+        )}
       </div>
     </PageContainer>
   );
@@ -457,7 +464,15 @@ function summariseLocation(loc: Record<string, unknown>): string {
 
 // --- Heatmap -----------------------------------------------------------------
 
-function HeatmapTab({ violations }: { violations: GeofenceEvent[] }) {
+function HeatmapTab({
+  violations,
+  aiEvents,
+  events,
+}: {
+  violations: GeofenceEvent[];
+  aiEvents: AiEvent[];
+  events: GeofenceEvent[];
+}) {
   const { basemap } = useMapSettings();
   const corridorQ = useQuery({
     queryKey: ["corridor"],
@@ -473,6 +488,21 @@ function HeatmapTab({ violations }: { violations: GeofenceEvent[] }) {
     queryKey: ["trucks", "live-map"],
     queryFn: () => getAdapter().trucks(undefined, 500),
   });
+
+  // Geolocate the RDS-backed violations / AI / entry-exit rows into weighted
+  // heatmap points (zone centroid or last-known vehicle position when a row
+  // carries no explicit lat/lon). This is the Esri HeatmapRenderer's data source.
+  const incidents = useMemo(
+    () =>
+      resolveIncidents({
+        violations,
+        aiEvents,
+        events,
+        zones: zonesQ.data,
+        trucks: trucksQ.data,
+      }),
+    [violations, aiEvents, events, zonesQ.data, trucksQ.data],
+  );
 
   // Violations by zone (density) for the accompanying chart.
   const byZone = useMemo(() => {
@@ -495,6 +525,7 @@ function HeatmapTab({ violations }: { violations: GeofenceEvent[] }) {
           snapshots={snapsQ.data}
           zones={zonesQ.data}
           trucks={trucksQ.data}
+          incidents={incidents}
         />
       </Card>
       <Card className="p-3">

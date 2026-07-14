@@ -1,10 +1,10 @@
-"""Driver-enrolment workflow tests — PWA submit -> admin approve (Identity / C2).
+"""Driver-enrollment workflow tests — PWA submit -> admin approve (Identity / C2).
 
 Two layers, both in-process and infra-free:
 
   * the ``gateway.enrollment`` store/state-machine, exercised directly against its
     in-memory backend (no Postgres), and
-  * the gateway ``/api/identity`` enrolment HTTP surface, booted with the Starlette
+  * the gateway ``/api/identity`` enrollment HTTP surface, booted with the Starlette
     TestClient + a FakeHttp so every upstream call degrades to the synthetic path.
 
 DPDP posture is asserted (consent required; the audit trail records each event).
@@ -148,7 +148,7 @@ def test_audit_trail_records_each_lifecycle_event():
 
 
 # ---------------------------------------------------------------------------
-# Gateway HTTP surface (/api/identity enrolment workflow)
+# Gateway HTTP surface (/api/identity enrollment workflow)
 # ---------------------------------------------------------------------------
 @pytest.fixture(scope="module")
 def client():
@@ -195,7 +195,7 @@ def test_enrol_request_requires_an_image(client):
 
 
 def test_full_workflow_submit_list_approve_then_gallery(client):
-    # 1. Driver submits an enrolment request.
+    # 1. Driver submits an enrollment request.
     sub = client.post("/api/identity/enrol-request", json={
         "driver_id": "DRV-W2", "name": "Workflow Driver", "license_no": "MH04 99",
         "consent": True, "images": [IMG, IMG],

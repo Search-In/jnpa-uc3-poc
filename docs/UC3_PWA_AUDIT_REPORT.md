@@ -57,7 +57,7 @@ a remaining readability improvement for sunlight/bumpy-cab use. Click depth is l
 | Step | Screen | API | Loading | Error | Empty | Success |
 |------|--------|-----|:-:|:-:|:-:|:-:|
 | Login | `Pairing` | otpRequest/Verify | ✅ | ✅ | n/a | ✅ |
-| Vehicle selection | `Pairing`+`DriverSession` | truck/enrolStatus | ✅ | ⚠️ silent | n/a | ✅ |
+| Vehicle selection | `Pairing`+`DriverSession` | truck/enrollStatus | ✅ | ⚠️ silent | n/a | ✅ |
 | Location tracking | `Trip`/`Home` (+**GpsStatus**) | truck poll + WS | ✅ | ✅ | partial | ✅ **(new pill)** |
 | Assigned route | `MapView`/`Trip` | corridor/gates/OSRM | ✅ | ✅ | ✅ | ✅ |
 | Gate information | `Trip` | tasSlots | ✅ | ✅ | ✅ | ✅ |

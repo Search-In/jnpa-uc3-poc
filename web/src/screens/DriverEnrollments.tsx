@@ -1,7 +1,7 @@
-// Driver Enrolment — admin approval console (Identity / C2), redesigned onto the
+// Driver Enrollment — admin approval console (Identity / C2), redesigned onto the
 // DTCCC kit for consistency. Reviews the PENDING queue submitted from the Driver
 // PWA, inspects captured reference frames + profile, and approves / rejects /
-// requests re-enrolment. On approval the gateway mints the face template and
+// requests re-enrollment. On approval the gateway mints the face template and
 // stores the reference photo; every action is DPDP-audited. RDS-backed via
 // /api/identity (getAdapter().enrollments / enrollmentDetail / approve / reject /
 // reenroll) — query keys and endpoints UNCHANGED. Restricted to CUSTOMS / ADMIN.
@@ -148,10 +148,10 @@ export default function DriverEnrollments() {
     <PageContainer>
       <PageHeader
         icon={UserPlus}
-        title={t("enrollments.title", "Driver Enrolment Requests")}
+        title={t("enrollments.title", "Driver Enrollment Requests")}
         subtitle={t(
           "enrollments.subtitle",
-          "Review and approve driver face enrolments submitted from the mobile app (DPDP-audited).",
+          "Review and approve driver face enrollments submitted from the mobile app (DPDP-audited).",
         )}
         updatedAt={listQ.dataUpdatedAt}
         isFetching={listQ.isFetching && !listQ.isLoading}
@@ -219,7 +219,7 @@ export default function DriverEnrollments() {
             rowKey={(e) => e.driver_id}
             status={listQ}
             onRetry={() => listQ.refetch()}
-            emptyLabel={t("enrollments.empty", "No enrolment requests in this view.")}
+            emptyLabel={t("enrollments.empty", "No enrollment requests in this view.")}
             search={(e, q) =>
               `${e.name} ${e.driver_id} ${e.license_no ?? ""} ${e.vehicle_no ?? ""}`
                 .toLowerCase()
@@ -234,7 +234,7 @@ export default function DriverEnrollments() {
       <Dialog open={!!openId} onOpenChange={(o) => !o && setOpenId(null)}>
         <DialogContent className="p-0">
           <DialogHeader>
-            <DialogTitle>{t("enrollments.review", "Review enrolment")}</DialogTitle>
+            <DialogTitle>{t("enrollments.review", "Review enrollment")}</DialogTitle>
           </DialogHeader>
           {openId && (
             <EnrollmentDetail
@@ -269,7 +269,7 @@ export default function DriverEnrollments() {
 
 // Admin-originated driver-profile creation: capture the profile + assign an
 // available Vehicle ID (searchable dropdown — no free typing), then POST to
-// /api/identity/drivers which creates a PENDING enrolment (source=ADMIN). The
+// /api/identity/drivers which creates a PENDING enrollment (source=ADMIN). The
 // driver flows through the SAME approve action; on approval the Vehicle ID
 // becomes eligible for PWA login.
 function CreateDriverForm({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
@@ -687,7 +687,7 @@ function EnrollmentDetail({
               disabled={actions.busy}
               className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-[13px] font-medium hover:bg-muted disabled:opacity-50"
             >
-              <RefreshCw className="h-4 w-4" /> {t("enrollments.reenroll", "Request re-enrolment")}
+              <RefreshCw className="h-4 w-4" /> {t("enrollments.reenroll", "Request re-enrollment")}
             </button>
           </>
         ) : (

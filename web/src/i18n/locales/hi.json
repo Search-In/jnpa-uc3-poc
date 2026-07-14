@@ -394,6 +394,7 @@
     "legend": "संकेत-सूची",
     "toggleLegend": "संकेत-सूची टॉगल करें",
     "layer": {
+      "violationHeatmap": "उल्लंघन हीटमैप",
       "gates": "गेट",
       "corridor": "NH-348 कॉरिडोर",
       "trucks": "ट्रक (1:50)",

@@ -4,7 +4,7 @@ Two modes, driven by ``APP_ENV`` (reusing the same dev/prod classification as th
 auth layer so there is ONE source of truth):
 
   * DEV / LOCAL  (APP_ENV=development|dev|local|test, the default) — every
-    resilience fallback is allowed: in-memory enrolment store, synthetic identity,
+    resilience fallback is allowed: in-memory enrollment store, synthetic identity,
     base64 image storage. The demo and tests run with zero infra.
 
   * PRODUCTION   (any other APP_ENV) — fallbacks are DISABLED so behaviour is
@@ -50,7 +50,7 @@ def production_mode() -> bool:
 
 
 def allow_memory_store() -> bool:
-    """In-memory enrolment store is dev-only (and disabled if ALLOW_FALLBACK=false)."""
+    """In-memory enrollment store is dev-only (and disabled if ALLOW_FALLBACK=false)."""
     return _fallbacks_allowed()
 
 

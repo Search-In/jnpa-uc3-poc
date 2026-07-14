@@ -11,7 +11,7 @@
 --
 -- Idempotent: each block is guarded so re-running never duplicates.
 -- APPLY: psql "$DSN" -v ON_ERROR_STOP=1 -f scripts/seed_demo_p0.sql
--- Modules: FASTag txns · Driver enrolment · Parking history · Empty-container
+-- Modules: FASTag txns · Driver enrollment · Parking history · Empty-container
 --          allocation history · Scenario timeline.
 -- ===========================================================================
 CREATE SCHEMA IF NOT EXISTS jnpa;
@@ -31,7 +31,7 @@ SELECT gen_random_uuid(), 'TAG-DEMO-001', 'MH04DM0001', 'DEMO-' || g,
 FROM generate_series(1, 8) AS g
 WHERE NOT EXISTS (SELECT 1 FROM jnpa.fastag_transactions WHERE rc_number = 'MH04DM0001');
 
--- 2. Driver enrolment (create table if the service hasn't yet) ---------------
+-- 2. Driver enrollment (create table if the service hasn't yet) ---------------
 CREATE TABLE IF NOT EXISTS jnpa.driver_enrollments (
     driver_id         text PRIMARY KEY,
     name              text NOT NULL,

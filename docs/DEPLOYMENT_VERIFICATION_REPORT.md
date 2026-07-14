@@ -69,7 +69,7 @@ All 13 menus reachable; all 21 probed gateway endpoints returned **HTTP 200**.
 | Intelligence | `/intelligence` | `/api/vahan/vehicle-intel/{plate}`, `/driver-intel/{key}` | vehicle_master, drivers (Vahan/Sarathi cached) | vehicles 3, drivers 6 | ✅ 200 |
 | Customs & Gate | `/gate-customs` | `/api/gate-data/providers`, `/captures`, `/reconciliations`, `/customs/history` | gate_captures, leo_reconciliation, alerts | captures 808, recon 404 | ✅ 200 |
 | Parking | `/parking` | `/api/parking/availability`, `/summary`, `/history`, `/violations` | parking_facilities, parking_slots, parking_transactions, **parking_events** | slots 1170, txns 21, events 27 (5 DEMO viol.) | ✅ 200 |
-| Driver Enrolment | `/enrollments` | `/api/identity/enrollments/*` | driver_enrollments, driver_faces, drivers, verification_logs | enrollments 5 | ✅ 200 |
+| Driver Enrollment | `/enrollments` | `/api/identity/enrollments/*` | driver_enrollments, driver_faces, drivers, verification_logs | enrollments 5 | ✅ 200 |
 | System Health | `/health` | `/api/kpi/sources`, `/cameras`, `/api/debug/decisions`, `/api/fastag/health` | in-memory gateway state (non-RDS) | live | ✅ 200 |
 | What-If Console | `/what-if` | `/api/scenarios/handles`, `/handle/{id}/timeline`, `/{name}/run` | **scenario_handles, scenario_steps, scenarios** | handles 9 (3 DEMO), steps 15 | ✅ 200 |
 | Demo Console | `/demo` | `/api/control/fault`, `/api/traffic/metrics`, `/api/anpr/eval` | in-memory fault ctrl; traffic_snapshots | live | ✅ 200 |

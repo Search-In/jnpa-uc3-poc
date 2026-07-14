@@ -935,7 +935,7 @@ services:
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
       # MinIO for driver-enrolment reference photos (gateway/objectstore.py).
-      # Absent creds -> enrolment keeps the base64 frame in Postgres (graceful).
+      # Absent creds -> enrollment keeps the base64 frame in Postgres (graceful).
       MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-}

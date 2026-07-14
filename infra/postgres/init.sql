@@ -72,7 +72,7 @@ CREATE TABLE jnpa.services (
 );
 
 -- --------------------------------------------------------------------------
--- Driver enrolment (UC-III Identity / face-recognition, Appendix C #2).
+-- Driver enrollment (UC-III Identity / face-recognition, Appendix C #2).
 -- The Driver PWA submits a profile + consented reference face frames; an admin
 -- (DTCCC_ADMIN / CUSTOMS) reviews and approves, at which point the identity
 -- service generates + stores the face template and the reference photo is
@@ -110,7 +110,7 @@ CREATE TABLE IF NOT EXISTS jnpa.driver_enrollments (
 CREATE INDEX IF NOT EXISTS idx_driver_enrol_status
     ON jnpa.driver_enrollments (status, submitted_at DESC);
 
--- Append-only DPDP audit of every enrolment lifecycle event (who, what, when).
+-- Append-only DPDP audit of every enrollment lifecycle event (who, what, when).
 CREATE TABLE IF NOT EXISTS jnpa.enrollment_audit (
     id        bigserial PRIMARY KEY,
     driver_id text NOT NULL,
@@ -124,7 +124,7 @@ CREATE INDEX IF NOT EXISTS idx_enrollment_audit_driver
 
 -- Master driver identity (production data model). `driver_enrollments` above is the
 -- WORKFLOW/request table (PENDING→ACTIVE…); this `drivers` table is the canonical
--- identity record an enrolment is PROMOTED into on admin approval. Verification
+-- identity record an enrollment is PROMOTED into on admin approval. Verification
 -- reads the active driver from here. Embeddings live in the identity service; this
 -- holds the durable profile + the reference-photo pointer + template metadata.
 CREATE TABLE IF NOT EXISTS jnpa.drivers (

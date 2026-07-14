@@ -9,7 +9,7 @@ admit / **PROVISIONAL** / reject machinery the Vahan fallback uses at the gate.
 
 > **No real driver biometrics are processed.** The enrolled gallery and every
 > "live capture" are **synthetic and consented**. Given DPDP Act exposure
-> (bid §7.4), real PDP biometric enrolment is a **post-award, consent-gated**
+> (bid §7.4), real PDP biometric enrollment is a **post-award, consent-gated**
 > workflow. This PoC proves the *mechanism* (embed → match → PROVISIONAL on
 > miss) without handling personal data — see
 > [`docs/ASSUMPTIONS.md`](../docs/ASSUMPTIONS.md) *"Identity / face-recognition
@@ -62,7 +62,7 @@ Response:
 ## Decision logic
 
 A live capture embedding is matched (cosine similarity) against the claimed
-enrolment:
+enrollment:
 
 | Condition                                                  | Decision      |
 | ---------------------------------------------------------- | ------------- |
@@ -81,7 +81,7 @@ via `IDENTITY_VERIFY_THRESHOLD`, `IDENTITY_PROVISIONAL_THRESHOLD`, and
 ## Deterministic gallery
 
 `gallery.py` builds **50** synthetic enrolled drivers (`DRV-0001` …) with
-deterministic names, DL-style licence numbers, and enrolment embeddings derived
+deterministic names, DL-style licence numbers, and enrollment embeddings derived
 from a fixed `SEED`. Every record is flagged `synthetic` + `consented`. Size is
 tunable via `IDENTITY_GALLERY_SIZE`.
 

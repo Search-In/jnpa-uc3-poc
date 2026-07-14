@@ -15,7 +15,7 @@ import { useWebcam } from "@/hooks/useWebcam";
 // Driver identity verification (capability C2). The synthetic Simulate dropdown
 // is replaced by a real browser-camera capture: Start Camera → live preview with
 // a face guide → Capture & Verify, which sends the frame to /api/identity/verify.
-// "Enrol reference" captures the selected driver's reference template first. The
+// "Enroll reference" captures the selected driver's reference template first. The
 // decision (VERIFIED / PROVISIONAL / REJECTED) + thresholds + DPDP are unchanged
 // server-side; only the embedding source moved from a hash to a real frame.
 
@@ -74,8 +74,8 @@ export function IdentityPanel() {
     },
   });
 
-  const enrol = useMutation({
-    mutationFn: (image: string) => getAdapter().identityEnrol(selected, image),
+  const enroll = useMutation({
+    mutationFn: (image: string) => getAdapter().identityEnroll(selected, image),
     onSuccess: () => setNotice({ kind: "ok", text: t("identityPanel.enrolSuccess") }),
   });
 
@@ -102,13 +102,13 @@ export function IdentityPanel() {
     if (image) verify.mutate(image);
   }
 
-  async function onEnrol() {
+  async function onEnroll() {
     const image = await captureValidated();
-    if (image) enrol.mutate(image);
+    if (image) enroll.mutate(image);
   }
 
   const live = cam.status === "live";
-  const busy = verify.isPending || enrol.isPending;
+  const busy = verify.isPending || enroll.isPending;
 
   return (
     <Card>
@@ -218,10 +218,10 @@ export function IdentityPanel() {
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => void onEnrol()}
+                    onClick={() => void onEnroll()}
                     disabled={busy || !selected}
                   >
-                    {enrol.isPending ? <Spinner /> : <UserCheck className="h-4 w-4" />}
+                    {enroll.isPending ? <Spinner /> : <UserCheck className="h-4 w-4" />}
                     {t("identityPanel.enrolReference")}
                   </Button>
                   <Button size="sm" variant="outline" onClick={() => cam.stop()} disabled={busy}>
@@ -231,7 +231,7 @@ export function IdentityPanel() {
               )}
             </div>
 
-            {/* Validation / enrolment notice */}
+            {/* Validation / enrollment notice */}
             {notice && (
               <div
                 className="flex items-start gap-1.5 rounded-md border px-3 py-2 text-[11px]"

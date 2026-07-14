@@ -99,7 +99,7 @@ from . import enrollment, objectstore
 async def _readiness(state: "GatewayState") -> tuple[bool, dict]:
     """Production readiness of the gateway's REQUIRED dependencies.
 
-    Postgres (enrolment/audit store) and MinIO (reference-photo store) must both be
+    Postgres (enrollment/audit store) and MinIO (reference-photo store) must both be
     reachable; the identity service must answer /healthz READY. In development the
     gateway is always READY (fallbacks are allowed). Drives the startup gate AND
     ``/healthz``."""

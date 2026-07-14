@@ -26,7 +26,7 @@ import type {
   Gate,
   IdentityVerifyArg,
   IdentityVerifyResult,
-  IdentityEnrolResult,
+  IdentityEnrollResult,
   KpiResult,
   ParkingFacility,
   ParkingSummary,
@@ -242,9 +242,9 @@ export interface DataAdapter {
     driverId: string,
     arg?: "genuine" | "impostor" | "unknown" | IdentityVerifyArg,
   ): Promise<IdentityVerifyResult>;
-  identityEnrol(driverId: string, image: string): Promise<IdentityEnrolResult>;
+  identityEnroll(driverId: string, image: string): Promise<IdentityEnrollResult>;
 
-  // --- Driver enrolment approval workflow (admin portal) ---
+  // --- Driver enrollment approval workflow (admin portal) ---
   enrollments(status?: string): Promise<DriverEnrollment[]>;
   enrollmentDetail(driverId: string): Promise<DriverEnrollment>;
   approveEnrollment(driverId: string): Promise<{ approved: boolean }>;

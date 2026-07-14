@@ -19,7 +19,7 @@ import Trip from "@/screens/Trip";
 import Reroute from "@/screens/Reroute";
 import Inbox from "@/screens/Inbox";
 import Profile from "@/screens/Profile";
-import Enrol from "@/screens/Enrol";
+import Enroll from "@/screens/Enroll";
 import Parking from "@/screens/Parking";
 import Zones from "@/screens/Zones";
 import MapView from "@/screens/MapView";
@@ -35,7 +35,7 @@ function TabBar() {
   const { t } = useTranslation();
   const { unread, pendingReroute } = useRealtime();
   // Native-style 5-tab bottom navigation: Home · Navigate · Alerts · Parking ·
-  // Profile. Trip / Reroute / Inbox / Enrol / Zones remain reachable as routes
+  // Profile. Trip / Reroute / Inbox / Enroll / Zones remain reachable as routes
   // (Home's actions + the full-screen reroute interrupt link into them).
   const tabs = [
     { to: "/home", label: t("tabs.home", { defaultValue: "Home" }), Icon: IconHome },
@@ -85,7 +85,7 @@ function TopBar() {
       "/zones": "screens.zones",
       "/reroute": "screens.reroute",
       "/inbox": "screens.inbox",
-      "/enrol": "screens.enrol",
+      "/enroll": "screens.enrol",
       "/profile": "screens.vehicle",
     }[loc.pathname] || "screens.trip";
   return (
@@ -142,7 +142,7 @@ function PairedApp({ deviceId, plate }: { deviceId: string; plate?: string | nul
                 <Route path="/zones" element={<Zones deviceId={deviceId} plate={plate} />} />
                 <Route path="/reroute" element={<Reroute />} />
                 <Route path="/inbox" element={<Inbox />} />
-                <Route path="/enrol" element={<Enrol deviceId={deviceId} plate={plate} />} />
+                <Route path="/enroll" element={<Enroll deviceId={deviceId} plate={plate} />} />
                 <Route path="/profile" element={<Profile deviceId={deviceId} plate={plate} />} />
                 <Route path="*" element={<Navigate to="/home" replace />} />
               </Routes>

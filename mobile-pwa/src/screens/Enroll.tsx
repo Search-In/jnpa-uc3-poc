@@ -3,9 +3,9 @@ import { useTranslation } from "react-i18next";
 import { api } from "@/lib/api";
 import { Card, Chip, Row, Spinner } from "@/components/ui";
 import { useWebcam } from "@/hooks/useWebcam";
-import { ENROL_DRIVER_KEY, useDriverSession } from "@/hooks/DriverSession";
+import { ENROLL_DRIVER_KEY, useDriverSession } from "@/hooks/DriverSession";
 
-// Driver face-enrolment wizard (Identity / C2). After pairing, a driver completes
+// Driver face-enrollment wizard (Identity / C2). After pairing, a driver completes
 // their profile, uploads identity documents, gives explicit biometric consent,
 // captures 2–3 reference frames with the shared webcam hook, and submits. The
 // request lands as PENDING; an admin approves it in the web portal before the
@@ -55,14 +55,14 @@ function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
-export default function Enrol({ plate }: { deviceId: string; plate?: string | null }) {
+export default function Enroll({ plate }: { deviceId: string; plate?: string | null }) {
   const { t } = useTranslation();
   const cam = useWebcam();
-  const { session, applyEnrolment } = useDriverSession();
+  const { session, applyEnrollment } = useDriverSession();
 
   // Auto-fill identity from the global session — the spec's "no manual re-entry
   // of login data". A field that the session already knows is locked (read-only);
-  // a first-time enrolment (session has no driver yet) leaves them editable.
+  // a first-time enrollment (session has no driver yet) leaves them editable.
   const lockDriverId = !!session.driverId;
   const lockName = !!session.name;
   const lockVehicle = !!session.vehicle;
@@ -125,7 +125,7 @@ export default function Enrol({ plate }: { deviceId: string; plate?: string | nu
     setSubmitting(true);
     setNotice(null);
     try {
-      const res = await api.enrolRequest({
+      const res = await api.enrollRequest({
         driver_id: profile.driver_id.trim(),
         name: profile.name.trim(),
         license_no: profile.license_no.trim(),
@@ -138,13 +138,13 @@ export default function Enrol({ plate }: { deviceId: string; plate?: string | nu
         documents,
       });
       try {
-        localStorage.setItem(ENROL_DRIVER_KEY, profile.driver_id.trim());
+        localStorage.setItem(ENROLL_DRIVER_KEY, profile.driver_id.trim());
       } catch {
         /* storage unavailable */
       }
       // Push the freshly-known identity + status into the global session so Home
       // and the rest of the app reflect it without an extra fetch.
-      applyEnrolment({
+      applyEnrollment({
         driverId: profile.driver_id.trim(),
         name: profile.name.trim(),
         vehicle: profile.vehicle_no.trim() || session.vehicle,
@@ -167,7 +167,7 @@ export default function Enrol({ plate }: { deviceId: string; plate?: string | nu
   useEffect(() => {
     let saved: string | null = null;
     try {
-      saved = localStorage.getItem(ENROL_DRIVER_KEY);
+      saved = localStorage.getItem(ENROLL_DRIVER_KEY);
     } catch {
       /* ignore */
     }
@@ -175,7 +175,7 @@ export default function Enrol({ plate }: { deviceId: string; plate?: string | nu
     let alive = true;
     (async () => {
       try {
-        const s = await api.enrolStatus(saved!);
+        const s = await api.enrollStatus(saved!);
         if (!alive) return;
         setProfile((p) => ({ ...p, driver_id: saved! }));
         setStatus(s.status);
@@ -196,10 +196,10 @@ export default function Enrol({ plate }: { deviceId: string; plate?: string | nu
     if (step !== "submitted" || !profile.driver_id) return;
     const tick = async () => {
       try {
-        const s = await api.enrolStatus(profile.driver_id.trim());
+        const s = await api.enrollStatus(profile.driver_id.trim());
         setStatus(s.status);
         setRejection(s.rejection_reason ?? null);
-        applyEnrolment({ status: (s.status || "PENDING").toUpperCase() as any });
+        applyEnrollment({ status: (s.status || "PENDING").toUpperCase() as any });
       } catch {
         /* keep last known */
       }
@@ -208,7 +208,7 @@ export default function Enrol({ plate }: { deviceId: string; plate?: string | nu
     return () => {
       if (pollRef.current) window.clearInterval(pollRef.current);
     };
-  }, [step, profile.driver_id, applyEnrolment]);
+  }, [step, profile.driver_id, applyEnrollment]);
 
   const profileValid = profile.driver_id.trim() && profile.name.trim() && profile.license_no.trim();
 
@@ -266,9 +266,9 @@ export default function Enrol({ plate }: { deviceId: string; plate?: string | nu
   return (
     <>
       <Card title={t("enrol.title")} className="tight">
-        <div className="enrol-steps">
+        <div className="enroll-steps">
           {STEPS.map((s, i) => (
-            <span key={s} className={`enrol-step ${i === idx ? "active" : i < idx ? "done" : ""}`}>
+            <span key={s} className={`enroll-step ${i === idx ? "active" : i < idx ? "done" : ""}`}>
               {i + 1}
             </span>
           ))}
@@ -285,11 +285,11 @@ export default function Enrol({ plate }: { deviceId: string; plate?: string | nu
       {step === "profile" && (
         <Card title={t("enrol.completeProfile")}>
           {(lockDriverId || lockName || lockVehicle) && (
-            <p className="muted enrol-autofill" style={{ fontSize: 12, marginBottom: 10 }}>
+            <p className="muted enroll-autofill" style={{ fontSize: 12, marginBottom: 10 }}>
               {t("enrol.autofillNote")}
             </p>
           )}
-          <div className="enrol-form">
+          <div className="enroll-form">
             <Field label={t("enrol.driverId")} required locked={lockDriverId}>
               <input
                 value={profile.driver_id}
@@ -365,7 +365,7 @@ export default function Enrol({ plate }: { deviceId: string; plate?: string | nu
       {step === "consent" && (
         <Card title={t("enrol.consentTitle")}>
           <div className="banner">{t("enrol.consentBody")}</div>
-          <label className="enrol-consent">
+          <label className="enroll-consent">
             <input
               type="checkbox"
               checked={consent}
@@ -389,11 +389,11 @@ export default function Enrol({ plate }: { deviceId: string; plate?: string | nu
           <p className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
             {t("enrol.faceNote", { min: MIN_FACES, max: MAX_FACES })}
           </p>
-          <div className="enrol-cam">
+          <div className="enroll-cam">
             <video ref={cam.videoRef} muted playsInline />
-            {cam.status === "live" && <div className="enrol-faceguide" aria-hidden />}
+            {cam.status === "live" && <div className="enroll-faceguide" aria-hidden />}
             {cam.status !== "live" && (
-              <div className="enrol-cam-overlay">
+              <div className="enroll-cam-overlay">
                 {cam.status === "requesting"
                   ? t("enrol.cameraStarting")
                   : cam.status === "denied"
@@ -403,13 +403,13 @@ export default function Enrol({ plate }: { deviceId: string; plate?: string | nu
                       : t("enrol.cameraOff")}
               </div>
             )}
-            <span className="enrol-cam-chip">{cam.status === "live" ? "● Live" : "○ Off"}</span>
+            <span className="enroll-cam-chip">{cam.status === "live" ? "● Live" : "○ Off"}</span>
           </div>
 
           {images.length > 0 && (
-            <div className="enrol-thumbs">
+            <div className="enroll-thumbs">
               {images.map((src, i) => (
-                <div key={i} className="enrol-thumb">
+                <div key={i} className="enroll-thumb">
                   <img src={src} alt={`capture ${i + 1}`} />
                   <button onClick={() => removeImage(i)} aria-label="remove">
                     ×
@@ -477,9 +477,9 @@ export default function Enrol({ plate }: { deviceId: string; plate?: string | nu
           <Row k={t("enrol.documents")} v={String(documents.length)} />
           <Row k={t("enrol.consentTitle")} v={consent ? "✓" : "✗"} />
           {images.length > 0 && (
-            <div className="enrol-thumbs" style={{ marginTop: 10 }}>
+            <div className="enroll-thumbs" style={{ marginTop: 10 }}>
               {images.map((src, i) => (
-                <div key={i} className="enrol-thumb">
+                <div key={i} className="enroll-thumb">
                   <img src={src} alt={`capture ${i + 1}`} />
                 </div>
               ))}
@@ -515,12 +515,12 @@ function Field({
   children: React.ReactNode;
 }) {
   return (
-    <label className={`enrol-field ${locked ? "locked" : ""}`}>
+    <label className={`enroll-field ${locked ? "locked" : ""}`}>
       <span>
         {label}
         {required ? <em> *</em> : null}
         {locked ? (
-          <span className="enrol-lock" aria-hidden>
+          <span className="enroll-lock" aria-hidden>
             {" "}
             🔒
           </span>
@@ -541,10 +541,10 @@ function DocUpload({
   onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
 }) {
   return (
-    <div className="enrol-doc">
+    <div className="enroll-doc">
       <span>{label}</span>
       {doc ? <img src={doc.image} alt={label} /> : <span className="muted">—</span>}
-      <label className="btn ghost enrol-doc-btn">
+      <label className="btn ghost enroll-doc-btn">
         {doc ? "Replace" : "Upload"}
         <input type="file" accept="image/*" capture="environment" onChange={onChange} hidden />
       </label>

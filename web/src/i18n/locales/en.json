@@ -34,7 +34,7 @@
     "whatIf": "What-If Console",
     "simulator": "Simulator",
     "demo": "Demo Console",
-    "enrollments": "Driver Enrolment"
+    "enrollments": "Driver Enrollment"
   },
   "followBox": {
     "title": "Follow the Box",
@@ -337,7 +337,7 @@
     },
     "dpdp": {
       "title": "DPDP — synthetic faces only",
-      "body": "PoC biometrics use synthetic, consented faces only. No real driver biometrics are processed. Real PDP enrolment is a post-award, consent-gated workflow; the PoC proves the verification pipeline (embed → match → PROVISIONAL on miss) on a synthetic gallery."
+      "body": "PoC biometrics use synthetic, consented faces only. No real driver biometrics are processed. Real PDP enrollment is a post-award, consent-gated workflow; the PoC proves the verification pipeline (embed → match → PROVISIONAL on miss) on a synthetic gallery."
     },
     "kpi": {
       "title": "KPI baselines",
@@ -515,16 +515,16 @@
     "downloadThisReport": "Download this report (PDF)"
   },
   "enrollments": {
-    "title": "Driver Enrolment Requests",
-    "subtitle": "Review and approve driver face enrolments submitted from the mobile app (DPDP-audited).",
-    "empty": "No enrolment requests in this view.",
+    "title": "Driver Enrollment Requests",
+    "subtitle": "Review and approve driver face enrollments submitted from the mobile app (DPDP-audited).",
+    "empty": "No enrollment requests in this view.",
     "photo": "Photo",
     "driver": "Driver",
     "license": "Licence",
     "submitted": "Submitted",
     "status": "Status",
     "actions": "Actions",
-    "review": "Review enrolment",
+    "review": "Review enrollment",
     "view": "View",
     "approve": "Approve",
     "reject": "Reject",
@@ -541,7 +541,7 @@
     "reviewedBy": "Reviewed by",
     "reason": "Reason",
     "dpdpNote": "Approving mints a face template and stores the reference photo. Every action is DPDP-audited (actor + timestamp).",
-    "reenroll": "Request re-enrolment"
+    "reenroll": "Request re-enrollment"
   },
   "identityPanel": {
     "validationNoFace": "No face detected — look straight at the camera.",
@@ -561,7 +561,7 @@
     "off": "Off",
     "startCamera": "Start camera",
     "captureVerify": "Capture & verify",
-    "enrolReference": "Enrol reference",
+    "enrolReference": "Enroll reference",
     "stop": "Stop",
     "synthetic": "Synthetic",
     "driverName": "Driver name",

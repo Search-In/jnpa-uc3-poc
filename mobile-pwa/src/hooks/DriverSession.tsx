@@ -16,19 +16,19 @@ import { api } from "@/lib/api";
 // the driver context once from the endpoints that do exist:
 //
 //   * vehicle  <- the live truck snapshot  (GET /api/trucks/{id} -> record.plate)
-//   * identity <- the driver's own enrolment record, if this device has enrolled
+//   * identity <- the driver's own enrollment record, if this device has enrolled
 //                 (GET /api/identity/enrol-request/{driver_id})
 //
 // The assembled context is persisted under one key and reused everywhere (Home,
-// Enrol, …). It is loaded ONCE per device and never refetched unless the caller
-// explicitly refresh()es (e.g. straight after submitting an enrolment) or the
+// Enroll, …). It is loaded ONCE per device and never refetched unless the caller
+// explicitly refresh()es (e.g. straight after submitting an enrollment) or the
 // device is unpaired. This is the contract the product spec asks for: one driver
 // session, one global state, no duplicate fetches.
 
-// The driver_id a completed enrolment is stored under (Enrol writes this on
+// The driver_id a completed enrollment is stored under (Enroll writes this on
 // submit). Shared here so the session can recover the driver identity after a
 // refresh without re-entering it.
-export const ENROL_DRIVER_KEY = "jnpa_enrol_driver_id";
+export const ENROLL_DRIVER_KEY = "jnpa_enrol_driver_id";
 const SESSION_KEY = "jnpa.pwa.session";
 
 export type DriverStatus = "ACTIVE" | "PENDING" | "REJECTED" | "REENROLL" | "UNVERIFIED";
@@ -46,10 +46,10 @@ export interface DriverContext {
 interface SessionApi {
   session: DriverContext;
   loading: boolean;
-  /** Re-assemble the context from the backend (use sparingly — e.g. post-enrolment). */
+  /** Re-assemble the context from the backend (use sparingly — e.g. post-enrollment). */
   refresh: () => Promise<void>;
-  /** Merge in fields known locally (e.g. the just-submitted enrolment) without a fetch. */
-  applyEnrolment: (patch: Partial<DriverContext>) => void;
+  /** Merge in fields known locally (e.g. the just-submitted enrollment) without a fetch. */
+  applyEnrollment: (patch: Partial<DriverContext>) => void;
 }
 
 const Ctx = createContext<SessionApi | null>(null);
@@ -81,9 +81,9 @@ function persist(session: DriverContext): void {
   }
 }
 
-function readEnrolDriverId(): string | null {
+function readEnrollDriverId(): string | null {
   try {
-    const v = localStorage.getItem(ENROL_DRIVER_KEY);
+    const v = localStorage.getItem(ENROLL_DRIVER_KEY);
     return v && v.trim() ? v.trim() : null;
   } catch {
     return null;
@@ -92,10 +92,10 @@ function readEnrolDriverId(): string | null {
 
 // Assemble the driver context from whatever the backend can tell us about this
 // device. Every lookup is best-effort: a fresh, never-enrolled device still
-// yields a usable context (status UNVERIFIED) so Home can prompt enrolment.
+// yields a usable context (status UNVERIFIED) so Home can prompt enrollment.
 async function assemble(deviceId: string, plate?: string | null): Promise<DriverContext> {
   let vehicle = plate ?? null;
-  let driverId = readEnrolDriverId();
+  let driverId = readEnrollDriverId();
   let name: string | null = null;
   let status: DriverStatus = "UNVERIFIED";
 
@@ -109,16 +109,16 @@ async function assemble(deviceId: string, plate?: string | null): Promise<Driver
     }
   }
 
-  // Identity from the driver's own enrolment record, if this device enrolled.
+  // Identity from the driver's own enrollment record, if this device enrolled.
   if (driverId) {
     try {
-      const rec = await api.enrolStatus(driverId);
+      const rec = await api.enrollStatus(driverId);
       driverId = rec.driver_id || driverId;
       name = (rec as any).name ?? null;
       vehicle = (rec as any).vehicle_no || vehicle;
       status = normaliseStatus(rec.status);
     } catch {
-      /* enrolment record gone (e.g. purged) — keep UNVERIFIED */
+      /* enrollment record gone (e.g. purged) — keep UNVERIFIED */
     }
   }
 
@@ -171,7 +171,7 @@ export function DriverSessionProvider({
     setLoading(false);
   }, [deviceId, plate, commit]);
 
-  const applyEnrolment = useCallback((patch: Partial<DriverContext>) => {
+  const applyEnrollment = useCallback((patch: Partial<DriverContext>) => {
     setSession((prev) => {
       const next = { ...prev, ...patch, deviceId: prev.deviceId };
       persist(next);
@@ -197,8 +197,8 @@ export function DriverSessionProvider({
   }, [deviceId]);
 
   const value = useMemo<SessionApi>(
-    () => ({ session, loading, refresh, applyEnrolment }),
-    [session, loading, refresh, applyEnrolment],
+    () => ({ session, loading, refresh, applyEnrollment }),
+    [session, loading, refresh, applyEnrollment],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

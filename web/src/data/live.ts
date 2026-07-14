@@ -15,7 +15,7 @@ import type {
   FaultState,
   IdentityVerifyArg,
   IdentityVerifyResult,
-  IdentityEnrolResult,
+  IdentityEnrollResult,
   KpiResult,
   ParkingFacility,
   ParkingSummary,
@@ -149,15 +149,15 @@ export class LiveAdapter implements DataAdapter {
       ...body,
     });
   };
-  identityEnrol = (driverId: string, image: string): Promise<IdentityEnrolResult> =>
-    postJson<IdentityEnrolResult>("/api/identity/enrol", {
+  identityEnroll = (driverId: string, image: string): Promise<IdentityEnrollResult> =>
+    postJson<IdentityEnrollResult>("/api/identity/enrol", {
       driver_id: driverId,
       image,
       is_synthetic: true,
       purpose: "ENROLMENT",
     });
 
-  // --- Driver enrolment approval workflow ---
+  // --- Driver enrollment approval workflow ---
   enrollments = async (status?: string): Promise<DriverEnrollment[]> =>
     (
       await getJson<{ enrollments: DriverEnrollment[] }>(
@@ -179,7 +179,7 @@ export class LiveAdapter implements DataAdapter {
   reenrollEnrollment = (driverId: string, reason?: string) =>
     postJson<{ reenroll: boolean }>(
       `/api/identity/enrollments/${encodeURIComponent(driverId)}/reenroll`,
-      { reason: reason ?? "re-enrolment requested" },
+      { reason: reason ?? "re-enrollment requested" },
     );
   createDriverProfile = (input: CreateDriverInput) =>
     postJson<{ created: boolean; driver_id: string; status: string }>(

@@ -1,9 +1,9 @@
 """Deterministic synthetic enrolled-driver gallery.
 
 DPDP posture: every entry here is a SYNTHETIC, CONSENTED record — there are no
-real drivers and no real biometrics. The "enrolment embedding" is the
+real drivers and no real biometrics. The "enrollment embedding" is the
 deterministic synthetic vector from :mod:`identity.embeddings`, standing in for
-the template a production face-recognition enrolment would store under explicit,
+the template a production face-recognition enrollment would store under explicit,
 consent-gated processing. Names and licence numbers are generated from a fixed
 seed so the gallery is identical across runs, hosts, and CI.
 """
@@ -31,7 +31,7 @@ _LAST = [
 
 @dataclass(frozen=True)
 class EnrolledDriver:
-    """One synthetic, consented enrolment record."""
+    """One synthetic, consented enrollment record."""
 
     driver_id: str
     name: str
@@ -74,7 +74,7 @@ def generate_gallery(n: int = DEFAULT_GALLERY_SIZE) -> Dict[str, EnrolledDriver]
     """Build the deterministic synthetic gallery of ``n`` enrolled drivers.
 
     Returns an ordered ``{driver_id: EnrolledDriver}`` map. Every record is
-    SYNTHETIC + CONSENTED and carries its deterministic enrolment embedding.
+    SYNTHETIC + CONSENTED and carries its deterministic enrollment embedding.
     """
     gallery: Dict[str, EnrolledDriver] = {}
     for i in range(1, n + 1):

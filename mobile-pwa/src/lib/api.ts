@@ -243,10 +243,10 @@ export const api = {
       `/api/vahan/fastag/${encodeURIComponent(plate)}`,
     ),
 
-  // --- Driver face enrolment (Identity / C2) ---
+  // --- Driver face enrollment (Identity / C2) ---
   // Submit the completed profile + consented reference frames. The driver is NOT
   // activated immediately — an admin reviews and approves in the web portal.
-  enrolRequest: (body: {
+  enrollRequest: (body: {
     driver_id: string;
     name: string;
     license_no?: string;
@@ -265,8 +265,8 @@ export const api = {
         body: JSON.stringify({ ...body, is_synthetic: true, purpose: "ENROLMENT" }),
       },
     ),
-  // Poll the driver's own enrolment status (PENDING / ACTIVE / REJECTED / REENROLL).
-  enrolStatus: (driverId: string) =>
+  // Poll the driver's own enrollment status (PENDING / ACTIVE / REJECTED / REENROLL).
+  enrollStatus: (driverId: string) =>
     http<{ driver_id: string; status: string; rejection_reason?: string | null }>(
       `/api/identity/enrol-request/${encodeURIComponent(driverId)}`,
     ),

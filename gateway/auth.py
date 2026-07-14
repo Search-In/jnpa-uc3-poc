@@ -84,7 +84,7 @@ _POLICY: tuple[tuple[str, frozenset[str]], ...] = (
     # FASTag (toll balance / transactions / enroute) — operational logistics data
     # for the control room + customs (same audience as gate-data).
     ("/api/fastag", CONTROL_ROOM | {Role.CUSTOMS.value}),
-    # Driver self-enrolment from the PWA: a DRIVER may submit/poll its own enrolment
+    # Driver self-enrollment from the PWA: a DRIVER may submit/poll its own enrollment
     # request (longest-prefix wins over the /api/identity admin rule below). The
     # admin review/approve surface (/api/identity/enrollments) stays customs+admin.
     ("/api/identity/enrol-request", {Role.DRIVER.value} | CONTROL_ROOM | {Role.CUSTOMS.value, Role.DTCCC_ADMIN.value}),

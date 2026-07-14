@@ -196,7 +196,7 @@ export interface IdentityVerifyResult {
   provider?: string;
 }
 
-export interface IdentityEnrolResult {
+export interface IdentityEnrollResult {
   enrolled: boolean;
   driver_id: string;
   provider?: string;
@@ -328,7 +328,7 @@ export interface ViolationEnforcedEvent {
   ts: string;
 }
 
-// Driver enrolment request lifecycle (Driver PWA submit -> admin approve).
+// Driver enrollment request lifecycle (Driver PWA submit -> admin approve).
 export type EnrollmentStatus = "PENDING" | "ACTIVE" | "REJECTED" | "REENROLL" | string;
 
 export interface DriverEnrollment {

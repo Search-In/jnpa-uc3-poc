@@ -8,7 +8,7 @@
     "reroute": "Re-route",
     "inbox": "Inbox",
     "vehicle": "Vehicle",
-    "enrol": "Enrol",
+    "enrol": "Enroll",
     "parking": "Parking",
     "zones": "Zones",
     "home": "Home",
@@ -22,7 +22,7 @@
     "reroute": "Re-route",
     "inbox": "Inbox",
     "vehicle": "Vehicle",
-    "enrol": "Driver Enrolment",
+    "enrol": "Driver Enrollment",
     "parking": "Parking",
     "zones": "Zones",
     "map": "Live Map",
@@ -36,16 +36,16 @@
     "lastVerified": "Last verified",
     "today": "Today",
     "startTrip": "Start Trip",
-    "goToEnrol": "Go to Enrol",
+    "goToEnrol": "Go to Enroll",
     "alerts": "Alerts",
     "vehicleInfo": "Vehicle Info",
-    "completeEnrol": "Complete enrolment",
-    "viewEnrol": "View enrolment status",
+    "completeEnrol": "Complete enrollment",
+    "viewEnrol": "View enrollment status",
     "status": {
       "ACTIVE": "Active",
       "PENDING": "Pending approval",
       "REJECTED": "Rejected",
-      "REENROLL": "Re-enrolment needed",
+      "REENROLL": "Re-enrollment needed",
       "UNVERIFIED": "Not enrolled"
     }
   },
@@ -140,7 +140,7 @@
     "ALERT": "Alert"
   },
   "enrol": {
-    "title": "Driver Enrolment",
+    "title": "Driver Enrollment",
     "dpdpNote": "Biometric data is captured with your consent under DPDP and used only for gate identity verification.",
     "completeProfile": "Complete your profile",
     "autofillNote": "Your driver ID, name and vehicle are filled from your session and can't be changed here.",
@@ -169,15 +169,15 @@
     "cameraError": "Camera unavailable.",
     "review": "Review & submit",
     "faces": "Face images",
-    "submit": "Submit enrolment",
+    "submit": "Submit enrollment",
     "next": "Next",
     "back": "Back",
     "resubmit": "Re-capture & re-submit",
     "reason": "Reason",
-    "statusPending": "Your enrolment is pending admin approval. You'll be verifiable at the gate once approved.",
-    "statusActive": "Your enrolment is approved and active. You can now be verified at the gate.",
-    "statusRejected": "Your enrolment was rejected. Please re-submit.",
-    "statusReenroll": "Re-enrolment requested. Please re-capture your reference photos and submit again."
+    "statusPending": "Your enrollment is pending admin approval. You'll be verifiable at the gate once approved.",
+    "statusActive": "Your enrollment is approved and active. You can now be verified at the gate.",
+    "statusRejected": "Your enrollment was rejected. Please re-submit.",
+    "statusReenroll": "Re-enrollment requested. Please re-capture your reference photos and submit again."
   },
   "parking": {
     "title": "Nearby parking",

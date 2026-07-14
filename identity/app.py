@@ -16,7 +16,7 @@ gallery and every capture are SYNTHETIC and CONSENTED. No real driver biometrics
 are processed. The embedding stage is simulated (see identity.embeddings) so the
 match / threshold / PROVISIONAL logic is provable without handling personal
 data. A production deployment swaps the synthetic embedder for a CNN (e.g.
-ArcFace) and gates enrolment behind explicit consent — the decision logic here
+ArcFace) and gates enrollment behind explicit consent — the decision logic here
 is unchanged.
 
 Decision logic (thresholds in identity.config):
@@ -135,7 +135,7 @@ def _production_startup_gate() -> None:
              liveness=liveness_enabled())
 
 # Camera-enrolled reference templates + photo pointers, keyed by driver_id. These
-# OVERRIDE the synthetic gallery enrolment once a consented reference is captured
+# OVERRIDE the synthetic gallery enrollment once a consented reference is captured
 # (so "Capture & Verify" compares against the driver's own enrolled template).
 _REFERENCES: Dict[str, List[float]] = {}
 _PHOTO_URLS: Dict[str, str] = {}
@@ -195,7 +195,7 @@ class VerifyResponse(BaseModel):
 
 
 class EnrolRequest(BaseModel):
-    driver_id: str = Field(..., description="Driver id to (re)enrol a reference for.")
+    driver_id: str = Field(..., description="Driver id to (re)enroll a reference for.")
     image: Optional[str] = Field(
         default=None,
         description="Captured reference frame as base64 (optionally a data: URL).",
@@ -207,7 +207,7 @@ class EnrolRequest(BaseModel):
         default=False,
         description="Replace an existing reference template. Default False so an "
         "existing driver embedding is never silently clobbered (safety rule); admin "
-        "approval / deliberate re-enrolment sets this True.",
+        "approval / deliberate re-enrollment sets this True.",
     )
 
 
@@ -232,7 +232,7 @@ class EnrolResponse(BaseModel):
 _GATES = ["G-NSICT", "G-GTI", "G-BMCT"]
 
 # Cap the snapshot fan-out so a large gallery doesn't flood the backbone each
-# tick (the HTTP /gallery surface still exposes the full enrolment).
+# tick (the HTTP /gallery surface still exposes the full enrollment).
 _SNAPSHOT_CAP = 100
 
 
@@ -276,7 +276,7 @@ def _face_verification_snapshot() -> List[FaceVerification]:
     """One FaceVerification per enrolled (synthetic) driver, for the backbone.
 
     DPDP: only the synthetic driver_id, gate_id, a deterministic match_score and
-    the MATCH/PROVISIONAL/NO_MATCH result go on the wire — never the enrolment
+    the MATCH/PROVISIONAL/NO_MATCH result go on the wire — never the enrollment
     embedding or any real biometric. ``synthetic=True`` (the schema default).
     """
     drivers = list(_GALLERY)
@@ -395,7 +395,7 @@ def _decode_image(data: Optional[str]) -> Optional[bytes]:
 
 def _reference_embedding(driver_id: str) -> Optional[List[float]]:
     """The template to match against: a camera-enrolled reference if present,
-    otherwise the deterministic gallery enrolment."""
+    otherwise the deterministic gallery enrollment."""
     ref = _REFERENCES.get(driver_id)
     if ref is not None:
         return ref
@@ -432,7 +432,7 @@ def _verify(driver_id: str, simulate: str, image: Optional[bytes] = None) -> Ver
     """
     # Resolve the driver's reference template: a camera-enrolled reference (set by
     # /enrol — e.g. an admin-approved driver) takes priority, else the synthetic
-    # gallery enrolment. Either source counts as "enrolled".
+    # gallery enrollment. Either source counts as "enrolled".
     reference = _reference_embedding(driver_id)
 
     # Unknown / unenrolled driver: nothing to match against, so we admit
@@ -611,7 +611,7 @@ async def enrol(req: EnrolRequest) -> EnrolResponse:
     """Capture/refresh a driver's reference template from a live frame.
 
     The embedding provider turns the consented reference frame into a template
-    stored in-process (overriding the synthetic gallery enrolment). Pixels are not
+    stored in-process (overriding the synthetic gallery enrollment). Pixels are not
     persisted; only the template (and an optional object-store photo_url) are kept.
     """
     # Production: the synthetic (image-free) embedder may never mint a real
@@ -623,11 +623,11 @@ async def enrol(req: EnrolRequest) -> EnrolResponse:
                              reason="synthetic_disabled_in_production")
 
     # Safety: never silently overwrite an existing reference template. A repeat
-    # enrol (e.g. the gateway's restart self-heal) is idempotent unless overwrite
-    # is set (deliberate admin approval / re-enrolment).
+    # enroll (e.g. the gateway's restart self-heal) is idempotent unless overwrite
+    # is set (deliberate admin approval / re-enrollment).
     existing = _REFERENCES.get(req.driver_id)
     if existing is not None and not req.overwrite:
-        log.info("enrol_skipped_existing_reference", driver_id=req.driver_id)
+        log.info("enroll_skipped_existing_reference", driver_id=req.driver_id)
         return EnrolResponse(
             enrolled=True,
             driver_id=req.driver_id,
@@ -644,7 +644,7 @@ async def enrol(req: EnrolRequest) -> EnrolResponse:
     if image is not None and quality_enabled() and _PROVIDER.name != "synthetic":
         quality = assess_quality(image)
         if not quality.get("ok", True):
-            log.info("enrol_rejected_low_quality", driver_id=req.driver_id,
+            log.info("enroll_rejected_low_quality", driver_id=req.driver_id,
                      reason=quality.get("reason"))
             return EnrolResponse(
                 enrolled=False, driver_id=req.driver_id, provider=_PROVIDER.name,
@@ -656,20 +656,20 @@ async def enrol(req: EnrolRequest) -> EnrolResponse:
         provider_name = _PROVIDER.name
     except Exception as exc:  # pragma: no cover - model/runtime dependent
         if _is_production():
-            # No silent fallback: refuse the enrolment rather than mint a synthetic
+            # No silent fallback: refuse the enrollment rather than mint a synthetic
             # template that would later pass any face.
-            log.warning("enrol_provider_failed", driver_id=req.driver_id, error=str(exc))
+            log.warning("enroll_provider_failed", driver_id=req.driver_id, error=str(exc))
             return EnrolResponse(enrolled=False, driver_id=req.driver_id,
                                  provider=_PROVIDER.name, dim=0, reason="embed_failed",
                                  quality=quality)
-        log.warning("enrol_provider_failed_degrading_to_synthetic", error=str(exc))
+        log.warning("enroll_provider_failed_degrading_to_synthetic", error=str(exc))
         embedding = synth_embedding(req.driver_id)
         provider_name = "synthetic"
     _REFERENCES[req.driver_id] = embedding
     if req.photo_url:
         _PHOTO_URLS[req.driver_id] = req.photo_url
     log.info(
-        "enrolment",
+        "enrollment",
         driver_id=req.driver_id,
         provider=provider_name,
         dim=len(embedding),

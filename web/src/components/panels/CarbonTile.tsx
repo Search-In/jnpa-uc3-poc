@@ -67,12 +67,13 @@ function CarbonMethodologyDialog() {
         </DialogHeader>
         <div className="space-y-4 p-4 text-sm">
           <p className="text-muted-foreground">
-            Each truck's CO₂e is the distance it travelled multiplied by an emission
-            factor for its vehicle class, plus any idle-engine emissions.
+            Each truck's CO₂e is the distance it travelled multiplied by an emission factor for its
+            vehicle class, plus any idle-engine emissions.
           </p>
 
           <div className="rounded-md border border-border bg-muted/40 p-3 font-mono text-[13px]">
-            CO₂ = Distance&nbsp;×&nbsp;Vehicle emission factor&nbsp;(+ idle&nbsp;time&nbsp;×&nbsp;idle&nbsp;factor)
+            CO₂ = Distance&nbsp;×&nbsp;Vehicle emission factor&nbsp;(+
+            idle&nbsp;time&nbsp;×&nbsp;idle&nbsp;factor)
           </div>
 
           <div>
@@ -130,15 +131,15 @@ function CarbonMethodologyDialog() {
                 </dd>
               </dl>
               <p className="mt-2 text-[10px] text-muted-foreground">
-                Idle emissions (engine running while stationary) are added on top:
-                idle minutes × the class idle factor above.
+                Idle emissions (engine running while stationary) are added on top: idle minutes ×
+                the class idle factor above.
               </p>
             </div>
           </div>
 
           <p className="text-[10px] text-muted-foreground">
-            Factors are IPCC / GHG-Protocol / GLEC constants (diesel 2680 g CO₂e per
-            litre). Unknown classes default to HGV.
+            Factors are IPCC / GHG-Protocol / GLEC constants (diesel 2680 g CO₂e per litre). Unknown
+            classes default to HGV.
           </p>
         </div>
       </DialogContent>

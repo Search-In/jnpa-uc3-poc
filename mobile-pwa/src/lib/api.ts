@@ -2,7 +2,14 @@
 // relative paths; the Vite dev proxy (dev) or the web/ nginx (prod, at /pwa)
 // forwards to the gateway. Returns parsed JSON and throws on non-2xx.
 
-import type { CorridorGeometry, Gate, TasSlot, TruckEnvelope, VahanEnvelope } from "./types";
+import type {
+  CorridorGeometry,
+  DriverProfile,
+  Gate,
+  TasSlot,
+  TruckEnvelope,
+  VahanEnvelope,
+} from "./types";
 import { getToken, setToken, tokenNeedsRefresh } from "./device";
 
 // Gateway base URL. Empty by default (same-origin: the Vite dev proxy or the
@@ -235,6 +242,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ vehicle_id: vehicleId, lat, lon, driver_id: driverId }),
     }),
+
+  // --- driver's own approved profile (driver/vehicle/enrollment) ---
+  // The DRIVER JWT is device-bound, so the gateway resolves the profile from the
+  // token; the device_id query is a dev fallback (auth-disabled builds) and is
+  // IGNORED server-side for a DRIVER token, so it can never fetch another driver.
+  driverProfile: (deviceId?: string) =>
+    http<DriverProfile>(
+      `/api/driver/profile${deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : ""}`,
+    ),
 
   // --- profile / vehicle: VahanRecord ---
   vahanRc: (plate: string) => http<VahanEnvelope>(`/api/vahan/rc/${encodeURIComponent(plate)}`),

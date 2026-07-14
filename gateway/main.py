@@ -49,6 +49,7 @@ from .routers import (
     checkin,
     control,
     debug,
+    driver as driver_router,
     empty_container,
     evidence,
     fastag,
@@ -69,6 +70,7 @@ from .routers import (
     trucks,
     ulip,
     vahan,
+    vehicles,
     violations,
     workflows,
     ws,
@@ -179,6 +181,26 @@ async def _lifespan(app: FastAPI):
         await kpi_router.ensure_kpi_gate_schema(cfg.postgres_dsn or None)
     except Exception as exc:  # noqa: BLE001
         log.warning("kpi_gate_schema_boot_failed", error=str(exc))
+
+    # Vehicle Master (fleet registry): ensure the table, then migrate the truck-sim
+    # fleet into it (idempotent, never clobbering an operator edit) so no existing
+    # vehicle disappears when the master is introduced. Best-effort — a sim/DB blip
+    # never aborts boot; the /api/vehicles read path re-seeds lazily if empty.
+    try:
+        from . import fleet
+        await fleet.ensure_backend(cfg.postgres_dsn)
+        devices: list = []
+        url = cfg.truck_api_url.rstrip("/") + "/devices/list"
+        try:
+            resp = await state.http.get(url, params={"limit": "5000"})
+            if resp.status_code == 200:
+                devices = list(resp.json().get("devices", []))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("fleet_seed_sim_unreachable", error=str(exc))
+        inserted = await fleet.sync_from_fleet(cfg.postgres_dsn, devices) if devices else 0
+        log.info("fleet_master_ready", devices_seen=len(devices), inserted=inserted)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("fleet_master_boot_failed", error=str(exc))
 
     # Firebase Admin (FCM push transport + Phone-Auth verify) — best-effort init.
     # A missing key/dep just leaves FCM disabled; WebPush + WS carry on unchanged.
@@ -350,6 +372,8 @@ app.include_router(journey.router)
 app.include_router(meta.router)
 app.include_router(workflows.router)
 app.include_router(identity.router)
+app.include_router(driver_router.router)
+app.include_router(vehicles.router)
 app.include_router(parking.router)
 app.include_router(debug.router)
 app.include_router(control.router)

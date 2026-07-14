@@ -20,13 +20,12 @@ import re
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
-import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from .. import enrollment, objectstore
+from .. import enrollment, fleet, objectstore
 from ..dpdp import audit_identity_access, enforce_dpdp
 from ..logging import get_logger
 from ..mode import allow_base64_image_fallback, allow_synthetic_identity
@@ -465,63 +464,24 @@ class CreateDriverBody(BaseModel):
     driver_id: Optional[str] = None  # optional; auto-generated when absent
 
 
-async def _fleet_vehicles(state: GatewayState, limit: int) -> List[dict]:
-    """Fleet vehicle snapshots from the truck-sim (the vehicle registry in the
-    PoC). Degrades to an empty list if the sim is unreachable."""
-    url = state.cfg.truck_api_url.rstrip("/") + "/devices/list"
-    try:
-        resp = await state.http.get(url, params={"limit": str(limit)})
-    except httpx.HTTPError as exc:
-        log.warning("available_vehicles_fleet_unreachable", error=str(exc))
-        return []
-    if resp.status_code == 200:
-        return list(resp.json().get("devices", []))
-    return []
-
-
 async def _vehicle_exists(state: GatewayState, vehicle_id: str) -> bool:
-    """True if the Vehicle ID is a known fleet vehicle. Fail-closed: if the vehicle
-    registry (truck-sim) is unreachable we 503 rather than accept an unverifiable id."""
-    url = state.cfg.truck_api_url.rstrip("/") + f"/devices/{vehicle_id}"
-    try:
-        resp = await state.http.get(url)
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail={"error": "vehicle_registry_unavailable",
-                    "message": "Cannot verify the vehicle right now; try again shortly."},
-        ) from exc
-    if resp.status_code == 200:
-        return True
-    if resp.status_code == 404:
-        return False
-    raise HTTPException(
-        status_code=503,
-        detail={"error": "vehicle_registry_unavailable",
-                "message": "Vehicle registry returned an unexpected status."})
+    """True if the Vehicle ID is an ACTIVE vehicle in the Vehicle Master. Assignment
+    no longer reads from the truck-sim: a vehicle must be registered (and ACTIVE) in
+    jnpa.fleet_vehicles before a driver can be assigned to it."""
+    return await fleet.vehicle_exists(
+        state.cfg.postgres_dsn, vehicle_id, active_only=True)
 
 
 @router.get("/available-vehicles")
 async def available_vehicles(q: Optional[str] = Query(default=None),
                              limit: int = Query(default=50, ge=1, le=500),
                              state: GatewayState = Depends(get_state)) -> dict:
-    """Fleet vehicles NOT already assigned to an active driver or open enrollment —
-    the source for the Control-Room 'assign vehicle' dropdown. ``q`` filters by
-    Vehicle ID / plate substring."""
-    taken = await enrollment.assigned_vehicles(state.cfg.postgres_dsn)
-    fleet = await _fleet_vehicles(state, max(limit * 4, 200))
-    needle = (q or "").strip().upper()
-    out: List[dict] = []
-    for dev in fleet:
-        vid = enrollment.normalize_vehicle_no(dev.get("device_id"))
-        if not vid or vid in taken:
-            continue
-        if needle and needle not in vid and needle not in str(dev.get("plate") or "").upper():
-            continue
-        out.append({"vehicle_id": dev.get("device_id"), "plate": dev.get("plate"),
-                    "state": dev.get("state")})
-        if len(out) >= limit:
-            break
+    """Legacy alias of ``GET /api/vehicles/available`` — kept so existing callers
+    keep working. Sources ACTIVE Vehicle Master entries not already assigned to an
+    active driver / open enrollment (no longer reads the truck-sim directly)."""
+    dsn = state.cfg.postgres_dsn
+    taken = await enrollment.assigned_vehicles(dsn)
+    out = await fleet.list_available(dsn, taken, q=q, limit=limit)
     REQUESTS.labels("identity", "ok").inc()
     return {"vehicles": out, "count": len(out)}
 
@@ -543,8 +503,10 @@ async def create_driver_profile(request: Request, body: CreateDriverBody,
         raise HTTPException(status_code=400,
                             detail="vehicle_no must be a valid Vehicle ID, e.g. TRK-000123")
     if not await _vehicle_exists(state, vehicle_no):
-        raise HTTPException(status_code=404,
-                            detail=f"vehicle {vehicle_no} is not in the fleet")
+        raise HTTPException(
+            status_code=404,
+            detail=f"vehicle {vehicle_no} is not a registered ACTIVE vehicle in the "
+                   f"Vehicle Master")
     conflict = await enrollment.vehicle_assignment_conflict(state.cfg.postgres_dsn, vehicle_no)
     if conflict:
         raise HTTPException(status_code=409, detail={

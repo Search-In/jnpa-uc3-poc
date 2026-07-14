@@ -34,7 +34,8 @@
     "whatIf": "What-If Console",
     "simulator": "Simulator",
     "demo": "Demo Console",
-    "enrollments": "Driver Enrollment"
+    "enrollments": "Driver Enrollment",
+    "vehicles": "Vehicle Management"
   },
   "followBox": {
     "title": "Follow the Box",

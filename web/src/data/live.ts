@@ -9,7 +9,11 @@ import type {
   AvailableVehicle,
   CarbonRollup,
   CreateDriverInput,
+  CreateVehicleInput,
   DriverEnrollment,
+  FleetVehicle,
+  UpdateVehicleInput,
+  VehicleStats,
   EmptyAllocation,
   FaultControlResult,
   FaultState,
@@ -61,6 +65,29 @@ async function deleteJson<T>(path: string): Promise<T> {
     headers: authHeaders(),
   });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} (${path})`);
+  return (await res.json()) as T;
+}
+
+// Like postJson but surfaces the gateway's error `detail` (e.g. the 409
+// "vehicle already assigned" message) so mutations show a useful reason.
+async function sendJson<T>(method: string, path: string, body: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method,
+    headers: authHeaders(),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let detail = `${res.status} ${res.statusText}`;
+    try {
+      const j = (await res.json()) as { detail?: unknown };
+      if (typeof j.detail === "string") detail = j.detail;
+      else if (j.detail && typeof j.detail === "object")
+        detail = (j.detail as { message?: string }).message ?? detail;
+    } catch {
+      /* non-JSON error body — keep the status line */
+    }
+    throw new Error(detail);
+  }
   return (await res.json()) as T;
 }
 
@@ -190,12 +217,33 @@ export class LiveAdapter implements DataAdapter {
     const params = new URLSearchParams();
     if (q) params.set("q", q);
     params.set("limit", String(limit));
+    // Vehicle Master is now the authoritative dropdown source (no truck-sim read).
     return (
       await getJson<{ vehicles: AvailableVehicle[] }>(
-        `/api/identity/available-vehicles?${params.toString()}`,
+        `/api/vehicles/available?${params.toString()}`,
       )
     ).vehicles;
   };
+
+  // --- Vehicle Master (fleet registry) — /api/vehicles/* ---
+  vehicles = async (q?: string, status?: string): Promise<FleetVehicle[]> => {
+    const params = new URLSearchParams();
+    if (q) params.set("q", q);
+    if (status && status !== "ALL") params.set("status", status);
+    const qs = params.toString();
+    return (
+      await getJson<{ vehicles: FleetVehicle[] }>(`/api/vehicles${qs ? `?${qs}` : ""}`)
+    ).vehicles;
+  };
+  vehicleStats = (): Promise<VehicleStats> => getJson<VehicleStats>("/api/vehicles/stats");
+  createVehicle = (input: CreateVehicleInput) =>
+    sendJson<{ created: boolean; vehicle: FleetVehicle }>("POST", "/api/vehicles", input);
+  updateVehicle = (vehicleId: string, input: UpdateVehicleInput) =>
+    sendJson<{ updated: boolean; vehicle: FleetVehicle }>(
+      "PATCH",
+      `/api/vehicles/${encodeURIComponent(vehicleId)}`,
+      input,
+    );
   parkingAvailability = async (minuteOfDay?: number): Promise<ParkingFacility[]> =>
     (
       await getJson<{ facilities: ParkingFacility[] }>(

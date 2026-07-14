@@ -85,7 +85,12 @@ export default function GeofencingManager() {
     () =>
       new SimpleFillSymbol({
         color: hexToRgba(ZONE_COLOUR, 0.2),
-        outline: new SimpleLineSymbol({ color: ZONE_COLOUR, width: 2.25, cap: "round", join: "round" }),
+        outline: new SimpleLineSymbol({
+          color: ZONE_COLOUR,
+          width: 2.25,
+          cap: "round",
+          join: "round",
+        }),
       }),
     [],
   );
@@ -102,9 +107,7 @@ export default function GeofencingManager() {
   function ringOf(g: Graphic): [number, number][] {
     const geom = g.geometry as Polygon;
     if (!geom || geom.type !== "polygon") return [];
-    const geo = geom.spatialReference?.isWGS84
-      ? geom
-      : (webMercatorToGeographic(geom) as Polygon);
+    const geo = geom.spatialReference?.isWGS84 ? geom : (webMercatorToGeographic(geom) as Polygon);
     return (geo.rings[0] as [number, number][]) ?? [];
   }
 

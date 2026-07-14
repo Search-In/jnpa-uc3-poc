@@ -88,7 +88,17 @@ _POLICY: tuple[tuple[str, frozenset[str]], ...] = (
     # request (longest-prefix wins over the /api/identity admin rule below). The
     # admin review/approve surface (/api/identity/enrollments) stays customs+admin.
     ("/api/identity/enrol-request", {Role.DRIVER.value} | CONTROL_ROOM | {Role.CUSTOMS.value, Role.DTCCC_ADMIN.value}),
+    # Driver PWA self-profile: a DRIVER may read ONLY its own profile (the route
+    # resolves the driver from the token's device binding, never client input);
+    # control room + customs may view for support.
+    ("/api/driver", {Role.DRIVER.value} | CONTROL_ROOM | {Role.CUSTOMS.value}),
     ("/api/identity", {Role.CUSTOMS.value, Role.DTCCC_ADMIN.value}),
+    # Vehicle Master administration — same audience as the enrollment surface it
+    # feeds (customs + admin create/manage vehicles + the assign-vehicle dropdown).
+    ("/api/vehicles", {Role.CUSTOMS.value, Role.DTCCC_ADMIN.value}),
+    # Vehicle Intelligence Identity/Detection (singular /api/vehicle) — same
+    # audience as the Intelligence screen (control room + police + customs).
+    ("/api/vehicle/", CONTROL_ROOM | {Role.TRAFFIC_POLICE.value, Role.CUSTOMS.value}),
     ("/api/control", CONTROL_ROOM),
     ("/api/scenarios", CONTROL_ROOM),
     ("/api/scenario", CONTROL_ROOM),

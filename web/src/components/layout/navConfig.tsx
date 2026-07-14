@@ -25,6 +25,7 @@ import {
   CreditCard,
   FileText,
   UserPlus,
+  CarFront,
   HeartPulse,
   FlaskConical,
   SlidersHorizontal,
@@ -102,6 +103,7 @@ export const NAV_SECTIONS: NavSection[] = [
     i18nKey: "navSection.administration",
     emoji: "⚙",
     items: [
+      leaf("/vehicles", "nav.vehicles", CarFront),
       leaf("/enrollments", "nav.enrollments", UserPlus),
       leaf("/workflows", "nav.workflows", Workflow),
       leaf("/health", "nav.health", HeartPulse),

@@ -20,10 +20,15 @@ import {
   SquareParking,
   CreditCard,
   ScanSearch,
+  ScanFace,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { getAdapter } from "@/data";
 import { ArcgisMap } from "@/components/map/ArcgisMap";
+import {
+  VehicleIdentityDialog,
+  VehicleDetectionDialog,
+} from "@/components/panels/VehicleIntelChecks";
 import { useMapSettings } from "@/lib/mapSettings";
 import { useGlobalSearch } from "@/lib/searchStore";
 import { Card } from "@/components/ui/card";
@@ -127,6 +132,9 @@ export default function Intelligence() {
 function VehicleProfile({ plate }: { plate: string }) {
   const { basemap } = useMapSettings();
   const enabled = !!plate;
+  // Vehicle Intelligence camera workflows (RC card header actions).
+  const [identityOpen, setIdentityOpen] = useState(false);
+  const [detectionOpen, setDetectionOpen] = useState(false);
 
   const viQ = useQuery({
     queryKey: ["vehicle-intel", plate],
@@ -289,7 +297,28 @@ function VehicleProfile({ plate }: { plate: string }) {
 
       {/* Profile + location */}
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-        <InfoCard title={`RC · ${vi.vehicle_number}`} icon={Car}>
+        <InfoCard
+          title={`RC · ${vi.vehicle_number}`}
+          icon={Car}
+          actions={
+            <>
+              <button
+                type="button"
+                onClick={() => setIdentityOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] font-medium hover:bg-muted"
+              >
+                <ScanFace className="h-3.5 w-3.5" /> Identity
+              </button>
+              <button
+                type="button"
+                onClick={() => setDetectionOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] font-medium hover:bg-muted"
+              >
+                <ShieldAlert className="h-3.5 w-3.5" /> Detection
+              </button>
+            </>
+          }
+        >
           <KV label="Owner" value={rc.owner_name_masked ?? rc.owner_name} />
           <KV label="Vehicle class" value={rc.vehicle_class} />
           <KV label="Fuel" value={rc.fuel_type} />
@@ -299,6 +328,17 @@ function VehicleProfile({ plate }: { plate: string }) {
           <KV label="RTO / State" value={`${rc.rto_code ?? "—"} / ${rc.state ?? "—"}`} />
           <KV label="Blacklist" value={rc.blacklist_status} />
         </InfoCard>
+
+        <VehicleIdentityDialog
+          vehicleNumber={vi.vehicle_number}
+          open={identityOpen}
+          onOpenChange={setIdentityOpen}
+        />
+        <VehicleDetectionDialog
+          vehicleNumber={vi.vehicle_number}
+          open={detectionOpen}
+          onOpenChange={setDetectionOpen}
+        />
 
         <InfoCard title="FASTag" icon={CreditCard}>
           {fbQ.isLoading ? (
@@ -671,10 +711,12 @@ function DriverRecords({ di }: { di: DriverIntel }) {
 function InfoCard({
   title,
   icon: Icon,
+  actions,
   children,
 }: {
   title: string;
   icon: typeof Car;
+  actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
@@ -682,6 +724,7 @@ function InfoCard({
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
         <Icon className="h-4 w-4 text-primary" />
         <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+        {actions && <div className="ml-auto flex items-center gap-1.5">{actions}</div>}
       </div>
       <div className="grid gap-x-6 p-3 sm:grid-cols-2">{children}</div>
     </Card>

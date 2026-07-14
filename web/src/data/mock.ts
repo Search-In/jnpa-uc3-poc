@@ -49,7 +49,17 @@ import type {
   TollEnrouteInput,
 } from "@/lib/types";
 import type { TasSlot } from "@/lib/types";
-import type { AvailableVehicle, CreateDriverInput, DriverEnrollment } from "@/lib/types";
+import type {
+  AvailableVehicle,
+  CreateDriverInput,
+  CreateVehicleInput,
+  DriverEnrollment,
+  FleetVehicle,
+  UpdateVehicleInput,
+  VehicleDetectionResult,
+  VehicleIdentityResult,
+  VehicleStats,
+} from "@/lib/types";
 import type {
   CarbonEmissionRecord,
   CongestionMetrics,
@@ -334,6 +344,25 @@ function mockAssignedVehicles(): Set<string> {
   }
   return taken;
 }
+
+// Mock Vehicle Master — TRK-000001..TRK-000030 seeded ACTIVE, mirroring the
+// gateway's truck-sim migration. Mutable so create/update demo flows persist.
+const MOCK_FLEET: FleetVehicle[] = Array.from({ length: 30 }, (_, i) => {
+  const n = i + 1;
+  return {
+    vehicle_id: `TRK-${String(n).padStart(6, "0")}`,
+    vehicle_number: `MH04${String.fromCharCode(65 + (n % 26))}${String.fromCharCode(
+      65 + ((n * 7) % 26),
+    )}${String((n * 137) % 10000).padStart(4, "0")}`,
+    vehicle_type: "Container Truck",
+    chassis_number: null,
+    rfid_fastag_id: null,
+    status: "ACTIVE",
+    created_by: "system:truck-sim",
+    created_at: new Date(NOW).toISOString(),
+    updated_at: new Date(NOW).toISOString(),
+  };
+});
 
 // --------------------------------------------------------------------------
 // KPI strip — mirrors shared/jnpa_shared/kpi.py KPI_TARGETS exactly. Each value
@@ -1547,6 +1576,168 @@ export class MockAdapter implements DataAdapter {
       out.push({ vehicle_id: vid, plate: null, state: "EN_ROUTE" });
     }
     return Promise.resolve(out);
+  }
+
+  vehicles(q?: string, status?: string): Promise<FleetVehicle[]> {
+    const drivers = new Map<string, { driver_id: string; name?: string | null }>();
+    for (const e of MOCK_ENROLLMENTS) {
+      if ((e.status ?? "").toUpperCase() === "ACTIVE" && e.vehicle_no) {
+        drivers.set(e.vehicle_no.trim().toUpperCase(), {
+          driver_id: e.driver_id,
+          name: e.name,
+        });
+      }
+    }
+    const needle = (q ?? "").trim().toUpperCase();
+    const st = (status ?? "").trim().toUpperCase();
+    const out = MOCK_FLEET.filter((v) => {
+      if (st && st !== "ALL" && v.status !== st) return false;
+      if (
+        needle &&
+        !v.vehicle_id.toUpperCase().includes(needle) &&
+        !(v.vehicle_number ?? "").toUpperCase().includes(needle)
+      )
+        return false;
+      return true;
+    }).map((v) => ({ ...v, assigned_driver: drivers.get(v.vehicle_id) ?? null }));
+    return Promise.resolve(out);
+  }
+
+  vehicleStats(): Promise<VehicleStats> {
+    const assigned = mockAssignedVehicles();
+    const active = MOCK_FLEET.filter((v) => v.status === "ACTIVE");
+    const assignedN = active.filter((v) => assigned.has(v.vehicle_id)).length;
+    return Promise.resolve({
+      total: MOCK_FLEET.length,
+      active: active.length,
+      assigned: assignedN,
+      available: Math.max(active.length - assignedN, 0),
+    });
+  }
+
+  createVehicle(input: CreateVehicleInput): Promise<{ created: boolean; vehicle: FleetVehicle }> {
+    const number = (input.vehicle_number ?? "").trim();
+    if (!number) return Promise.reject(new Error("vehicle_number is required"));
+    const dup = MOCK_FLEET.find(
+      (v) => (v.vehicle_number ?? "").trim().toUpperCase() === number.toUpperCase(),
+    );
+    if (dup)
+      return Promise.reject(
+        new Error(`Vehicle number ${number} is already registered as ${dup.vehicle_id}.`),
+      );
+    // Backend owns the TRK sequence: max existing suffix + 1.
+    const highest = MOCK_FLEET.reduce((mx, v) => {
+      const m = /^TRK-(\d{6})$/.exec(v.vehicle_id);
+      return m ? Math.max(mx, parseInt(m[1], 10)) : mx;
+    }, 0);
+    const vid = `TRK-${String(highest + 1).padStart(6, "0")}`;
+    const vehicle: FleetVehicle = {
+      vehicle_id: vid,
+      vehicle_number: input.vehicle_number?.trim() || null,
+      vehicle_type: input.vehicle_type?.trim() || null,
+      chassis_number: input.chassis_number?.trim() || null,
+      rfid_fastag_id: input.rfid_fastag_id?.trim() || null,
+      status: (input.status ?? "ACTIVE").toUpperCase(),
+      created_by: "admin:mock",
+      created_at: new Date(NOW).toISOString(),
+      updated_at: new Date(NOW).toISOString(),
+      assigned_driver: null,
+    };
+    MOCK_FLEET.unshift(vehicle);
+    return Promise.resolve({ created: true, vehicle });
+  }
+
+  updateVehicle(
+    vehicleId: string,
+    input: UpdateVehicleInput,
+  ): Promise<{ updated: boolean; vehicle: FleetVehicle }> {
+    const vid = vehicleId.trim().toUpperCase();
+    const rec = MOCK_FLEET.find((v) => v.vehicle_id === vid);
+    if (!rec) return Promise.reject(new Error(`vehicle ${vid} not found`));
+    const nextStatus = input.status?.toUpperCase();
+    if (nextStatus && nextStatus !== "ACTIVE" && mockAssignedVehicles().has(vid))
+      return Promise.reject(
+        new Error("Vehicle is assigned to an active driver; reassign before deactivating."),
+      );
+    if (input.vehicle_number !== undefined) rec.vehicle_number = input.vehicle_number || null;
+    if (input.vehicle_type !== undefined) rec.vehicle_type = input.vehicle_type || null;
+    if (input.chassis_number !== undefined) rec.chassis_number = input.chassis_number || null;
+    if (input.rfid_fastag_id !== undefined) rec.rfid_fastag_id = input.rfid_fastag_id || null;
+    if (nextStatus) rec.status = nextStatus;
+    rec.updated_at = new Date(NOW).toISOString();
+    return Promise.resolve({ updated: true, vehicle: { ...rec } });
+  }
+
+  vehicleIdentity(vehicleNumber: string, image: string): Promise<VehicleIdentityResult> {
+    if (!image)
+      return Promise.resolve({
+        driver_name: null,
+        confidence: 0,
+        status: "NOT_MATCHED",
+        matched: false,
+        vehicle_number: vehicleNumber,
+        reason: "no_image",
+        message: "No camera frame captured.",
+      });
+    // Resolve the vehicle -> its ACTIVE assigned driver (server-side in prod).
+    const key = vehicleNumber.trim().toUpperCase();
+    const vehicle = MOCK_FLEET.find(
+      (v) => (v.vehicle_number ?? "").toUpperCase() === key || v.vehicle_id.toUpperCase() === key,
+    );
+    const driver = vehicle
+      ? MOCK_ENROLLMENTS.find(
+          (e) =>
+            (e.status ?? "").toUpperCase() === "ACTIVE" &&
+            (e.vehicle_no ?? "").toUpperCase() === vehicle.vehicle_id.toUpperCase(),
+        )
+      : undefined;
+    if (!driver)
+      return Promise.resolve({
+        driver_name: null,
+        confidence: 0,
+        status: "NOT_MATCHED",
+        matched: false,
+        vehicle_number: vehicleNumber,
+        vehicle_id: vehicle?.vehicle_id ?? null,
+        reason: "no_active_driver",
+        message: "No active driver linked to this vehicle.",
+      });
+    return Promise.resolve({
+      driver_name: driver.name,
+      driver_id: driver.driver_id,
+      vehicle_number: vehicle?.vehicle_number ?? vehicleNumber,
+      vehicle_id: vehicle?.vehicle_id ?? null,
+      confidence: 98,
+      status: "MATCHED",
+      matched: true,
+      decision: "VERIFIED",
+      message: "Identity verified.",
+    });
+  }
+
+  vehicleDetection(image: string, expected?: string): Promise<VehicleDetectionResult> {
+    if (!image)
+      return Promise.resolve({
+        detected_vehicle: null,
+        confidence: 0,
+        match: null,
+        reason: "no_image",
+        message: "No camera frame captured.",
+      } as VehicleDetectionResult);
+    // Deterministic demo read: detect the expected plate (a matching read).
+    const detected = (expected ?? "MH04AB1234").toUpperCase();
+    const match =
+      expected != null
+        ? detected.replace(/[^A-Z0-9]/g, "") === expected.toUpperCase().replace(/[^A-Z0-9]/g, "")
+        : null;
+    return Promise.resolve({
+      detected_vehicle: detected,
+      confidence: 99,
+      match,
+      expected: expected ?? null,
+      decision_path: "SYNTHETIC",
+      message: match ? "Vehicle verified." : "Plate detected.",
+    });
   }
 
   parkingAvailability(minuteOfDay?: number): Promise<ParkingFacility[]> {

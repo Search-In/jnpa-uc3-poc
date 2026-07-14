@@ -125,3 +125,28 @@ export interface AlertFrame {
   plate?: string | null;
   payload?: Record<string, any>;
 }
+
+// The authenticated driver's own approved profile (GET /api/driver/profile).
+export interface DriverProfile {
+  driver: {
+    id: string | null;
+    name: string | null;
+    mobile: string | null;
+    licence: string | null;
+    emergency_contact: string | null;
+    status: string | null;
+  };
+  vehicle: {
+    vehicle_id: string | null;
+    vehicle_number: string | null;
+    vehicle_type: string | null;
+    chassis_number?: string | null;
+    rfid_fastag_id?: string | null;
+    status: string | null;
+  };
+  enrollment: {
+    status: string | null;
+    approved_at: string | null;
+    approved_by?: string | null;
+  };
+}

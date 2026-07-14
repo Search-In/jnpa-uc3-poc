@@ -48,6 +48,8 @@ export const SCREEN_ROLES: Record<string, Role[]> = {
   // Driver enrollment approval — biometric-sensitive, mirrors the gateway
   // /api/identity policy (customs + admin only).
   "/enrollments": ["DTCCC_ADMIN", "CUSTOMS"],
+  // Vehicle Master administration — same audience as the enrollment surface it feeds.
+  "/vehicles": ["DTCCC_ADMIN", "CUSTOMS"],
   "/health": CONTROL_ROOM,
   "/what-if": CONTROL_ROOM,
   "/whatif": CONTROL_ROOM,

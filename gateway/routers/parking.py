@@ -170,6 +170,21 @@ def _rds_summary(board: List[dict]) -> dict:
     }
 
 
+def _summary_contract(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Map the RDS/parking-service summary keys to the frontend ParkingSummary
+    contract (total_*/full_count). The web ParkingBoard header reads
+    total_capacity/total_occupied/total_available/full_count; upstream emits
+    capacity/occupied/available/full. Accepts either naming so the header
+    populates on the live path, not only against the local mock adapter."""
+    return {
+        "total_capacity": data.get("total_capacity", data.get("capacity", 0)),
+        "total_occupied": data.get("total_occupied", data.get("occupied", 0)),
+        "total_available": data.get("total_available", data.get("available", 0)),
+        "facilities": data.get("facilities", 0),
+        "full_count": data.get("full_count", data.get("full", 0)),
+    }
+
+
 async def _upstream(state: GatewayState, path: str) -> Dict[str, Any] | None:
     url = state.cfg.parking_url.rstrip("/") + path
     t0 = time.perf_counter()
@@ -227,14 +242,15 @@ async def summary(
     data = await _upstream(state, "/summary")
     if data is not None:
         REQUESTS.labels("parking", "ok").inc()
-        return {"decision_path": "LIVE", **data}
+        return {"decision_path": "LIVE", **_summary_contract(data)}
     board = await _rds_facilities(state.cfg.postgres_dsn)
     if board:
         REQUESTS.labels("parking", "ok").inc()
-        return {"decision_path": "RDS_DIRECT", "source": "rds", **_rds_summary(board)}
+        return {"decision_path": "RDS_DIRECT", "source": "rds",
+                **_summary_contract(_rds_summary(board))}
     REQUESTS.labels("parking", "error").inc()
     return {"decision_path": "UNAVAILABLE", "source": "unavailable",
-            "capacity": 0, "occupied": 0, "available": 0, "facilities": 0, "full": 0}
+            **_summary_contract({})}
 
 
 @router.get("/facilities")

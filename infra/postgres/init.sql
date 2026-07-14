@@ -190,6 +190,31 @@ CREATE INDEX IF NOT EXISTS idx_verification_logs_driver
     ON jnpa.verification_logs (driver_id, ts DESC);
 
 -- --------------------------------------------------------------------------
+-- Vehicle Master (fleet registry). The authoritative list of vehicles a driver
+-- may be assigned to. Distinct from jnpa.vehicle_master above (that is the Vahan
+-- RC-lookup cache, keyed by plate). Every vehicle exists here first; the
+-- "assign vehicle" dropdown draws ONLY from ACTIVE rows not held by an active
+-- driver. The truck-sim fleet is migrated in on boot (gateway/fleet.py) so no
+-- existing vehicle disappears when the master is introduced.
+-- --------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS jnpa.fleet_vehicles (
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    vehicle_id      text NOT NULL UNIQUE,   -- fleet id, e.g. TRK-000001
+    vehicle_number  text,                   -- plate, e.g. MH04AB1234
+    vehicle_type    text,                   -- e.g. Container Truck
+    chassis_number  text,
+    rfid_fastag_id  text,
+    status          text NOT NULL DEFAULT 'ACTIVE'
+                    CHECK (status IN ('ACTIVE', 'INACTIVE', 'MAINTENANCE')),
+    created_by      text,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    updated_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_fleet_vehicles_vehicle_id ON jnpa.fleet_vehicles (vehicle_id);
+CREATE INDEX IF NOT EXISTS idx_fleet_vehicles_number ON jnpa.fleet_vehicles (vehicle_number);
+CREATE INDEX IF NOT EXISTS idx_fleet_vehicles_status ON jnpa.fleet_vehicles (status);
+
+-- --------------------------------------------------------------------------
 -- Time-series (hypertables)
 -- --------------------------------------------------------------------------
 CREATE TABLE jnpa.anpr_reads (

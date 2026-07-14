@@ -8,7 +8,24 @@ import { useDriverSession } from "@/hooks/DriverSession";
 import { verifiedLabel } from "@/lib/driverLang";
 import { IconShield, IconLogout, IconBell } from "@/components/icons";
 import i18n, { SUPPORTED_LANGS, LANG_LABELS } from "@/i18n";
-import type { TruckEnvelope, VahanEnvelope } from "@/lib/types";
+import type { DriverProfile, TruckEnvelope, VahanEnvelope } from "@/lib/types";
+
+// ISO timestamp -> DD-MM-YYYY (the driver-facing approval date). "—" when absent.
+function fmtDate(iso?: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getDate())}-${p(d.getMonth() + 1)}-${d.getFullYear()}`;
+}
+
+// Enrollment/vehicle status -> Chip tone.
+function statusTone(s?: string | null): "ok" | "warn" | "down" {
+  const v = (s || "").toUpperCase();
+  if (v === "ACTIVE") return "ok";
+  if (v === "PENDING" || v === "REENROLL" || v === "MAINTENANCE") return "warn";
+  return "down";
+}
 
 // Profile / Vehicle — pulls the VahanRecord through the gateway's orchestrated
 // chain (LIVE_PRIMARY / LIVE_FALLBACK / CACHED / PROVISIONAL) for the truck's
@@ -30,6 +47,29 @@ export default function Profile({ deviceId, plate }: { deviceId: string; plate?:
   const [loading, setLoading] = useState(true);
   const [push, setPush] = useState<PushState | null>(null);
   const [pushBusy, setPushBusy] = useState(false);
+  const [profile, setProfile] = useState<DriverProfile | null>(null);
+  const [profileLoading, setProfileLoading] = useState(true);
+
+  // Load the driver's OWN approved profile. The gateway resolves it from the
+  // DRIVER token's device binding; deviceId is passed only as an auth-disabled
+  // dev fallback and is ignored server-side for a real DRIVER token.
+  useEffect(() => {
+    let alive = true;
+    setProfileLoading(true);
+    (async () => {
+      try {
+        const p = await api.driverProfile(deviceId);
+        if (alive) setProfile(p);
+      } catch {
+        if (alive) setProfile(null); // not yet approved / no active assignment
+      } finally {
+        if (alive) setProfileLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [deviceId]);
 
   useEffect(() => {
     let alive = true;
@@ -94,6 +134,114 @@ export default function Profile({ deviceId, plate }: { deviceId: string; plate?:
           </div>
         </div>
       </div>
+
+      {/* Driver Profile — the approved driver + assigned vehicle + enrollment.
+          Sourced from GET /api/driver/profile (own identity only). */}
+      {profileLoading ? (
+        <Card title={t("driverProfile.title", { defaultValue: "Driver Profile" })}>
+          <div className="muted" style={{ fontSize: 13 }}>
+            <Spinner /> {t("driverProfile.loading", { defaultValue: "Loading profile…" })}
+          </div>
+        </Card>
+      ) : profile ? (
+        <>
+          <Card title={t("driverProfile.driverInfo", { defaultValue: "Driver Information" })}>
+            <Row
+              k={t("driverProfile.name", { defaultValue: "Name" })}
+              v={profile.driver.name || t("common.noData", { defaultValue: "—" })}
+            />
+            <Row
+              k={t("driverProfile.driverId", { defaultValue: "Driver ID" })}
+              v={<span className="selectable">{profile.driver.id || "—"}</span>}
+            />
+            <Row
+              k={t("driverProfile.mobile", { defaultValue: "Mobile" })}
+              v={profile.driver.mobile || "—"}
+            />
+            <Row
+              k={t("driverProfile.licence", { defaultValue: "Licence" })}
+              v={profile.driver.licence || "—"}
+            />
+            <Row
+              k={t("driverProfile.emergency", { defaultValue: "Emergency Contact" })}
+              v={profile.driver.emergency_contact || "—"}
+            />
+            <Row
+              k={t("driverProfile.status", { defaultValue: "Status" })}
+              v={
+                <Chip status={statusTone(profile.driver.status)}>
+                  {profile.driver.status || "—"}
+                </Chip>
+              }
+            />
+          </Card>
+
+          <Card title={t("driverProfile.vehicleInfo", { defaultValue: "Assigned Vehicle" })}>
+            <Row
+              k={t("driverProfile.vehicleId", { defaultValue: "Vehicle ID" })}
+              v={<span className="selectable">{profile.vehicle.vehicle_id || "—"}</span>}
+            />
+            <Row
+              k={t("driverProfile.vehicleNumber", { defaultValue: "Vehicle Number" })}
+              v={profile.vehicle.vehicle_number || "—"}
+            />
+            <Row
+              k={t("driverProfile.vehicleType", { defaultValue: "Type" })}
+              v={profile.vehicle.vehicle_type || "—"}
+            />
+            {profile.vehicle.chassis_number ? (
+              <Row
+                k={t("driverProfile.chassis", { defaultValue: "Chassis Number" })}
+                v={profile.vehicle.chassis_number}
+              />
+            ) : null}
+            {profile.vehicle.rfid_fastag_id ? (
+              <Row
+                k={t("driverProfile.rfid", { defaultValue: "RFID / FASTag ID" })}
+                v={profile.vehicle.rfid_fastag_id}
+              />
+            ) : null}
+            <Row
+              k={t("driverProfile.vehicleStatus", { defaultValue: "Vehicle Status" })}
+              v={
+                <Chip status={statusTone(profile.vehicle.status)}>
+                  {profile.vehicle.status || "—"}
+                </Chip>
+              }
+            />
+          </Card>
+
+          <Card title={t("driverProfile.enrollmentInfo", { defaultValue: "Enrollment Status" })}>
+            <Row
+              k={t("driverProfile.approvalStatus", { defaultValue: "Approval Status" })}
+              v={
+                <Chip status={statusTone(profile.enrollment.status)}>
+                  {profile.enrollment.status || "—"}
+                </Chip>
+              }
+            />
+            <Row
+              k={t("driverProfile.approvedDate", { defaultValue: "Approved Date" })}
+              v={fmtDate(profile.enrollment.approved_at)}
+            />
+            {profile.enrollment.approved_by ? (
+              <Row
+                k={t("driverProfile.approvedBy", { defaultValue: "Approved By" })}
+                v={profile.enrollment.approved_by}
+              />
+            ) : null}
+          </Card>
+        </>
+      ) : (
+        <Card title={t("driverProfile.title", { defaultValue: "Driver Profile" })}>
+          <div className="muted" style={{ fontSize: 13 }}>
+            {t("driverProfile.none", {
+              defaultValue:
+                "No approved profile is linked to this vehicle yet. Complete enrollment and wait for admin approval.",
+            })}
+          </div>
+        </Card>
+      )}
 
       <Card title={t("common.language")}>
         <label

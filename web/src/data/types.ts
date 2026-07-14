@@ -15,6 +15,12 @@ import type {
   CarbonRollup,
   CorridorGeometry,
   CreateDriverInput,
+  CreateVehicleInput,
+  FleetVehicle,
+  UpdateVehicleInput,
+  VehicleDetectionResult,
+  VehicleIdentityResult,
+  VehicleStats,
   Decision,
   DriverEnrollment,
   EmptyAllocation,
@@ -256,6 +262,19 @@ export interface DataAdapter {
   ): Promise<{ created: boolean; driver_id: string; status: string }>;
   // Fleet vehicles not yet assigned to an active driver (assign-vehicle dropdown).
   availableVehicles(q?: string, limit?: number): Promise<AvailableVehicle[]>;
+
+  // --- Vehicle Master (fleet registry, admin portal) ---
+  vehicles(q?: string, status?: string): Promise<FleetVehicle[]>;
+  vehicleStats(): Promise<VehicleStats>;
+  createVehicle(input: CreateVehicleInput): Promise<{ created: boolean; vehicle: FleetVehicle }>;
+  updateVehicle(
+    vehicleId: string,
+    input: UpdateVehicleInput,
+  ): Promise<{ updated: boolean; vehicle: FleetVehicle }>;
+
+  // --- Vehicle Intelligence Identity & Detection (camera workflows) ---
+  vehicleIdentity(vehicleNumber: string, image: string): Promise<VehicleIdentityResult>;
+  vehicleDetection(image: string, expected?: string): Promise<VehicleDetectionResult>;
 
   parkingAvailability(minuteOfDay?: number): Promise<ParkingFacility[]>;
   parkingSummary(minuteOfDay?: number): Promise<ParkingSummary>;

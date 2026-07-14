@@ -64,6 +64,46 @@ def test_calculate_endpoint_returns_figure(client):
     assert b["emission_id"] is None
 
 
+def test_calculate_persists_via_committing_helper(client, monkeypatch):
+    """Regression for the persistence bug: calculate() must write the INSERT with
+    the COMMITTING execute_returning() (engine.begin), never fetch_one() (which runs
+    on a non-committing engine.connect() and silently rolls the row back)."""
+    import jnpa_shared.db as db
+    from gateway.routers import carbon
+
+    seen = {}
+
+    async def fake_ensure(dsn):
+        seen["ensure"] = True
+
+    async def fake_execute_returning(sql, params=None, *, dsn=None):
+        seen["sql"] = sql
+        seen["co2"] = params["co2_kg"]
+        assert "INSERT INTO jnpa.carbon_emission" in sql
+        assert "RETURNING id" in sql
+        return {"id": 4242}  # a committed INSERT ... RETURNING yields the new id
+
+    async def forbidden_fetch_one(*a, **k):  # must NOT be used for the write
+        raise AssertionError("calculate() must not persist via fetch_one()")
+
+    monkeypatch.setattr(carbon, "_ensure", fake_ensure)
+    monkeypatch.setattr(db, "execute_returning", fake_execute_returning)
+    monkeypatch.setattr(db, "fetch_one", forbidden_fetch_one)
+
+    r = client.post(
+        "/api/carbon/calculate",
+        json={"vehicle_id": "TRK-000001", "distance_km": 25,
+              "idle_time_minutes": 20, "vehicle_type": "truck"},
+    )
+    assert r.status_code == 200, r.text
+    b = r.json()
+    assert b["emission_id"] == 4242
+    assert b["persisted"] is True
+    # The task's worked example: distance 25 * 20 t nominal * 62 /1000 + 20 * 134 /1000.
+    assert abs(b["co2_kg"] - 33.68) < 0.01
+    assert seen.get("ensure") is True
+
+
 def test_calculate_requires_vehicle_id(client):
     r = client.post("/api/carbon/calculate", json={"distance_km": 10})
     assert r.status_code == 422

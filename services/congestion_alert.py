@@ -128,10 +128,15 @@ def _alert_id(segment_id: str, bucket: str) -> str:
 
 
 async def _persist_alert(dsn: str, alert_id: str, alert: CongestionAlert) -> bool:
-    """Insert one jnpa.alerts row (dedup by id). Returns True if newly inserted."""
-    from jnpa_shared.db import fetch_one
+    """Insert one jnpa.alerts row (dedup by id). Returns True if newly inserted.
 
-    row = await fetch_one(
+    Uses ``execute_returning`` (a committed transaction), NOT ``fetch_one`` — the
+    latter runs on a non-committing connection, so the INSERT would roll back on
+    close and the alert would never persist (same class of bug as the carbon fix).
+    """
+    from jnpa_shared.db import execute_returning
+
+    row = await execute_returning(
         """
         INSERT INTO jnpa.alerts (id, kind, severity, gate_id, plate, payload)
         VALUES (CAST(:id AS uuid), :kind, :sev, :gate, NULL, CAST(:p AS jsonb))

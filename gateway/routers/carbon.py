@@ -53,6 +53,22 @@ _DDL = (
 _READY: Dict[str, bool] = {}
 
 
+def _dsn_target(dsn: Optional[str]) -> str:
+    """host:port/dbname of a DSN for logs, with the password redacted."""
+    if not dsn:
+        return "(none)"
+    try:
+        from urllib.parse import urlsplit
+
+        u = urlsplit(dsn)
+        host = u.hostname or "?"
+        port = f":{u.port}" if u.port else ""
+        db = (u.path or "").lstrip("/") or "?"
+        return f"{host}{port}/{db}"
+    except Exception:  # noqa: BLE001
+        return "(unparseable)"
+
+
 async def _ensure(dsn: Optional[str]) -> None:
     if not dsn or _READY.get(dsn):
         return
@@ -164,10 +180,14 @@ async def calculate(body: Dict[str, Any] = Body(...),
     dsn = state.cfg.postgres_dsn
     if dsn:
         await _ensure(dsn)
-        from jnpa_shared.db import fetch_one
+        # execute_returning() runs the INSERT in a COMMITTED transaction (engine.begin)
+        # and hands back the RETURNING row. Using fetch_one() here was the persistence
+        # bug: it runs on a non-committing engine.connect(), so the INSERT was rolled
+        # back on close — the id came back but the row never landed.
+        from jnpa_shared.db import execute_returning
 
         try:
-            inserted = await fetch_one(
+            inserted = await execute_returning(
                 """
                 INSERT INTO jnpa.carbon_emission
                     (vehicle_id, vehicle_type, distance_km, fuel_consumed_litre,
@@ -190,8 +210,20 @@ async def calculate(body: Dict[str, Any] = Body(...),
                 dsn=dsn,
             )
             emission_id = int(inserted["id"]) if inserted else None
-        except Exception as exc:  # noqa: BLE001 — persistence is best-effort
-            log.warning("carbon_persist_failed", vehicle_id=vehicle_id, error=str(exc))
+            if emission_id is None:
+                # A committed INSERT ... RETURNING must yield a row — surface loudly.
+                log.error("carbon_persist_no_row", vehicle_id=vehicle_id,
+                          database=_dsn_target(dsn))
+        except Exception as exc:  # noqa: BLE001 — endpoint still returns the figure
+            # Do NOT swallow silently: log the vehicle, the error + its class, and the
+            # database target so a persistence failure is diagnosable from the logs.
+            log.error(
+                "carbon_persist_failed",
+                vehicle_id=vehicle_id,
+                error=str(exc),
+                error_type=type(exc).__name__,
+                database=_dsn_target(dsn),
+            )
 
     REQUESTS.labels("carbon", "ok").inc()
     return {

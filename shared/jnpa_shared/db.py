@@ -81,6 +81,30 @@ async def execute(
         return result.rowcount if result.rowcount is not None else 0
 
 
+async def execute_returning(
+    sql: str,
+    params: Optional[Mapping[str, Any]] = None,
+    *,
+    dsn: Optional[str] = None,
+) -> Optional[Mapping[str, Any]]:
+    """Run a WRITING statement (``INSERT/UPDATE/DELETE ... RETURNING``) inside a
+    COMMITTED transaction and return the first row (dict-like) or ``None``.
+
+    Use this — NOT :func:`fetch_one` — for statements that modify data and need a
+    value back (e.g. a ``RETURNING id``). :func:`fetch_one` runs on a
+    non-committing ``engine.connect()``: that is correct for a ``SELECT`` but a
+    plain connection opens an implicit transaction that is **rolled back on close**,
+    so an ``INSERT ... RETURNING`` would hand back an id yet never persist the row.
+    This helper uses ``engine.begin()`` so the write commits, exactly like
+    :func:`execute`.
+    """
+    engine = get_engine(dsn)
+    async with engine.begin() as conn:
+        result = await conn.execute(text(sql), params or {})
+        row = result.mappings().first()
+        return dict(row) if row is not None else None
+
+
 async def insert_row(
     table: str,
     row: Mapping[str, Any],
@@ -116,6 +140,7 @@ __all__ = [
     "fetch_all",
     "fetch_one",
     "execute",
+    "execute_returning",
     "insert_row",
     "ping",
     "dispose_all",

@@ -5,6 +5,32 @@
 # healthcheck at it, so the dashboard runs locally without touching the image or
 # the committed production config. Delete this file to restore stock behaviour.
 services:
+  # LOCAL-ONLY: host port 5433 is frequently held by another project's Postgres
+  # (e.g. iamyhealth-system-infra-postgres-1), which leaves jnpa-postgres stuck in
+  # "Created" and detached from the network — every service then fails to resolve
+  # `postgres` (Name or service not known). Remapping the *host* publish to 5434
+  # lets both stacks coexist; containers still reach the DB as postgres:5432 over
+  # the jnpa network. Host tools/seed scripts use 5434 locally.
+  postgres:
+    ports:
+      - "5434:5432"
+
+  # The gateway bakes the capability packages (carbon/ etc.) into its image at
+  # build time (gateway/Dockerfile: COPY carbon/ ... && pip install -e). An image
+  # built before carbon.calculator.emission_record() was added is stale, so
+  # POST /api/carbon/calculate 500s (AttributeError). Bind-mounting current source
+  # over the baked copy — same pattern as ./gateway and ./services — keeps the
+  # in-process carbon calculator in sync without a full image rebuild.
+  gateway:
+    volumes:
+      - ./carbon:/app/carbon:ro
+      # jnpa_shared is pip-installed into site-packages at image build (shared/ is
+      # NOT in the bind list), so functions added to shared/ after the last image
+      # build are missing at runtime — e.g. execute_returning(), which the carbon
+      # /calculate persistence path imports (500 ImportError otherwise). Shadow the
+      # baked copy with current source. Deploy-time fix is `docker compose build gateway`.
+      - ./shared/jnpa_shared:/usr/local/lib/python3.11/site-packages/jnpa_shared:ro
+
   web:
     volumes:
       - ./web/nginx/default.local.conf:/etc/nginx/conf.d/default.conf:ro

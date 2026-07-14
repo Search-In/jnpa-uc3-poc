@@ -14,6 +14,7 @@ import SimpleLineSymbol from "@arcgis/core/symbols/SimpleLineSymbol";
 import PictureMarkerSymbol from "@arcgis/core/symbols/PictureMarkerSymbol";
 import type MapView from "@arcgis/core/views/MapView";
 import { basemapId } from "@/lib/basemap";
+import { applyCorridorView } from "@/lib/mapConfig";
 import type { CorridorGeometry, DevicePosition, Gate } from "@/lib/types";
 
 // One route option to draw (Google-Maps-style): a polyline in [lon,lat] pairs,
@@ -127,7 +128,10 @@ export default function MiniMap({
     const view = event.target.view;
     if (!view || !view.map) return;
     viewRef.current = view;
-    if (view.constraints) view.constraints.snapToZoom = false;
+    // Frame + hard-clamp the driver map to the JNPA operational corridor so it
+    // opens on the port corridor and can never be panned/zoomed out to the wider
+    // region. (A live trip, when present, re-frames within this clamp below.)
+    applyCorridorView(view);
     // Keep only the compact zoom + attribution UI on the small driver map.
     view.ui.components = ["zoom", "attribution"];
 

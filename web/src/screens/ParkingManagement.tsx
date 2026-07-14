@@ -405,6 +405,32 @@ function HistoryTable({
   );
 }
 
+// Severity/duration live in the parking_events.detail jsonb (not dedicated
+// columns). Surface them for the Violations tab, falling back to a sensible
+// severity derived from the event type when the seed didn't record one.
+function violationDurationMin(detail: Record<string, unknown> | null | undefined): number | null {
+  if (!detail) return null;
+  const min = detail.duration_min ?? detail.duration_minutes;
+  if (typeof min === "number") return Math.round(min);
+  const sec = detail.duration_s ?? detail.duration_seconds;
+  if (typeof sec === "number") return Math.round(sec / 60);
+  return null;
+}
+
+function violationSeverity(
+  detail: Record<string, unknown> | null | undefined,
+  eventType: string,
+): "High" | "Medium" | "Low" {
+  const raw = String(detail?.severity ?? "").toLowerCase();
+  if (raw === "high" || raw === "critical") return "High";
+  if (raw === "medium" || raw === "moderate") return "Medium";
+  if (raw === "low") return "Low";
+  // Derive from the event type when the seed carried no explicit severity.
+  if (eventType === "ILLEGAL_PARKING" || eventType === "NO_PARKING_VIOLATION") return "High";
+  if (eventType === "OVERFLOW") return "Medium";
+  return "Low";
+}
+
 function ViolationsTable({
   rows,
   status,
@@ -427,6 +453,27 @@ function ViolationsTable({
       render: (v) => v.vehicle_id ?? "—",
     },
     { key: "facility", header: "Facility", render: (v) => v.facility_id ?? "—" },
+    {
+      key: "duration",
+      header: "Duration",
+      render: (v) => {
+        const mins = violationDurationMin(v.detail);
+        return mins != null ? `${mins}m` : "—";
+      },
+    },
+    {
+      key: "severity",
+      header: "Severity",
+      render: (v) => {
+        const sev = violationSeverity(v.detail, v.event_type);
+        return (
+          <StatusChip
+            label={sev}
+            tone={sev === "High" ? "critical" : sev === "Medium" ? "warn" : "ok"}
+          />
+        );
+      },
+    },
     {
       key: "when",
       header: "When",

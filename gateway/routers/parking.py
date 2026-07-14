@@ -92,6 +92,74 @@ async def _rds_facilities(dsn: Optional[str]) -> List[dict]:
     return board
 
 
+async def _rds_history(dsn: Optional[str], vehicle_id: Optional[str], limit: int) -> Optional[List[dict]]:
+    """Entry/exit transactions from RDS (mirrors parking service persistence.history).
+    Returns None if the DB is unreachable (caller keeps the empty contract)."""
+    if not dsn:
+        return None
+    from jnpa_shared.db import fetch_all
+
+    where = "WHERE vehicle_id = :vid" if vehicle_id else ""
+    params: Dict[str, Any] = {"limit": limit}
+    if vehicle_id:
+        params["vid"] = vehicle_id
+    try:
+        rows = await fetch_all(
+            f"""
+            SELECT id, vehicle_id, driver_id, facility_id, slot_id, entry_time, exit_time,
+                   EXTRACT(EPOCH FROM duration) AS duration_s, status
+            FROM jnpa.parking_transactions {where}
+            ORDER BY entry_time DESC LIMIT :limit
+            """,
+            params,
+            dsn=dsn,
+        )
+    except Exception as exc:  # noqa: BLE001 - DB unreachable → keep empty contract
+        log.debug("parking_history_rds_unavailable", error=str(exc))
+        return None
+    out: List[dict] = []
+    for r in rows:
+        d = dict(r)
+        for k in ("entry_time", "exit_time"):
+            if d.get(k) is not None and hasattr(d[k], "isoformat"):
+                d[k] = d[k].isoformat()
+        if d.get("duration_s") is not None:
+            d["duration_s"] = int(d["duration_s"])
+        out.append(d)
+    return out
+
+
+async def _rds_violations(dsn: Optional[str], limit: int) -> Optional[List[dict]]:
+    """Parking violation / overflow events from RDS (mirrors persistence.violations).
+    Returns None if the DB is unreachable (caller keeps the empty contract)."""
+    if not dsn:
+        return None
+    from jnpa_shared.db import fetch_all
+
+    try:
+        rows = await fetch_all(
+            """
+            SELECT id, event_type, vehicle_id, facility_id, detail, created_at
+            FROM jnpa.parking_events
+            WHERE event_type IN ('ILLEGAL_PARKING','NO_PARKING_VIOLATION','OVERFLOW')
+            ORDER BY created_at DESC LIMIT :limit
+            """,
+            {"limit": limit},
+            dsn=dsn,
+        )
+    except Exception as exc:  # noqa: BLE001 - DB unreachable → keep empty contract
+        log.debug("parking_violations_rds_unavailable", error=str(exc))
+        return None
+    out: List[dict] = []
+    for r in rows:
+        d = dict(r)
+        d["detail"] = _loc(d.get("detail"))
+        if d.get("created_at") is not None and hasattr(d["created_at"], "isoformat"):
+            d["created_at"] = d["created_at"].isoformat()
+        out.append(d)
+    return out
+
+
 def _rds_summary(board: List[dict]) -> dict:
     return {
         "capacity": sum(int(r["capacity"]) for r in board),
@@ -219,8 +287,17 @@ async def history(vehicle_id: Optional[str] = Query(default=None),
     """Entry/exit transaction history from RDS."""
     q = {k: v for k, v in {"vehicle_id": vehicle_id, "limit": limit}.items() if v is not None}
     data = await _upstream(state, "/history?" + urlencode(q))
-    REQUESTS.labels("parking", "ok").inc()
-    return data if data is not None else {"count": 0, "transactions": []}
+    if data is not None:
+        REQUESTS.labels("parking", "ok").inc()
+        return {"decision_path": "LIVE", **data}
+    # Upstream (parking service) down → read the same RDS table directly so the
+    # Entry/Exit History and Vehicles tabs survive a parking-service outage.
+    txns = await _rds_history(state.cfg.postgres_dsn, vehicle_id, limit)
+    if txns is not None:
+        REQUESTS.labels("parking", "ok").inc()
+        return {"decision_path": "RDS_DIRECT", "count": len(txns), "transactions": txns}
+    REQUESTS.labels("parking", "error").inc()
+    return {"decision_path": "UNAVAILABLE", "count": 0, "transactions": []}
 
 
 @router.get("/violations")
@@ -228,5 +305,14 @@ async def violations(limit: int = Query(default=100, ge=1, le=1000),
                      state: GatewayState = Depends(get_state)) -> dict:
     """Parking violation / overflow events from RDS."""
     data = await _upstream(state, "/violations?" + urlencode({"limit": limit}))
-    REQUESTS.labels("parking", "ok").inc()
-    return data if data is not None else {"count": 0, "violations": []}
+    if data is not None:
+        REQUESTS.labels("parking", "ok").inc()
+        return {"decision_path": "LIVE", **data}
+    # Upstream (parking service) down → read jnpa.parking_events directly so the
+    # Violations tab never silently shows 0 while the DB actually has rows.
+    viols = await _rds_violations(state.cfg.postgres_dsn, limit)
+    if viols is not None:
+        REQUESTS.labels("parking", "ok").inc()
+        return {"decision_path": "RDS_DIRECT", "count": len(viols), "violations": viols}
+    REQUESTS.labels("parking", "error").inc()
+    return {"decision_path": "UNAVAILABLE", "count": 0, "violations": []}

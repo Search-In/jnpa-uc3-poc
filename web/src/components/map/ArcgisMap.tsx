@@ -55,7 +55,12 @@ import {
   type IncidentSummary,
 } from "@/lib/incidents";
 import { fmtDateTimeIST } from "@/lib/utils";
-import { JNPA_CENTER, JNPA_ZOOM } from "@/lib/basemap";
+import {
+  SATELLITE_BASEMAP,
+  applyCorridorView,
+  CORRIDOR_CENTER,
+  CORRIDOR_ZOOM,
+} from "@/lib/mapConfig";
 import {
   snapPathToRoads,
   buildPathIndex,
@@ -69,7 +74,7 @@ import { useClickOutside } from "@/hooks/useClickOutside";
 // a pure view change over one data source (no separate page, no simulator/mock).
 import { Scene3D } from "./scene3d/Scene3D";
 
-const DEFAULT_BASEMAP = "dark-gray-vector";
+const DEFAULT_BASEMAP = SATELLITE_BASEMAP;
 // Soft outer road "shoulder" drawn under the corridor casing so the ribbon has a
 // graduated, anti-aliased edge (a real-road look) instead of a hard boundary.
 // Purely cosmetic; kept local alongside the other map-only colour constants.
@@ -143,7 +148,7 @@ export interface ArcgisMapProps {
    * the highlight layer; null clears it.
    */
   focusPoint?: { lat: number; lon: number } | null;
-  /** Override basemap (default "dark-gray-vector" — no API key needed in dev). */
+  /** Override basemap (default "satellite" — Esri World Imagery, no API key). */
   basemap?: string;
   /** Map centre [lon, lat]; defaults to the JNPA corridor mid-point. */
   center?: [number, number];
@@ -184,8 +189,8 @@ export function ArcgisMap({
   highlightLabels = {},
   focusPoint = null,
   basemap = DEFAULT_BASEMAP,
-  center = JNPA_CENTER,
-  zoom = JNPA_ZOOM,
+  center = CORRIDOR_CENTER,
+  zoom = CORRIDOR_ZOOM,
   onGateClick,
   onViewReady,
   className,
@@ -251,8 +256,12 @@ export function ArcgisMap({
       if (!view || !view.map) return;
       viewRef.current = view;
 
-      // GIS-5 UX: continuous (non-stepped) wheel/pinch zoom for a smooth feel.
-      if (view.constraints) view.constraints.snapToZoom = false;
+      // GIS-5 UX + corridor lock: frame the view on the JNPA operational corridor
+      // AND hard-clamp pan/zoom to it (extent geometry + minZoom, rotation off,
+      // continuous zoom) so the operator only ever sees the port corridor, never
+      // the wider Navi Mumbai / Uran region. applyCorridorView also goTo()s the
+      // corridor so the first painted frame is already tight on it.
+      applyCorridorView(view);
 
       // Ensure the native zoom (+/−) and attribution widgets are present at the
       // top-left corner (canonical ArcGIS default UI). Idempotent — keeps exactly

@@ -26,6 +26,8 @@ import "@arcgis/map-components/components/arcgis-map";
 import { ArcgisMap as ArcgisMapWC } from "@arcgis/map-components-react";
 import { Layers as LayersIcon, X as XIcon } from "lucide-react";
 import GraphicsLayer from "@arcgis/core/layers/GraphicsLayer";
+import FeatureLayer from "@arcgis/core/layers/FeatureLayer";
+import HeatmapRenderer from "@arcgis/core/renderers/HeatmapRenderer";
 import Graphic from "@arcgis/core/Graphic";
 import Point from "@arcgis/core/geometry/Point";
 import Polyline from "@arcgis/core/geometry/Polyline";
@@ -46,6 +48,13 @@ import type {
   Zone,
 } from "@/lib/types";
 import { gateColour, jamColour, MAP_TOKENS, parkingStatusColour, zoneColour } from "@/lib/tokens";
+import {
+  incidentsNear,
+  summariseIncidents,
+  type IncidentPoint,
+  type IncidentSummary,
+} from "@/lib/incidents";
+import { fmtDateTimeIST } from "@/lib/utils";
 import { JNPA_CENTER, JNPA_ZOOM } from "@/lib/basemap";
 import {
   snapPathToRoads,
@@ -70,10 +79,23 @@ const HIGHLIGHT_COLOUR = "#56B4E9";
 // Alert-focus halo colour (CB-safe orange) — distinct from the tour spotlight.
 const FOCUS_COLOUR = "#E69F00";
 
+// Click radius (metres) used to aggregate violation/event incidents into a
+// single hotspot popup — the heatmap surface has no per-feature popup, so a
+// click gathers everything within this radius of the map point.
+const HOTSPOT_RADIUS_M = 500;
+
 // Operator-toggleable operational layers, surfaced in the floating Layers
 // control (GIS-5). The tour-driven `highlight` layer is intentionally omitted.
-type ToggleLayerKey = "gates" | "corridor" | "trucks" | "heatmap" | "zones" | "parking";
+type ToggleLayerKey =
+  | "violationHeatmap"
+  | "gates"
+  | "corridor"
+  | "trucks"
+  | "heatmap"
+  | "zones"
+  | "parking";
 const LAYER_DEFS: { key: ToggleLayerKey; label: string }[] = [
+  { key: "violationHeatmap", label: "Violation heatmap" },
   { key: "gates", label: "Gates" },
   { key: "corridor", label: "NH-348 corridor" },
   { key: "trucks", label: "Trucks (1:50)" },
@@ -95,6 +117,12 @@ export interface ArcgisMapProps {
   trucks?: TruckDevice[];
   /** Parking facilities. */
   parkingFacilities?: ParkingFacility[];
+  /**
+   * Geolocated violation / AI / entry-exit incidents that drive the Esri
+   * HeatmapRenderer violation-density layer. Already resolved to lat/lon by the
+   * caller (see lib/incidents.resolveIncidents). Empty/omitted = no heat layer.
+   */
+  incidents?: IncidentPoint[];
   /**
    * Asset ids the guided What-If tour is spotlighting for the current step
    * (gate ids / corridor segment ids). The map rings each with a halo and
@@ -151,6 +179,7 @@ export function ArcgisMap({
   snapshots = [],
   trucks = [],
   parkingFacilities = [],
+  incidents = [],
   highlights = [],
   highlightLabels = {},
   focusPoint = null,
@@ -173,6 +202,7 @@ export function ArcgisMap({
   const [viewReady, setViewReady] = useState(false);
   const layers = useRef<{
     heatmap: GraphicsLayer;
+    violationHeatmap: FeatureLayer;
     zones: GraphicsLayer;
     corridor: GraphicsLayer;
     parking: GraphicsLayer;
@@ -182,6 +212,19 @@ export function ArcgisMap({
     pulse: GraphicsLayer;
   } | null>(null);
   const clickHandle = useRef<ViewHandle | null>(null);
+  // Live copy of the resolved incidents for the click handler (which closes over
+  // stale props otherwise), plus edit bookkeeping for the client-side heatmap
+  // FeatureLayer: a monotonic objectId sequence + the ids currently on the layer,
+  // so each refresh deletes exactly the previous batch and adds a fresh one.
+  const incidentsRef = useRef<IncidentPoint[]>(incidents);
+  incidentsRef.current = incidents;
+  const heatOidSeq = useRef(0);
+  const heatOids = useRef<number[]>([]);
+  const heatEditing = useRef(false);
+  // zone_id → display name, kept current for the hotspot popup title (the click
+  // handler is created once and would otherwise close over the initial zones).
+  const zoneNameRef = useRef<Map<string, string>>(new Map());
+  zoneNameRef.current = new Map(zones.map((z) => [z.id, z.name]));
   // Snapped road geometry for the corridor (OSRM, render-time only). Null until
   // the route resolves, or permanently if OSRM is unreachable — callers then
   // fall back to the authored straight-line geometry.
@@ -220,6 +263,11 @@ export function ArcgisMap({
       const mk = (id: string) => new GraphicsLayer({ id, title: id });
       const set = {
         heatmap: mk("uc3-heatmap"),
+        // Real Esri HeatmapRenderer layer (violation/event density). A
+        // client-side FeatureLayer so the density surface is genuine kernel
+        // density, not a scatter of markers. Sits just above the congestion
+        // cue and below the zone outlines so both stay legible.
+        violationHeatmap: makeViolationHeatmapLayer(),
         zones: mk("uc3-zones"),
         corridor: mk("uc3-corridor"),
         parking: mk("uc3-parking"),
@@ -234,6 +282,7 @@ export function ArcgisMap({
       layers.current = set;
       view.map.addMany([
         set.heatmap,
+        set.violationHeatmap,
         set.zones,
         set.corridor,
         set.parking,
@@ -242,18 +291,57 @@ export function ArcgisMap({
         set.highlight,
         set.pulse,
       ]);
+      // Restore the operator's toggle state onto the freshly-created layers so a
+      // remount (e.g. guided-tour navigation) doesn't silently re-show a layer
+      // the operator had hidden.
+      set.violationHeatmap.visible = layerVis.violationHeatmap ?? true;
 
-      // Gate click → callback.
+      // Click routing (all via hitTest):
+      //   1. gate graphic → onGateClick callback (unchanged);
+      //   2. any graphic that carries its own popupTemplate (zone/corridor/
+      //      parking/gate) → ArcGIS's default popup handles it, we stay out;
+      //   3. otherwise → aggregate the violation/event incidents around the
+      //      click point into a single hotspot popup (the heatmap surface has no
+      //      per-feature popup of its own).
       clickHandle.current?.remove();
       clickHandle.current = view.on("click", (e) => {
         void view.hitTest(e).then((res) => {
-          const hit = res.results.find(
-            (r) => r.type === "graphic" && r.graphic?.layer === layers.current?.gates,
-          );
-          if (hit && hit.type === "graphic") {
-            const gateId = hit.graphic.getAttribute("id") as string | undefined;
+          const graphics = res.results.filter((r) => r.type === "graphic");
+          const gateHit = graphics.find((r) => r.graphic?.layer === layers.current?.gates);
+          if (gateHit && gateHit.type === "graphic") {
+            const gateId = gateHit.graphic.getAttribute("id") as string | undefined;
             if (gateId) onGateClickRef.current?.(gateId);
           }
+          // A templated graphic under the cursor owns the popup — don't stack the
+          // hotspot popup on top of a zone/gate/segment popup.
+          const templated = graphics.some(
+            (r) => r.type === "graphic" && r.graphic?.popupTemplate,
+          );
+          if (templated) return;
+          const mp = e.mapPoint;
+          if (!mp || !layers.current?.violationHeatmap.visible) {
+            view.closePopup();
+            return;
+          }
+          const near = incidentsNear(
+            incidentsRef.current,
+            mp.longitude,
+            mp.latitude,
+            HOTSPOT_RADIUS_M,
+          );
+          if (near.length === 0) {
+            view.closePopup();
+            return;
+          }
+          const summary = summariseIncidents(near);
+          const zoneName = summary.dominantZone
+            ? zoneNameRef.current.get(summary.dominantZone) ?? summary.dominantZone
+            : null;
+          view.openPopup({
+            title: hotspotTitle(summary, zoneName),
+            location: mp,
+            content: hotspotContent(summary),
+          });
         });
       });
 
@@ -272,6 +360,7 @@ export function ArcgisMap({
   // ---- render helpers ---------------------------------------------------
   const renderAll = useCallback(() => {
     renderHeatmap();
+    void renderIncidentHeatmap();
     renderZones();
     renderCorridor();
     renderParking();
@@ -380,6 +469,43 @@ export function ArcgisMap({
           attributes: { segment_id: seg.id, ratio },
         }),
       );
+    }
+  }
+
+  // Push the resolved incidents into the client-side heatmap FeatureLayer. Each
+  // refresh deletes the previous batch (tracked by objectId) and adds the new
+  // one via a single applyEdits, so the HeatmapRenderer re-densifies. A simple
+  // in-flight guard serialises overlapping refreshes; polling keeps it eventually
+  // consistent if one is skipped.
+  async function renderIncidentHeatmap() {
+    const layer = layers.current?.violationHeatmap;
+    if (!layer || heatEditing.current) return;
+    heatEditing.current = true;
+    try {
+      const adds = incidentsRef.current.map((p) => {
+        const oid = ++heatOidSeq.current;
+        return new Graphic({
+          geometry: new Point({ longitude: p.lon, latitude: p.lat, spatialReference: WGS84 }),
+          attributes: {
+            oid,
+            weight: p.weight,
+            event_type: p.event_type,
+            vehicle_id: p.vehicle_id ?? "",
+            zone_id: p.zone_id ?? "",
+            severity: p.severity,
+            status: p.status ?? "",
+            created_at: p.created_at,
+          },
+        });
+      });
+      const deletes = heatOids.current.map((objectId) => ({ objectId }));
+      await layer.applyEdits({ deleteFeatures: deletes, addFeatures: adds });
+      heatOids.current = adds.map((g) => g.attributes.oid as number);
+    } catch {
+      // Client-side applyEdits is best-effort; a failed refresh keeps the
+      // previous surface until the next data tick corrects it.
+    } finally {
+      heatEditing.current = false;
     }
   }
 
@@ -695,6 +821,8 @@ export function ArcgisMap({
   }, [focusPoint]);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => void renderIncidentHeatmap(), [incidents]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => renderZones(), [zones]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => renderGates(), [gates]);
@@ -876,6 +1004,88 @@ export function ArcgisMap({
 }
 
 export default ArcgisMap;
+
+// ---- violation/event heatmap (Esri HeatmapRenderer) ---------------------
+
+// Empty client-side FeatureLayer carrying the real Esri HeatmapRenderer.
+// Features are streamed in via applyEdits (renderIncidentHeatmap) so the density
+// surface reflects live violation/AI/entry-exit incidents. Colours come from the
+// design tokens (single source of truth); the low stop is transparent so sparse
+// areas fade into the basemap.
+function makeViolationHeatmapLayer(): FeatureLayer {
+  return new FeatureLayer({
+    id: "uc3-violation-heatmap",
+    title: "Violation heatmap",
+    source: [],
+    objectIdField: "oid",
+    geometryType: "point",
+    spatialReference: WGS84,
+    // The aggregated hotspot popup is opened from the map click handler, so the
+    // layer's own per-feature popup stays off (one heat point isn't meaningful).
+    popupEnabled: false,
+    fields: [
+      { name: "oid", type: "oid" },
+      { name: "weight", type: "double" },
+      { name: "event_type", type: "string" },
+      { name: "vehicle_id", type: "string" },
+      { name: "zone_id", type: "string" },
+      { name: "severity", type: "string" },
+      { name: "status", type: "string" },
+      { name: "created_at", type: "string" },
+    ],
+    renderer: new HeatmapRenderer({
+      field: "weight",
+      radius: 40,
+      minDensity: 0,
+      maxDensity: 0.8,
+      colorStops: MAP_TOKENS.heatStops.map((s) => ({ ratio: s.ratio, color: s.color })),
+    }),
+  });
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+// Title for the click-time hotspot popup — the dominant zone name, flagged HIGH
+// ACTIVITY when the cluster is violation-heavy.
+function hotspotTitle(s: IncidentSummary, zoneName: string | null): string {
+  const where = zoneName ?? "Incident hotspot";
+  return s.violations >= 5 ? `${where} — HIGH ACTIVITY` : where;
+}
+
+// HTML body for the hotspot popup: aggregate counts + a short recent-events list.
+// ArcGIS sanitises popup HTML, but data values are escaped here as well.
+function hotspotContent(s: IncidentSummary): string {
+  const row = (label: string, value: string) =>
+    `<div style="display:flex;justify-content:space-between;gap:16px;padding:2px 0">` +
+    `<span style="color:#64748b">${label}</span><span style="font-weight:600">${value}</span></div>`;
+  const recent = s.recent
+    .map(
+      (i) =>
+        `<div style="display:flex;justify-content:space-between;gap:12px;padding:2px 0;font-size:12px">` +
+        `<span>${escapeHtml(i.event_type)}</span>` +
+        `<span style="color:#64748b">${escapeHtml(i.vehicle_id ?? "—")}</span>` +
+        `<span style="color:#64748b">${fmtDateTimeIST(i.created_at)}</span></div>`,
+    )
+    .join("");
+  return (
+    row("Total Events", String(s.total)) +
+    row("Violations", String(s.violations)) +
+    row("Vehicles Impacted", String(s.vehicles)) +
+    row("Top Issue", escapeHtml(s.topIssue ?? "—")) +
+    row("Last Event", s.lastEvent ? fmtDateTimeIST(s.lastEvent) : "—") +
+    (recent
+      ? `<div style="margin-top:6px;border-top:1px solid #e2e8f0;padding-top:4px">` +
+        `<div style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#94a3b8;margin-bottom:2px">Recent</div>` +
+        `${recent}</div>`
+      : "")
+  );
+}
 
 // ---- small geometry / colour helpers ------------------------------------
 function closeRing(ring: [number, number][]): [number, number][] {

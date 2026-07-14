@@ -394,6 +394,7 @@
     "legend": "Legend",
     "toggleLegend": "Toggle legend",
     "layer": {
+      "violationHeatmap": "Violation heatmap",
       "gates": "Gates",
       "corridor": "NH-348 corridor",
       "trucks": "Trucks (1:50)",

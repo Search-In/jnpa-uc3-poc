@@ -657,13 +657,19 @@ export interface ParkingFacilityRow {
   free_pct: number | null;
   status: string;
 }
+// GET /api/parking/summary — the gateway maps the RDS rollup through
+// `_summary_contract`, which emits the shared ParkingBoard header contract
+// (total_* / full_count), NOT capacity/occupied/full. Typed accurately here so a
+// future consumer reads the real field names. (The Parking Management KPI cards
+// no longer depend on this — they roll up the per-facility availability data.)
 export interface ParkingMgmtSummary {
   source?: string;
-  capacity: number;
-  occupied: number;
-  available: number;
-  facilities: number;
-  full: number;
+  decision_path?: string;
+  total_capacity: number;
+  total_occupied: number;
+  total_available: number;
+  full_count: number;
+  utilization_pct?: number;
 }
 export interface ParkingAllocation {
   allocated: boolean;

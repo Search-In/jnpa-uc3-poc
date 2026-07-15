@@ -147,6 +147,33 @@ async def resolve_device(
     return row["device_id"] if row else None
 
 
+async def registered_devices(state: GatewayState, *, limit: int = 500) -> list[str]:
+    """Best-effort list of device_ids that have a push registration (FCM or WebPush).
+
+    Used by broadcast-style alert paths (e.g. automatic congestion) that have no
+    single bound driver but should still reach every driver whose device can be
+    pushed to. Merges the in-memory write-through caches with the durable table so
+    a cold gateway still finds devices seeded/registered before it started.
+    Returns [] when nothing is registered (the caller then no-ops the device legs).
+    """
+    ids: set[str] = set(FCM_TOKENS) | set(SUBSCRIPTIONS)
+    dsn = state.cfg.postgres_dsn
+    if dsn:
+        from jnpa_shared.db import fetch_all
+
+        try:
+            rows = await fetch_all(
+                """SELECT device_id FROM jnpa.push_subscriptions
+                   WHERE fcm_token IS NOT NULL OR webpush IS NOT NULL
+                   ORDER BY updated_at DESC LIMIT :lim""",
+                {"lim": limit}, dsn=dsn,
+            )
+            ids.update(r["device_id"] for r in (rows or []))
+        except Exception as exc:  # noqa: BLE001
+            log.debug("push_registered_devices_db_skipped", error=str(exc))
+    return sorted(ids)[:limit]
+
+
 async def _load_fcm(state: GatewayState, device_id: str) -> Optional[str]:
     if device_id in FCM_TOKENS:
         return FCM_TOKENS[device_id]

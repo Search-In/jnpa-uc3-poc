@@ -55,16 +55,29 @@ def _auto_congestion_alert(state: GatewayState, predictions: Any) -> None:
     if thr > 1.0:  # disabled by config
         return
     from .. import audit
+    from .. import notifications as notif
+    from . import push
     from services import congestion_alert
 
-    audit.spawn(
-        congestion_alert.raise_congestion_alerts(
+    async def _run() -> None:
+        # Fan a newly-raised congestion alert out to every registered driver
+        # device over WebPush + FCM (ws=False — the service emits the corridor
+        # WS frame once, so we never duplicate it). No registered device => the
+        # service still broadcasts on WS exactly as before.
+        async def _dispatch(device_id: str, advisory: Dict[str, Any]):
+            return await notif.dispatch(state, device_id, advisory, ws_type="alert", ws=False)
+
+        targets = await push.registered_devices(state)
+        await congestion_alert.raise_congestion_alerts(
             predictions=predictions,
             threshold=thr,
             dsn=state.cfg.postgres_dsn or None,
             broadcast=state.ws.broadcast,
+            dispatch=_dispatch if targets else None,
+            device_targets=targets or None,
         )
-    )
+
+    audit.spawn(_run())
 
 
 @router.get("/predict")

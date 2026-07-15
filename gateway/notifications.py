@@ -97,6 +97,7 @@ async def dispatch_alert(
     href: Optional[str] = None,
     category: Optional[str] = None,
     extra: Optional[Dict[str, Any]] = None,
+    ws: bool = True,
 ) -> Optional[DispatchResult]:
     """Convenience wrapper for the alert engine (congestion / parking / geofence /
     customs / emergency). Builds the standard advisory envelope and dispatches it
@@ -105,6 +106,11 @@ async def dispatch_alert(
     Returns None (no-op) when ``device_id`` is unknown — an alert with no bound
     device still reaches the control-room dashboard via the normal alert pump; it
     just has no driver to push to.
+
+    ``ws`` defaults to True (the wrapper emits its own ``alert`` frame). Pass
+    ``ws=False`` when the caller has ALREADY broadcast a WS frame for this event
+    (e.g. the violations console emits ``violation_enforced``) so the driver's
+    device-push legs are added WITHOUT changing existing WebSocket behaviour.
     """
     if not device_id:
         return None
@@ -119,7 +125,7 @@ async def dispatch_alert(
         payload["href"] = href
     if extra:
         payload.update(extra)
-    return await dispatch(gw, device_id, payload, ws_type="alert")
+    return await dispatch(gw, device_id, payload, ws_type="alert", ws=ws)
 
 
 __all__ = ["dispatch", "dispatch_alert", "DispatchResult"]

@@ -199,7 +199,27 @@ async def _lifespan(app: FastAPI):
         except Exception as exc:  # noqa: BLE001
             log.warning("fleet_seed_sim_unreachable", error=str(exc))
         inserted = await fleet.sync_from_fleet(cfg.postgres_dsn, devices) if devices else 0
-        log.info("fleet_master_ready", devices_seen=len(devices), inserted=inserted)
+        # Reconcile the master with EXISTING driver assignments: every assigned
+        # vehicle (drivers.vehicle_no_norm) must exist as a fleet vehicle_id, or the
+        # assignment is orphaned (the deployment blocker). Backfills from ALL
+        # assignments — not only truck-sim — and NEVER mutates jnpa.drivers, so PWA
+        # login / JWTs / assignments are untouched.
+        backfilled = await fleet.sync_from_assignments(cfg.postgres_dsn)
+        log.info("fleet_master_ready", devices_seen=len(devices),
+                 inserted=inserted, assignment_backfilled=backfilled)
+        # Startup validation: report any ACTIVE driver still without a matching
+        # fleet vehicle (should be zero after the backfill).
+        orphans = await fleet.orphan_active_drivers(cfg.postgres_dsn)
+        if orphans:
+            log.error(
+                "fleet_orphan_active_drivers",
+                count=len(orphans),
+                drivers=[{"driver_id": o.get("driver_id"),
+                          "vehicle_no_norm": o.get("vehicle_no_norm")} for o in orphans[:50]],
+                hint="ACTIVE drivers reference a vehicle absent from jnpa.fleet_vehicles",
+            )
+        else:
+            log.info("fleet_assignment_integrity_ok")
     except Exception as exc:  # noqa: BLE001
         log.warning("fleet_master_boot_failed", error=str(exc))
 

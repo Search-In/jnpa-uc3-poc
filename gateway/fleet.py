@@ -283,6 +283,92 @@ async def sync_from_fleet(dsn: str, devices: List[Mapping[str, Any]]) -> int:
     return inserted
 
 
+def _looks_like_trk_id(value: str) -> bool:
+    """True for the canonical fleet Vehicle ID shape TRK-000123 (vs a plate)."""
+    return len(value) == 10 and value.startswith("TRK-") and value[4:].isdigit()
+
+
+async def sync_from_assignments(dsn: str) -> int:
+    """Backfill the Vehicle Master from EXISTING driver assignments.
+
+    Every assigned vehicle (``jnpa.drivers.vehicle_no_norm``) MUST exist as a
+    ``jnpa.fleet_vehicles.vehicle_id`` — that is the canonical relationship the PWA
+    login gate and the deployment audit depend on. The truck-sim sync only covers
+    sim devices, so assignments that came from elsewhere (admin-created plates,
+    non-sim TRK ids) were orphaned. This backfills a fleet row for each such
+    Vehicle ID so no ACTIVE driver is left dangling.
+
+    CRITICAL: this NEVER touches ``jnpa.drivers`` — assignments, PWA login and JWTs
+    are unchanged; it only *adds* the missing fleet rows the assignments point at.
+    Idempotent (skips ids that already exist). Returns the number inserted.
+
+    For a Vehicle ID that is a plate (not TRK-shaped) the plate is also stored as
+    the ``vehicle_number``; for a TRK-shaped id the driver's original ``vehicle_no``
+    (if it is a plate) is used as the number, else it is left null."""
+    from . import enrollment  # local import: enrollment never imports fleet
+
+    assignments = await enrollment.all_assignments(dsn)
+    inserted = 0
+    for a in assignments:
+        vid = normalize_vehicle_no(a.get("vehicle_no_norm"))
+        if not vid or await get_vehicle(dsn, vid):
+            continue
+        raw = (a.get("vehicle_no") or "").strip()
+        if _looks_like_trk_id(vid):
+            number = "" if _looks_like_trk_id(raw.upper()) else raw
+        else:
+            number = vid  # the Vehicle ID *is* the plate
+        try:
+            await add_vehicle(dsn, vehicle_id=vid, vehicle_number=number,
+                              vehicle_type=_DEFAULT_TYPE, status=ACTIVE,
+                              created_by="system:assignment-backfill")
+            inserted += 1
+        except ValueError:
+            continue  # inserted concurrently — fine
+    if inserted:
+        log.info("fleet_assignment_backfill", inserted=inserted)
+    return inserted
+
+
+async def orphan_active_drivers(dsn: str, *, active_only: bool = True) -> List[dict]:
+    """Deployment audit: ACTIVE drivers whose assigned vehicle has NO matching fleet
+    vehicle. Mirrors the verification query
+
+        SELECT d.driver_id, d.name, d.vehicle_no_norm
+        FROM jnpa.drivers d
+        LEFT JOIN jnpa.fleet_vehicles f ON d.vehicle_no_norm = f.vehicle_id
+        WHERE f.vehicle_id IS NULL;
+
+    Returns ``[{driver_id, name, vehicle_no_norm}, …]`` (empty == healthy). Only
+    considers drivers that actually hold an assignment (non-null vehicle_no_norm);
+    ``active_only=False`` audits every status."""
+    if await _backend(dsn) == "db":
+        from jnpa_shared.db import fetch_all
+
+        status_clause = "d.status = 'ACTIVE' AND " if active_only else ""
+        rows = await fetch_all(
+            f"""
+            SELECT d.driver_id, d.name, d.vehicle_no_norm
+            FROM jnpa.drivers d
+            LEFT JOIN jnpa.fleet_vehicles f ON d.vehicle_no_norm = f.vehicle_id
+            WHERE {status_clause} f.vehicle_id IS NULL
+              AND d.vehicle_no_norm IS NOT NULL AND TRIM(d.vehicle_no_norm) <> ''
+            ORDER BY d.driver_id
+            """, dsn=dsn)
+        return [dict(r) for r in rows]
+    from . import enrollment
+
+    out: List[dict] = []
+    for d in enrollment._MEM_DRIVERS.values():
+        if active_only and d.get("status") != ACTIVE:
+            continue
+        vid = (d.get("vehicle_no_norm") or "").strip()
+        if vid and vid not in _MEM:
+            out.append({"driver_id": d.get("driver_id"), "name": d.get("name"),
+                        "vehicle_no_norm": vid})
+    return out
+
+
 # --------------------------------------------------------------------------- reads
 async def get_vehicle(dsn: str, vehicle_id: str) -> Optional[dict]:
     vid = normalize_vehicle_no(vehicle_id)
@@ -375,7 +461,7 @@ async def stats(dsn: str, assigned: set) -> dict:
 
 __all__ = [
     "ACTIVE", "INACTIVE", "MAINTENANCE", "STATUSES", "ensure_backend",
-    "add_vehicle", "update_vehicle", "sync_from_fleet", "get_vehicle",
-    "vehicle_exists", "list_vehicles", "list_available", "stats",
-    "next_vehicle_id", "find_by_number",
+    "add_vehicle", "update_vehicle", "sync_from_fleet", "sync_from_assignments",
+    "orphan_active_drivers", "get_vehicle", "vehicle_exists", "list_vehicles",
+    "list_available", "stats", "next_vehicle_id", "find_by_number",
 ]

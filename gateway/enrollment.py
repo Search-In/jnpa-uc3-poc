@@ -637,6 +637,25 @@ async def active_driver_vehicle_map(dsn: str) -> Dict[str, dict]:
     return out
 
 
+async def all_assignments(dsn: str) -> List[dict]:
+    """Every driver row that holds a vehicle assignment (non-empty vehicle_no_norm),
+    of any status, as ``{driver_id, vehicle_no_norm, vehicle_no}``. Used by the
+    fleet backfill to guarantee each assigned Vehicle ID exists in the Vehicle
+    Master. Read-only — does not mutate jnpa.drivers."""
+    if await _backend(dsn) == "db":
+        from jnpa_shared.db import fetch_all
+
+        rows = await fetch_all(
+            "SELECT driver_id, vehicle_no_norm, vehicle_no FROM jnpa.drivers "
+            "WHERE vehicle_no_norm IS NOT NULL AND TRIM(vehicle_no_norm) <> ''", dsn=dsn)
+        return [dict(r) for r in rows]
+    return [{"driver_id": d.get("driver_id"),
+             "vehicle_no_norm": d.get("vehicle_no_norm"),
+             "vehicle_no": d.get("vehicle_no")}
+            for d in _MEM_DRIVERS.values()
+            if (d.get("vehicle_no_norm") or "").strip()]
+
+
 async def assigned_vehicles(dsn: str) -> set:
     """Normalised Vehicle IDs already taken (ACTIVE drivers + open enrollments).
     The Control-Room "available vehicles" dropdown subtracts this set so an admin
@@ -804,6 +823,6 @@ __all__ = [
     "submit", "mark_active", "set_status", "get", "list_requests", "audit",
     "decode_data_url", "promote_to_driver", "get_driver", "list_active_drivers",
     "get_active_driver_by_vehicle", "vehicle_assignment_conflict", "assigned_vehicles",
-    "active_driver_vehicle_map",
+    "active_driver_vehicle_map", "all_assignments",
     "log_verification", "recent_verifications", "store_face", "load_faces",
 ]

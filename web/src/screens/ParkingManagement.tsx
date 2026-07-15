@@ -53,13 +53,6 @@ export default function ParkingManagement() {
   const { basemap } = useMapSettings();
   const [tab, setTab] = useState<TabKey>("facilities");
 
-  // Distinct key from the adapter-shaped ["parking-summary"] used by the Live-Ops
-  // ParkingBoard — this one returns the {available,capacity,...} api shape, so a
-  // shared key would let one screen read the other's differently-named fields.
-  const sumQ = useQuery({
-    queryKey: ["parking-summary-mgmt"],
-    queryFn: () => api.parkingSummary(),
-  });
   const availQ = useQuery({
     queryKey: ["parking-avail"],
     queryFn: () => api.parkingAvailability(),
@@ -67,11 +60,25 @@ export default function ParkingManagement() {
   const histQ = useQuery({ queryKey: ["parking-hist"], queryFn: () => api.parkingHistory(200) });
   const violQ = useQuery({ queryKey: ["parking-viol"], queryFn: () => api.parkingViolations(200) });
 
-  const s = sumQ.data;
   const facilities = availQ.data?.facilities ?? [];
   const activeVehicles = (histQ.data?.transactions ?? []).filter((t) => t.status === "ACTIVE");
 
-  const utilPct = s && s.capacity ? Math.round((s.occupied / s.capacity) * 100) : 0;
+  // KPI rollup computed from the (already-loaded) per-facility availability data —
+  // the same RDS occupancy the facilities table shows. This removes the fragile
+  // dependency on the /api/parking/summary endpoint, whose fields are named
+  // total_capacity/total_occupied/... (the shared ParkingBoard contract) and so
+  // never matched the capacity/occupied/... this screen read — leaving the cards
+  // blank. Deriving here always yields numbers and can't drift from the table.
+  const kpi = useMemo(() => {
+    const capacity = facilities.reduce((a, f) => a + (f.capacity ?? 0), 0);
+    const occupied = facilities.reduce((a, f) => a + (f.occupied ?? 0), 0);
+    const available = Math.max(capacity - occupied, 0);
+    // Full = a facility with real capacity and zero free slots.
+    const full = facilities.filter((f) => (f.capacity ?? 0) > 0 && (f.available ?? 0) <= 0).length;
+    return { capacity, occupied, available, full };
+  }, [facilities]);
+
+  const utilPct = kpi.capacity ? Math.round((kpi.occupied / kpi.capacity) * 100) : 0;
 
   const chartData = useMemo(
     () =>
@@ -104,7 +111,6 @@ export default function ParkingManagement() {
   );
 
   function refreshAll() {
-    void qc.invalidateQueries({ queryKey: ["parking-summary-mgmt"] });
     void qc.invalidateQueries({ queryKey: ["parking-avail"] });
     void qc.invalidateQueries({ queryKey: ["parking-hist"] });
     void qc.invalidateQueries({ queryKey: ["parking-viol"] });
@@ -116,8 +122,8 @@ export default function ParkingManagement() {
         icon={SquareParking}
         title="Parking Management"
         subtitle="Geo-fenced port holding yards · RDS-backed"
-        updatedAt={sumQ.dataUpdatedAt}
-        isFetching={sumQ.isFetching && !sumQ.isLoading}
+        updatedAt={availQ.dataUpdatedAt}
+        isFetching={availQ.isFetching && !availQ.isLoading}
         onRefresh={refreshAll}
       />
 
@@ -127,31 +133,31 @@ export default function ParkingManagement() {
           <StatCard
             icon={ParkingCircle}
             label="Total Capacity"
-            value={s?.capacity ?? "—"}
+            value={kpi.capacity}
             tone="info"
-            loading={sumQ.isLoading}
+            loading={availQ.isLoading}
           />
           <StatCard
             icon={Car}
             label="Occupied"
-            value={s?.occupied ?? "—"}
+            value={kpi.occupied}
             tone="warn"
-            loading={sumQ.isLoading}
+            loading={availQ.isLoading}
             sub={`${utilPct}% utilised`}
           />
           <StatCard
             icon={CheckCircle2}
             label="Available"
-            value={s?.available ?? "—"}
+            value={kpi.available}
             tone="ok"
-            loading={sumQ.isLoading}
+            loading={availQ.isLoading}
           />
           <StatCard
             icon={Ban}
             label="Full Facilities"
-            value={s?.full ?? "—"}
-            tone={(s?.full ?? 0) > 0 ? "critical" : "ok"}
-            loading={sumQ.isLoading}
+            value={kpi.full}
+            tone={kpi.full > 0 ? "critical" : "ok"}
+            loading={availQ.isLoading}
           />
           <StatCard
             icon={TriangleAlert}

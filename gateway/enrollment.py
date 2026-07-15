@@ -588,14 +588,14 @@ async def vehicle_assignment_conflict(dsn: str, vehicle_no: str, *,
         row = await fetch_one(
             "SELECT driver_id, name, status FROM jnpa.drivers "
             "WHERE vehicle_no_norm = :v AND status = 'ACTIVE' "
-            "AND (:excl IS NULL OR driver_id <> :excl) LIMIT 1",
+            "AND (CAST(:excl AS TEXT) IS NULL OR driver_id <> CAST(:excl AS TEXT)) LIMIT 1",
             {"v": norm, "excl": exclude_driver_id}, dsn=dsn)
         if row:
             return {**_iso_row(dict(row)), "kind": "driver"}
         row = await fetch_one(
             "SELECT driver_id, name, status FROM jnpa.driver_enrollments "
             "WHERE UPPER(TRIM(vehicle_no)) = :v AND status = ANY(:states) "
-            "AND (:excl IS NULL OR driver_id <> :excl) LIMIT 1",
+            "AND (CAST(:excl AS TEXT) IS NULL OR driver_id <> CAST(:excl AS TEXT)) LIMIT 1",
             {"v": norm, "states": list(_OPEN_ENROL_STATES), "excl": exclude_driver_id}, dsn=dsn)
         if row:
             return {**_iso_row(dict(row)), "kind": "enrollment"}

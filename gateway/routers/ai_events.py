@@ -32,9 +32,34 @@ _ALERT_NS = uuid.UUID("9a8b7c6d-5e4f-3a2b-1c0d-9e8f7a6b5c4d")
 
 # AI event types that should raise an alert + notify by default.
 _ALERTING = {
-    "ILLEGAL_PARKING", "WRONG_DIRECTION", "NO_PARKING_VIOLATION",
-    "QUEUE_OVERFLOW", "CONGESTION_ALERT", "OVERSPEED",
+    "ILLEGAL_PARKING", "WRONG_DIRECTION", "WRONG_WAY", "NO_PARKING_VIOLATION",
+    "QUEUE_OVERFLOW", "CONGESTION_ALERT", "OVERSPEED", "OVERSPEEDING",
 }
+
+# Driver-facing copy per event kind: (title, body, category, href). The client
+# (mobile-pwa/src/lib/notify.ts) also maps kinds, but the server supplies plain
+# language + deep-link so an FCM data-only message renders identically. Aliases
+# (WRONG_WAY, OVERSPEEDING) map to the same buckets as the canonical kinds.
+_ADVISORY: Dict[str, tuple] = {
+    "WRONG_DIRECTION": ("Wrong-way driving", "You are travelling against traffic — correct your direction immediately.", "emergency", "#/map"),
+    "WRONG_WAY": ("Wrong-way driving", "You are travelling against traffic — correct your direction immediately.", "emergency", "#/map"),
+    "OVERSPEED": ("Overspeeding", "You are exceeding the speed limit — slow down.", "emergency", "#/map"),
+    "OVERSPEEDING": ("Overspeeding", "You are exceeding the speed limit — slow down.", "emergency", "#/map"),
+    "ILLEGAL_PARKING": ("No-parking violation", "Move your vehicle — parking is not allowed here.", "emergency", "#/zones"),
+    "NO_PARKING_VIOLATION": ("No-parking violation", "Move your vehicle — parking is not allowed here.", "emergency", "#/zones"),
+    "QUEUE_OVERFLOW": ("Congestion ahead", "Expect delay — an alternate route may be available.", "congestion", "#/map"),
+    "CONGESTION_ALERT": ("Congestion ahead", "Expect delay — an alternate route may be available.", "congestion", "#/map"),
+}
+
+
+def _advisory_copy(event_type: str, payload: Dict[str, Any]) -> tuple:
+    """(title, body, category, href) for an event kind, with a sane default."""
+    title, body, category, href = _ADVISORY.get(
+        event_type, (event_type.replace("_", " ").title() or "Advisory", "", "info", "#/alerts"),
+    )
+    # Let an explicit payload message override the canned body.
+    msg = payload.get("message") or payload.get("detail")
+    return title, (str(msg) if msg else body), category, href
 
 
 @router.post("/event")
@@ -42,9 +67,12 @@ async def ingest_ai_event(
     body: Dict[str, Any] = Body(...),
     state: GatewayState = Depends(get_state),
 ) -> dict:
-    """Ingest one AI event. Body: {event_type, vehicle_id?, driver_id?, location?,
-    payload?, severity?, alert?, notify?}. Persists to digital_twin_events and,
-    when warranted, raises an alert + notification."""
+    """Ingest one AI event. Body: {event_type, vehicle_id?, driver_id?, device_id?,
+    location?, payload?, severity?, alert?, notify?}. Persists to
+    digital_twin_events and, when warranted, raises an alert + dispatches a driver
+    notification over WS + WebPush + FCM. ``device_id`` (or a TRK-* vehicle_id) is
+    an optional, additive hint for the push target; without it the device is
+    resolved from the driver/vehicle mapping."""
     event_type = (body.get("event_type") or "").strip().upper()
     if not event_type:
         raise HTTPException(status_code=422, detail={"error": "event_type_required"})
@@ -54,7 +82,10 @@ async def ingest_ai_event(
     payload = body.get("payload") or {}
     severity = (body.get("severity") or "info").lower()
     should_alert = bool(body.get("alert", event_type in _ALERTING))
-    should_notify = bool(body.get("notify", severity in ("warning", "critical")))
+    # An alerting event warrants a driver notification even at default severity
+    # (a WRONG_WAY at 'info' still needs to reach the driver). An explicit
+    # notify=false in the body still wins.
+    should_notify = bool(body.get("notify", should_alert or severity in ("warning", "critical")))
 
     # 1) unified event timeline (reuse framework writer)
     await audit.record_event(
@@ -85,17 +116,59 @@ async def ingest_ai_event(
         except Exception as exc:  # noqa: BLE001
             log.warning("ai_alert_write_failed", error=str(exc))
 
+    dispatched: Dict[str, bool] | None = None
     if should_notify:
+        # Resolve the driver's registered device and fan the alert out over
+        # WS + WebPush + FCM (dispatch_alert). Reaches the mobile PWA in the
+        # background via FCM, not only a foregrounded socket. Best-effort: a
+        # driver with no registered device just gets the control-room WS frame.
+        # Lazy imports avoid a state<->notifications import cycle.
+        from .. import notifications
+        from . import push
+
+        # Prefer an explicit device_id in the body; else treat a TRK-* vehicle_id
+        # as the device directly; else reverse-lookup by driver/vehicle mapping.
+        device_id = body.get("device_id")
+        if not device_id and isinstance(vehicle_id, str) and vehicle_id.startswith("TRK-"):
+            device_id = vehicle_id
+        if not device_id:
+            device_id = await push.resolve_device(
+                state, driver_id=driver_id, vehicle_id=vehicle_id,
+            )
+        title, body_text, category, href = _advisory_copy(event_type, payload)
+        result = await notifications.dispatch_alert(
+            state, device_id,
+            kind=event_type, title=title, body=body_text,
+            category=category, href=href,
+            extra={"alert_id": alert_id, "plate": vehicle_id, "severity": severity},
+        )
+        dispatched = result.as_dict() if result else None
+        # Delivery audit reflects the ACTUAL DispatchResult — no more fake SENT.
+        # Status uses the audit framework's whitelist
+        # (SENT/SKIPPED/FAILED/NO_SUBSCRIPTION); the full per-transport breakdown
+        # is kept in provider_response for evidence. A device-transport
+        # (FCM/WebPush) success is a real push; WS-only means the device was not
+        # reached (no token / not configured) => SKIPPED, never a fake SENT.
+        if result is None:
+            status = "NO_SUBSCRIPTION"  # no device bound to this driver/vehicle
+        elif result.fcm or result.webpush:
+            status = "SENT"
+        elif result.ws:
+            status = "SKIPPED"  # dashboard got the WS frame; device push not delivered
+        else:
+            status = "FAILED"
         await audit.log_notification(
-            channel="push", event_id=alert_id, receiver=driver_id or vehicle_id,
-            message=f"AI alert: {event_type}", delivery_status="SENT",
-            provider_response={"event_type": event_type, "severity": severity},
+            channel="push", event_id=alert_id, receiver=device_id or driver_id or vehicle_id,
+            message=f"AI alert: {event_type}", delivery_status=status,
+            provider_response={"event_type": event_type, "severity": severity,
+                               "dispatch": dispatched, "device_id": device_id},
             dsn=state.cfg.postgres_dsn,
         )
 
     REQUESTS.labels("ai_event", "ok").inc()
     return {"ingested": True, "event_type": event_type, "alert_id": alert_id,
-            "alerted": should_alert, "notified": should_notify}
+            "alerted": should_alert, "notified": should_notify,
+            "dispatch": dispatched}
 
 
 @router.get("/events")

@@ -635,6 +635,31 @@ async def enforce(
     except Exception as exc:  # noqa: BLE001 — notification is non-critical
         log.warning("violations_notify_failed", case_id=case_id, error=str(exc))
 
+    # Additionally push the enforcement to the driver's device over WebPush + FCM
+    # (ws=False: the "violation_enforced" WS frame above is unchanged and NOT
+    # duplicated). Best-effort — a driver with no registered device is a no-op.
+    try:
+        from .. import notifications
+        from . import push
+
+        device_id = await push.resolve_device(state, driver_id=driver_id, vehicle_id=plate)
+        if device_id:
+            fine = res["case_total"]
+            challan_no = (challan or {}).get("challan_no")
+            await notifications.dispatch_alert(
+                state, device_id,
+                kind="VIOLATION_ENFORCED",
+                title="Enforcement notice",
+                body=(f"e-Challan {challan_no} issued — fine ₹{fine}." if challan_no
+                      else f"A traffic violation was recorded — fine ₹{fine}."),
+                category="compliance", href="#/profile",
+                extra={"case_id": case_id, "plate": plate, "challan_no": challan_no,
+                       "alert_ids": res["alert_ids"]},
+                ws=False,
+            )
+    except Exception as exc:  # noqa: BLE001 — device push is non-critical
+        log.warning("violations_device_push_failed", case_id=case_id, error=str(exc))
+
     await state.record_decision(
         api="violations", decision_path="ENFORCED", key=case_id, source="violations",
         detail={"kinds": kinds, "fine_total": res["case_total"],

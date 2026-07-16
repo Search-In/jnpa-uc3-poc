@@ -38,6 +38,10 @@ _COLUMNS = (
     "container_number", "vessel_name", "customs_status", "yard_block",
     "is_released", "vehicle_number", "gate", "camera_id", "eta",
     "eseal_status", "eseal_number", "pre_document_status", "origin_stream",
+    # Unified lifecycle status (migration 0023). Server-managed via
+    # transition_lifecycle() — NOT in _WRITABLE, so a client PUT can never set it
+    # directly; the DB DEFAULT 'CREATED' populates it on INSERT.
+    "lifecycle_status",
     "created_at", "updated_at",
 )
 _SELECT_COLS = ", ".join(_COLUMNS)
@@ -100,6 +104,44 @@ _REEFER_PLAN_COLS = ("id", "container_number", "temperature", "power_required",
                      "slot", "status", "created_at")
 _REEFER_PLAN_SELECT = ", ".join(_REEFER_PLAN_COLS)
 
+# Lifecycle audit log + scan verification records (migration 0023).
+_LIFECYCLE_COLS = ("id", "container_number", "action", "old_status", "new_status",
+                   "actor_role", "note", "created_at")
+_LIFECYCLE_SELECT = ", ".join(_LIFECYCLE_COLS)
+_SCAN_VERIF_COLS = ("id", "container_number", "verified", "remarks", "actor_role",
+                    "created_at")
+_SCAN_VERIF_SELECT = ", ".join(_SCAN_VERIF_COLS)
+
+
+class CargoTransitionError(Exception):
+    """Raised when a lifecycle transition is rejected: the container's current
+    status is not a legal predecessor of the requested target (e.g. release before
+    verify, or a duplicate release). Carries the current + attempted status so the
+    router can render a precise 409."""
+
+    def __init__(self, container_number: str, current: Optional[str], target: str) -> None:
+        self.container_number = container_number
+        self.current = current
+        self.target = target
+        super().__init__(
+            f"illegal cargo transition for {container_number}: "
+            f"{current or 'UNKNOWN'} -> {target}")
+
+
+def _infer_lifecycle(row: Mapping[str, Any]) -> str:
+    """Resolve a row's effective lifecycle when ``lifecycle_status`` is NULL — the
+    case for rows written before migration 0023 backfilled them, or by a fake in a
+    test. Derived from the legacy columns so the state machine behaves sensibly on
+    historical data: released -> RELEASED, yarded -> YARD_ASSIGNED, else CREATED."""
+    status = row.get("lifecycle_status")
+    if status:
+        return str(status)
+    if row.get("is_released"):
+        return "RELEASED"
+    if row.get("yard_block"):
+        return "YARD_ASSIGNED"
+    return "CREATED"
+
 
 class CargoRepository:
     """Raw-SQL CRUD for ``jnpa.cargo``. Stateless apart from the DSN, so a single
@@ -136,6 +178,7 @@ class CargoRepository:
     _FILTER_COLS = (
         "container_number", "customs_status", "yard_block", "is_released",
         "vehicle_number", "eseal_status", "pre_document_status", "origin_stream",
+        "lifecycle_status",
     )
 
     def _where(self, filters: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -162,6 +205,7 @@ class CargoRepository:
         eseal_status: Optional[str] = None,
         pre_document_status: Optional[str] = None,
         origin_stream: Optional[str] = None,
+        lifecycle_status: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict]:
@@ -190,6 +234,7 @@ class CargoRepository:
         eseal_status: Optional[str] = None,
         pre_document_status: Optional[str] = None,
         origin_stream: Optional[str] = None,
+        lifecycle_status: Optional[str] = None,
     ) -> int:
         """Total rows matching the same filters as list() (ignores limit/offset).
         Powers the X-Total-Count header so a paginated UI knows the full size."""
@@ -422,6 +467,137 @@ class CargoRepository:
             "INSERT INTO jnpa.cargo_rake_plans (rake_id, containers, planned_containers) "
             "VALUES (:rake_id, CAST(:containers AS jsonb), :planned_containers) "
             f"RETURNING {_RAKE_PLAN_SELECT}"
+        )
+        async with get_engine(self._dsn).begin() as conn:
+            result = await conn.execute(text(sql), params)
+            row = result.mappings().first()
+        return dict(row) if row else dict(params)
+
+    # -------------------------------------------------- lifecycle (0023)
+    async def transition_lifecycle(
+        self,
+        container_number: str,
+        *,
+        target: str,
+        allowed_from: set[str],
+        action: str,
+        actor_role: Optional[str] = None,
+        note: Optional[str] = None,
+        strict: bool = True,
+    ) -> Optional[dict]:
+        """Atomically advance ``jnpa.cargo.lifecycle_status`` to ``target``.
+
+        Locks the cargo row (``FOR UPDATE``), resolves the current status (falling
+        back to :func:`_infer_lifecycle` when the column is NULL), and:
+
+        * container absent            -> ``CargoNotFound`` if ``strict`` else ``None``
+        * current not in ``allowed_from`` -> ``CargoTransitionError`` if ``strict``
+                                             else ``None`` (no-op; the caller's
+                                             primary write still stands)
+        * otherwise                    -> UPDATE the status + append one row to the
+                                          ``cargo_lifecycle_events`` audit log, and
+                                          return the FULL updated cargo row plus the
+                                          resolved ``old_status``/``new_status``.
+
+        The update and the audit insert share one transaction, so the record's
+        state and its audit trail can never diverge. The ``allowed_from`` policy is
+        supplied by the service (the single source of the state machine)."""
+        async with get_engine(self._dsn).begin() as conn:
+            cur = await conn.execute(
+                text(f"SELECT {_SELECT_COLS} FROM jnpa.cargo "
+                     "WHERE container_number = :cn FOR UPDATE"),
+                {"cn": container_number})
+            existing = cur.mappings().first()
+            if existing is None:
+                if strict:
+                    raise CargoNotFound(container_number)
+                return None
+            current = _infer_lifecycle(existing)
+            if current not in allowed_from:
+                if strict:
+                    raise CargoTransitionError(container_number, current, target)
+                return None
+            upd = await conn.execute(
+                text("UPDATE jnpa.cargo SET lifecycle_status = :ns "
+                     f"WHERE container_number = :cn RETURNING {_SELECT_COLS}"),
+                {"ns": target, "cn": container_number})
+            row = upd.mappings().first()
+            await conn.execute(
+                text("INSERT INTO jnpa.cargo_lifecycle_events "
+                     "(container_number, action, old_status, new_status, actor_role, note) "
+                     "VALUES (:cn, :action, :old, :new, :actor, :note)"),
+                {"cn": container_number, "action": action, "old": current,
+                 "new": target, "actor": actor_role, "note": note})
+        out = dict(row) if row else dict(existing)
+        out["_old_status"] = current
+        out["_new_status"] = target
+        return out
+
+    async def list_lifecycle_events(self, container_number: str, *,
+                                    limit: int = 100, offset: int = 0) -> list[dict]:
+        """Append-only lifecycle transition history for one container, newest-first."""
+        sql = (
+            f"SELECT {_LIFECYCLE_SELECT} FROM jnpa.cargo_lifecycle_events "
+            "WHERE container_number = :cn ORDER BY id DESC LIMIT :limit OFFSET :offset"
+        )
+        async with get_engine(self._dsn).connect() as conn:
+            result = await conn.execute(
+                text(sql), {"cn": container_number, "limit": limit, "offset": offset})
+            return [dict(r) for r in result.mappings().all()]
+
+    async def list_scan_queue(self, *, limit: int = 100, offset: int = 0) -> list[dict]:
+        """Containers awaiting a customs scan: yard-assignment completed, NOT
+        released, and NOT yet verified. Yard-assignment is detected from either the
+        live ``yard_block`` or a lifecycle at/after YARD_ASSIGNED, so both the new
+        lifecycle path and legacy yarded rows appear. Oldest-first (queue order)."""
+        sql = (
+            f"SELECT {_SELECT_COLS} FROM jnpa.cargo "
+            "WHERE is_released = false "
+            "AND (yard_block IS NOT NULL OR lifecycle_status IN "
+            "     ('YARD_ASSIGNED','YARD_POSITION_ALLOCATED','REEFER_PLANNED',"
+            "      'RAKE_ASSIGNED','SCAN_PENDING')) "
+            "AND COALESCE(lifecycle_status,'') NOT IN ('VERIFIED','RELEASED') "
+            "ORDER BY created_at ASC, container_number ASC "
+            "LIMIT :limit OFFSET :offset"
+        )
+        async with get_engine(self._dsn).connect() as conn:
+            result = await conn.execute(text(sql), {"limit": limit, "offset": offset})
+            return [dict(r) for r in result.mappings().all()]
+
+    async def record_scan_verification(self, container_number: str, verified: bool,
+                                       remarks: Optional[str],
+                                       actor_role: Optional[str]) -> dict:
+        """Insert one scan/customs verification record and return the stored row."""
+        params = {"container_number": container_number, "verified": verified,
+                  "remarks": remarks, "actor_role": actor_role}
+        sql = (
+            "INSERT INTO jnpa.cargo_scan_verifications "
+            "(container_number, verified, remarks, actor_role) "
+            "VALUES (:container_number, :verified, :remarks, :actor_role) "
+            f"RETURNING {_SCAN_VERIF_SELECT}"
+        )
+        async with get_engine(self._dsn).begin() as conn:
+            result = await conn.execute(text(sql), params)
+            row = result.mappings().first()
+        return dict(row) if row else dict(params)
+
+    async def create_yard_position(self, container_number: str, *,
+                                   assigned_block: str, yard_row: Optional[str],
+                                   yard_slot: Optional[str], yard_position: Optional[str],
+                                   priority: str) -> dict:
+        """Record a physical yard position (block / row / slot / position) as a
+        ``cargo_yard_plans`` row with the 0023 position columns populated."""
+        params = {"container_number": container_number, "preferred_block": None,
+                  "assigned_block": assigned_block, "priority": priority,
+                  "yard_row": yard_row, "yard_slot": yard_slot,
+                  "yard_position": yard_position}
+        sql = (
+            "INSERT INTO jnpa.cargo_yard_plans "
+            "(container_number, preferred_block, assigned_block, priority, "
+            " yard_row, yard_slot, yard_position) "
+            "VALUES (:container_number, :preferred_block, :assigned_block, :priority, "
+            " :yard_row, :yard_slot, :yard_position) "
+            f"RETURNING {_YARD_PLAN_SELECT}, yard_row, yard_slot, yard_position"
         )
         async with get_engine(self._dsn).begin() as conn:
             result = await conn.execute(text(sql), params)

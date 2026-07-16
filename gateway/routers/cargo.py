@@ -65,6 +65,7 @@ from services.cargo import (
     CargoConflict,
     CargoNotFound,
     CargoService,
+    CargoTransitionError,
     scope_filters_for_role,
 )
 
@@ -254,6 +255,9 @@ class CargoOut(BaseModel):
     eseal_number: Optional[str] = None
     pre_document_status: Optional[str] = None
     origin_stream: Optional[str] = None
+    # Unified UC-II lifecycle state (migration 0023). Optional so a fake repo or a
+    # pre-0023 row without the column still deserialises (backward compatible).
+    lifecycle_status: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -526,6 +530,136 @@ class ReeferPlanOut(BaseModel):
         "container_number": "MSCU7789010", "slot": "REEFER-A12", "status": "ALLOCATED"}})
 
 
+# ------------------------------------------------- lifecycle DTOs / enums (0023)
+class LifecycleStatus(str, Enum):
+    """The unified UC-II cargo lifecycle (migration 0023). Also the value space of
+    the ``?status=`` list filter used for the UC-III handover (?status=RELEASED)."""
+    CREATED = "CREATED"
+    VESSEL_DISCHARGED = "VESSEL_DISCHARGED"
+    YARD_ASSIGNED = "YARD_ASSIGNED"
+    YARD_POSITION_ALLOCATED = "YARD_POSITION_ALLOCATED"
+    REEFER_PLANNED = "REEFER_PLANNED"
+    RAKE_ASSIGNED = "RAKE_ASSIGNED"
+    SCAN_PENDING = "SCAN_PENDING"
+    VERIFIED = "VERIFIED"
+    RELEASED = "RELEASED"
+
+
+class DischargeIn(BaseModel):
+    """Body for POST /api/cargo/{cn}/discharge (task #2)."""
+    vessel_name: Optional[str] = Field(default=None, max_length=200)
+    discharge_time: Optional[datetime] = Field(default=None,
+                                               description="Vessel discharge time (ISO-8601)")
+
+    model_config = ConfigDict(json_schema_extra={"example": {
+        "vessel_name": "TEST VESSEL", "discharge_time": "2026-07-16T08:30:00Z"}})
+
+
+class DischargeOut(BaseModel):
+    container_number: str
+    lifecycle_status: str = "VESSEL_DISCHARGED"
+    status: str = "DISCHARGED"
+
+    model_config = ConfigDict(json_schema_extra={"example": {
+        "container_number": "GESU5123996", "lifecycle_status": "VESSEL_DISCHARGED",
+        "status": "DISCHARGED"}})
+
+
+class YardPositionIn(BaseModel):
+    """Body for POST /api/cargo/{cn}/yard-position (task #4): the physical address."""
+    yard_block: str = Field(..., max_length=50, description="Yard block id, e.g. 'A-01'")
+    row: Optional[str] = Field(default=None, max_length=16)
+    slot: Optional[str] = Field(default=None, max_length=16)
+    position: Optional[str] = Field(default=None, max_length=32)
+    priority: Priority = Field(default=Priority.MEDIUM)
+
+    model_config = ConfigDict(json_schema_extra={"example": {
+        "yard_block": "A-01", "row": "R3", "slot": "S07", "position": "A-01-R3-S07",
+        "priority": "HIGH"}})
+
+    @field_validator("yard_block")
+    @classmethod
+    def _v_yard_block(cls, v: str) -> str:
+        return _clean_yard_block(v)
+
+
+class YardPositionOut(BaseModel):
+    container_number: str
+    yard_block: str
+    row: Optional[str] = None
+    slot: Optional[str] = None
+    position: Optional[str] = None
+    lifecycle_status: str = "YARD_POSITION_ALLOCATED"
+    status: str = "ALLOCATED"
+
+    model_config = ConfigDict(json_schema_extra={"example": {
+        "container_number": "GESU5123996", "yard_block": "A-01", "row": "R3",
+        "slot": "S07", "position": "A-01-R3-S07",
+        "lifecycle_status": "YARD_POSITION_ALLOCATED", "status": "ALLOCATED"}})
+
+
+class ScanQueueItemOut(BaseModel):
+    """One container awaiting a customs scan (task #5)."""
+    container_number: str
+    yard_block: Optional[str] = None
+    status: str = "SCAN_PENDING"
+
+    model_config = ConfigDict(json_schema_extra={"example": {
+        "container_number": "GESU5123996", "yard_block": "A-01",
+        "status": "SCAN_PENDING"}})
+
+
+class VerifyIn(BaseModel):
+    """Body for POST /api/cargo/{cn}/verify (task #6)."""
+    verified: bool = Field(default=True)
+    remarks: Optional[str] = Field(default=None, max_length=1000)
+
+    model_config = ConfigDict(json_schema_extra={"example": {
+        "verified": True, "remarks": "Customs cleared"}})
+
+
+class VerifyOut(BaseModel):
+    container_number: str
+    verified: bool
+    lifecycle_status: str
+
+    model_config = ConfigDict(json_schema_extra={"example": {
+        "container_number": "GESU5123996", "verified": True,
+        "lifecycle_status": "VERIFIED"}})
+
+
+class ReleaseIn(BaseModel):
+    """Optional body for POST /api/cargo/{cn}/release (task #7)."""
+    note: Optional[str] = Field(default=None, max_length=1000)
+
+    model_config = ConfigDict(json_schema_extra={"example": {"note": "Gate-out cleared"}})
+
+
+class ReleaseOut(BaseModel):
+    """UC-III handover confirmation (task #8)."""
+    container_number: str
+    lifecycle_status: str = "RELEASED"
+    yard_location: Optional[str] = None
+    vehicle_details: Optional[str] = None
+    status: str = "RELEASED"
+
+    model_config = ConfigDict(json_schema_extra={"example": {
+        "container_number": "GESU5123996", "lifecycle_status": "RELEASED",
+        "yard_location": "A-01", "vehicle_details": "MH04AB1234",
+        "status": "RELEASED"}})
+
+
+class LifecycleHistoryOut(BaseModel):
+    id: int
+    container_number: str
+    action: str
+    old_status: Optional[str] = None
+    new_status: str
+    actor_role: Optional[str] = None
+    note: Optional[str] = None
+    created_at: datetime
+
+
 _ERROR_RESPONSES = {
     400: {"description": "Validation error (bad ISO-6346 / enum / types)"},
     404: {"description": "Container not found"},
@@ -592,6 +726,21 @@ def _require_container_no(value: str) -> str:
                                     "container_number": value})
 
 
+def _actor_role(request: Request) -> Optional[str]:
+    """The authenticated principal's role, recorded on lifecycle audit rows. None
+    for the open dev/demo profile (no auth), which is fine — the column is nullable."""
+    principal = getattr(request.state, "principal", None)
+    return getattr(principal, "role", None)
+
+
+def _transition_409(exc: CargoTransitionError) -> HTTPException:
+    """Map an illegal lifecycle transition to a precise 409 (e.g. release before
+    verify, or a duplicate release)."""
+    return HTTPException(status_code=status.HTTP_409_CONFLICT, detail={
+        "error": "illegal_transition", "container_number": exc.container_number,
+        "current_status": exc.current, "attempted_status": exc.target})
+
+
 # --------------------------------------------------------------------- endpoints
 @router.post("", response_model=CargoOut, status_code=status.HTTP_201_CREATED,
              responses=_ERROR_RESPONSES, summary="Create a cargo record")
@@ -621,6 +770,9 @@ async def list_cargo(
     eseal_status: Optional[ESealStatus] = Query(default=None),
     pre_document_status: Optional[PreDocumentStatus] = Query(default=None),
     origin_stream: Optional[str] = Query(default=None, description="Cargo source stream, e.g. 'UC-II'"),
+    status_filter: Optional[LifecycleStatus] = Query(
+        default=None, alias="status",
+        description="Filter by lifecycle status (UC-III handover uses ?status=RELEASED)"),
     role: Optional[str] = Query(default=None,
                                 description="Scope results to a user role (e.g. 'operator', 'customs', 'driver')"),
     limit: int = Query(default=100, ge=1, le=1000),
@@ -638,6 +790,7 @@ async def list_cargo(
         eseal_status=eseal_status.value if eseal_status else None,
         pre_document_status=pre_document_status.value if pre_document_status else None,
         origin_stream=_clean_text(origin_stream),
+        lifecycle_status=status_filter.value if status_filter else None,
     )
     # Role-based filtering: prefer the AUTHENTICATED principal's role (so a query
     # param can never widen a token's scope); fall back to the ?role= param for the
@@ -782,6 +935,22 @@ async def create_reefer_planning(
                          status=row.get("status", "ALLOCATED"))
 
 
+# ---- 7. Scan queue (customs) -------------------------------------------------
+# Static path — MUST be declared before GET /{container_number} or 'scan-queue'
+# would be parsed as a container number.
+@router.get("/scan-queue", response_model=list[ScanQueueItemOut],
+            summary="Containers awaiting a customs scan (yard-assigned, not released, not verified)")
+async def scan_queue(
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    service: CargoService = Depends(get_service),
+) -> list[ScanQueueItemOut]:
+    rows = await service.scan_queue(limit=limit, offset=offset)
+    return [ScanQueueItemOut(container_number=r["container_number"],
+                             yard_block=r.get("yard_block"), status="SCAN_PENDING")
+            for r in rows]
+
+
 @router.get("/{container_number}", response_model=CargoOut, responses=_ERROR_RESPONSES,
             summary="Get one cargo record by container number")
 async def get_cargo(
@@ -816,20 +985,137 @@ async def update_cargo(
 async def assign_yard(
     container_number: str,
     body: YardAssignmentIn,
+    request: Request,
     service: CargoService = Depends(get_service),
 ) -> YardAssignmentOut:
     """Persist ``jnpa.cargo.yard_block`` for one container and confirm the
-    assignment. Reuses the same CargoService.update_cargo path as the generic
-    PUT — no separate yard table/service. 404 if the container is unknown; 400
-    (via the shared validation handler) if the block is missing/malformed."""
+    assignment (task #3). Sets the block (so ``cargo.yard_assigned`` still fires)
+    and advances the lifecycle to YARD_ASSIGNED — the mandatory gate before the
+    scan queue. 404 if the container is unknown; 400 (via the shared validation
+    handler) if the block is missing/malformed."""
     cn = _require_container_no(container_number)
     try:
-        row = await service.update_cargo(cn, {"yard_block": body.yard_block})
+        row = await service.assign_yard(cn, body.yard_block, actor_role=_actor_role(request))
     except CargoNotFound:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "not_found", "container_number": cn})
     return YardAssignmentOut(container_number=row["container_number"],
                              yard_block=row["yard_block"], status="ASSIGNED")
+
+
+# ---- 8. UC-II lifecycle: discharge / yard-position / verify / release ---------
+@router.post("/{container_number}/discharge", response_model=DischargeOut,
+             responses=_ERROR_RESPONSES, summary="Mark a container discharged from the vessel")
+async def discharge_cargo(
+    container_number: str,
+    body: DischargeIn,
+    request: Request,
+    service: CargoService = Depends(get_service),
+) -> DischargeOut:
+    """Vessel discharge (task #2): CREATED -> VESSEL_DISCHARGED. Does NOT auto-assign
+    a yard. 404 if unknown; 409 if the container is not in a dischargeable state."""
+    cn = _require_container_no(container_number)
+    try:
+        row = await service.discharge_cargo(
+            cn, vessel_name=body.vessel_name, discharge_time=body.discharge_time,
+            actor_role=_actor_role(request))
+    except CargoNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail={"error": "not_found", "container_number": cn})
+    except CargoTransitionError as exc:
+        raise _transition_409(exc)
+    return DischargeOut(container_number=cn,
+                        lifecycle_status=row.get("lifecycle_status", "VESSEL_DISCHARGED"),
+                        status="DISCHARGED")
+
+
+@router.post("/{container_number}/yard-position", response_model=YardPositionOut,
+             status_code=status.HTTP_201_CREATED, responses=_ERROR_RESPONSES,
+             summary="Allocate a physical yard position (block / row / slot / position)")
+async def allocate_yard_position(
+    container_number: str,
+    body: YardPositionIn,
+    request: Request,
+    service: CargoService = Depends(get_service),
+) -> YardPositionOut:
+    """Yard position allocation (task #4). Records the physical address and advances
+    the lifecycle to YARD_POSITION_ALLOCATED. 404 if the container is unknown."""
+    cn = _require_container_no(container_number)
+    try:
+        await service.allocate_yard_position(
+            cn, yard_block=body.yard_block, yard_row=body.row, yard_slot=body.slot,
+            yard_position=body.position, priority=body.priority.value,
+            actor_role=_actor_role(request))
+    except CargoNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail={"error": "not_found", "container_number": cn})
+    return YardPositionOut(container_number=cn, yard_block=body.yard_block,
+                           row=body.row, slot=body.slot, position=body.position,
+                           lifecycle_status="YARD_POSITION_ALLOCATED", status="ALLOCATED")
+
+
+@router.post("/{container_number}/verify", response_model=VerifyOut,
+             responses=_ERROR_RESPONSES, summary="Record a customs/scan verification")
+async def verify_cargo(
+    container_number: str,
+    body: VerifyIn,
+    request: Request,
+    service: CargoService = Depends(get_service),
+) -> VerifyOut:
+    """Customs / scan verification (task #6). ``verified=true`` -> VERIFIED (requires
+    yard-assignment; 409 otherwise). 404 if the container is unknown."""
+    cn = _require_container_no(container_number)
+    try:
+        row = await service.verify_cargo(cn, verified=body.verified,
+                                         remarks=body.remarks,
+                                         actor_role=_actor_role(request))
+    except CargoNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail={"error": "not_found", "container_number": cn})
+    except CargoTransitionError as exc:
+        raise _transition_409(exc)
+    return VerifyOut(container_number=cn, verified=body.verified,
+                     lifecycle_status=row.get("lifecycle_status", "VERIFIED"
+                                              if body.verified else "SCAN_PENDING"))
+
+
+@router.post("/{container_number}/release", response_model=ReleaseOut,
+             responses=_ERROR_RESPONSES, summary="Release a container (validated) for UC-III handover")
+async def release_cargo(
+    container_number: str,
+    request: Request,
+    body: Optional[ReleaseIn] = None,
+    service: CargoService = Depends(get_service),
+) -> ReleaseOut:
+    """Validated release (task #7): requires VERIFIED (which requires yard-assignment),
+    so release-before-verification and duplicate release both return 409. Emits the
+    UC-III handover ``cargo.released`` event. 404 if the container is unknown."""
+    cn = _require_container_no(container_number)
+    try:
+        row = await service.release_cargo(cn, actor_role=_actor_role(request),
+                                          note=body.note if body else None)
+    except CargoNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail={"error": "not_found", "container_number": cn})
+    except CargoTransitionError as exc:
+        raise _transition_409(exc)
+    return ReleaseOut(container_number=cn,
+                      lifecycle_status=row.get("lifecycle_status", "RELEASED"),
+                      yard_location=row.get("yard_block"),
+                      vehicle_details=row.get("vehicle_number"), status="RELEASED")
+
+
+@router.get("/{container_number}/lifecycle", response_model=list[LifecycleHistoryOut],
+            responses=_ERROR_RESPONSES, summary="Append-only lifecycle transition history")
+async def cargo_lifecycle_history(
+    container_number: str,
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    service: CargoService = Depends(get_service),
+) -> list[LifecycleHistoryOut]:
+    cn = _require_container_no(container_number)
+    rows = await service.list_lifecycle_history(cn, limit=limit, offset=offset)
+    return [LifecycleHistoryOut(**r) for r in rows]
 
 
 # ---- 2. Workflow lifecycle (TRIGGER -> APPROVE / REJECT) ----------------------

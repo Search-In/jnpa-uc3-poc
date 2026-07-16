@@ -34,7 +34,13 @@ os.environ.setdefault("POSTGRES_DSN", "postgresql+asyncpg://x:x@127.0.0.1:1/none
 from starlette.testclient import TestClient  # noqa: E402
 
 from jnpa_shared.iso6346 import is_valid_container_no, with_check_digit  # noqa: E402
-from services.cargo import CargoConflict, CargoNotFound, CargoService  # noqa: E402
+from services.cargo import (  # noqa: E402
+    CargoConflict,
+    CargoNotFound,
+    CargoService,
+    CargoTransitionError,
+)
+from services.cargo.repository import _infer_lifecycle  # noqa: E402
 
 # A valid + an invalid ISO-6346 number reused across the tests.
 VALID_CN = "MAEU6123458"
@@ -68,6 +74,10 @@ class FakeCargoRepo:
         self._rake_plan_seq = 0
         self._reefer_plans: list[dict] = []
         self._reefer_plan_seq = 0
+        self._lifecycle: list[dict] = []
+        self._lifecycle_seq = 0
+        self._scan_verifs: list[dict] = []
+        self._scan_verif_seq = 0
 
     async def create(self, row: Mapping[str, Any]) -> dict:
         cn = row["container_number"]
@@ -87,6 +97,7 @@ class FakeCargoRepo:
             "eseal_number": row.get("eseal_number"),
             "pre_document_status": _enum_val(row.get("pre_document_status")),
             "origin_stream": row.get("origin_stream"),
+            "lifecycle_status": "CREATED",
             "created_at": _NOW,
             "updated_at": _NOW,
         }
@@ -100,12 +111,13 @@ class FakeCargoRepo:
     def _filtered(self, *, container_number=None, customs_status=None,
                   yard_block=None, is_released=None, vehicle_number=None,
                   eseal_status=None, pre_document_status=None,
-                  origin_stream=None) -> list[dict]:
+                  origin_stream=None, lifecycle_status=None) -> list[dict]:
         rows = list(self._rows.values())
         eq = {"container_number": container_number, "customs_status": customs_status,
               "yard_block": yard_block, "is_released": is_released,
               "vehicle_number": vehicle_number, "eseal_status": eseal_status,
-              "pre_document_status": pre_document_status, "origin_stream": origin_stream}
+              "pre_document_status": pre_document_status, "origin_stream": origin_stream,
+              "lifecycle_status": lifecycle_status}
         for col, val in eq.items():
             if val is not None:
                 rows = [r for r in rows if r[col] == val]
@@ -239,6 +251,65 @@ class FakeCargoRepo:
                "temperature": temperature, "power_required": power_required,
                "slot": slot, "status": "ALLOCATED", "created_at": _NOW}
         self._reefer_plans.append(rec)
+        return dict(rec)
+
+    # ----- lifecycle (0023) -----
+    async def transition_lifecycle(self, container_number, *, target, allowed_from,
+                                   action, actor_role=None, note=None, strict=True):
+        rec = self._rows.get(container_number)
+        if rec is None:
+            if strict:
+                raise CargoNotFound(container_number)
+            return None
+        current = _infer_lifecycle(rec)
+        if current not in allowed_from:
+            if strict:
+                raise CargoTransitionError(container_number, current, target)
+            return None
+        rec["lifecycle_status"] = target
+        self._lifecycle_seq += 1
+        self._lifecycle.append({
+            "id": self._lifecycle_seq, "container_number": container_number,
+            "action": action, "old_status": current, "new_status": target,
+            "actor_role": actor_role, "note": note, "created_at": _NOW})
+        out = dict(rec)
+        out["_old_status"] = current
+        out["_new_status"] = target
+        return out
+
+    async def list_lifecycle_events(self, container_number, *, limit=100, offset=0):
+        rows = [r for r in self._lifecycle if r["container_number"] == container_number]
+        rows.sort(key=lambda r: r["id"], reverse=True)
+        return [dict(r) for r in rows[offset:offset + limit]]
+
+    async def list_scan_queue(self, *, limit=100, offset=0) -> list[dict]:
+        yard_states = {"YARD_ASSIGNED", "YARD_POSITION_ALLOCATED", "REEFER_PLANNED",
+                       "RAKE_ASSIGNED", "SCAN_PENDING"}
+        rows = [r for r in self._rows.values()
+                if not r.get("is_released")
+                and (r.get("yard_block") or r.get("lifecycle_status") in yard_states)
+                and (r.get("lifecycle_status") or "") not in ("VERIFIED", "RELEASED")]
+        rows.sort(key=lambda r: (r["created_at"], r["container_number"]))
+        return [dict(r) for r in rows[offset:offset + limit]]
+
+    async def record_scan_verification(self, container_number, verified, remarks,
+                                       actor_role) -> dict:
+        self._scan_verif_seq += 1
+        rec = {"id": self._scan_verif_seq, "container_number": container_number,
+               "verified": verified, "remarks": remarks, "actor_role": actor_role,
+               "created_at": _NOW}
+        self._scan_verifs.append(rec)
+        return dict(rec)
+
+    async def create_yard_position(self, container_number, *, assigned_block,
+                                   yard_row, yard_slot, yard_position, priority) -> dict:
+        self._yard_plan_seq += 1
+        rec = {"id": self._yard_plan_seq, "container_number": container_number,
+               "preferred_block": None, "assigned_block": assigned_block,
+               "priority": priority, "status": "PLANNED", "yard_row": yard_row,
+               "yard_slot": yard_slot, "yard_position": yard_position,
+               "created_at": _NOW}
+        self._yard_plans.append(rec)
         return dict(rec)
 
 
@@ -764,6 +835,192 @@ def test_new_lifecycle_events_emitted(client):
     assert {"cargo.status_changed", "cargo.gate_movement"} <= kinds
 
 
+# ============================================ UC-II lifecycle (migration 0023)
+CN2 = "MSCU7789010"  # a second valid ISO-6346 number
+assert is_valid_container_no(CN2)
+
+
+def _lc_payload(cn=VALID_CN, **over) -> dict:
+    """A cargo create payload that starts clean at CREATED (no yard, unreleased)."""
+    base = {"container_number": cn, "vessel_name": "TEST VESSEL",
+            "customs_status": "PENDING", "is_released": False,
+            "vehicle_number": "MH04AB1234"}
+    base.update(over)
+    return base
+
+
+# ---- pure state-machine unit tests -------------------------------------------
+def test_state_machine_forward_and_mandatory_gates():
+    from services.cargo import allowed_predecessors, can_transition
+    # mandatory happy path steps are legal
+    assert can_transition("CREATED", "VESSEL_DISCHARGED")
+    assert can_transition("VESSEL_DISCHARGED", "YARD_ASSIGNED")
+    assert can_transition("YARD_ASSIGNED", "VERIFIED")       # optional band skippable
+    assert can_transition("VERIFIED", "RELEASED")
+    # mandatory gates cannot be skipped
+    assert not can_transition("CREATED", "YARD_ASSIGNED")    # skips VESSEL_DISCHARGED
+    assert not can_transition("YARD_ASSIGNED", "RELEASED")   # skips VERIFIED
+    assert not can_transition("VESSEL_DISCHARGED", "VERIFIED")  # skips YARD_ASSIGNED
+    # never backwards / no self-loop (duplicate release protection)
+    assert not can_transition("RELEASED", "RELEASED")
+    assert not can_transition("VERIFIED", "YARD_ASSIGNED")
+    # the exact predecessor sets the endpoints rely on
+    assert allowed_predecessors("VESSEL_DISCHARGED") == {"CREATED"}
+    assert allowed_predecessors("RELEASED") == {"VERIFIED"}
+    assert allowed_predecessors("VERIFIED") == {
+        "YARD_ASSIGNED", "YARD_POSITION_ALLOCATED", "REEFER_PLANNED",
+        "RAKE_ASSIGNED", "SCAN_PENDING"}
+
+
+# ---- full lifecycle happy path -----------------------------------------------
+def test_full_lifecycle_create_to_handover(client):
+    assert client.post("/api/cargo", json=_lc_payload()).json()["lifecycle_status"] == "CREATED"
+    # 2. vessel discharge
+    d = client.post(f"/api/cargo/{VALID_CN}/discharge",
+                    json={"vessel_name": "TEST VESSEL", "discharge_time": "2026-07-16T08:30:00Z"})
+    assert d.status_code == 200, d.text
+    assert d.json()["lifecycle_status"] == "VESSEL_DISCHARGED"
+    # 3. yard assignment
+    ya = client.put(f"/api/cargo/{VALID_CN}/yard-assignment", json={"yard_block": "A-01"})
+    assert ya.status_code == 200
+    assert client.get(f"/api/cargo/{VALID_CN}").json()["lifecycle_status"] == "YARD_ASSIGNED"
+    # 4. yard position allocation (block/row/slot/position)
+    yp = client.post(f"/api/cargo/{VALID_CN}/yard-position",
+                     json={"yard_block": "A-01", "row": "R3", "slot": "S07",
+                           "position": "A-01-R3-S07", "priority": "HIGH"})
+    assert yp.status_code == 201, yp.text
+    assert yp.json()["lifecycle_status"] == "YARD_POSITION_ALLOCATED"
+    # 7. scan queue lists it as SCAN_PENDING
+    q = client.get("/api/cargo/scan-queue").json()
+    assert {"container_number": VALID_CN, "yard_block": "A-01", "status": "SCAN_PENDING"} in q
+    # 8. verification
+    v = client.post(f"/api/cargo/{VALID_CN}/verify",
+                    json={"verified": True, "remarks": "Customs cleared"})
+    assert v.status_code == 200 and v.json()["lifecycle_status"] == "VERIFIED"
+    # once verified it leaves the scan queue
+    assert VALID_CN not in [x["container_number"] for x in client.get("/api/cargo/scan-queue").json()]
+    # 9. release (validated) -> UC-III handover payload
+    r = client.post(f"/api/cargo/{VALID_CN}/release")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["lifecycle_status"] == "RELEASED"
+    assert body["yard_location"] == "A-01"
+    assert body["vehicle_details"] == "MH04AB1234"
+    # 10. UC-III handover query + released flag both consistent
+    rel = client.get("/api/cargo", params={"status": "RELEASED"}).json()
+    assert VALID_CN in [x["container_number"] for x in rel]
+    assert client.get(f"/api/cargo/{VALID_CN}").json()["is_released"] is True
+    # lifecycle audit history records every transition (newest first)
+    hist = client.get(f"/api/cargo/{VALID_CN}/lifecycle").json()
+    actions = [h["action"] for h in hist]
+    assert {"DISCHARGE", "YARD_ASSIGN", "YARD_POSITION", "VERIFY", "RELEASE"} <= set(actions)
+    # lifecycle events emitted on the notifications contract
+    kinds = {e["event"] for e in client.get("/api/cargo/events", params={"container_number": VALID_CN}).json()}
+    assert {"cargo.vessel_discharged", "cargo.yard_position_allocated",
+            "cargo.verified", "cargo.released", "cargo.lifecycle_changed"} <= kinds
+
+
+# ---- invalid transitions ------------------------------------------------------
+def test_verify_before_yard_assignment_409(client):
+    client.post("/api/cargo", json=_lc_payload())
+    # straight to verify with no yard assignment -> illegal transition
+    r = client.post(f"/api/cargo/{VALID_CN}/verify", json={"verified": True})
+    assert r.status_code == 409
+    assert r.json()["detail"]["error"] == "illegal_transition"
+
+
+def test_release_before_verify_409(client):
+    client.post("/api/cargo", json=_lc_payload())
+    client.post(f"/api/cargo/{VALID_CN}/discharge", json={})
+    client.put(f"/api/cargo/{VALID_CN}/yard-assignment", json={"yard_block": "A-01"})
+    r = client.post(f"/api/cargo/{VALID_CN}/release")
+    assert r.status_code == 409
+    assert r.json()["detail"]["current_status"] == "YARD_ASSIGNED"
+
+
+def test_duplicate_release_409(client):
+    client.post("/api/cargo", json=_lc_payload())
+    client.post(f"/api/cargo/{VALID_CN}/discharge", json={})
+    client.put(f"/api/cargo/{VALID_CN}/yard-assignment", json={"yard_block": "A-01"})
+    client.post(f"/api/cargo/{VALID_CN}/verify", json={"verified": True})
+    assert client.post(f"/api/cargo/{VALID_CN}/release").status_code == 200
+    # second release must fail
+    dup = client.post(f"/api/cargo/{VALID_CN}/release")
+    assert dup.status_code == 409
+    assert dup.json()["detail"]["current_status"] == "RELEASED"
+
+
+def test_double_discharge_409(client):
+    client.post("/api/cargo", json=_lc_payload())
+    assert client.post(f"/api/cargo/{VALID_CN}/discharge", json={}).status_code == 200
+    assert client.post(f"/api/cargo/{VALID_CN}/discharge", json={}).status_code == 409
+
+
+def test_discharge_unknown_container_404(client):
+    r = client.post(f"/api/cargo/{VALID_CN}/discharge", json={})
+    assert r.status_code == 404
+
+
+def test_discharge_does_not_auto_assign_yard(client):
+    client.post("/api/cargo", json=_lc_payload(yard_block=None))
+    client.post(f"/api/cargo/{VALID_CN}/discharge", json={})
+    assert client.get(f"/api/cargo/{VALID_CN}").json()["yard_block"] is None
+
+
+# ---- scan queue --------------------------------------------------------------
+def test_scan_queue_excludes_unyarded_and_released(client):
+    # unyarded, discharged -> NOT in queue
+    client.post("/api/cargo", json=_lc_payload())
+    client.post(f"/api/cargo/{VALID_CN}/discharge", json={})
+    # yarded, unreleased -> IN queue
+    client.post("/api/cargo", json=_lc_payload(cn=CN2))
+    client.post(f"/api/cargo/{CN2}/discharge", json={})
+    client.put(f"/api/cargo/{CN2}/yard-assignment", json={"yard_block": "B-02"})
+    qns = [x["container_number"] for x in client.get("/api/cargo/scan-queue").json()]
+    assert CN2 in qns and VALID_CN not in qns
+
+
+# ---- verify failure path ------------------------------------------------------
+def test_verify_rejected_does_not_advance(client):
+    client.post("/api/cargo", json=_lc_payload())
+    client.post(f"/api/cargo/{VALID_CN}/discharge", json={})
+    client.put(f"/api/cargo/{VALID_CN}/yard-assignment", json={"yard_block": "A-01"})
+    r = client.post(f"/api/cargo/{VALID_CN}/verify",
+                    json={"verified": False, "remarks": "hold for inspection"})
+    assert r.status_code == 200 and r.json()["verified"] is False
+    # still yard-assigned (not verified) and still releasable-blocked
+    assert client.get(f"/api/cargo/{VALID_CN}").json()["lifecycle_status"] == "YARD_ASSIGNED"
+    assert client.post(f"/api/cargo/{VALID_CN}/release").status_code == 409
+
+
+# ---- regression: legacy PUT release stays backward compatible -----------------
+def test_legacy_put_release_syncs_lifecycle(client):
+    client.post("/api/cargo", json=_lc_payload())
+    up = client.put(f"/api/cargo/{VALID_CN}", json={"is_released": True})
+    assert up.status_code == 200 and up.json()["is_released"] is True
+    # the legacy path also drives lifecycle -> RELEASED so ?status=RELEASED is consistent
+    assert client.get(f"/api/cargo/{VALID_CN}").json()["lifecycle_status"] == "RELEASED"
+    assert VALID_CN in [x["container_number"] for x in
+                        client.get("/api/cargo", params={"status": "RELEASED"}).json()]
+    # legacy cargo.released event still fires
+    kinds = {e["event"] for e in client.get("/api/cargo/events").json()}
+    assert "cargo.released" in kinds
+
+
+# ---- optional planning states advance lifecycle -------------------------------
+def test_reefer_and_rake_advance_lifecycle(client):
+    client.post("/api/cargo", json=_lc_payload())
+    client.post(f"/api/cargo/{VALID_CN}/discharge", json={})
+    client.put(f"/api/cargo/{VALID_CN}/yard-assignment", json={"yard_block": "A-01"})
+    client.post("/api/cargo/reefer-planning", json={"container_number": VALID_CN, "temperature": 4})
+    assert client.get(f"/api/cargo/{VALID_CN}").json()["lifecycle_status"] == "REEFER_PLANNED"
+    client.post("/api/cargo/rake-planning", json={"rake_id": "RKE001", "containers": [VALID_CN]})
+    assert client.get(f"/api/cargo/{VALID_CN}").json()["lifecycle_status"] == "RAKE_ASSIGNED"
+    # and can still be verified + released from the optional band
+    assert client.post(f"/api/cargo/{VALID_CN}/verify", json={"verified": True}).status_code == 200
+    assert client.post(f"/api/cargo/{VALID_CN}/release").status_code == 200
+
+
 # --------------------------------------------------- real-DB integration (opt-in)
 def _pg_reachable(host: str = "127.0.0.1", port: int = 5433) -> bool:
     try:
@@ -776,12 +1033,16 @@ def _pg_reachable(host: str = "127.0.0.1", port: int = 5433) -> bool:
 @pytest.mark.skipif(not _pg_reachable(), reason="Postgres not reachable on 5433")
 def test_real_db_roundtrip():
     """Exercises the REAL raw-SQL repository end-to-end against Postgres."""
-    dsn = "postgresql+asyncpg://postgres:postgres@127.0.0.1:5433/postgres"
+    dsn = os.environ.get("CARGO_TEST_DSN", "postgresql+asyncpg://postgres:postgres@127.0.0.1:5433/postgres")
     from gateway.main import app
     from gateway.routers import cargo as cargo_router
+    from jnpa_shared.db import get_engine
 
+    # Rebuild the cached async engine on THIS test's event loop (the lru_cache
+    # would otherwise hand back an engine bound to a prior test's closed loop).
+    get_engine.cache_clear()
     app.dependency_overrides[cargo_router.get_service] = lambda: CargoService(dsn=dsn)
-    cn = with_check_digit("TESTU999000")  # unique-ish, valid ISO
+    cn = with_check_digit("TESU999000")  # unique-ish, valid ISO
     try:
         with TestClient(app) as c:
             c.delete(f"/api/cargo/{cn}")  # clean slate
@@ -806,5 +1067,57 @@ def test_real_db_roundtrip():
             assert {"cargo.created", "cargo.released", "cargo.yard_assigned"} <= kinds
             assert c.delete(f"/api/cargo/{cn}").status_code == 200
             assert c.get(f"/api/cargo/{cn}").status_code == 404
+    finally:
+        app.dependency_overrides.pop(cargo_router.get_service, None)
+
+
+@pytest.mark.skipif(not _pg_reachable(), reason="Postgres not reachable on 5433")
+def test_real_db_full_lifecycle():
+    """Full UC-II lifecycle end-to-end against REAL Postgres (migration 0023):
+    create -> discharge -> yard-assign -> yard-position -> verify -> release, plus
+    the invalid-transition + duplicate-release guards and the UC-III handover query."""
+    dsn = os.environ.get("CARGO_TEST_DSN", "postgresql+asyncpg://postgres:postgres@127.0.0.1:5433/postgres")
+    from gateway.main import app
+    from gateway.routers import cargo as cargo_router
+    from jnpa_shared.db import get_engine
+
+    # Rebuild the cached async engine on THIS test's event loop (see above).
+    get_engine.cache_clear()
+    app.dependency_overrides[cargo_router.get_service] = lambda: CargoService(dsn=dsn)
+    cn = with_check_digit("TESU888000")  # valid ISO, distinct from the other test
+    try:
+        with TestClient(app) as c:
+            c.delete(f"/api/cargo/{cn}")  # clean slate
+            assert c.post("/api/cargo", json=_lc_payload(cn=cn)).status_code == 201
+            assert c.get(f"/api/cargo/{cn}").json()["lifecycle_status"] == "CREATED"
+            # invalid: verify/release before the mandatory gates
+            assert c.post(f"/api/cargo/{cn}/verify", json={"verified": True}).status_code == 409
+            assert c.post(f"/api/cargo/{cn}/release").status_code == 409
+            # walk the happy path
+            assert c.post(f"/api/cargo/{cn}/discharge",
+                          json={"vessel_name": "TEST VESSEL"}).status_code == 200
+            assert c.put(f"/api/cargo/{cn}/yard-assignment",
+                         json={"yard_block": "A-01"}).status_code == 200
+            assert c.post(f"/api/cargo/{cn}/yard-position",
+                          json={"yard_block": "A-01", "row": "R3", "slot": "S07",
+                                "position": "A-01-R3-S07"}).status_code == 201
+            assert cn in [x["container_number"] for x in c.get("/api/cargo/scan-queue").json()]
+            assert c.post(f"/api/cargo/{cn}/verify",
+                          json={"verified": True, "remarks": "cleared"}).status_code == 200
+            rel = c.post(f"/api/cargo/{cn}/release")
+            assert rel.status_code == 200
+            assert rel.json()["yard_location"] == "A-01"
+            # duplicate release fails; handover query returns it
+            assert c.post(f"/api/cargo/{cn}/release").status_code == 409
+            assert cn in [x["container_number"]
+                          for x in c.get("/api/cargo", params={"status": "RELEASED"}).json()]
+            # audit history + lifecycle events persisted in the DB
+            actions = {h["action"] for h in c.get(f"/api/cargo/{cn}/lifecycle").json()}
+            assert {"DISCHARGE", "YARD_ASSIGN", "YARD_POSITION", "VERIFY", "RELEASE"} <= actions
+            kinds = {e["event"] for e in
+                     c.get("/api/cargo/events", params={"container_number": cn}).json()}
+            assert {"cargo.vessel_discharged", "cargo.yard_position_allocated",
+                    "cargo.verified", "cargo.released"} <= kinds
+            c.delete(f"/api/cargo/{cn}")
     finally:
         app.dependency_overrides.pop(cargo_router.get_service, None)

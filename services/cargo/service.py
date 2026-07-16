@@ -16,7 +16,12 @@ from typing import Any, Mapping, Optional
 
 from jnpa_shared.logging import get_logger
 
-from .repository import CargoConflict, CargoNotFound, CargoRepository
+from .repository import (
+    CargoConflict,
+    CargoNotFound,
+    CargoRepository,
+    CargoTransitionError,
+)
 
 log = get_logger("services.cargo.service")
 
@@ -38,6 +43,71 @@ EVENT_GATE_IN = "cargo.gate_in"
 EVENT_GATE_OUT = "cargo.gate_out"
 EVENT_PENDENCY_CREATED = "cargo.pendency_created"
 EVENT_QUEUE_UPDATED = "cargo.queue_updated"
+# UC-II lifecycle topics (migration 0023 — all ADDITIVE). ``cargo.lifecycle_changed``
+# fires on EVERY accepted transition; the specific topics fire on their step.
+EVENT_LIFECYCLE_CHANGED = "cargo.lifecycle_changed"
+EVENT_VESSEL_DISCHARGED = "cargo.vessel_discharged"
+EVENT_YARD_POSITION_ALLOCATED = "cargo.yard_position_allocated"
+EVENT_REEFER_PLANNED = "cargo.reefer_planned"
+EVENT_RAKE_ASSIGNED = "cargo.rake_assigned"
+EVENT_VERIFIED = "cargo.verified"
+
+# --------------------------------------------------------------------- lifecycle
+# The single source of truth for the cargo lifecycle state machine (task #1).
+#
+#   CREATED -> VESSEL_DISCHARGED -> YARD_ASSIGNED
+#           -> [YARD_POSITION_ALLOCATED | REEFER_PLANNED | RAKE_ASSIGNED]  (optional)
+#           -> SCAN_PENDING (derived queue label) -> VERIFIED -> RELEASED
+#
+# Each state carries an ordinal RANK. Transitions are FORWARD-ONLY, and a move may
+# never skip a MANDATORY gate (discharge, yard-assign, verify, release). The
+# optional planning states between YARD_ASSIGNED and VERIFIED may be skipped.
+LC_CREATED = "CREATED"
+LC_VESSEL_DISCHARGED = "VESSEL_DISCHARGED"
+LC_YARD_ASSIGNED = "YARD_ASSIGNED"
+LC_YARD_POSITION_ALLOCATED = "YARD_POSITION_ALLOCATED"
+LC_REEFER_PLANNED = "REEFER_PLANNED"
+LC_RAKE_ASSIGNED = "RAKE_ASSIGNED"
+LC_SCAN_PENDING = "SCAN_PENDING"
+LC_VERIFIED = "VERIFIED"
+LC_RELEASED = "RELEASED"
+
+_LIFECYCLE_RANK: dict[str, int] = {
+    LC_CREATED: 0,
+    LC_VESSEL_DISCHARGED: 10,
+    LC_YARD_ASSIGNED: 20,
+    LC_YARD_POSITION_ALLOCATED: 21,   # optional
+    LC_REEFER_PLANNED: 22,            # optional
+    LC_RAKE_ASSIGNED: 23,            # optional
+    LC_SCAN_PENDING: 24,            # optional (derived queue label)
+    LC_VERIFIED: 30,
+    LC_RELEASED: 40,
+}
+# Gates that can never be skipped. A transition is rejected if a mandatory gate's
+# rank lies strictly between the current and target ranks.
+_MANDATORY_STATES: frozenset[str] = frozenset(
+    {LC_CREATED, LC_VESSEL_DISCHARGED, LC_YARD_ASSIGNED, LC_VERIFIED, LC_RELEASED})
+# Every non-terminal state — the permissive predecessor set for the LEGACY
+# PUT is_released=true path, which forces lifecycle to RELEASED from anywhere so
+# the UC-III handover query (?status=RELEASED) stays consistent (see update_cargo).
+_ALL_NON_RELEASED: frozenset[str] = frozenset(
+    s for s in _LIFECYCLE_RANK if s != LC_RELEASED)
+
+
+def can_transition(current: str, target: str) -> bool:
+    """True iff ``current`` -> ``target`` is a legal lifecycle move: strictly
+    forward, skipping no mandatory gate. Unknown states are never transitionable."""
+    if current not in _LIFECYCLE_RANK or target not in _LIFECYCLE_RANK:
+        return False
+    cr, tr = _LIFECYCLE_RANK[current], _LIFECYCLE_RANK[target]
+    if tr <= cr:
+        return False
+    return not any(cr < _LIFECYCLE_RANK[m] < tr for m in _MANDATORY_STATES)
+
+
+def allowed_predecessors(target: str) -> set[str]:
+    """The set of states from which ``target`` is a legal next step."""
+    return {s for s in _LIFECYCLE_RANK if can_transition(s, target)}
 
 # Workflow action -> resulting status. The single source of truth for the
 # TRIGGER → APPROVE / REJECT lifecycle (migration 0016).
@@ -195,6 +265,7 @@ class CargoService:
         eseal_status: Optional[str] = None,
         pre_document_status: Optional[str] = None,
         origin_stream: Optional[str] = None,
+        lifecycle_status: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict]:
@@ -204,6 +275,7 @@ class CargoService:
             yard_block=yard_block, is_released=is_released,
             vehicle_number=vehicle_number, eseal_status=eseal_status,
             pre_document_status=pre_document_status, origin_stream=origin_stream,
+            lifecycle_status=lifecycle_status,
             limit=limit, offset=offset,
         )
         self._observe("list", "success", t0)
@@ -220,12 +292,14 @@ class CargoService:
         eseal_status: Optional[str] = None,
         pre_document_status: Optional[str] = None,
         origin_stream: Optional[str] = None,
+        lifecycle_status: Optional[str] = None,
     ) -> int:
         return await self._repo.count(
             container_number=container_number, customs_status=customs_status,
             yard_block=yard_block, is_released=is_released,
             vehicle_number=vehicle_number, eseal_status=eseal_status,
             pre_document_status=pre_document_status, origin_stream=origin_stream,
+            lifecycle_status=lifecycle_status,
         )
 
     # ------------------------------------------------------------------ update
@@ -242,6 +316,15 @@ class CargoService:
         self._observe("update", "success", t0, container=container_number)
         for event, payload in self._derive_update_events(old, out):
             await self._emit(event, container_number, payload)
+        # LEGACY release path: a PUT that flips is_released -> true also drives the
+        # lifecycle to RELEASED (best-effort, from any state) so the UC-III handover
+        # query (?status=RELEASED) is consistent regardless of which release path was
+        # used. The dedicated POST /release is the VALIDATED path; this keeps the old
+        # contract working AND its lifecycle coherent. cargo.released already fired
+        # above (via the diff), so _advance only adds cargo.lifecycle_changed.
+        if not old.get("is_released") and out.get("is_released"):
+            await self._advance(container_number, target=LC_RELEASED, action="RELEASE",
+                                allowed_from=_ALL_NON_RELEASED, strict=False)
         return out
 
     # ------------------------------------------------------------------ delete
@@ -252,6 +335,155 @@ class CargoService:
         if removed:
             await self._emit(EVENT_DELETED, container_number, {})
         return removed
+
+    # ------------------------------------------------------- lifecycle (0023)
+    async def _advance(self, container_number: str, *, target: str, action: str,
+                       allowed_from: Optional[set[str]] = None, strict: bool = True,
+                       actor_role: Optional[str] = None,
+                       note: Optional[str] = None) -> Optional[dict]:
+        """Drive one lifecycle transition through the repository (atomic + audited)
+        and, when applied, emit ``cargo.lifecycle_changed``. Returns the updated
+        cargo row, or ``None`` when a best-effort (``strict=False``) transition was
+        not applicable. In ``strict`` mode the repository raises
+        :class:`CargoNotFound` / :class:`CargoTransitionError`, which the router maps
+        to 404 / 409. ``allowed_from`` defaults to the state machine's legal
+        predecessors of ``target``; callers pass a custom set only for the lenient
+        legacy paths (yard-assign / reefer / rake / PUT-release)."""
+        af = allowed_from if allowed_from is not None else allowed_predecessors(target)
+        row = await self._repo.transition_lifecycle(
+            container_number, target=target, allowed_from=af, action=action,
+            actor_role=actor_role, note=note, strict=strict)
+        if row is None:
+            return None
+        old = row.pop("_old_status", None)
+        new = row.pop("_new_status", target)
+        await self._emit(EVENT_LIFECYCLE_CHANGED, container_number,
+                         {"from": old, "to": new, "action": action})
+        return row
+
+    async def discharge_cargo(self, container_number: str, *,
+                              vessel_name: Optional[str] = None,
+                              discharge_time: Any = None,
+                              actor_role: Optional[str] = None) -> dict:
+        """Mark a container discharged from the vessel: CREATED -> VESSEL_DISCHARGED
+        (task #2). Does NOT auto-assign a yard. Emits ``cargo.vessel_discharged``.
+        404 if the container is unknown; 409 if it is not in a dischargeable state."""
+        t0 = perf_counter()
+        row = await self._advance(container_number, target=LC_VESSEL_DISCHARGED,
+                                  action="DISCHARGE", actor_role=actor_role,
+                                  note=vessel_name)
+        if vessel_name:  # persist the discharging vessel on the record (additive)
+            row = await self._repo.update(container_number, {"vessel_name": vessel_name})
+        payload: dict[str, Any] = {}
+        if vessel_name:
+            payload["vessel_name"] = vessel_name
+        if discharge_time is not None:
+            payload["discharge_time"] = (
+                discharge_time.isoformat() if hasattr(discharge_time, "isoformat")
+                else str(discharge_time))
+        await self._emit(EVENT_VESSEL_DISCHARGED, container_number, payload)
+        self._observe("discharge", "success", t0, container=container_number)
+        return row
+
+    async def assign_yard(self, container_number: str, yard_block: str, *,
+                          actor_role: Optional[str] = None) -> dict:
+        """Yard-assignment write (task #3). Sets ``yard_block`` via the same
+        update path (so ``cargo.yard_assigned`` still fires) and best-effort advances
+        the lifecycle to YARD_ASSIGNED. Lenient on lifecycle for backward
+        compatibility (a container created straight to yard-assign still works)."""
+        t0 = perf_counter()
+        row = await self.update_cargo(container_number, {"yard_block": yard_block})
+        await self._advance(container_number, target=LC_YARD_ASSIGNED,
+                            action="YARD_ASSIGN", strict=False,
+                            allowed_from={LC_CREATED, LC_VESSEL_DISCHARGED},
+                            actor_role=actor_role)
+        self._observe("yard_assign", "success", t0, container=container_number)
+        return row
+
+    async def allocate_yard_position(self, container_number: str, *,
+                                     yard_block: str, yard_row: Optional[str] = None,
+                                     yard_slot: Optional[str] = None,
+                                     yard_position: Optional[str] = None,
+                                     priority: str = "MEDIUM",
+                                     actor_role: Optional[str] = None) -> dict:
+        """Allocate a physical yard position (block / row / slot / position) for a
+        container (task #4). Requires the container to exist (404). Records a
+        position row and best-effort advances the lifecycle to
+        YARD_POSITION_ALLOCATED. Always emits ``cargo.yard_position_allocated``."""
+        t0 = perf_counter()
+        existing = await self._repo.get(container_number)
+        if existing is None:
+            raise CargoNotFound(container_number)
+        plan = await self._repo.create_yard_position(
+            container_number, assigned_block=yard_block, yard_row=yard_row,
+            yard_slot=yard_slot, yard_position=yard_position, priority=priority)
+        await self._advance(container_number, target=LC_YARD_POSITION_ALLOCATED,
+                            action="YARD_POSITION", strict=False,
+                            allowed_from={LC_YARD_ASSIGNED, LC_YARD_POSITION_ALLOCATED},
+                            actor_role=actor_role)
+        await self._emit(EVENT_YARD_POSITION_ALLOCATED, container_number, {
+            "yard_block": yard_block, "row": yard_row, "slot": yard_slot,
+            "position": yard_position})
+        self._observe("yard_position", "success", t0, container=container_number)
+        return plan
+
+    async def scan_queue(self, *, limit: int = 100, offset: int = 0) -> list[dict]:
+        """Containers awaiting a customs scan (task #5): yard-assigned, not released,
+        not yet verified. The router labels each row status ``SCAN_PENDING``."""
+        return await self._repo.list_scan_queue(limit=limit, offset=offset)
+
+    async def verify_cargo(self, container_number: str, *, verified: bool = True,
+                           remarks: Optional[str] = None,
+                           actor_role: Optional[str] = None) -> dict:
+        """Record a customs/scan verification (task #6). When ``verified`` is true,
+        advances the lifecycle to VERIFIED (requires yard-assignment; 409 otherwise)
+        and emits ``cargo.verified``. When false, records the failed check without
+        advancing. 404 if the container is unknown."""
+        t0 = perf_counter()
+        if verified:
+            row = await self._advance(container_number, target=LC_VERIFIED,
+                                      action="VERIFY", actor_role=actor_role,
+                                      note=remarks)
+        else:
+            row = await self._repo.get(container_number)
+            if row is None:
+                raise CargoNotFound(container_number)
+        await self._repo.record_scan_verification(
+            container_number, bool(verified), remarks, actor_role)
+        await self._emit(EVENT_VERIFIED, container_number,
+                         {"verified": bool(verified), "remarks": remarks})
+        self._observe("verify", "success" if verified else "rejected", t0,
+                      container=container_number)
+        return row
+
+    async def release_cargo(self, container_number: str, *,
+                            actor_role: Optional[str] = None,
+                            note: Optional[str] = None) -> dict:
+        """Validated release (task #7): requires the lifecycle to be VERIFIED
+        (which itself requires yard-assignment), so release-before-verification is a
+        409 and a duplicate release is a 409. Flips ``is_released`` for legacy
+        consumers/filters and emits the UC-III handover ``cargo.released`` event with
+        the yard location + vehicle details (task #8). 404 if unknown."""
+        t0 = perf_counter()
+        await self._advance(container_number, target=LC_RELEASED, action="RELEASE",
+                            actor_role=actor_role, note=note)
+        # Keep the legacy boolean + any consumers of it in sync. repo.update does not
+        # emit (the rich cargo.released below is the single release signal here).
+        row = await self._repo.update(container_number, {"is_released": True})
+        await self._emit(EVENT_RELEASED, container_number, {
+            "status": LC_RELEASED,
+            "is_released": True,
+            "yard_location": row.get("yard_block"),
+            "vehicle_details": row.get("vehicle_number"),
+        })
+        self._observe("release", "success", t0, container=container_number)
+        return row
+
+    async def list_lifecycle_history(self, container_number: str, *,
+                                     limit: int = 100, offset: int = 0) -> list[dict]:
+        """Append-only lifecycle transition audit for one container (task #1)."""
+        return await self._repo.list_lifecycle_events(
+            container_number, limit=limit, offset=offset)
 
     # ----------------------------------------------------- notifications (0017)
     async def create_notification(self, *, container_number: str, notification_type: str,
@@ -343,6 +575,11 @@ class CargoService:
         self._observe("rake_plan", "success", t0)
         for cn in items:
             await self._emit(EVENT_QUEUE_UPDATED, cn, {"rake_id": rake_id})
+            # Best-effort lifecycle advance to RAKE_ASSIGNED (optional state) +
+            # the specific topic. Never fails planning if the box isn't yarded yet.
+            await self._advance(cn, target=LC_RAKE_ASSIGNED, action="RAKE_ASSIGN",
+                                strict=False)
+            await self._emit(EVENT_RAKE_ASSIGNED, cn, {"rake_id": rake_id})
         return row
 
     async def list_rake_plans(self, **filters: Any) -> list[dict]:
@@ -356,5 +593,11 @@ class CargoService:
         slot = f"REEFER-A{idx:02d}"
         row = await self._repo.create_reefer_plan(
             container_number, temperature, power_required, slot)
+        # Best-effort lifecycle advance to REEFER_PLANNED (optional state) + topic.
+        await self._advance(container_number, target=LC_REEFER_PLANNED,
+                            action="REEFER_PLAN", strict=False)
+        await self._emit(EVENT_REEFER_PLANNED, container_number,
+                         {"slot": slot, "temperature": temperature,
+                          "power_required": power_required})
         self._observe("reefer_plan", "success", t0, container=container_number)
         return row

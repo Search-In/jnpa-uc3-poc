@@ -1213,3 +1213,49 @@ CREATE TABLE IF NOT EXISTS jnpa.carbon_emission (
 );
 CREATE INDEX IF NOT EXISTS idx_carbon_emission_vehicle ON jnpa.carbon_emission (vehicle_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_carbon_emission_created ON jnpa.carbon_emission (created_at DESC);
+
+-- Cargo lifecycle state management (migration 0023): a single validated lifecycle
+-- CREATED -> VESSEL_DISCHARGED -> YARD_ASSIGNED -> [position/reefer/rake]* ->
+-- SCAN_PENDING -> VERIFIED -> RELEASED, closing the UC-II -> UC-III handover. The
+-- transition policy lives in services.cargo; these are the additive stores.
+ALTER TABLE jnpa.cargo
+    ADD COLUMN IF NOT EXISTS lifecycle_status text DEFAULT 'CREATED'
+        CHECK (lifecycle_status IN (
+            'CREATED','VESSEL_DISCHARGED','YARD_ASSIGNED','YARD_POSITION_ALLOCATED',
+            'REEFER_PLANNED','RAKE_ASSIGNED','SCAN_PENDING','VERIFIED','RELEASED'));
+CREATE INDEX IF NOT EXISTS idx_cargo_lifecycle_status ON jnpa.cargo (lifecycle_status);
+UPDATE jnpa.cargo
+   SET lifecycle_status = CASE
+        WHEN is_released THEN 'RELEASED'
+        WHEN yard_block IS NOT NULL THEN 'YARD_ASSIGNED'
+        ELSE 'CREATED'
+   END
+ WHERE lifecycle_status IS NULL;
+-- Yard position detail (block / row / slot / position) on the existing plan table.
+ALTER TABLE jnpa.cargo_yard_plans ADD COLUMN IF NOT EXISTS yard_row      text;
+ALTER TABLE jnpa.cargo_yard_plans ADD COLUMN IF NOT EXISTS yard_slot     text;
+ALTER TABLE jnpa.cargo_yard_plans ADD COLUMN IF NOT EXISTS yard_position text;
+-- Append-only lifecycle audit history.
+CREATE TABLE IF NOT EXISTS jnpa.cargo_lifecycle_events (
+    id               bigserial PRIMARY KEY,
+    container_number text NOT NULL,
+    action           text NOT NULL,
+    old_status       text,
+    new_status       text NOT NULL,
+    actor_role       text,
+    note             text,
+    created_at       timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cargo_lifecycle_ev_container ON jnpa.cargo_lifecycle_events (container_number);
+CREATE INDEX IF NOT EXISTS idx_cargo_lifecycle_ev_created   ON jnpa.cargo_lifecycle_events (id DESC);
+-- Scan / customs verification records.
+CREATE TABLE IF NOT EXISTS jnpa.cargo_scan_verifications (
+    id               bigserial PRIMARY KEY,
+    container_number text NOT NULL,
+    verified         boolean NOT NULL DEFAULT true,
+    remarks          text,
+    actor_role       text,
+    created_at       timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cargo_scan_verif_container ON jnpa.cargo_scan_verifications (container_number);
+CREATE INDEX IF NOT EXISTS idx_cargo_scan_verif_created   ON jnpa.cargo_scan_verifications (id DESC);

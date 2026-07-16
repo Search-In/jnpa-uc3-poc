@@ -210,6 +210,42 @@ as a notification and advance `last_id` to `X-Cargo-Event-Cursor`.
 
 ---
 
+## UC-II lifecycle → UC-III handover (migration 0023)
+
+POC-3 owns a single, validated cargo lifecycle. Every record carries
+`lifecycle_status` (on `CargoOut`), advanced only through the endpoints below —
+forward-only, and mandatory gates (discharge, yard-assign, verify, release) cannot
+be skipped. Illegal moves return **409**; unknown container **404**.
+
+```
+CREATED → VESSEL_DISCHARGED → YARD_ASSIGNED
+        → [YARD_POSITION_ALLOCATED | REEFER_PLANNED | RAKE_ASSIGNED]  (optional)
+        → SCAN_PENDING (scan-queue label) → VERIFIED → RELEASED
+```
+
+| Step | Call | Body | Result |
+|---|---|---|---|
+| Discharge | `POST /api/cargo/{cn}/discharge` | `{"vessel_name","discharge_time"}` | `→ VESSEL_DISCHARGED` (no auto yard) |
+| Yard assign | `PUT /api/cargo/{cn}/yard-assignment` | `{"yard_block":"A-01"}` | `→ YARD_ASSIGNED` |
+| Yard position | `POST /api/cargo/{cn}/yard-position` | `{"yard_block","row","slot","position","priority"}` | `→ YARD_POSITION_ALLOCATED` |
+| Scan queue | `GET /api/cargo/scan-queue` | — | `[{container_number, yard_block, status:"SCAN_PENDING"}]` |
+| Verify | `POST /api/cargo/{cn}/verify` | `{"verified":true,"remarks":"…"}` | `→ VERIFIED` |
+| Release | `POST /api/cargo/{cn}/release` | `{"note":"…"}` (optional) | `→ RELEASED`; requires VERIFIED; duplicate → 409 |
+| Handover list | `GET /api/cargo?status=RELEASED` | — | released cargo |
+| Audit | `GET /api/cargo/{cn}/lifecycle` | — | append-only transition history |
+
+Release response / `cargo.released` payload:
+`{container_number, lifecycle_status:"RELEASED", yard_location, vehicle_details, status:"RELEASED"}`.
+
+New lifecycle events (on the same `/api/cargo/events` log): `cargo.vessel_discharged`,
+`cargo.yard_position_allocated`, `cargo.verified`, `cargo.reefer_planned`,
+`cargo.rake_assigned`, `cargo.lifecycle_changed` (fires on every transition).
+
+The legacy `PUT is_released=true` still works and stays lifecycle-consistent;
+`POST /release` is the validated path.
+
+---
+
 ## Status codes & error shape
 
 | Code | When |
@@ -217,9 +253,11 @@ as a notification and advance `last_id` to `X-Cargo-Event-Cursor`.
 | 200 | successful GET / PUT / DELETE |
 | 201 | successful POST (create) |
 | 400 | validation failure — bad ISO-6346, bad enum, wrong type, missing PK, malformed JSON |
-| 404 | container not found (GET/PUT/DELETE) |
-| 409 | duplicate `container_number` on create |
+| 404 | container not found (GET/PUT/DELETE/lifecycle) |
+| 409 | duplicate `container_number` on create, **or** an illegal lifecycle transition (e.g. release before verify, duplicate release) |
 | 500 | unexpected server/DB error |
+
+409 lifecycle body: `{ "detail": { "error": "illegal_transition", "container_number": "...", "current_status": "...", "attempted_status": "..." } }`.
 
 400 body: `{ "error": "validation_error", "detail": <field errors> }`.
 404/409 body: `{ "detail": { "error": "not_found" | "duplicate_container", "container_number": "..." } }`.

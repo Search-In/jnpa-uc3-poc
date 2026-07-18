@@ -7,6 +7,7 @@
 // a pure UI redesign (no API, schema or business-rule changes).
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Ban,
@@ -104,6 +105,14 @@ export default function TransporterBlacklist({ mode = "master" }: { mode?: "mast
   const dq = useDebounced(q, 320);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [page, setPage] = useState(0);
+  // Deep-link target: "Open Transporter" from Driver Master navigates here with
+  // ?transporterId=<id> — auto-select that transporter (master mode only).
+  const [searchParams] = useSearchParams();
+  useEffect(() => {
+    if (isBlacklistMode) return;
+    const tid = searchParams.get("transporterId");
+    if (tid && /^\d+$/.test(tid)) setSelectedId(Number(tid));
+  }, [searchParams, isBlacklistMode]);
 
   // Filtered, server-searched list (covers the full registry; display window 1000).
   const listQ = useQuery({

@@ -448,6 +448,35 @@ export const api = {
   validateDriver: (driverId: string) =>
     http<any>(`/api/transporters/validate/driver/${encodeURIComponent(driverId)}`),
 
+  // --- Driver Master & Intelligence (read-only registry) ---
+  driversMaster: (params?: {
+    q?: string; company?: string; status?: string; enrolled?: boolean;
+    verification?: string; transporter_id?: number;
+    sort?: string; direction?: string; limit?: number; offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)));
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/drivers/master${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  driverMasterStats: () =>
+    http<{
+      total_drivers: number; active_pdp: number; expiring_soon: number; expired_pdp: number;
+      companies: number; enrolled: number; pending_enrollment: number; not_enrolled: number;
+    }>("/api/drivers/master/stats"),
+  driverMaster: (licence: string) =>
+    http<any>(`/api/drivers/master/${encodeURIComponent(licence)}`),
+  driverMasterPdpHistory: (licence: string, params?: { limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && qs.set(k, String(v)));
+    return http<{ licence: string; appl_number: string | null; items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/drivers/master/${encodeURIComponent(licence)}/pdp-history${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  driverMasterValidate: (licence: string) =>
+    http<any>(`/api/drivers/master/validate/${encodeURIComponent(licence)}`),
+
   // --- Camera AI (Features 3/4/5) ---
   cameraCounts: (params?: { camera_id?: string; gate_id?: string; limit?: number }) => {
     const q = new URLSearchParams();

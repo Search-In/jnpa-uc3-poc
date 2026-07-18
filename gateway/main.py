@@ -50,6 +50,7 @@ from .routers import (
     control,
     debug,
     driver as driver_router,
+    drivers_master,
     empty_container,
     evidence,
     fastag,
@@ -419,6 +420,7 @@ app.include_router(meta.router)
 app.include_router(workflows.router)
 app.include_router(identity.router)
 app.include_router(driver_router.router)
+app.include_router(drivers_master.router)    # Driver Master & Intelligence (read-only, additive)
 app.include_router(vehicle_identity.router)
 app.include_router(vehicles.router)
 app.include_router(parking.router)

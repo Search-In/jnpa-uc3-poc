@@ -50,6 +50,9 @@ export const SCREEN_ROLES: Record<string, Role[]> = {
   "/enrollments": ["DTCCC_ADMIN", "CUSTOMS"],
   // Vehicle Master administration — same audience as the enrollment surface it feeds.
   "/vehicles": ["DTCCC_ADMIN", "CUSTOMS"],
+  // CFS-ECY CODECO off-dock container movements (read-only) — container/customs
+  // audience, same as the Customs & Gate + FASTag consoles.
+  "/cfs-ecy": [...CONTROL_ROOM, "CUSTOMS"],
   "/health": CONTROL_ROOM,
   "/what-if": CONTROL_ROOM,
   "/whatif": CONTROL_ROOM,

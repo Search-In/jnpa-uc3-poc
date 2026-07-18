@@ -82,6 +82,7 @@ from .routers import (
     accidents,
     bottlenecks,
     camera_ai,
+    cfs_ecy,
     document_ocr,
     double_trip,
     ldb,
@@ -208,6 +209,15 @@ async def _lifespan(app: FastAPI):
         await uc3_ext.ensure_uc3_schema(cfg.postgres_dsn or None)
     except Exception as exc:  # noqa: BLE001
         log.warning("uc3_ext_schema_boot_failed", error=str(exc))
+
+    # CFS-ECY CODECO movements (module 13): the off-dock gate-movement table + dwell
+    # view. Idempotent, additive — mirrors migration 0027 so a dev DB that never ran
+    # it still gets the objects. Read-only wrt every existing table.
+    try:
+        from . import cfs_ecy_ext
+        await cfs_ecy_ext.ensure_cfs_ecy_schema(cfg.postgres_dsn or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("cfs_ecy_schema_boot_failed", error=str(exc))
 
     # Vehicle Master (fleet registry): ensure the table, then migrate the truck-sim
     # fleet into it (idempotent, never clobbering an operator edit) so no existing
@@ -435,6 +445,7 @@ app.include_router(camera_ai.router)         # camera-AI counting / trailer / co
 app.include_router(document_ocr.router)      # document OCR
 app.include_router(nvr.router)               # NVR device/stream integration
 app.include_router(trt.router)               # ECY TRT KPI
+app.include_router(cfs_ecy.router)           # CFS-ECY CODECO gate movements (module 13, read-only)
 app.include_router(bottlenecks.router)       # three-road bottleneck analytics
 app.include_router(reefer.router)            # reefer availability
 app.include_router(pdp.router)               # PDP adapter

@@ -477,6 +477,39 @@ export const api = {
   driverMasterValidate: (licence: string) =>
     http<any>(`/api/drivers/master/validate/${encodeURIComponent(licence)}`),
 
+  // --- CFS-ECY CODECO gate movements (module 13, read-only) ---
+  cfsEcyMovements: (params?: {
+    facility?: string; mode?: string; container?: string;
+    from?: string; to?: string;
+    sort?: string; direction?: string; limit?: number; offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)));
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/cfs-ecy/movements${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  cfsEcyStats: (params?: { facility?: string; from?: string; to?: string }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)));
+    return http<{
+      total_in: number; total_out: number; total_events: number;
+      container_count: number; active_containers: number; iso_invalid: number;
+      average_dwell_hours: number | null; median_dwell_hours: number | null;
+      dwell_count: number;
+      daily_throughput: { day: string; in_count: number; out_count: number }[];
+    }>(`/api/cfs-ecy/stats${qs.toString() ? `?${qs}` : ""}`);
+  },
+  cfsEcyDwell: (params?: { from?: string; to?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)));
+    return http<{ items: any[]; total: number; summary: any; note: string }>(
+      `/api/cfs-ecy/dwell${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  cfsEcyContainer: (containerNumber: string) =>
+    http<any>(`/api/cfs-ecy/containers/${encodeURIComponent(containerNumber)}`),
+
   // --- Camera AI (Features 3/4/5) ---
   cameraCounts: (params?: { camera_id?: string; gate_id?: string; limit?: number }) => {
     const q = new URLSearchParams();

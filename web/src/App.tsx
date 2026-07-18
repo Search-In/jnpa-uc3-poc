@@ -20,6 +20,7 @@ import WhatIfConsole from "@/screens/WhatIfConsole";
 import DemoConsole from "@/screens/DemoConsole";
 import DriverEnrollments from "@/screens/DriverEnrollments";
 import VehicleManagement from "@/screens/VehicleManagement";
+import CfsEcyMovements from "@/screens/CfsEcyMovements";
 import WorkflowComposer from "@/screens/WorkflowComposer";
 import SimulatorPage from "@/sim/SimulatorPage";
 import Launcher from "@/screens/Launcher";
@@ -241,6 +242,14 @@ function DashboardShell({
             element={
               <Guard path="/vehicles">
                 <VehicleManagement />
+              </Guard>
+            }
+          />
+          <Route
+            path="/cfs-ecy"
+            element={
+              <Guard path="/cfs-ecy">
+                <CfsEcyMovements />
               </Guard>
             }
           />

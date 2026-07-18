@@ -103,6 +103,28 @@ async def run(params: Dict[str, Any], handle_id: str | None = None) -> ScenarioH
                 detail={"injected": q.get("injected") if q else 0, "gate_id": gate_id},
             )
 
+            # --- Step 4b: driver shortage --------------------------------------
+            base_drivers = await _active_driver_base(cfg)
+            driver_gap = _driver_shortage(base_drivers, demand, rain)
+            await h.step(
+                f"Driver shortage: {driver_gap['available_drivers']} available vs "
+                f"{driver_gap['required_drivers']} required — {driver_gap['shortage']} short "
+                f"({driver_gap['shortage_pct']}%)",
+                trigger="scenario.monsoon_friday",
+                status="degraded" if driver_gap["shortage"] > 0 else "ok",
+                detail=driver_gap,
+            )
+
+            # --- Step 4c: fuel shortage ----------------------------------------
+            fuel_gap = _fuel_shortage(demand, rain)
+            await h.step(
+                f"Fuel-supply stress: {fuel_gap['bunkers_low']}/{fuel_gap['bunkers_total']} "
+                f"bunkers low, ~{fuel_gap['avg_refuel_wait_min']} min refuel wait ({fuel_gap['risk']})",
+                trigger="scenario.monsoon_friday",
+                status="degraded" if fuel_gap["risk"] in ("MEDIUM", "HIGH") else "ok",
+                detail=fuel_gap,
+            )
+
             # --- Step 5: traffic rerouting -------------------------------------
             rerouted = await _reroute_inbound(up, h, gate_id)
             best = h.cleanup.get("best_alt_gate")
@@ -130,6 +152,19 @@ async def run(params: Dict[str, Any], handle_id: str | None = None) -> ScenarioH
                 status="ok" if carbon else "degraded",
                 detail={"total_kg": total_kg, "idle_kg": idle_kg,
                         "avoided_idle_kg_sim": avoided_kg, "simulated": True},
+            )
+
+            # --- Step 7: reactive recommendations ------------------------------
+            # Synthesise the reactive-twin guidance (weather / routes / driver /
+            # fuel / TAS) from the propagated state above.
+            recs = _recommendations(driver_gap, fuel_gap, best, gate_id)
+            await h.step(
+                f"Reactive Twin recommendations issued ({len(recs)})",
+                trigger="scenario.monsoon_friday",
+                status="ok",
+                detail={"recommendations": recs, "best_alt_gate": best,
+                        "driver_shortage": driver_gap.get("shortage"),
+                        "fuel_risk": fuel_gap.get("risk"), "simulated": True},
             )
 
             await h.finish("DONE")
@@ -196,6 +231,77 @@ async def _resolve_alerts(cfg: ScenarioConfig, handle_id: str) -> None:
         )
     except Exception as exc:  # noqa: BLE001
         log.debug("resolve_alerts_failed", error=str(exc))
+
+
+# Rain-intensity -> impact multipliers for the simulated shortage propagation.
+_RAIN_FACTOR = {"light": 0.10, "moderate": 0.20, "heavy": 0.35, "severe": 0.50}
+
+
+async def _active_driver_base(cfg: ScenarioConfig) -> int:
+    """Best-effort real base: count ACTIVE drivers in jnpa.drivers; default 400."""
+    try:
+        from jnpa_shared.db import fetch_one
+        row = await fetch_one(
+            "SELECT count(*) AS n FROM jnpa.drivers WHERE status = 'ACTIVE'",
+            {}, dsn=cfg.postgres_dsn)
+        n = int(row["n"]) if row and row.get("n") else 0
+        return n if n > 0 else 400
+    except Exception:  # noqa: BLE001
+        return 400
+
+
+def _driver_shortage(base: int, demand: int, rain: str) -> Dict[str, Any]:
+    """Simulated driver-supply gap: heavy rain keeps a fraction of drivers off the
+    road while the Friday-peak surge lifts the requirement. A shadow-run estimate
+    under the stated assumptions — never a claimed live headcount."""
+    factor = _RAIN_FACTOR.get(rain, 0.35)
+    available = int(base * (1.0 - factor))
+    # Each surge truck needs a driver; requirement is the on-shift base + surge.
+    required = base + demand
+    gap = max(0, required - available)
+    return {
+        "available_drivers": available, "required_drivers": required,
+        "shortage": gap, "shortage_pct": round(100.0 * gap / required, 1) if required else 0.0,
+        "rain_factor": factor, "simulated": True,
+    }
+
+
+def _fuel_shortage(demand: int, rain: str) -> Dict[str, Any]:
+    """Simulated fuel-supply stress: rain slows tanker replenishment while the
+    arrival surge lifts consumption, so a share of corridor bunkers run low."""
+    factor = _RAIN_FACTOR.get(rain, 0.35)
+    bunkers_total = 6
+    bunkers_low = min(bunkers_total, round(bunkers_total * factor) + (1 if demand > 80 else 0))
+    avg_wait_min = round(6.0 + 40.0 * factor + demand * 0.05, 1)
+    return {
+        "bunkers_total": bunkers_total, "bunkers_low": int(bunkers_low),
+        "avg_refuel_wait_min": avg_wait_min,
+        "risk": "HIGH" if bunkers_low >= 3 else ("MEDIUM" if bunkers_low >= 1 else "LOW"),
+        "simulated": True,
+    }
+
+
+def _recommendations(driver: Dict[str, Any], fuel: Dict[str, Any],
+                     best_gate: str | None, gate_id: str) -> List[Dict[str, Any]]:
+    """Synthesise actionable reactive-twin recommendations from the propagated
+    driver/fuel/congestion state (the 'guidance on weather, routes & TAS' the
+    Reactive Twin is meant to emit)."""
+    recs: List[Dict[str, Any]] = [
+        {"action": "REROUTE", "priority": "P0",
+         "text": f"Divert inbound trucks from {gate_id} to {best_gate or 'the best alternate gate'} and reslot TAS."},
+    ]
+    if driver.get("shortage", 0) > 0:
+        recs.append({"action": "MOBILISE_DRIVERS", "priority": "P1",
+                     "text": f"Call up standby drivers to cover a {driver['shortage']} "
+                             f"({driver['shortage_pct']}%) driver gap; stagger shift start."})
+    if fuel.get("risk") in ("MEDIUM", "HIGH"):
+        recs.append({"action": "FUEL_ADVISORY", "priority": "P1",
+                     "text": f"{fuel['bunkers_low']}/{fuel['bunkers_total']} bunkers low "
+                             f"(~{fuel['avg_refuel_wait_min']} min wait) — pre-position tankers, "
+                             f"advise drivers to refuel before the corridor."})
+    recs.append({"action": "TAS_RESLOT", "priority": "P2",
+                 "text": "Extend appointment windows and prioritise reefer/perishable slots during the peak."})
+    return recs
 
 
 __all__ = ["NAME", "run", "reset"]

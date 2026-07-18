@@ -68,10 +68,23 @@ const SCENARIOS: { id: ScenarioId; runner: string; blurb: string; params: Record
       id: "MONSOON-FRIDAY",
       runner: "monsoon_friday",
       blurb:
-        "Master scenario: monsoon rain + Friday peak → congestion → demand surge → gate queue → reroute → carbon impact.",
+        "Heavy Rain — cascades to driver & fuel shortage + reactive recommendations. Monsoon rain + Friday peak → congestion → demand surge → gate queue → reroute → carbon impact.",
       params: { gate_id: "G-NSICT", rain_intensity: "heavy", demand_trucks: 120 },
     },
   ];
+
+// Display-only theme labels that make the requested scenario themes
+// discoverable in the UI. These NEVER change the backend `runner` name or the
+// run/reset wiring — they only annotate the shared SCENARIO_LABELS title. Any
+// id without an override falls back to SCENARIO_LABELS unchanged.
+const SCENARIO_THEME: Partial<Record<ScenarioId, string>> = {
+  "TFC-1": "Port Congestion",
+  "MONSOON-FRIDAY": "Heavy Rain",
+};
+function displayLabel(id: ScenarioId): string {
+  const theme = SCENARIO_THEME[id];
+  return theme ? `${SCENARIO_LABELS[id]} · ${theme}` : SCENARIO_LABELS[id];
+}
 
 function stepTone(status: string): Tone {
   if (status === "failed") return "critical";
@@ -176,6 +189,7 @@ export default function WhatIfConsole() {
         }
       />
 
+
       {/* Status summary */}
       <div className="px-4 pt-3">
         <StatGrid className="lg:grid-cols-4">
@@ -216,7 +230,7 @@ export default function WhatIfConsole() {
             return (
               <Card key={s.id} className={`p-3 ${active ? "border-primary" : ""}`}>
                 <div className="mb-2 flex items-center justify-between">
-                  <h3 className="text-sm font-semibold">{SCENARIO_LABELS[s.id]}</h3>
+                  <h3 className="text-sm font-semibold">{displayLabel(s.id)}</h3>
                   {active && <StatusChip label={t("whatIf.running")} tone="ok" />}
                 </div>
                 <p className="mb-2 text-xs text-muted-foreground">{t(`whatIf.blurb.${s.id}`)}</p>
@@ -248,6 +262,15 @@ export default function WhatIfConsole() {
           })}
         </div>
 
+        {/* Theme coverage caption — keeps the catalogue honest: Driver Shortage
+            and Fuel Shortage are not standalone runs, they are modelled as
+            cascading sub-effects inside Heavy Rain; Major Accident has no
+            backend scenario yet. */}
+        <p className="mt-2 text-[11px] text-muted-foreground">
+          Driver Shortage and Fuel Shortage are sub-effects modelled inside Heavy Rain
+          (Monsoon Friday). Major Accident is planned — no live scenario yet.
+        </p>
+
         {/* Scenario comparison */}
         <Card className="mt-3 overflow-hidden">
           <div className="flex items-center gap-2 border-b border-border px-3 py-2">
@@ -270,7 +293,7 @@ export default function WhatIfConsole() {
                   const [k, v] = Object.entries(s.params)[0];
                   return (
                     <tr key={s.id}>
-                      <td className="px-3 py-2 font-medium">{SCENARIO_LABELS[s.id]}</td>
+                      <td className="px-3 py-2 font-medium">{displayLabel(s.id)}</td>
                       <td className="px-3 py-2 font-mono text-xs text-muted-foreground">
                         {s.runner}
                       </td>

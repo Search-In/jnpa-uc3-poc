@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Info, Radio, RefreshCw, Truck as TruckIcon, X } from "lucide-react";
 import type MapView from "@arcgis/core/views/MapView";
@@ -27,8 +28,12 @@ import {
   SearchInput,
   FilterSelect,
   StatusChip,
+  SegmentedTabs,
+  Embedded,
   type Tone,
 } from "@/components/ui/dtccc";
+import EcyTrt from "@/screens/EcyTrt";
+import DoubleTrip from "@/screens/DoubleTrip";
 import { useSocket } from "@/hooks/SocketContext";
 import { useRefresh } from "@/lib/refresh";
 import { severityColour } from "@/lib/palette";
@@ -264,9 +269,48 @@ export default function LiveOperations() {
   const mapHighlights = useMemo(() => [...spotlight, ...simHighlights], [spotlight, simHighlights]);
   const effectiveFocus = focusPoint ?? selectedFocus ?? simFocusPoint;
 
+  // Additive top-level tabs: the live map/ops view stays the default, with ECY
+  // TRT and Double-Trip monitoring folded in as sibling tabs. The live content
+  // is always mounted (hidden via CSS) so the map/WebSocket never unmount on a
+  // tab switch; embedded screens mount only when their tab is active.
+  const [params, setParams] = useSearchParams();
+  const tabParam = params.get("tab");
+  const active: "live" | "trt" | "double-trip" =
+    tabParam === "trt" ? "trt" : tabParam === "double-trip" ? "double-trip" : "live";
+  const setActive = (key: "live" | "trt" | "double-trip") => {
+    const next = new URLSearchParams(params);
+    if (key === "live") next.delete("tab");
+    else next.set("tab", key);
+    setParams(next, { replace: true });
+  };
+
   return (
     <PageContainer>
-      <PageHeader
+      <div className="border-b border-border px-4 py-2.5">
+        <SegmentedTabs
+          value={active}
+          onChange={setActive}
+          tabs={[
+            { key: "live", label: t("navGroup.traffic") },
+            { key: "trt", label: "ECY TRT" },
+            { key: "double-trip", label: "Double Trip" },
+          ]}
+        />
+      </div>
+
+      {active === "trt" && (
+        <Embedded>
+          <EcyTrt />
+        </Embedded>
+      )}
+      {active === "double-trip" && (
+        <Embedded>
+          <DoubleTrip />
+        </Embedded>
+      )}
+
+      <div className={active === "live" ? "" : "hidden"}>
+        <PageHeader
         icon={TruckIcon}
         title={t("navGroup.traffic")}
         subtitle={t("app.corridor")}
@@ -403,6 +447,7 @@ export default function LiveOperations() {
         <TasWidget />
         <AutoLeoPanel />
         <CustomsFeedPanel />
+      </div>
       </div>
     </PageContainer>
   );

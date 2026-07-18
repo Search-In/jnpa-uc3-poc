@@ -15,6 +15,7 @@ import {
   Container,
   Flag,
   ClipboardCheck,
+  Camera,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
@@ -26,13 +27,15 @@ import {
   SegmentedTabs,
   DataTable,
   StatusChip,
+  Embedded,
   type Column,
   type Tone,
 } from "@/components/ui/dtccc";
+import CameraAI from "@/screens/CameraAI";
 import { fmtDateTimeIST } from "@/lib/utils";
 import type { CustomsAlert, GateCapture, LeoReconciliation } from "@/lib/types";
 
-type TabKey = "captures" | "leo" | "customs";
+type TabKey = "captures" | "leo" | "customs" | "camera";
 
 const CAPTURE_TYPES = [
   { key: "ESEAL", label: "e-Seal", icon: ShieldCheck },
@@ -156,6 +159,7 @@ export default function GateCustoms() {
             { key: "captures", label: "Gate Captures", icon: ClipboardCheck },
             { key: "leo", label: "Auto-LEO", icon: ShieldCheck, count: recon.length },
             { key: "customs", label: "Customs Flags", icon: Flag, count: customs.length },
+            { key: "camera", label: "Camera AI", icon: Camera },
           ]}
         />
 
@@ -185,6 +189,11 @@ export default function GateCustoms() {
           <Card className="overflow-hidden">
             <CustomsTable rows={customs} status={customsQ} onRetry={() => customsQ.refetch()} />
           </Card>
+        )}
+        {tab === "camera" && (
+          <Embedded>
+            <CameraAI />
+          </Embedded>
         )}
       </div>
     </PageContainer>

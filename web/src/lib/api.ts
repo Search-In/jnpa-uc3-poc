@@ -405,6 +405,150 @@ export const api = {
     }),
   wfExecutions: (limit = 50) =>
     http<{ executions: WfExecution[]; count: number }>(`/api/workflows/executions?limit=${limit}`),
+
+  // ===================================================================
+  // UC-III Final-Completion feature APIs (additive; gateway routers 0024)
+  // ===================================================================
+  // --- Accidents (Feature 1) ---
+  accidents: (params?: { status?: string; accident_type?: string; vehicle_id?: string; limit?: number }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<{ count: number; accidents: any[] }>(`/api/accidents${q.toString() ? `?${q}` : ""}`);
+  },
+  accidentDashboard: () => http<any>("/api/accidents/dashboard"),
+  accident: (id: number) => http<{ accident: any; timeline: any[] }>(`/api/accidents/${id}`),
+  accidentReport: (body: Record<string, any>) =>
+    http<{ created: boolean; accident: any }>("/api/accidents", { method: "POST", body: JSON.stringify(body) }),
+  accidentStatus: (id: number, body: Record<string, any>) =>
+    http<any>(`/api/accidents/${id}/status`, { method: "POST", body: JSON.stringify(body) }),
+  accidentInvestigation: (id: number, body: Record<string, any>) =>
+    http<any>(`/api/accidents/${id}/investigation`, { method: "POST", body: JSON.stringify(body) }),
+  accidentResolve: (id: number, body: Record<string, any>) =>
+    http<any>(`/api/accidents/${id}/resolve`, { method: "POST", body: JSON.stringify(body) }),
+
+  // --- Transporter blacklist (Feature 2) ---
+  transporters: (params?: { q?: string; status?: string; limit?: number }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<{ count: number; transporters: any[] }>(`/api/transporters${q.toString() ? `?${q}` : ""}`);
+  },
+  transporterBlacklist: () => http<{ count: number; blacklist: any[] }>("/api/transporters/blacklist"),
+  transporter: (id: number) =>
+    http<{ transporter: any; vehicles: any[]; blacklist_history: any[] }>(`/api/transporters/${id}`),
+  transporterCreate: (body: Record<string, any>) =>
+    http<any>("/api/transporters", { method: "POST", body: JSON.stringify(body) }),
+  transporterAddVehicle: (id: number, body: Record<string, any>) =>
+    http<any>(`/api/transporters/${id}/vehicles`, { method: "POST", body: JSON.stringify(body) }),
+  transporterBlacklistAdd: (id: number, body: Record<string, any>) =>
+    http<any>(`/api/transporters/${id}/blacklist`, { method: "POST", body: JSON.stringify(body) }),
+  transporterLift: (id: number, body?: Record<string, any>) =>
+    http<any>(`/api/transporters/${id}/lift`, { method: "POST", body: JSON.stringify(body || {}) }),
+  validateVehicle: (plate: string) =>
+    http<any>(`/api/transporters/validate/vehicle/${encodeURIComponent(plate)}`),
+  validateDriver: (driverId: string) =>
+    http<any>(`/api/transporters/validate/driver/${encodeURIComponent(driverId)}`),
+
+  // --- Camera AI (Features 3/4/5) ---
+  cameraCounts: (params?: { camera_id?: string; gate_id?: string; limit?: number }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<{ count: number; counts: any[] }>(`/api/camera-ai/counts${q.toString() ? `?${q}` : ""}`);
+  },
+  cameraSummary: () => http<any>("/api/camera-ai/summary"),
+  cameraDashboard: () => http<any>("/api/camera-ai/dashboard"),
+  cameraTrailers: (limit = 100) => http<{ count: number; trailers: any[] }>(`/api/camera-ai/trailer?limit=${limit}`),
+  cameraContainers: (limit = 100) => http<{ count: number; containers: any[] }>(`/api/camera-ai/container?limit=${limit}`),
+  cameraCountIngest: (body: Record<string, any>) =>
+    http<any>("/api/camera-ai/counts", { method: "POST", body: JSON.stringify(body) }),
+  cameraTrailerIngest: (body: Record<string, any>) =>
+    http<any>("/api/camera-ai/trailer", { method: "POST", body: JSON.stringify(body) }),
+  cameraContainerIngest: (body: Record<string, any>) =>
+    http<any>("/api/camera-ai/container", { method: "POST", body: JSON.stringify(body) }),
+
+  // --- Document OCR (Feature 6) ---
+  ocrDocuments: (params?: { doc_type?: string; limit?: number }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<{ count: number; documents: any[] }>(`/api/ocr/documents${q.toString() ? `?${q}` : ""}`);
+  },
+  ocrDocument: (id: number) => http<any>(`/api/ocr/documents/${id}`),
+  ocrHealth: () => http<any>("/api/ocr/health"),
+  ocrUpload: (file: File, docType: string, sourceRef?: string) => {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    fd.append("doc_type", docType);
+    if (sourceRef) fd.append("source_ref", sourceRef);
+    return postForm<any>("/api/ocr/document", fd);
+  },
+
+  // --- NVR (Feature 7) ---
+  nvrDevices: () => http<{ count: number; devices: any[] }>("/api/nvr/devices"),
+  nvrDevice: (id: string) => http<any>(`/api/nvr/devices/${encodeURIComponent(id)}`),
+  nvrStreams: () => http<{ count: number; streams: any[] }>("/api/nvr/streams"),
+  nvrHealth: () => http<any>("/api/nvr/health"),
+  nvrRegister: (body: Record<string, any>) =>
+    http<any>("/api/nvr/devices", { method: "POST", body: JSON.stringify(body) }),
+  nvrMapChannel: (id: string, body: Record<string, any>) =>
+    http<any>(`/api/nvr/devices/${encodeURIComponent(id)}/channels`, { method: "POST", body: JSON.stringify(body) }),
+
+  // --- ECY TRT (Feature 8) ---
+  trtSummary: () => http<any>("/api/trt/summary"),
+  trtRecords: (params?: { status?: string; vehicle_id?: string; limit?: number }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<{ count: number; records: any[] }>(`/api/trt/records${q.toString() ? `?${q}` : ""}`);
+  },
+  trtPhase: (body: Record<string, any>) =>
+    http<any>("/api/trt/phase", { method: "POST", body: JSON.stringify(body) }),
+
+  // --- Bottlenecks (Feature 9) ---
+  bottlenecks: (top = 3) => http<any>(`/api/bottlenecks?top=${top}`),
+  bottleneckSnapshot: () => http<any>("/api/bottlenecks/snapshot", { method: "POST" }),
+  bottleneckHistory: (limit = 100) => http<{ count: number; snapshots: any[] }>(`/api/bottlenecks/history?limit=${limit}`),
+
+  // --- Reefer (Feature 11) ---
+  reeferSlots: (params?: { facility_id?: string; status?: string }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<{ count: number; slots: any[] }>(`/api/reefer/slots${q.toString() ? `?${q}` : ""}`);
+  },
+  reeferAvailability: () => http<any>("/api/reefer/availability"),
+  reeferSeed: (count = 24) =>
+    http<any>("/api/reefer/seed", { method: "POST", body: JSON.stringify({ count }) }),
+  reeferAllocate: (body: Record<string, any>) =>
+    http<any>("/api/reefer/allocate", { method: "POST", body: JSON.stringify(body) }),
+  reeferRelease: (body: Record<string, any>) =>
+    http<any>("/api/reefer/release", { method: "POST", body: JSON.stringify(body) }),
+
+  // --- Integrations: PDP / LDB / RMS-TAS (Features 12/13/14) ---
+  pdpVehicle: (plate: string) => http<any>(`/api/pdp/vehicle/${encodeURIComponent(plate)}`),
+  pdpTraffic: () => http<any>("/api/pdp/traffic"),
+  pdpHealth: () => http<any>("/api/pdp/health"),
+  ldbContainer: (no: string) => http<any>(`/api/ldb/container/${encodeURIComponent(no)}`),
+  ldbMovements: (no: string) => http<any>(`/api/ldb/container/${encodeURIComponent(no)}/movements`),
+  ldbHealth: () => http<any>("/api/ldb/health"),
+  rmsSlots: (params?: { gate_id?: string; date?: string }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<{ count: number; slots: any[] }>(`/api/rms-tas/slots${q.toString() ? `?${q}` : ""}`);
+  },
+  rmsHealth: () => http<any>("/api/rms-tas/health"),
+  rmsSeed: (body: Record<string, any>) =>
+    http<any>("/api/rms-tas/seed", { method: "POST", body: JSON.stringify(body) }),
+  rmsBook: (body: Record<string, any>) =>
+    http<any>("/api/rms-tas/book", { method: "POST", body: JSON.stringify(body) }),
+
+  // --- TT Double Trip (Feature 15) ---
+  doubleTripStatistics: () => http<any>("/api/double-trip/statistics"),
+  doubleTripCycles: (params?: { vehicle_id?: string; limit?: number }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<{ count: number; cycles: any[] }>(`/api/double-trip/cycles${q.toString() ? `?${q}` : ""}`);
+  },
+  doubleTripStart: (body: Record<string, any>) =>
+    http<any>("/api/double-trip/start", { method: "POST", body: JSON.stringify(body) }),
+  doubleTripComplete: (tripId: number) =>
+    http<any>(`/api/double-trip/${tripId}/complete`, { method: "POST" }),
 };
 
 export interface WfField {

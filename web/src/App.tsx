@@ -244,6 +244,19 @@ function DashboardShell({
               </Guard>
             }
           />
+          {/* --- UC-III features now live inside their host screens; the old
+              standalone routes redirect into the host (+tab) so deep-links and
+              Command-Center/Demo shortcuts keep resolving (no sidebar entry). --- */}
+          <Route path="/accidents" element={<Navigate to="/alerts?tab=accidents" replace />} />
+          <Route path="/transporters" element={<Navigate to="/vehicles?tab=transporters" replace />} />
+          <Route path="/camera-ai" element={<Navigate to="/gate-customs" replace />} />
+          <Route path="/document-ocr" element={<Navigate to="/follow-the-box" replace />} />
+          <Route path="/nvr" element={<Navigate to="/health" replace />} />
+          <Route path="/trt" element={<Navigate to="/live?tab=trt" replace />} />
+          <Route path="/bottlenecks" element={<Navigate to="/geofencing" replace />} />
+          <Route path="/reefer" element={<Navigate to="/parking" replace />} />
+          <Route path="/integrations" element={<Navigate to="/health" replace />} />
+          <Route path="/double-trip" element={<Navigate to="/live?tab=double-trip" replace />} />
           <Route path="*" element={<Navigate to="/command-center" replace />} />
         </Routes>
       </main>

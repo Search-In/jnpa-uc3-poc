@@ -14,6 +14,7 @@ import {
   ParkingCircle,
   Ban,
   CheckCircle2,
+  Snowflake,
 } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api } from "@/lib/api";
@@ -28,9 +29,11 @@ import {
   SegmentedTabs,
   DataTable,
   StatusChip,
+  Embedded,
   type Column,
   type Tone,
 } from "@/components/ui/dtccc";
+import ReeferAvailability from "@/screens/ReeferAvailability";
 import { STATUS } from "@/lib/tokens";
 import { fmtDateTimeIST } from "@/lib/utils";
 import type {
@@ -40,7 +43,7 @@ import type {
   ParkingViolation,
 } from "@/lib/types";
 
-type TabKey = "facilities" | "vehicles" | "history" | "violations";
+type TabKey = "facilities" | "vehicles" | "history" | "violations" | "reefer";
 
 function statusTone(status?: string | null, freePct?: number | null): Tone {
   if (status === "FULL") return "critical";
@@ -225,6 +228,7 @@ export default function ParkingManagement() {
               icon: TriangleAlert,
               count: violQ.data?.violations?.length,
             },
+            { key: "reefer", label: "Reefer", icon: Snowflake },
           ]}
         />
         <Card className="overflow-hidden">
@@ -247,6 +251,11 @@ export default function ParkingManagement() {
               status={violQ}
               onRetry={() => violQ.refetch()}
             />
+          )}
+          {tab === "reefer" && (
+            <Embedded>
+              <ReeferAvailability />
+            </Embedded>
           )}
         </Card>
       </div>

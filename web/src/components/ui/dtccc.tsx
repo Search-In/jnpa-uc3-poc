@@ -10,7 +10,7 @@
 // Pure presentation — no data fetching, no backend coupling. Colours come from
 // tokens.ts only.
 
-import { useMemo, useState, type ReactNode } from "react";
+import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ChevronLeft, ChevronRight, RefreshCw, Search, type LucideIcon } from "lucide-react";
@@ -36,6 +36,21 @@ export const TONE_COLOUR: Record<Tone, string> = {
   neutral: "#64748b",
 };
 
+// --- Embedded mode -----------------------------------------------------------
+// A screen rendered INSIDE another screen's tab (UC-III features folded into
+// their host screens) should drop its own full-page chrome so the host owns the
+// header/scroll. Wrap the nested screen in <Embedded>…</Embedded>: PageHeader
+// then renders nothing and PageContainer becomes a plain block. Backward
+// compatible — outside an <Embedded> the context is false and every standalone
+// screen renders exactly as before.
+const EmbeddedContext = createContext(false);
+export function useEmbedded(): boolean {
+  return useContext(EmbeddedContext);
+}
+export function Embedded({ children }: { children: ReactNode }) {
+  return <EmbeddedContext.Provider value={true}>{children}</EmbeddedContext.Provider>;
+}
+
 // --- Page chrome -------------------------------------------------------------
 
 export function PageContainer({
@@ -45,6 +60,12 @@ export function PageContainer({
   children: ReactNode;
   className?: string;
 }) {
+  const embedded = useEmbedded();
+  // Embedded: plain block so the host tab owns height/scroll. Standalone: the
+  // usual full-height scroll page (unchanged).
+  if (embedded) {
+    return <div className={cn("flex flex-col gap-4", className)}>{children}</div>;
+  }
   return (
     <div className={cn("flex h-full flex-col overflow-y-auto bg-background", className)}>
       {children}
@@ -70,7 +91,11 @@ export function PageHeader({
   actions?: ReactNode;
 }) {
   const { t } = useTranslation();
+  const embedded = useEmbedded();
   const { refresh, lastRefreshAt, isRefreshing } = useRefresh();
+  // Embedded in a host screen's tab → the host already shows a page header, so
+  // the nested screen's own header is suppressed to avoid a doubled title.
+  if (embedded) return null;
   // Screens may still pass a scoped updatedAt/isFetching/onRefresh; otherwise we
   // fall back to the global RefreshManager so every page behaves identically.
   const effectiveUpdatedAt = updatedAt ?? lastRefreshAt;

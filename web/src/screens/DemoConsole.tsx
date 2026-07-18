@@ -9,7 +9,7 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import {
   SlidersHorizontal,
   Bug,
@@ -21,8 +21,12 @@ import {
   TriangleAlert,
   Play,
   ExternalLink,
+  Rocket,
+  Snowflake,
+  CalendarClock,
 } from "lucide-react";
 import { getAdapter, DATA_MODE } from "@/data";
+import { api } from "@/lib/api";
 import { useSocket } from "@/hooks/SocketContext";
 import type { FaultControlResult, FaultSeverity, FaultState, OperatorBanner } from "@/lib/types";
 import { Card } from "@/components/ui/card";
@@ -82,8 +86,19 @@ function TestingCard({
 export default function DemoConsole() {
   const { t } = useTranslation();
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const { operatorBanner: wsBanner } = useSocket();
   const [localBanner, setLocalBanner] = useState<OperatorBanner | null>(null);
+
+  // UC-III demo shortcuts — seed helpers reuse existing @/lib/api methods, then navigate.
+  const seedReefer = useMutation({
+    mutationFn: () => api.reeferSeed(24),
+    onSuccess: () => navigate("/parking?tab=reefer"),
+  });
+  const seedRms = useMutation({
+    mutationFn: () => api.rmsSeed({ gate_id: "G-NSICT", slots_per_day: 8 }),
+    onSuccess: () => navigate("/health?tab=integrations"),
+  });
 
   const faultsQ = useQuery<FaultState>({
     queryKey: ["faults"],
@@ -196,6 +211,7 @@ export default function DemoConsole() {
           </button>
         }
       />
+
 
       {/* Operator banner (live WS) */}
       <div className="px-4 pt-3">
@@ -344,6 +360,57 @@ export default function DemoConsole() {
               className="ml-auto text-[11px] font-semibold text-primary hover:underline"
             >
               Source health →
+            </Link>
+          </div>
+        </TestingCard>
+
+        {/* UC-III Demo Shortcuts */}
+        <TestingCard
+          icon={Rocket}
+          title="UC-III Demo Shortcuts"
+          subtitle="One-click seed + jump to the host screen for the UC-III walkthrough"
+          className="lg:col-span-2"
+        >
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={() => seedReefer.mutate()}
+              disabled={seedReefer.isPending}
+              className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-[13px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
+            >
+              <Snowflake className="h-3.5 w-3.5" />{" "}
+              {seedReefer.isPending ? "Seeding…" : "Seed Reefer Slots"}
+            </button>
+            <button
+              onClick={() => seedRms.mutate()}
+              disabled={seedRms.isPending}
+              className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-[13px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
+            >
+              <CalendarClock className="h-3.5 w-3.5" />{" "}
+              {seedRms.isPending ? "Seeding…" : "Seed RMS-TAS Slots"}
+            </button>
+            <Link
+              to="/alerts?tab=accidents"
+              className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-[13px] font-medium hover:bg-muted"
+            >
+              <TriangleAlert className="h-3.5 w-3.5" /> Open Accident Console
+            </Link>
+            <Link
+              to="/live?tab=trt"
+              className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-[13px] font-medium hover:bg-muted"
+            >
+              <ExternalLink className="h-3.5 w-3.5" /> Open ECY TRT
+            </Link>
+            <Link
+              to="/geofencing?tab=bottlenecks"
+              className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-[13px] font-medium hover:bg-muted"
+            >
+              <ExternalLink className="h-3.5 w-3.5" /> Open Road Bottlenecks
+            </Link>
+            <Link
+              to="/gate-customs"
+              className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-[13px] font-medium hover:bg-muted"
+            >
+              <Camera className="h-3.5 w-3.5" /> Open Camera AI
             </Link>
           </div>
         </TestingCard>

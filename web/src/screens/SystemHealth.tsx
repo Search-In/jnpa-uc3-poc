@@ -39,8 +39,12 @@ import {
   StatGrid,
   StatCard,
   StatusChip,
+  SegmentedTabs,
+  Embedded,
   type Tone,
 } from "@/components/ui/dtccc";
+import Integrations from "@/screens/Integrations";
+import NvrIntegration from "@/screens/NvrIntegration";
 import { STATUS } from "@/lib/tokens";
 import { relativeAge, fmtDateTimeIST } from "@/lib/utils";
 
@@ -117,6 +121,7 @@ export default function SystemHealth() {
   const [drawer, setDrawer] = useState<{ title: string; api?: string; source?: string } | null>(
     null,
   );
+  const [tab, setTab] = useState<"services" | "integrations" | "nvr">("services");
 
   const sources = sourcesQ.data ?? [];
   const cameras = camerasQ.data ?? [];
@@ -278,6 +283,41 @@ export default function SystemHealth() {
         actions={<AssumptionsPanel />}
       />
 
+
+      {/* Integration status area — additive tabs; Services preserves existing behavior */}
+      <div className="px-4 pt-3">
+        <SegmentedTabs
+          tabs={[
+            { key: "services", label: "Services" },
+            { key: "integrations", label: "Integrations" },
+            { key: "nvr", label: "NVR" },
+          ]}
+          value={tab}
+          onChange={setTab}
+        />
+      </div>
+
+      {tab === "integrations" && (
+        <div className="px-4 pt-3">
+          <Embedded>
+            <Integrations />
+          </Embedded>
+          <p className="px-1 pt-2 text-[11px] text-muted-foreground">
+            PDP · LDB · RMS-TAS · Weather share the same integration adapter layer (LIVE / MOCK).
+          </p>
+        </div>
+      )}
+
+      {tab === "nvr" && (
+        <div className="px-4 pt-3">
+          <Embedded>
+            <NvrIntegration />
+          </Embedded>
+        </div>
+      )}
+
+      {tab === "services" && (
+        <>
       {/* Overall status */}
       <div className="px-4 pt-3">
         <StatGrid className="lg:grid-cols-4">
@@ -355,6 +395,8 @@ export default function SystemHealth() {
       <div className="px-4 pb-6">
         <IdentityPanel />
       </div>
+        </>
+      )}
 
       <LogDrawer drawer={drawer} onClose={() => setDrawer(null)} />
     </PageContainer>

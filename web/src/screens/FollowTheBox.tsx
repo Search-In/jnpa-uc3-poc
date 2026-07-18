@@ -14,7 +14,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Box, Search, Ship, Truck, ArrowRight, ArrowDown, Check, Radio } from "lucide-react";
 import { getAdapter, DATA_MODE } from "@/data";
 import { isValidContainerNo } from "@/lib/iso6346";
-import { PageContainer, PageHeader, StatusChip } from "@/components/ui/dtccc";
+import { PageContainer, PageHeader, StatusChip, SegmentedTabs, Embedded } from "@/components/ui/dtccc";
+import DocumentOCR from "@/screens/DocumentOCR";
 import { Card } from "@/components/ui/card";
 import { EmptyState, LoadingState } from "@/components/ui/misc";
 import { STATUS } from "@/lib/tokens";
@@ -241,6 +242,7 @@ export default function FollowTheBox() {
   const [params, setParams] = useSearchParams();
   const [term, setTerm] = useState(params.get("c") || DEMO_CONTAINER);
   const [submitted, setSubmitted] = useState(params.get("c") || DEMO_CONTAINER);
+  const [tab, setTab] = useState<"journey" | "ocr">("journey");
 
   useEffect(() => {
     const c = params.get("c");
@@ -272,6 +274,24 @@ export default function FollowTheBox() {
     <PageContainer>
       <PageHeader title={t("followBox.title")} subtitle={t("followBox.subtitle")} icon={Box} />
 
+
+      <div className="px-4 pt-3">
+        <SegmentedTabs
+          value={tab}
+          onChange={setTab}
+          tabs={[
+            { key: "journey", label: "Container Journey", icon: Box },
+            { key: "ocr", label: "OCR Verification", icon: Search },
+          ]}
+        />
+      </div>
+
+      {tab === "ocr" ? (
+        <Embedded>
+          <DocumentOCR />
+        </Embedded>
+      ) : (
+        <>
       <div className="px-4 pt-3">
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex items-center gap-2 rounded-md border border-border bg-card px-2 py-1.5">
@@ -327,6 +347,8 @@ export default function FollowTheBox() {
           </>
         )}
       </div>
+        </>
+      )}
     </PageContainer>
   );
 }

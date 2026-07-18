@@ -21,6 +21,11 @@ import {
   FileDown,
   ExternalLink,
   BarChart3,
+  Camera,
+  Video,
+  Gauge,
+  Snowflake,
+  Cable,
 } from "lucide-react";
 import {
   Bar,
@@ -49,9 +54,22 @@ import {
   DataTable,
   FilterSelect,
   StatusChip,
+  Embedded,
   type Column,
   type Tone,
 } from "@/components/ui/dtccc";
+import DocumentOCR from "@/screens/DocumentOCR";
+import Accidents from "@/screens/Accidents";
+import EcyTrt from "@/screens/EcyTrt";
+import DoubleTrip from "@/screens/DoubleTrip";
+import TransporterBlacklist from "@/screens/TransporterBlacklist";
+import {
+  CameraAIReport,
+  NvrReport,
+  BottlenecksReport,
+  ReeferReport,
+  IntegrationReport,
+} from "@/screens/reports/Uc3ReportTabs";
 import { EmptyState } from "@/components/ui/misc";
 import { severityColour } from "@/lib/palette";
 import { STATUS } from "@/lib/tokens";
@@ -80,7 +98,98 @@ function sevTone(sev: string): Tone {
   return "neutral";
 }
 
+type Uc3TabKey =
+  | "enforcement"
+  | "document_ocr"
+  | "accident"
+  | "ecy_trt"
+  | "double_trip"
+  | "blacklist"
+  | "camera_ai"
+  | "nvr"
+  | "bottlenecks"
+  | "reefer"
+  | "integrations";
+
 export default function PoliceReports() {
+  const [uc3Tab, setUc3Tab] = useState<Uc3TabKey>("enforcement");
+  return (
+    <>
+      <div className="px-4 pt-3">
+        <SegmentedTabs
+          value={uc3Tab}
+          onChange={setUc3Tab}
+          tabs={[
+            { key: "enforcement", label: "Enforcement", icon: ShieldAlert },
+            { key: "document_ocr", label: "Document OCR", icon: ScanFace },
+            { key: "accident", label: "Accident Report", icon: FileWarning },
+            { key: "ecy_trt", label: "ECY TRT", icon: FileText },
+            { key: "double_trip", label: "Double Trip", icon: ReceiptText },
+            { key: "blacklist", label: "Blacklist", icon: ShieldAlert },
+            { key: "camera_ai", label: "Camera AI", icon: Camera },
+            { key: "nvr", label: "NVR", icon: Video },
+            { key: "bottlenecks", label: "Road Bottlenecks", icon: Gauge },
+            { key: "reefer", label: "Reefer", icon: Snowflake },
+            { key: "integrations", label: "Integration Health", icon: Cable },
+          ]}
+        />
+      </div>
+      {uc3Tab === "enforcement" && <EnforcementReports />}
+      {uc3Tab === "document_ocr" && (
+        <Embedded>
+          <DocumentOCR />
+        </Embedded>
+      )}
+      {uc3Tab === "accident" && (
+        <Embedded>
+          <Accidents />
+        </Embedded>
+      )}
+      {uc3Tab === "ecy_trt" && (
+        <Embedded>
+          <EcyTrt />
+        </Embedded>
+      )}
+      {uc3Tab === "double_trip" && (
+        <Embedded>
+          <DoubleTrip />
+        </Embedded>
+      )}
+      {uc3Tab === "blacklist" && (
+        <Embedded>
+          <TransporterBlacklist />
+        </Embedded>
+      )}
+      {uc3Tab === "camera_ai" && (
+        <Embedded>
+          <CameraAIReport />
+        </Embedded>
+      )}
+      {uc3Tab === "nvr" && (
+        <Embedded>
+          <NvrReport />
+        </Embedded>
+      )}
+      {uc3Tab === "bottlenecks" && (
+        <Embedded>
+          <BottlenecksReport />
+        </Embedded>
+      )}
+      {uc3Tab === "reefer" && (
+        <Embedded>
+          <ReeferReport />
+        </Embedded>
+      )}
+      {uc3Tab === "integrations" && (
+        <Embedded>
+          <IntegrationReport />
+        </Embedded>
+      )}
+    </>
+  );
+}
+
+function EnforcementReports() {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const [tab, setTab] = useState<TabKey>("police");

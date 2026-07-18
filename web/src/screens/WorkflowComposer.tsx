@@ -6,13 +6,62 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Workflow, Plus, Trash2, Play, ShieldCheck } from "lucide-react";
+import { Workflow, Plus, Trash2, Play, ShieldCheck, LayoutTemplate } from "lucide-react";
 import { api, type WfRule } from "@/lib/api";
 import { PageContainer, PageHeader, StatusChip } from "@/components/ui/dtccc";
 import { Card } from "@/components/ui/card";
 import { EmptyState, LoadingState } from "@/components/ui/misc";
 import { STATUS } from "@/lib/tokens";
 import { fmtDateTimeIST } from "@/lib/utils";
+
+// --- starter templates (additive) ---------------------------------------
+// These only PREFILL the existing rule-editor form. Hints are matched against
+// whatever fields/actions the loaded wfCatalog actually provides; if a hinted
+// field is absent we fall back to the first available field. No new APIs or
+// fields are invented.
+type WfTemplate = {
+  id: string;
+  label: string;
+  fieldHints: string[];
+  op: string;
+  value: string;
+  actionHints: string[];
+};
+
+const WORKFLOW_TEMPLATES: WfTemplate[] = [
+  {
+    id: "accident",
+    label: "Accident Workflow",
+    fieldHints: ["accident", "collision", "impact", "crash", "incident", "speed"],
+    op: ">",
+    value: "0",
+    actionHints: ["violation", "notify", "officer", "alert", "reroute", "suggest"],
+  },
+  {
+    id: "reefer",
+    label: "Reefer Workflow",
+    fieldHints: ["reefer", "temperature", "temp", "cold", "chill"],
+    op: ">",
+    value: "8",
+    actionHints: ["notify", "alert", "officer", "violation"],
+  },
+  {
+    id: "ecy_trt",
+    label: "ECY TRT Workflow",
+    fieldHints: ["trt", "turn", "dwell", "duration", "wait", "time", "ecy"],
+    op: ">",
+    value: "60",
+    actionHints: ["notify", "alert", "officer", "reroute", "suggest"],
+  },
+  {
+    id: "blacklist",
+    label: "Blacklist Workflow",
+    fieldHints: ["blacklist", "black_list", "blocked", "flag", "watch", "status"],
+    op: "==",
+    value: "true",
+    actionHints: ["violation", "notify", "officer", "alert", "block"],
+  },
+];
 
 export default function WorkflowComposer() {
   const qc = useQueryClient();
@@ -30,6 +79,44 @@ export default function WorkflowComposer() {
   const [op, setOp] = useState(">");
   const [value, setValue] = useState("");
   const [picked, setPicked] = useState<string[]>([]);
+
+  // Prefill the existing rule form from a starter template. Picks the closest
+  // available catalog field/action; falls back to the first field/action if a
+  // hinted one is absent. The rule name is always the template's name.
+  const applyTemplate = (t: WfTemplate) => {
+    const matchOne = (hints: string[]) => {
+      for (const hint of hints) {
+        const m = fields.find(
+          (f) =>
+            f.key.toLowerCase().includes(hint) || f.label.toLowerCase().includes(hint),
+        );
+        if (m) return m;
+      }
+      return fields[0];
+    };
+    const matchActions = (hints: string[]) => {
+      const chosen: string[] = [];
+      for (const hint of hints) {
+        for (const a of actions) {
+          if (
+            (a.key.toLowerCase().includes(hint) ||
+              a.label.toLowerCase().includes(hint)) &&
+            !chosen.includes(a.key)
+          ) {
+            chosen.push(a.key);
+          }
+        }
+      }
+      if (chosen.length === 0 && actions[0]) chosen.push(actions[0].key);
+      return chosen;
+    };
+    const f = matchOne(t.fieldHints);
+    setName(t.label);
+    setField(f ? f.key : "");
+    setOp(operators.includes(t.op) ? t.op : (operators[0] ?? op));
+    setValue(t.value);
+    setPicked(matchActions(t.actionHints));
+  };
 
   const create = useMutation({
     mutationFn: () => api.wfCreateRule({ name, field, op, value, actions: picked }),
@@ -90,6 +177,30 @@ export default function WorkflowComposer() {
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-3 px-4 py-3 lg:grid-cols-2">
+          {/* ---------------- Starter templates ---------------- */}
+          <Card className="p-4 lg:col-span-2">
+            <div className="mb-2 flex items-center gap-2">
+              <LayoutTemplate size={15} />
+              <h3 className="text-sm font-semibold">Templates</h3>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {WORKFLOW_TEMPLATES.map((t) => (
+                <button
+                  key={t.id}
+                  disabled={fields.length === 0}
+                  onClick={() => applyTemplate(t)}
+                  className="rounded-md border border-border bg-muted/40 px-3 py-1.5 text-[12px] font-medium text-foreground hover:bg-muted disabled:opacity-50"
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              Templates prefill the rule editor with a starting point; review and Save to
+              persist.
+            </p>
+          </Card>
+
           {/* ---------------- Rule authoring ---------------- */}
           <Card className="p-4">
             <div className="mb-3 flex items-center gap-2">

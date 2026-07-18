@@ -63,6 +63,20 @@ _DDL: list[str] = [
         updated_at timestamptz NOT NULL DEFAULT now())""",
     "CREATE INDEX IF NOT EXISTS idx_transporters_status ON jnpa.transporters (status)",
     "CREATE INDEX IF NOT EXISTS idx_transporters_name ON jnpa.transporters (lower(name))",
+    # 2b. Transport Master fields (migration 0025) — additive columns from the
+    # official TransporterDetails.xlsx. ADD COLUMN IF NOT EXISTS is idempotent.
+    "ALTER TABLE jnpa.transporters ADD COLUMN IF NOT EXISTS source_company_id bigint",
+    "ALTER TABLE jnpa.transporters ADD COLUMN IF NOT EXISTS source_user_id bigint",
+    "ALTER TABLE jnpa.transporters ADD COLUMN IF NOT EXISTS contact_person text",
+    "ALTER TABLE jnpa.transporters ADD COLUMN IF NOT EXISTS designation text",
+    "ALTER TABLE jnpa.transporters ADD COLUMN IF NOT EXISTS email text",
+    "ALTER TABLE jnpa.transporters ADD COLUMN IF NOT EXISTS mobile text",
+    "ALTER TABLE jnpa.transporters ADD COLUMN IF NOT EXISTS address text",
+    "ALTER TABLE jnpa.transporters ADD COLUMN IF NOT EXISTS doc_type text",
+    "ALTER TABLE jnpa.transporters ADD COLUMN IF NOT EXISTS doc_file text",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_transporters_source_company_id ON jnpa.transporters (source_company_id)",
+    "CREATE INDEX IF NOT EXISTS idx_transporters_mobile ON jnpa.transporters (mobile)",
+    "CREATE INDEX IF NOT EXISTS idx_transporters_email ON jnpa.transporters (lower(email))",
     """CREATE TABLE IF NOT EXISTS jnpa.transporter_vehicles (
         id bigserial PRIMARY KEY,
         transporter_id bigint NOT NULL REFERENCES jnpa.transporters(id) ON DELETE CASCADE,

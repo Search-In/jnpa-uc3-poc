@@ -271,7 +271,7 @@ export default function VehicleManagement() {
 
       {pageTab === "blacklist" && (
         <Embedded>
-          <TransporterBlacklist />
+          <TransporterBlacklist mode="blacklist" />
         </Embedded>
       )}
 

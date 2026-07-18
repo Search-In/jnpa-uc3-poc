@@ -69,14 +69,28 @@ async def create_transporter(body: Dict[str, Any] = Body(...),
     name = (body.get("name") or "").strip()
     if not name:
         raise HTTPException(400, "name required")
+    # Backward compatible: legacy callers send only code/name/gstin/contact/status.
+    # Transport Master callers may additionally send the extended fields below;
+    # all are optional and default to NULL so nothing existing breaks.
     row = await execute_returning(
-        """INSERT INTO jnpa.transporters (code, name, gstin, contact, status)
+        """INSERT INTO jnpa.transporters
+             (code, name, gstin, contact, status, source_company_id, source_user_id,
+              contact_person, designation, email, mobile, address, doc_type, doc_file)
            VALUES (:code, :name, :gstin, CAST(:contact AS jsonb),
-                   COALESCE(:status, 'ACTIVE'))
+                   COALESCE(:status, 'ACTIVE'), :source_company_id, :source_user_id,
+                   :contact_person, :designation, :email, :mobile, :address,
+                   :doc_type, :doc_file)
            RETURNING *""",
         {"code": body.get("code"), "name": name, "gstin": body.get("gstin"),
          "contact": json.dumps(body.get("contact") or {}),
-         "status": (body.get("status") or "ACTIVE")},
+         "status": (body.get("status") or "ACTIVE"),
+         "source_company_id": body.get("source_company_id"),
+         "source_user_id": body.get("source_user_id"),
+         "contact_person": body.get("contact_person"),
+         "designation": body.get("designation"),
+         "email": body.get("email"), "mobile": body.get("mobile"),
+         "address": body.get("address"), "doc_type": body.get("doc_type"),
+         "doc_file": body.get("doc_file")},
         dsn=dsn)
     REQUESTS.labels("transporters", "ok").inc()
     return {"created": True, "transporter": _iso(dict(row)) if row else None}
@@ -94,7 +108,13 @@ async def list_transporters(q: Optional[str] = Query(default=None),
     where: List[str] = []
     params: Dict[str, Any] = {"limit": limit}
     if q:
-        where.append("(lower(name) LIKE :q OR lower(coalesce(code,'')) LIKE :q OR lower(coalesce(gstin,'')) LIKE :q)")
+        where.append(
+            "(lower(name) LIKE :q OR lower(coalesce(code,'')) LIKE :q "
+            "OR lower(coalesce(gstin,'')) LIKE :q "
+            "OR lower(coalesce(contact_person,'')) LIKE :q "
+            "OR lower(coalesce(email,'')) LIKE :q "
+            "OR coalesce(mobile,'') LIKE :q "
+            "OR coalesce(source_company_id::text,'') LIKE :q)")
         params["q"] = f"%{q.lower()}%"
     if status:
         where.append("status = :status")

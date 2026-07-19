@@ -423,17 +423,18 @@ export const api = {
     );
   },
   accidentDashboard: () => http<any>("/api/accidents/dashboard"),
-  accident: (id: number) => http<{ accident: any; timeline: any[] }>(`/api/accidents/${id}`),
+  accident: (id: number | string) =>
+    http<{ accident: any; timeline: any[] }>(`/api/accidents/${id}`),
   accidentReport: (body: Record<string, any>) =>
     http<{ created: boolean; accident: any }>("/api/accidents", {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  accidentStatus: (id: number, body: Record<string, any>) =>
+  accidentStatus: (id: number | string, body: Record<string, any>) =>
     http<any>(`/api/accidents/${id}/status`, { method: "POST", body: JSON.stringify(body) }),
-  accidentInvestigation: (id: number, body: Record<string, any>) =>
+  accidentInvestigation: (id: number | string, body: Record<string, any>) =>
     http<any>(`/api/accidents/${id}/investigation`, { method: "POST", body: JSON.stringify(body) }),
-  accidentResolve: (id: number, body: Record<string, any>) =>
+  accidentResolve: (id: number | string, body: Record<string, any>) =>
     http<any>(`/api/accidents/${id}/resolve`, { method: "POST", body: JSON.stringify(body) }),
 
   // --- Transporter blacklist (Feature 2) ---

@@ -8,12 +8,7 @@ import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Ship, FileText, ScanLine, BadgeCheck, DoorOpen } from "lucide-react";
 import { api } from "@/lib/api";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { StatusChip, type Tone } from "@/components/ui/dtccc";
 import { Spinner, EmptyState } from "@/components/ui/misc";
 import { fmtDateTimeIST } from "@/lib/utils";
@@ -182,11 +177,7 @@ function Body({ view }: { view: CustomsContainerView }) {
         <KV k="Entry Inward" v={vessel?.entry_inward ? fmtDateTimeIST(vessel.entry_inward) : "—"} />
         <KV
           k="Last Customs Event"
-          v={
-            lastEvent
-              ? `${lastEvent.event} · ${fmtDateTimeIST(lastEvent.created_at)}`
-              : "Pending"
-          }
+          v={lastEvent ? `${lastEvent.event} · ${fmtDateTimeIST(lastEvent.created_at)}` : "Pending"}
         />
       </section>
     </div>

@@ -31,6 +31,7 @@ from jnpa_shared.logging import get_logger
 
 from . import persistence
 from . import icegate_sim
+from . import customs_adapter
 
 log = get_logger("gate_data.providers")
 
@@ -38,7 +39,13 @@ SOURCES = ("ESEAL", "FORM13", "WEIGHBRIDGE", "ICEGATE")
 
 
 def source_mode(source: str) -> str:
-    """Resolved mode for a source: 'live' only if MODE=live AND a URL is set."""
+    """Resolved mode for a source: 'live' only if MODE=live AND a URL is set.
+
+    ICEGATE has a second LIVE path — the customs adapter (module 5) — which serves
+    real ICEGATE captures from the customs tables WITHOUT a vendor URL. When that
+    flag is on, ICEGATE reports 'live' (the dashboard badge lights LIVE)."""
+    if source == "ICEGATE" and customs_adapter.enabled():
+        return "live"
     mode = os.environ.get(f"GATE_{source}_MODE", "sim").strip().lower()
     if mode == "live" and not source_url(source):
         return "sim"  # live requested but unconfigured -> safe SIM fallback
@@ -50,8 +57,12 @@ def source_url(source: str) -> str:
 
 
 def providers_status() -> Dict[str, Dict[str, Any]]:
-    """Per-source mode + configured flag (for /healthz + the dashboard badge)."""
-    return {
+    """Per-source mode + configured flag (for /healthz + the dashboard badge).
+
+    The ICEGATE entry additionally carries ``adapter='customs'`` when the customs
+    adapter is the active LIVE source (additive key; the dashboard reads only ``mode``,
+    so the existing contract is unchanged)."""
+    status = {
         s: {
             "mode": source_mode(s),
             "requested": os.environ.get(f"GATE_{s}_MODE", "sim").strip().lower(),
@@ -59,6 +70,9 @@ def providers_status() -> Dict[str, Dict[str, Any]]:
         }
         for s in SOURCES
     }
+    if customs_adapter.enabled():
+        status["ICEGATE"]["adapter"] = "customs"
+    return status
 
 
 def _seed_source_dict(source: str, rec) -> Tuple[Dict[str, Any], Optional[str], Optional[str]]:

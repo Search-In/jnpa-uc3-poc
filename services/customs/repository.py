@@ -1,0 +1,725 @@
+"""Customs persistence — raw-SQL repository over the shared async engine.
+
+The ONLY layer that speaks SQL to the ``jnpa.customs_*`` tables. It mirrors
+:mod:`services.cargo.repository`: reads on a plain ``connect()``, writes inside a
+single ``engine.begin()`` transaction (auto-commit / auto-rollback), no ORM.
+
+Design guarantees for a customs import:
+  * ATOMIC per file — one whole message (envelope + every child row) persists in a
+    SINGLE transaction. Any error rolls the ENTIRE file back (no half-manifests),
+    then a FAILED ledger row is recorded in a separate transaction so the failure is
+    still audited.
+  * IDEMPOTENT — dedup at the CONTENT level (``customs_messages.source_sha256``
+    UNIQUE): re-importing unchanged bytes is a no-op (SKIPPED_DUPLICATE). Every child
+    insert additionally uses ON CONFLICT on its natural key, so a partial re-import
+    upserts instead of duplicating.
+  * BULK — children are written with executemany + parent-id maps resolved by natural
+    key, so a 2 800-container IGM is a handful of statements, not thousands.
+"""
+from __future__ import annotations
+
+from typing import Any, Mapping, Optional, Sequence
+
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
+
+from jnpa_shared.db import get_engine
+from jnpa_shared.logging import get_logger
+
+from .parsers.common import ParsedMessage
+
+log = get_logger("services.customs.repository")
+
+
+class CustomsRepository:
+    """Raw-SQL persistence for the customs document tables. Stateless apart from the
+    DSN, so a single shared instance is safe (engine + pool are cached)."""
+
+    def __init__(self, dsn: Optional[str] = None) -> None:
+        self._dsn = dsn
+
+    # ---------------------------------------------------------------- helpers
+    @staticmethod
+    async def _exec_many(conn: Any, sql: str, rows: Sequence[Mapping[str, Any]]) -> None:
+        """executemany a leaf INSERT (fire-and-forget; used for non-counted children)."""
+        if rows:
+            await conn.execute(text(sql), list(rows))
+
+    @staticmethod
+    async def _scalar(conn: Any, sql: str, params: Mapping[str, Any]) -> int:
+        res = await conn.execute(text(sql), params)
+        return int(res.scalar() or 0)
+
+    async def _bulk_counted(self, conn: Any, sql: str, rows: Sequence[Mapping[str, Any]],
+                            *, count_sql: str, count_params: Mapping[str, Any]) -> int:
+        """executemany a leaf INSERT and return the TRUE number of rows inserted.
+
+        asyncpg's executemany rowcount is unreliable under ``ON CONFLICT``, so we
+        measure a before/after delta on the target rows scoped to the parent id(s)
+        touched this call (``count_sql``/``count_params``), inside the same
+        transaction. This reports the honest imported count even when the source
+        file carries duplicate natural keys (e.g. the Shipping Bill sheet lists each
+        SB several times) — the duplicates collapse and are simply not counted."""
+        if not rows:
+            return 0
+        before = await self._scalar(conn, count_sql, count_params)
+        await conn.execute(text(sql), list(rows))
+        after = await self._scalar(conn, count_sql, count_params)
+        return after - before
+
+    # -------------------------------------------------------------------- events
+    async def record_event(self, event: str, *, module: Optional[str] = None,
+                           reference: Optional[str] = None,
+                           container_no: Optional[str] = None,
+                           payload: Optional[Mapping[str, Any]] = None) -> None:
+        """Append one row to the append-only jnpa.customs_events log (the same
+        pattern as jnpa.cargo_events). Generated ONLY from real customs processing."""
+        import json
+        async with get_engine(self._dsn).begin() as conn:
+            await conn.execute(
+                text("INSERT INTO jnpa.customs_events (event, module, reference, "
+                     "container_no, payload) VALUES (:e, :m, :r, :c, CAST(:p AS jsonb))"),
+                {"e": event, "m": module, "r": reference, "c": container_no,
+                 "p": json.dumps(dict(payload or {}))})
+
+    async def list_events(self, *, module: Optional[str] = None,
+                          container_no: Optional[str] = None, event: Optional[str] = None,
+                          since_id: Optional[int] = None, limit: int = 100,
+                          offset: int = 0) -> list[dict]:
+        """Recent customs events (newest first), optionally filtered. since_id (an
+        exclusive lower bound) supports a monotonic poll cursor like cargo events."""
+        where = []
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        for col, val in (("module", module), ("container_no", container_no), ("event", event)):
+            if val is not None:
+                where.append(f"{col} = :{col}")
+                params[col] = val
+        if since_id is not None:
+            where.append("id > :since_id")
+            params["since_id"] = since_id
+        clause = (" WHERE " + " AND ".join(where)) if where else ""
+        sql = ("SELECT id, event, module, reference, container_no, payload, created_at "
+               f"FROM jnpa.customs_events{clause} ORDER BY id DESC LIMIT :limit OFFSET :offset")
+        async with get_engine(self._dsn).connect() as conn:
+            res = await conn.execute(text(sql), params)
+            return [dict(r) for r in res.mappings().all()]
+
+    async def find_message_by_sha(self, sha256: str) -> Optional[dict]:
+        """Return the existing ledger row for this content hash, or None."""
+        async with get_engine(self._dsn).connect() as conn:
+            res = await conn.execute(
+                text("SELECT id, module, message_type, source_file, import_status, "
+                     "record_count, imported_count, error_count, created_at "
+                     "FROM jnpa.customs_messages WHERE source_sha256 = :sha"),
+                {"sha": sha256})
+            row = res.mappings().first()
+        return dict(row) if row else None
+
+    # -------------------------------------------------------------------- reads
+    async def _rows(self, sql: str, params: Mapping[str, Any]) -> list[dict]:
+        async with get_engine(self._dsn).connect() as conn:
+            res = await conn.execute(text(sql), params)
+            return [dict(r) for r in res.mappings().all()]
+
+    async def _one(self, sql: str, params: Mapping[str, Any]) -> Optional[dict]:
+        rows = await self._rows(sql, params)
+        return rows[0] if rows else None
+
+    async def _count(self, sql: str, params: Mapping[str, Any]) -> int:
+        async with get_engine(self._dsn).connect() as conn:
+            return int((await conn.execute(text(sql), params)).scalar() or 0)
+
+    @staticmethod
+    def _where(filters: Mapping[str, Any], allowed: Sequence[str], *,
+               alias: str = "") -> tuple[str, dict]:
+        """Build a WHERE clause from a whitelisted equality filter set (keys are fixed
+        identifiers, values always bound — injection-safe by construction). ``alias``
+        qualifies the column names (e.g. ``v.igm_no``) without touching bind params."""
+        clauses, params = [], {}
+        for col in allowed:
+            val = filters.get(col)
+            if val is not None:
+                qualified = f"{alias}.{col}" if alias else col
+                clauses.append(f"{qualified} = :{col}")
+                params[col] = val
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        return where, params
+
+    async def list_messages(self, *, filters: Mapping[str, Any], limit: int, offset: int) -> list[dict]:
+        where, params = self._where(filters, ("module", "message_type", "import_status"))
+        params.update(limit=limit, offset=offset)
+        return await self._rows(
+            "SELECT id, message_type, module, control_number, primary_ref, source_file, "
+            "sent_ts, record_count, imported_count, error_count, import_status, error_detail, "
+            f"created_at, updated_at FROM jnpa.customs_messages{where} "
+            "ORDER BY id DESC LIMIT :limit OFFSET :offset", params)
+
+    async def count_messages(self, *, filters: Mapping[str, Any]) -> int:
+        where, params = self._where(filters, ("module", "message_type", "import_status"))
+        return await self._count(f"SELECT count(*) FROM jnpa.customs_messages{where}", params)
+
+    async def get_message(self, message_id: int) -> Optional[dict]:
+        return await self._one(
+            "SELECT id, message_type, module, control_number, sender_id, receiver_id, "
+            "message_id_code, sent_ts, primary_ref, source_file, source_sha256, "
+            "file_size_bytes, record_count, imported_count, error_count, import_status, "
+            "error_detail, created_at, updated_at FROM jnpa.customs_messages WHERE id = :id",
+            {"id": message_id})
+
+    async def list_message_errors(self, message_id: int, *, limit: int, offset: int) -> list[dict]:
+        return await self._rows(
+            "SELECT id, record_ref, error_code, error_detail, created_at "
+            "FROM jnpa.customs_import_errors WHERE message_id = :id "
+            "ORDER BY id LIMIT :limit OFFSET :offset",
+            {"id": message_id, "limit": limit, "offset": offset})
+
+    async def list_igm(self, *, filters: Mapping[str, Any], limit: int, offset: int) -> list[dict]:
+        where, params = self._where(filters, ("igm_no",), alias="v")
+        params.update(limit=limit, offset=offset)
+        return await self._rows(
+            "SELECT v.id, v.igm_no, v.igm_date, v.vessel_code, v.voyage_no, "
+            "v.shipping_line_code, v.port_of_arrival, v.total_no_of_lines, v.expected_arrival, "
+            "v.entry_inward, "
+            "(SELECT count(*) FROM jnpa.customs_igm_cargo_line l WHERE l.vessel_id = v.id) AS line_count, "
+            "(SELECT count(*) FROM jnpa.customs_igm_container c "
+            "   JOIN jnpa.customs_igm_cargo_line l ON l.id = c.cargo_line_id WHERE l.vessel_id = v.id) AS container_count "
+            f"FROM jnpa.customs_igm_vessel v{where} "
+            "ORDER BY v.id DESC LIMIT :limit OFFSET :offset", params)
+
+    async def count_igm(self, *, filters: Mapping[str, Any]) -> int:
+        where, params = self._where(filters, ("igm_no",))
+        return await self._count(f"SELECT count(*) FROM jnpa.customs_igm_vessel{where}", params)
+
+    async def list_igm_containers(self, *, filters: Mapping[str, Any], limit: int, offset: int) -> list[dict]:
+        where, params = self._where(filters, ("igm_no", "container_no"))
+        params.update(limit=limit, offset=offset)
+        return await self._rows(
+            "SELECT id, igm_no, line_no, subline_no, container_no, iso_valid, seal_no, "
+            "container_status, no_of_packages, container_weight, iso_size_type "
+            f"FROM jnpa.customs_igm_container{where} ORDER BY id LIMIT :limit OFFSET :offset", params)
+
+    async def count_igm_containers(self, *, filters: Mapping[str, Any]) -> int:
+        where, params = self._where(filters, ("igm_no", "container_no"))
+        return await self._count(f"SELECT count(*) FROM jnpa.customs_igm_container{where}", params)
+
+    async def list_ooc(self, *, filters: Mapping[str, Any], limit: int, offset: int) -> list[dict]:
+        where, params = self._where(filters, ("bill_of_entry_no", "igm_no", "out_of_charge_no"), alias="o")
+        params.update(limit=limit, offset=offset)
+        return await self._rows(
+            "SELECT o.id, o.bill_of_entry_no, o.bill_of_entry_date, o.igm_no, o.line_no, "
+            "o.out_of_charge_no, o.out_of_charge_date, o.importer_name, o.ie_code, o.cha_code, "
+            "o.total_customs_duty, "
+            "(SELECT count(*) FROM jnpa.customs_ooc_container c WHERE c.ooc_id = o.id) AS container_count "
+            f"FROM jnpa.customs_ooc o{where} "
+            "ORDER BY o.id DESC LIMIT :limit OFFSET :offset", params)
+
+    async def count_ooc(self, *, filters: Mapping[str, Any]) -> int:
+        where, params = self._where(filters, ("bill_of_entry_no", "igm_no", "out_of_charge_no"))
+        return await self._count(f"SELECT count(*) FROM jnpa.customs_ooc{where}", params)
+
+    async def list_smtp(self, *, filters: Mapping[str, Any], limit: int, offset: int) -> list[dict]:
+        where, params = self._where(filters, ("smtp_no", "igm_no", "bond_no"), alias="s")
+        params.update(limit=limit, offset=offset)
+        return await self._rows(
+            "SELECT s.id, s.smtp_no, s.smtp_date, s.igm_no, s.destination_code, s.carrier_code, "
+            "s.bond_no, "
+            "(SELECT count(*) FROM jnpa.customs_smtp_line l WHERE l.smtp_id = s.id) AS line_count "
+            f"FROM jnpa.customs_smtp s{where} "
+            "ORDER BY s.id DESC LIMIT :limit OFFSET :offset", params)
+
+    async def count_smtp(self, *, filters: Mapping[str, Any]) -> int:
+        where, params = self._where(filters, ("smtp_no", "igm_no", "bond_no"))
+        return await self._count(f"SELECT count(*) FROM jnpa.customs_smtp{where}", params)
+
+    async def list_rms(self, *, filters: Mapping[str, Any], limit: int, offset: int) -> list[dict]:
+        where, params = self._where(filters, ("igm_no",))
+        params.update(limit=limit, offset=offset)
+        return await self._rows(
+            "SELECT id, igm_no, vessel_name, shipping_line, shipping_agent, "
+            "processing_end_date, any_selected, selected_count, created_at "
+            f"FROM jnpa.customs_rms_scanlist{where} ORDER BY id DESC LIMIT :limit OFFSET :offset", params)
+
+    async def count_rms(self, *, filters: Mapping[str, Any]) -> int:
+        where, params = self._where(filters, ("igm_no",))
+        return await self._count(f"SELECT count(*) FROM jnpa.customs_rms_scanlist{where}", params)
+
+    async def list_leo(self, *, filters: Mapping[str, Any], limit: int, offset: int) -> list[dict]:
+        where, params = self._where(filters, ("sb_no",))
+        params.update(limit=limit, offset=offset)
+        return await self._rows(
+            "SELECT id, sb_no, sb_date, site_id, rotation_no, leo_date, action, created_at "
+            f"FROM jnpa.customs_leo{where} ORDER BY id DESC LIMIT :limit OFFSET :offset", params)
+
+    async def count_leo(self, *, filters: Mapping[str, Any]) -> int:
+        where, params = self._where(filters, ("sb_no",))
+        return await self._count(f"SELECT count(*) FROM jnpa.customs_leo{where}", params)
+
+    async def list_shipping_bills(self, *, filters: Mapping[str, Any], limit: int, offset: int) -> list[dict]:
+        where, params = self._where(filters, ("sb_no", "site_id"))
+        params.update(limit=limit, offset=offset)
+        return await self._rows(
+            "SELECT id, sb_no, sb_date, site_id, action, created_at "
+            f"FROM jnpa.customs_shipping_bill{where} ORDER BY id DESC LIMIT :limit OFFSET :offset", params)
+
+    async def count_shipping_bills(self, *, filters: Mapping[str, Any]) -> int:
+        where, params = self._where(filters, ("sb_no", "site_id"))
+        return await self._count(f"SELECT count(*) FROM jnpa.customs_shipping_bill{where}", params)
+
+    async def container_customs(self, container_no: str) -> dict:
+        """The full customs view of one container: the derived status flags + every
+        customs document that references it (IGM line, OOC, SMTP line, RMS selection).
+        The single soft-join binding the customs layer to a box (by value)."""
+        status = await self._one(
+            "SELECT container_no, igm_no, declared_igm, rms_selected, ooc_cleared, smtp_bonded "
+            "FROM jnpa.v_customs_container_status WHERE container_no = :cn", {"cn": container_no})
+        igm = await self._rows(
+            "SELECT igm_no, line_no, container_no, seal_no, container_status, iso_size_type "
+            "FROM jnpa.customs_igm_container WHERE container_no = :cn ORDER BY id", {"cn": container_no})
+        ooc = await self._rows(
+            "SELECT o.bill_of_entry_no, o.out_of_charge_no, o.out_of_charge_date, o.importer_name "
+            "FROM jnpa.customs_ooc_container oc JOIN jnpa.customs_ooc o ON o.id = oc.ooc_id "
+            "WHERE oc.container_no = :cn ORDER BY o.id", {"cn": container_no})
+        smtp = await self._rows(
+            "SELECT s.smtp_no, s.bond_no, s.destination_code, sl.consignee_name "
+            "FROM jnpa.customs_smtp_line sl JOIN jnpa.customs_smtp s ON s.id = sl.smtp_id "
+            "WHERE sl.container_no = :cn ORDER BY s.id", {"cn": container_no})
+        rms = await self._rows(
+            "SELECT igm_no, scan_machine, scan_location, cfs_name "
+            "FROM jnpa.customs_rms_container WHERE container_no = :cn ORDER BY id", {"cn": container_no})
+        return {"container_no": container_no, "status": status,
+                "igm": igm, "ooc": ooc, "smtp": smtp, "rms": rms}
+
+    async def summary(self) -> dict:
+        """Dashboard counts across the customs layer (one round trip per table)."""
+        async with get_engine(self._dsn).connect() as conn:
+            async def n(sql: str) -> int:
+                return int((await conn.execute(text(sql))).scalar() or 0)
+            return {
+                "messages": await n("SELECT count(*) FROM jnpa.customs_messages"),
+                "igm_vessels": await n("SELECT count(*) FROM jnpa.customs_igm_vessel"),
+                "igm_containers": await n("SELECT count(*) FROM jnpa.customs_igm_container"),
+                "ooc": await n("SELECT count(*) FROM jnpa.customs_ooc"),
+                "smtp": await n("SELECT count(*) FROM jnpa.customs_smtp"),
+                "smtp_lines": await n("SELECT count(*) FROM jnpa.customs_smtp_line"),
+                "rms_scanlists": await n("SELECT count(*) FROM jnpa.customs_rms_scanlist"),
+                "rms_containers": await n("SELECT count(*) FROM jnpa.customs_rms_container"),
+                "leo": await n("SELECT count(*) FROM jnpa.customs_leo"),
+                "shipping_bills": await n("SELECT count(*) FROM jnpa.customs_shipping_bill"),
+                "distinct_containers": await n("SELECT count(*) FROM jnpa.v_customs_container_status"),
+                "failed_imports": await n("SELECT count(*) FROM jnpa.customs_messages WHERE import_status = 'FAILED'"),
+            }
+
+    # ------------------------------------------------------- cargo binding (workflow)
+    async def reconcile_cargo_status(self) -> dict:
+        """Bind the customs document layer to the physical container lifecycle.
+
+        For every container that exists in BOTH jnpa.cargo AND the customs view, drive
+        jnpa.cargo.customs_status from customs facts (using ONLY the existing enum
+        values, so nothing downstream breaks):
+          * Out-Of-Charge issued  -> CLEARED           (import customs release)
+          * RMS-selected (not yet cleared) -> UNDER_INSPECTION  (scanning hold)
+        Only rows whose status actually changes are touched. Runs in ONE transaction.
+        Returns the container numbers moved to each status (for event/notification
+        emission by the service). NEVER creates cargo rows and never touches a
+        container that customs has no fact for — purely additive to existing data."""
+        cleared: list[str] = []
+        inspect: list[str] = []
+        async with get_engine(self._dsn).begin() as conn:
+            res = await conn.execute(text(
+                "UPDATE jnpa.cargo c SET customs_status = 'CLEARED' "
+                "FROM jnpa.v_customs_container_status v "
+                "WHERE v.container_no = c.container_number "
+                "  AND v.ooc_cleared IS TRUE AND c.customs_status <> 'CLEARED' "
+                "RETURNING c.container_number"))
+            cleared = [r[0] for r in res.fetchall()]
+            res = await conn.execute(text(
+                "UPDATE jnpa.cargo c SET customs_status = 'UNDER_INSPECTION' "
+                "FROM jnpa.v_customs_container_status v "
+                "WHERE v.container_no = c.container_number "
+                "  AND v.rms_selected IS TRUE AND v.ooc_cleared IS NOT TRUE "
+                "  AND c.customs_status NOT IN ('CLEARED', 'UNDER_INSPECTION') "
+                "RETURNING c.container_number"))
+            inspect = [r[0] for r in res.fetchall()]
+        return {"cleared": cleared, "under_inspection": inspect}
+
+    async def create_cargo_notification(self, container_number: str, *,
+                                        notification_type: str, severity: str,
+                                        message: str) -> None:
+        """Reuse the EXISTING jnpa.cargo_notifications store (migration 0017) so a
+        customs hold surfaces on the existing /api/cargo/notifications feed — no new
+        notification system. Best-effort insert."""
+        import json
+        async with get_engine(self._dsn).begin() as conn:
+            await conn.execute(
+                text("INSERT INTO jnpa.cargo_notifications "
+                     "(container_number, notification_type, severity, message, stakeholders) "
+                     "VALUES (:cn, :t, :s, :m, CAST(:st AS jsonb))"),
+                {"cn": container_number, "t": notification_type, "s": severity,
+                 "m": message, "st": json.dumps(["CUSTOMS", "TERMINAL_OPS"])})
+
+    # ------------------------------------------------------------------ persist
+    async def persist(self, parsed: ParsedMessage, *, source_file: str,
+                      source_sha256: str, file_size: Optional[int] = None) -> dict:
+        """Persist one parsed customs message atomically + idempotently.
+
+        Returns an import-result dict: ``{message_id, module, import_status,
+        record_count, imported_count, error_count, duplicate}``. A file whose bytes
+        were already imported returns ``duplicate=True`` / ``SKIPPED_DUPLICATE`` and
+        writes nothing. A structural failure returns ``FAILED`` with a recorded
+        ledger row (and no domain rows)."""
+        existing = await self.find_message_by_sha(source_sha256)
+        if existing is not None:
+            return {"message_id": existing["id"], "module": existing["module"],
+                    "import_status": "SKIPPED_DUPLICATE",
+                    "record_count": existing["record_count"],
+                    "imported_count": existing["imported_count"],
+                    "error_count": existing["error_count"], "duplicate": True}
+
+        msg = parsed.message
+        module = msg["module"]
+        envelope = {
+            "message_type": msg["message_type"], "module": module,
+            "control_number": msg.get("control_number"),
+            "sender_id": msg.get("sender_id"), "receiver_id": msg.get("receiver_id"),
+            "message_id_code": msg.get("message_id_code"), "sent_ts": msg.get("sent_ts"),
+            "primary_ref": msg.get("primary_ref"), "source_file": source_file,
+            "source_sha256": source_sha256, "file_size_bytes": file_size,
+            "record_count": parsed.record_count,
+        }
+        try:
+            async with get_engine(self._dsn).begin() as conn:
+                res = await conn.execute(text(_MSG_INSERT), envelope)
+                message_id = res.mappings().first()["id"]
+                imported = await _PERSISTERS[module](self, conn, message_id, parsed.payload)
+                status = "SUCCESS"
+                await conn.execute(
+                    text("UPDATE jnpa.customs_messages SET import_status = :s, "
+                         "imported_count = :imp, error_count = 0, updated_at = now() "
+                         "WHERE id = :id"),
+                    {"s": status, "imp": imported, "id": message_id})
+            return {"message_id": message_id, "module": module, "import_status": status,
+                    "record_count": parsed.record_count, "imported_count": imported,
+                    "error_count": 0, "duplicate": False}
+        except IntegrityError as exc:
+            # A concurrent import committed the same sha first — treat as duplicate.
+            dup = await self.find_message_by_sha(source_sha256)
+            if dup is not None:
+                return {"message_id": dup["id"], "module": module,
+                        "import_status": "SKIPPED_DUPLICATE",
+                        "record_count": dup["record_count"],
+                        "imported_count": dup["imported_count"],
+                        "error_count": dup["error_count"], "duplicate": True}
+            return await self._record_failure(envelope, str(getattr(exc, "orig", exc)))
+        except Exception as exc:  # noqa: BLE001 — record + surface as FAILED, never partial
+            log.warning("customs.persist_failed", module=module,
+                        source_file=source_file, error=str(exc))
+            return await self._record_failure(envelope, str(exc))
+
+    async def _record_failure(self, envelope: Mapping[str, Any], detail: str) -> dict:
+        """Insert a FAILED ledger row in its own transaction (the domain rows were
+        rolled back). Best-effort: if even this fails, surface FAILED without an id."""
+        row = dict(envelope)
+        row["import_status"] = "FAILED"
+        row["error_detail"] = detail[:4000]
+        try:
+            async with get_engine(self._dsn).begin() as conn:
+                res = await conn.execute(text(_MSG_INSERT_FAILED), row)
+                mid = res.mappings().first()["id"]
+                await conn.execute(
+                    text("INSERT INTO jnpa.customs_import_errors "
+                         "(message_id, record_ref, error_code, error_detail) "
+                         "VALUES (:mid, NULL, 'PERSIST_FAILED', :d)"),
+                    {"mid": mid, "d": detail[:4000]})
+            fail_id: Optional[int] = mid
+        except Exception as exc:  # noqa: BLE001
+            log.error("customs.failure_record_failed", error=str(exc))
+            fail_id = None
+        return {"message_id": fail_id, "module": envelope["module"],
+                "import_status": "FAILED", "record_count": envelope["record_count"],
+                "imported_count": 0, "error_count": 1, "duplicate": False}
+
+    # ----------------------------------------------------- per-module persisters
+    async def _persist_igm(self, conn: Any, message_id: int, payload: Mapping[str, Any]) -> int:
+        imported = 0
+        for v in payload.get("vessels", []):
+            vparams = {k: v.get(k) for k in _IGM_VESSEL_COLS}
+            vparams["message_id"] = message_id
+            res = await conn.execute(text(_IGM_VESSEL_UPSERT), vparams)
+            vessel_id = res.mappings().first()["id"]
+            igm_no, igm_date = v.get("igm_no"), v.get("igm_date")
+            line_rows = []
+            for ln in v.get("lines", []):
+                lr = {k: ln.get(k) for k in _IGM_LINE_COLS}
+                lr.update({"vessel_id": vessel_id, "igm_no": igm_no, "igm_date": igm_date})
+                line_rows.append(lr)
+            await self._exec_many(conn, _IGM_LINE_INSERT, line_rows)
+            # Resolve line ids by natural key so containers attach correctly (idempotent).
+            res = await conn.execute(
+                text("SELECT id, line_no, subline_no FROM jnpa.customs_igm_cargo_line "
+                     "WHERE vessel_id = :vid"), {"vid": vessel_id})
+            line_id = {(r["line_no"], r["subline_no"]): r["id"] for r in res.mappings().all()}
+            cont_rows = []
+            for ln in v.get("lines", []):
+                key = (ln.get("line_no"), ln.get("subline_no") or 0)
+                cid = line_id.get(key)
+                if cid is None:
+                    continue
+                for c in ln.get("containers", []):
+                    cr = {k: c.get(k) for k in _IGM_CONT_COLS}
+                    cr.update({"cargo_line_id": cid, "igm_no": igm_no,
+                               "line_no": ln.get("line_no"),
+                               "subline_no": ln.get("subline_no") or 0})
+                    cont_rows.append(cr)
+            imported += await self._bulk_counted(
+                conn, _IGM_CONT_INSERT, cont_rows,
+                count_sql="SELECT count(*) FROM jnpa.customs_igm_container "
+                          "WHERE cargo_line_id = ANY(:ids)",
+                count_params={"ids": list(line_id.values())})
+        return imported
+
+    async def _persist_ooc(self, conn: Any, message_id: int, payload: Mapping[str, Any]) -> int:
+        imported = 0
+        for o in payload.get("oocs", []):
+            oparams = {k: o.get(k) for k in _OOC_COLS}
+            oparams["message_id"] = message_id
+            res = await conn.execute(text(_OOC_UPSERT), oparams)
+            ooc_id = res.mappings().first()["id"]
+            cont_rows = [{"ooc_id": ooc_id, "bill_of_entry_no": c.get("bill_of_entry_no"),
+                          "container_no": c.get("container_no"), "iso_valid": c.get("iso_valid")}
+                         for c in o.get("containers", [])]
+            imported += await self._bulk_counted(
+                conn, _OOC_CONT_INSERT, cont_rows,
+                count_sql="SELECT count(*) FROM jnpa.customs_ooc_container WHERE ooc_id = :oid",
+                count_params={"oid": ooc_id})
+            res = await conn.execute(
+                text("SELECT id, container_no FROM jnpa.customs_ooc_container WHERE ooc_id = :oid"),
+                {"oid": ooc_id})
+            cont_id = {r["container_no"]: r["id"] for r in res.mappings().all()}
+            item_rows = []
+            for c in o.get("containers", []):
+                ocid = cont_id.get(c.get("container_no"))
+                if ocid is None:
+                    continue
+                for it in c.get("items", []):
+                    ir = {k: it.get(k) for k in _OOC_ITEM_COLS}
+                    ir["ooc_container_id"] = ocid
+                    item_rows.append(ir)
+            await self._exec_many(conn, _OOC_ITEM_INSERT, item_rows)
+        return imported
+
+    async def _persist_smtp(self, conn: Any, message_id: int, payload: Mapping[str, Any]) -> int:
+        imported = 0
+        for p in payload.get("permits", []):
+            pparams = {k: p.get(k) for k in _SMTP_COLS}
+            pparams["message_id"] = message_id
+            res = await conn.execute(text(_SMTP_UPSERT), pparams)
+            smtp_id = res.mappings().first()["id"]
+            line_rows = []
+            for ln in p.get("lines", []):
+                lr = {k: ln.get(k) for k in _SMTP_LINE_COLS}
+                lr.update({"smtp_id": smtp_id, "smtp_no": p.get("smtp_no")})
+                line_rows.append(lr)
+            imported += await self._bulk_counted(
+                conn, _SMTP_LINE_INSERT, line_rows,
+                count_sql="SELECT count(*) FROM jnpa.customs_smtp_line WHERE smtp_id = :sid",
+                count_params={"sid": smtp_id})
+        return imported
+
+    async def _persist_rms(self, conn: Any, message_id: int, payload: Mapping[str, Any]) -> int:
+        s = payload.get("scanlist") or {}
+        sparams = {k: s.get(k) for k in _RMS_SCAN_COLS}
+        sparams["message_id"] = message_id
+        res = await conn.execute(text(_RMS_SCAN_UPSERT), sparams)
+        scanlist_id = res.mappings().first()["id"]
+        cont_rows = []
+        for c in payload.get("containers", []):
+            cr = {k: c.get(k) for k in _RMS_CONT_COLS}
+            cr["scanlist_id"] = scanlist_id
+            cont_rows.append(cr)
+        return await self._bulk_counted(
+            conn, _RMS_CONT_INSERT, cont_rows,
+            count_sql="SELECT count(*) FROM jnpa.customs_rms_container WHERE scanlist_id = :sid",
+            count_params={"sid": scanlist_id})
+
+    async def _persist_leo(self, conn: Any, message_id: int, payload: Mapping[str, Any]) -> int:
+        # Leaf carries message_id and is brand-new for this message, so a message-scoped
+        # count is the exact number of rows this file contributed (duplicates collapse).
+        rows = [{"message_id": message_id, **{k: r.get(k) for k in _LEO_COLS}}
+                for r in payload.get("rows", [])]
+        return await self._bulk_counted(
+            conn, _LEO_INSERT, rows,
+            count_sql="SELECT count(*) FROM jnpa.customs_leo WHERE message_id = :mid",
+            count_params={"mid": message_id})
+
+    async def _persist_sb(self, conn: Any, message_id: int, payload: Mapping[str, Any]) -> int:
+        rows = [{"message_id": message_id, **{k: r.get(k) for k in _SB_COLS}}
+                for r in payload.get("rows", [])]
+        return await self._bulk_counted(
+            conn, _SB_INSERT, rows,
+            count_sql="SELECT count(*) FROM jnpa.customs_shipping_bill WHERE message_id = :mid",
+            count_params={"mid": message_id})
+
+
+# --------------------------------------------------------------------------- SQL
+# Column lists (the parser dict keys that map 1:1 to table columns). message_id and
+# parent ids are added by the persisters; created_at is server-managed.
+def _cols(sql_cols: str) -> tuple[str, ...]:
+    return tuple(c.strip() for c in sql_cols.split(",") if c.strip())
+
+
+_MSG_INSERT = """
+INSERT INTO jnpa.customs_messages
+    (message_type, module, control_number, sender_id, receiver_id, message_id_code,
+     sent_ts, primary_ref, source_file, source_sha256, file_size_bytes, record_count,
+     import_status)
+VALUES
+    (:message_type, :module, :control_number, :sender_id, :receiver_id, :message_id_code,
+     :sent_ts, :primary_ref, :source_file, :source_sha256, :file_size_bytes, :record_count,
+     'PENDING')
+RETURNING id
+"""
+_MSG_INSERT_FAILED = """
+INSERT INTO jnpa.customs_messages
+    (message_type, module, control_number, sender_id, receiver_id, message_id_code,
+     sent_ts, primary_ref, source_file, source_sha256, file_size_bytes, record_count,
+     import_status, error_detail)
+VALUES
+    (:message_type, :module, :control_number, :sender_id, :receiver_id, :message_id_code,
+     :sent_ts, :primary_ref, :source_file, :source_sha256, :file_size_bytes, :record_count,
+     'FAILED', :error_detail)
+RETURNING id
+"""
+
+# IGM ------------------------------------------------------------------------
+_IGM_VESSEL_COLS = _cols(
+    "customs_house_code, igm_no, igm_date, imo_code, vessel_code, voyage_no, "
+    "shipping_line_code, shipping_agent_code, master_name, port_of_arrival, vessel_type, "
+    "total_no_of_lines, brief_cargo_desc, expected_arrival, entry_inward, terminal_operator_code")
+_IGM_VESSEL_UPSERT = f"""
+INSERT INTO jnpa.customs_igm_vessel
+    (message_id, {", ".join(_IGM_VESSEL_COLS)})
+VALUES
+    (:message_id, {", ".join(f':{c}' for c in _IGM_VESSEL_COLS)})
+ON CONFLICT (igm_no, igm_date) DO UPDATE SET igm_no = EXCLUDED.igm_no
+RETURNING id
+"""
+_IGM_LINE_COLS = _cols(
+    "line_no, subline_no, bl_no, bl_date, house_bl_no, house_bl_date, port_of_loading, "
+    "port_of_destination, port_of_discharge, importer_name, importer_address, importer_state, "
+    "notified_party, nature_of_cargo, item_type, cargo_movement, no_of_packages, "
+    "type_of_packages, gross_weight, unit_of_weight, goods_description, mlo_code, be_regularised")
+_IGM_LINE_INSERT = f"""
+INSERT INTO jnpa.customs_igm_cargo_line
+    (vessel_id, igm_no, igm_date, {", ".join(_IGM_LINE_COLS)})
+VALUES
+    (:vessel_id, :igm_no, :igm_date, {", ".join(f':{c}' for c in _IGM_LINE_COLS)})
+ON CONFLICT (vessel_id, line_no, subline_no) DO NOTHING
+"""
+_IGM_CONT_COLS = _cols(
+    "container_no, iso_valid, seal_no, container_agent_code, container_status, "
+    "no_of_packages, container_weight, iso_size_type, soc_flag")
+_IGM_CONT_INSERT = f"""
+INSERT INTO jnpa.customs_igm_container
+    (cargo_line_id, igm_no, line_no, subline_no, {", ".join(_IGM_CONT_COLS)})
+VALUES
+    (:cargo_line_id, :igm_no, :line_no, :subline_no, {", ".join(f':{c}' for c in _IGM_CONT_COLS)})
+ON CONFLICT (cargo_line_id, container_no) DO NOTHING
+"""
+
+# OOC ------------------------------------------------------------------------
+_OOC_COLS = _cols(
+    "customs_house_code, igm_no, igm_date, line_no, subline_no, bill_of_entry_no, "
+    "bill_of_entry_date, document_type, ie_code, importer_name, importer_address, "
+    "importer_city, pin_code, cha_code, out_of_charge_no, out_of_charge_date, "
+    "out_of_charge_type, nature_of_cargo, quantity_out_of_charged, unit_of_quantity, "
+    "no_of_packages, country_of_origin, assessable_value, cif_value, total_customs_duty")
+_OOC_UPSERT = f"""
+INSERT INTO jnpa.customs_ooc
+    (message_id, {", ".join(_OOC_COLS)})
+VALUES
+    (:message_id, {", ".join(f':{c}' for c in _OOC_COLS)})
+ON CONFLICT (bill_of_entry_no, line_no, subline_no) DO UPDATE SET bill_of_entry_no = EXCLUDED.bill_of_entry_no
+RETURNING id
+"""
+_OOC_CONT_INSERT = """
+INSERT INTO jnpa.customs_ooc_container (ooc_id, bill_of_entry_no, container_no, iso_valid)
+VALUES (:ooc_id, :bill_of_entry_no, :container_no, :iso_valid)
+ON CONFLICT (ooc_id, container_no) DO NOTHING
+"""
+_OOC_ITEM_COLS = _cols(
+    "invoice_number, item_sr_no, item_description, hs_classification, cif_value, assessable_value")
+_OOC_ITEM_INSERT = f"""
+INSERT INTO jnpa.customs_ooc_item
+    (ooc_container_id, {", ".join(_OOC_ITEM_COLS)})
+VALUES
+    (:ooc_container_id, {", ".join(f':{c}' for c in _OOC_ITEM_COLS)})
+ON CONFLICT (ooc_container_id, invoice_number, item_sr_no) DO NOTHING
+"""
+
+# SMTP -----------------------------------------------------------------------
+_SMTP_COLS = _cols(
+    "customs_house_code, smtp_no, smtp_date, igm_no, igm_date, destination_code, "
+    "carrier_code, bond_no, terminal_operator_code")
+_SMTP_UPSERT = f"""
+INSERT INTO jnpa.customs_smtp
+    (message_id, {", ".join(_SMTP_COLS)})
+VALUES
+    (:message_id, {", ".join(f':{c}' for c in _SMTP_COLS)})
+ON CONFLICT (smtp_no) DO UPDATE SET smtp_no = EXCLUDED.smtp_no
+RETURNING id
+"""
+_SMTP_LINE_COLS = _cols(
+    "line_no, subline_no, consignee_name, cargo_desc, container_no, iso_valid, "
+    "container_type, seal_no, no_of_packages, unit_of_packages, gross_qty, unit_of_qty")
+_SMTP_LINE_INSERT = f"""
+INSERT INTO jnpa.customs_smtp_line
+    (smtp_id, smtp_no, {", ".join(_SMTP_LINE_COLS)})
+VALUES
+    (:smtp_id, :smtp_no, {", ".join(f':{c}' for c in _SMTP_LINE_COLS)})
+ON CONFLICT (smtp_id, line_no, container_no) DO NOTHING
+"""
+
+# RMS ------------------------------------------------------------------------
+_RMS_SCAN_COLS = _cols(
+    "customs_house, shipping_line, shipping_agent, igm_no, igm_date, igm_date_raw, "
+    "processing_end_date, vessel_name, subject, any_selected, selected_count")
+_RMS_SCAN_UPSERT = f"""
+INSERT INTO jnpa.customs_rms_scanlist
+    (message_id, {", ".join(_RMS_SCAN_COLS)})
+VALUES
+    (:message_id, {", ".join(f':{c}' for c in _RMS_SCAN_COLS)})
+ON CONFLICT (igm_no) DO UPDATE SET selected_count = EXCLUDED.selected_count
+RETURNING id
+"""
+_RMS_CONT_COLS = _cols(
+    "igm_no, sl_no, container_no, iso_valid, scan_machine, scan_location, cfs_name, goods_desc")
+_RMS_CONT_INSERT = f"""
+INSERT INTO jnpa.customs_rms_container
+    (scanlist_id, {", ".join(_RMS_CONT_COLS)})
+VALUES
+    (:scanlist_id, {", ".join(f':{c}' for c in _RMS_CONT_COLS)})
+ON CONFLICT (scanlist_id, container_no) DO NOTHING
+"""
+
+# LEO / Shipping Bill --------------------------------------------------------
+_LEO_COLS = _cols("sb_no, sb_date, site_id, rotation_no, leo_date, action")
+_LEO_INSERT = f"""
+INSERT INTO jnpa.customs_leo (message_id, {", ".join(_LEO_COLS)})
+VALUES (:message_id, {", ".join(f':{c}' for c in _LEO_COLS)})
+ON CONFLICT (sb_no, leo_date) DO NOTHING
+"""
+_SB_COLS = _cols("sb_no, sb_date, site_id, action")
+_SB_INSERT = f"""
+INSERT INTO jnpa.customs_shipping_bill (message_id, {", ".join(_SB_COLS)})
+VALUES (:message_id, {", ".join(f':{c}' for c in _SB_COLS)})
+ON CONFLICT (sb_no) DO NOTHING
+"""
+
+_PERSISTERS = {
+    "IGM": CustomsRepository._persist_igm,
+    "OOC": CustomsRepository._persist_ooc,
+    "SMTP": CustomsRepository._persist_smtp,
+    "RMS": CustomsRepository._persist_rms,
+    "LEO": CustomsRepository._persist_leo,
+    "SHIPPING_BILL": CustomsRepository._persist_sb,
+}

@@ -82,14 +82,7 @@ function includesQ(hay: string, q: string): boolean {
 
 // --- 1. Camera AI ------------------------------------------------------------
 
-const CAMERA_HEADERS = [
-  "Camera",
-  "Gate",
-  "Vehicle Count",
-  "Queue",
-  "Confidence",
-  "Detection Time",
-];
+const CAMERA_HEADERS = ["Camera", "Gate", "Vehicle Count", "Queue", "Confidence", "Detection Time"];
 
 export function CameraAIReport() {
   const countsQ = useQuery({
@@ -110,7 +103,12 @@ export function CameraAIReport() {
 
   const columns: Column<any>[] = useMemo(
     () => [
-      { key: "camera", header: "Camera", className: "font-mono", render: (r) => r.camera_id ?? "—" },
+      {
+        key: "camera",
+        header: "Camera",
+        className: "font-mono",
+        render: (r) => r.camera_id ?? "—",
+      },
       { key: "gate", header: "Gate", className: "font-mono", render: (r) => r.gate_id ?? "—" },
       {
         key: "vehicles",
@@ -298,13 +296,7 @@ export function NvrReport() {
 
 // --- 3. Bottlenecks ----------------------------------------------------------
 
-const BOTTLENECK_HEADERS = [
-  "Road",
-  "Severity",
-  "Delay",
-  "Average Speed",
-  "Snapshot Time",
-];
+const BOTTLENECK_HEADERS = ["Road", "Severity", "Delay", "Average Speed", "Snapshot Time"];
 
 export function BottlenecksReport() {
   const histQ = useQuery({
@@ -330,7 +322,13 @@ export function BottlenecksReport() {
         className: "tabular-nums",
         render: (r) => severityOf(r),
       },
-      { key: "delay", header: "Delay", align: "right", className: "tabular-nums", render: (r) => delayOf(r) },
+      {
+        key: "delay",
+        header: "Delay",
+        align: "right",
+        className: "tabular-nums",
+        render: (r) => delayOf(r),
+      },
       {
         key: "speed",
         header: "Average Speed",

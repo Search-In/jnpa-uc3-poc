@@ -69,7 +69,9 @@ function LegTile({
   completing: boolean;
 }) {
   const seq = leg?.trip_seq ?? "—";
-  const isReturn = String(leg?.direction || "").toUpperCase().includes("RETURN");
+  const isReturn = String(leg?.direction || "")
+    .toUpperCase()
+    .includes("RETURN");
   const label = seq === 1 ? "Trip 1" : isReturn ? "Return" : `Trip ${seq}`;
   return (
     <div className="min-w-[180px] flex-1 rounded-md border border-border bg-muted/30 p-2">
@@ -81,7 +83,9 @@ function LegTile({
       </div>
       <div className="text-[11px] text-muted-foreground">
         {leg?.direction ? (
-          <span className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">{leg.direction}</span>
+          <span className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">
+            {leg.direction}
+          </span>
         ) : null}
       </div>
       <div className="mt-1 flex items-center gap-1 text-[12px]">
@@ -136,7 +140,10 @@ function CycleCard({
       {legs.length ? (
         <div className="flex flex-wrap items-stretch gap-2 md:flex-nowrap">
           {legs.map((leg, i) => (
-            <div key={leg?.trip_id ?? leg?.trip_seq ?? i} className="flex flex-1 items-center gap-2">
+            <div
+              key={leg?.trip_id ?? leg?.trip_seq ?? i}
+              className="flex flex-1 items-center gap-2"
+            >
               <LegTile
                 leg={leg}
                 onComplete={onComplete}
@@ -206,7 +213,9 @@ export default function DoubleTrip() {
   const canStart = vehicleId.trim() && origin.trim() && destination.trim();
   const live = String(stats?.source || "").toLowerCase() === "live";
   const ratioPct =
-    stats?.double_trip_ratio != null ? `${Math.round(Number(stats.double_trip_ratio) * 100)}%` : "—";
+    stats?.double_trip_ratio != null
+      ? `${Math.round(Number(stats.double_trip_ratio) * 100)}%`
+      : "—";
 
   return (
     <PageContainer>

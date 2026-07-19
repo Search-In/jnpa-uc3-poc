@@ -334,7 +334,12 @@ function CountingTable({
         className: "whitespace-nowrap text-muted-foreground",
         render: (r) => (r.ts ? fmtDateTimeIST(r.ts) : "—"),
       },
-      { key: "camera", header: "Camera", className: "font-mono", render: (r) => r.camera_id ?? "—" },
+      {
+        key: "camera",
+        header: "Camera",
+        className: "font-mono",
+        render: (r) => r.camera_id ?? "—",
+      },
       { key: "gate", header: "Gate", className: "font-mono", render: (r) => r.gate_id ?? "—" },
       {
         key: "vehicles",
@@ -398,7 +403,12 @@ function TrailersTable({
         className: "whitespace-nowrap text-muted-foreground",
         render: (r) => (r.ts ? fmtDateTimeIST(r.ts) : "—"),
       },
-      { key: "camera", header: "Camera", className: "font-mono", render: (r) => r.camera_id ?? "—" },
+      {
+        key: "camera",
+        header: "Camera",
+        className: "font-mono",
+        render: (r) => r.camera_id ?? "—",
+      },
       {
         key: "trailer",
         header: "Trailer No.",

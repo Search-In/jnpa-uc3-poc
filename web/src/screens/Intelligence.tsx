@@ -96,7 +96,6 @@ export default function Intelligence() {
         subtitle="360° investigation · Vahan · Sarathi · FASTag · Customs · Geo — RDS-backed"
       />
 
-
       {/* Search bar */}
       <div className="flex flex-wrap items-center gap-2 border-b border-border bg-card px-4 py-3">
         <SegmentedTabs

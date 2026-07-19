@@ -36,12 +36,7 @@ import {
 } from "@/components/ui/dtccc";
 import { Card } from "@/components/ui/card";
 import { LoadingState, ErrorState } from "@/components/ui/misc";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { api } from "@/lib/api";
 
 type Facility = "all" | "CFS" | "ECY";
@@ -78,8 +73,12 @@ function fmtTs(ts?: string): string {
   if (!ts) return "—";
   try {
     return new Date(ts).toLocaleString("en-IN", {
-      day: "2-digit", month: "short", year: "numeric",
-      hour: "2-digit", minute: "2-digit", hour12: false,
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
     });
   } catch {
     return ts;
@@ -125,7 +124,15 @@ export default function CfsEcyMovements() {
   }, [tab, mode, search, dateFrom, dateTo]);
 
   const listQ = useQuery({
-    queryKey: ["cfs-ecy-movements", facilityParam, mode, containerParam, fromParam, toParam, offset],
+    queryKey: [
+      "cfs-ecy-movements",
+      facilityParam,
+      mode,
+      containerParam,
+      fromParam,
+      toParam,
+      offset,
+    ],
     queryFn: () =>
       api.cfsEcyMovements({
         facility: facilityParam,
@@ -183,12 +190,50 @@ export default function CfsEcyMovements() {
       <div className="flex flex-col gap-4 p-4">
         {/* KPIs — scoped by facility + date range */}
         <StatGrid>
-          <StatCard icon={ArrowDownToLine} label="Total Gate-IN" value={s?.total_in ?? "—"} tone="ok" loading={statsQ.isLoading} />
-          <StatCard icon={ArrowUpFromLine} label="Total Gate-OUT" value={s?.total_out ?? "—"} tone="info" loading={statsQ.isLoading} />
-          <StatCard icon={Container} label="Active in facility" value={s?.active_containers ?? "—"} tone="warn" sub="net IN (still inside)" loading={statsQ.isLoading} />
-          <StatCard icon={GaugeCircle} label="Avg CFS dwell" value={fmtDwell(s?.average_dwell_hours)} tone="neutral" sub={s?.dwell_count ? `${s.dwell_count} cycles` : undefined} loading={statsQ.isLoading} />
-          <StatCard icon={Timer} label="Median CFS dwell" value={fmtDwell(s?.median_dwell_hours)} tone="neutral" loading={statsQ.isLoading} />
-          <StatCard icon={Boxes} label="Distinct containers" value={s?.container_count ?? "—"} tone="info" loading={statsQ.isLoading} />
+          <StatCard
+            icon={ArrowDownToLine}
+            label="Total Gate-IN"
+            value={s?.total_in ?? "—"}
+            tone="ok"
+            loading={statsQ.isLoading}
+          />
+          <StatCard
+            icon={ArrowUpFromLine}
+            label="Total Gate-OUT"
+            value={s?.total_out ?? "—"}
+            tone="info"
+            loading={statsQ.isLoading}
+          />
+          <StatCard
+            icon={Container}
+            label="Active in facility"
+            value={s?.active_containers ?? "—"}
+            tone="warn"
+            sub="net IN (still inside)"
+            loading={statsQ.isLoading}
+          />
+          <StatCard
+            icon={GaugeCircle}
+            label="Avg CFS dwell"
+            value={fmtDwell(s?.average_dwell_hours)}
+            tone="neutral"
+            sub={s?.dwell_count ? `${s.dwell_count} cycles` : undefined}
+            loading={statsQ.isLoading}
+          />
+          <StatCard
+            icon={Timer}
+            label="Median CFS dwell"
+            value={fmtDwell(s?.median_dwell_hours)}
+            tone="neutral"
+            loading={statsQ.isLoading}
+          />
+          <StatCard
+            icon={Boxes}
+            label="Distinct containers"
+            value={s?.container_count ?? "—"}
+            tone="info"
+            loading={statsQ.isLoading}
+          />
         </StatGrid>
 
         {/* Facility tabs */}
@@ -228,13 +273,25 @@ export default function CfsEcyMovements() {
             />
             <label className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
               From
-              <input type="date" value={dateFrom} max={dateTo || undefined}
-                onChange={(e) => setDateFrom(e.target.value)} className={inputCls} aria-label="From date" />
+              <input
+                type="date"
+                value={dateFrom}
+                max={dateTo || undefined}
+                onChange={(e) => setDateFrom(e.target.value)}
+                className={inputCls}
+                aria-label="From date"
+              />
             </label>
             <label className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
               To
-              <input type="date" value={dateTo} min={dateFrom || undefined}
-                onChange={(e) => setDateTo(e.target.value)} className={inputCls} aria-label="To date" />
+              <input
+                type="date"
+                value={dateTo}
+                min={dateFrom || undefined}
+                onChange={(e) => setDateTo(e.target.value)}
+                className={inputCls}
+                aria-label="To date"
+              />
             </label>
             {filtersActive && (
               <button
@@ -254,7 +311,9 @@ export default function CfsEcyMovements() {
           {listQ.isError ? (
             <ErrorState onRetry={() => listQ.refetch()} detail={friendlyError(listQ.error)} />
           ) : listQ.isLoading ? (
-            <div className="p-6"><LoadingState /></div>
+            <div className="p-6">
+              <LoadingState />
+            </div>
           ) : rows.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-2 py-12 text-center">
               <span className="flex h-12 w-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
@@ -262,12 +321,15 @@ export default function CfsEcyMovements() {
               </span>
               <div className="text-sm font-medium">No data found</div>
               <div className="max-w-xs text-[12px] text-muted-foreground">
-                No CODECO movements match the current filters. Try clearing the search or date range.
+                No CODECO movements match the current filters. Try clearing the search or date
+                range.
               </div>
             </div>
           ) : (
             <>
-              <div className={`overflow-x-auto transition-opacity ${listQ.isFetching ? "opacity-60" : ""}`}>
+              <div
+                className={`overflow-x-auto transition-opacity ${listQ.isFetching ? "opacity-60" : ""}`}
+              >
                 <table className="w-full min-w-[640px] text-left text-[13px]">
                   <thead className="bg-muted/60 text-[11px] uppercase tracking-wide text-muted-foreground">
                     <tr>
@@ -285,13 +347,24 @@ export default function CfsEcyMovements() {
                         onClick={() => setSelected(r.container_number)}
                         className="cursor-pointer hover:bg-muted/40"
                       >
-                        <td className="px-3 py-2 font-mono font-semibold text-foreground">{r.container_number}</td>
-                        <td className="px-3 py-2"><StatusChip label={r.facility_type} tone={facilityTone(r.facility_type)} /></td>
+                        <td className="px-3 py-2 font-mono font-semibold text-foreground">
+                          {r.container_number}
+                        </td>
+                        <td className="px-3 py-2">
+                          <StatusChip
+                            label={r.facility_type}
+                            tone={facilityTone(r.facility_type)}
+                          />
+                        </td>
                         <td className="px-3 py-2">
                           <StatusChip
                             label={
                               <span className="inline-flex items-center gap-1">
-                                {r.mode === "IN" ? <ArrowDownToLine className="h-3 w-3" /> : <ArrowUpFromLine className="h-3 w-3" />}
+                                {r.mode === "IN" ? (
+                                  <ArrowDownToLine className="h-3 w-3" />
+                                ) : (
+                                  <ArrowUpFromLine className="h-3 w-3" />
+                                )}
                                 {r.mode}
                               </span>
                             }
@@ -300,7 +373,11 @@ export default function CfsEcyMovements() {
                         </td>
                         <td className="px-3 py-2 tabular-nums">{fmtTs(r.event_ts)}</td>
                         <td className="px-3 py-2 text-center">
-                          {r.iso_valid ? <StatusChip label="valid" tone="ok" /> : <StatusChip label="invalid" tone="critical" />}
+                          {r.iso_valid ? (
+                            <StatusChip label="valid" tone="ok" />
+                          ) : (
+                            <StatusChip label="invalid" tone="critical" />
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -311,8 +388,12 @@ export default function CfsEcyMovements() {
               {/* Server-side pagination */}
               <div className="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2 text-[11.5px] text-muted-foreground">
                 <span>
-                  Showing <span className="font-semibold text-foreground">{showingFrom}–{showingTo}</span> of{" "}
-                  <span className="font-semibold text-foreground">{total.toLocaleString()}</span> movements
+                  Showing{" "}
+                  <span className="font-semibold text-foreground">
+                    {showingFrom}–{showingTo}
+                  </span>{" "}
+                  of <span className="font-semibold text-foreground">{total.toLocaleString()}</span>{" "}
+                  movements
                 </span>
                 <div className="ml-auto flex items-center gap-1">
                   <button
@@ -324,7 +405,9 @@ export default function CfsEcyMovements() {
                   >
                     <ChevronLeft size={14} />
                   </button>
-                  <span className="px-1 tabular-nums">{page + 1} / {pageCount}</span>
+                  <span className="px-1 tabular-nums">
+                    {page + 1} / {pageCount}
+                  </span>
                   <button
                     type="button"
                     disabled={page >= pageCount - 1}
@@ -371,7 +454,9 @@ function ContainerTimelineDialog({
         </DialogHeader>
 
         {q.isLoading ? (
-          <div className="py-8"><LoadingState /></div>
+          <div className="py-8">
+            <LoadingState />
+          </div>
         ) : q.isError ? (
           <div className="py-8 text-center text-sm text-destructive">{friendlyError(q.error)}</div>
         ) : (
@@ -386,7 +471,10 @@ function ContainerTimelineDialog({
                 <StatusChip label={`CFS dwell ${fmtDwell(data.dwell_hours)}`} tone="info" />
               )}
               {data?.in_lifecycle ? (
-                <StatusChip label={`Lifecycle: ${data?.cargo?.lifecycle_status ?? "tracked"}`} tone="ok" />
+                <StatusChip
+                  label={`Lifecycle: ${data?.cargo?.lifecycle_status ?? "tracked"}`}
+                  tone="ok"
+                />
               ) : (
                 <StatusChip label="Not in Container Lifecycle" tone="neutral" />
               )}
@@ -416,13 +504,20 @@ function ContainerTimelineDialog({
               </div>
               <ol className="flex flex-col gap-2">
                 {events.map((e) => (
-                  <li key={e.id} className="flex items-center gap-3 rounded-md border border-border px-3 py-2 text-[13px]">
+                  <li
+                    key={e.id}
+                    className="flex items-center gap-3 rounded-md border border-border px-3 py-2 text-[13px]"
+                  >
                     <StatusChip label={e.facility_type} tone={facilityTone(e.facility_type)} />
                     <StatusChip label={e.mode} tone={modeTone(e.mode)} />
-                    <span className="ml-auto tabular-nums text-muted-foreground">{fmtTs(e.event_ts)}</span>
+                    <span className="ml-auto tabular-nums text-muted-foreground">
+                      {fmtTs(e.event_ts)}
+                    </span>
                   </li>
                 ))}
-                {events.length === 0 && <li className="text-sm text-muted-foreground">No gate events.</li>}
+                {events.length === 0 && (
+                  <li className="text-sm text-muted-foreground">No gate events.</li>
+                )}
               </ol>
             </div>
           </div>

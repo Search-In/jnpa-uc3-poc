@@ -433,9 +433,7 @@ function AccidentDetail({
             <span className="text-muted-foreground">Investigation: </span>
             {a.investigation_status ?? "—"}
           </div>
-          {a.description && (
-            <div className="pt-1 text-foreground">{a.description}</div>
-          )}
+          {a.description && <div className="pt-1 text-foreground">{a.description}</div>}
           {a.resolution && (
             <div className="pt-1">
               <span className="text-muted-foreground">Resolution: </span>

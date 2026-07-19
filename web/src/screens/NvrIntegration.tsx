@@ -26,7 +26,11 @@ const inputCls = "rounded-md border border-border bg-card px-2 py-1.5 text-[13px
 export default function NvrIntegration() {
   const qc = useQueryClient();
 
-  const healthQ = useQuery({ queryKey: ["nvr-health"], queryFn: () => api.nvrHealth(), retry: false });
+  const healthQ = useQuery({
+    queryKey: ["nvr-health"],
+    queryFn: () => api.nvrHealth(),
+    retry: false,
+  });
   const devicesQ = useQuery({ queryKey: ["nvr-devices"], queryFn: () => api.nvrDevices() });
   const streamsQ = useQuery({ queryKey: ["nvr-streams"], queryFn: () => api.nvrStreams() });
 
@@ -59,7 +63,15 @@ export default function NvrIntegration() {
         channels: reg.channels ? Number(reg.channels) : undefined,
       }),
     onSuccess: () => {
-      setReg({ id: "", name: "", vendor: "", host: "", port: "554", protocol: "RTSP", channels: "" });
+      setReg({
+        id: "",
+        name: "",
+        vendor: "",
+        host: "",
+        port: "554",
+        protocol: "RTSP",
+        channels: "",
+      });
       qc.invalidateQueries({ queryKey: ["nvr-devices"] });
       qc.invalidateQueries({ queryKey: ["nvr-health"] });
       qc.invalidateQueries({ queryKey: ["nvr-streams"] });
@@ -89,9 +101,9 @@ export default function NvrIntegration() {
   const detail: any = detailQ.data;
   const mappings: any[] = detail?.channels ?? detail?.channel_mappings ?? detail?.mappings ?? [];
 
-  const canRegister =
-    reg.id.trim() && reg.name.trim() && reg.host.trim() && !register.isPending;
-  const canMap = map.id.trim() && map.channel !== "" && map.camera_id.trim() && !mapChannel.isPending;
+  const canRegister = reg.id.trim() && reg.name.trim() && reg.host.trim() && !register.isPending;
+  const canMap =
+    map.id.trim() && map.channel !== "" && map.camera_id.trim() && !mapChannel.isPending;
 
   return (
     <PageContainer>
@@ -131,24 +143,36 @@ export default function NvrIntegration() {
               <div className="font-medium">{health?.mode ?? (configured ? "LIVE" : "MOCK")}</div>
             </div>
             <div>
-              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Devices</div>
-              <div className="font-medium tabular-nums">{devicesQ.data?.count ?? devices.length}</div>
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                Devices
+              </div>
+              <div className="font-medium tabular-nums">
+                {devicesQ.data?.count ?? devices.length}
+              </div>
             </div>
             <div>
-              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Online</div>
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                Online
+              </div>
               <div className="font-medium tabular-nums" style={{ color: STATUS.ok }}>
                 {health?.online ?? "—"}
               </div>
             </div>
             <div>
-              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Offline</div>
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                Offline
+              </div>
               <div className="font-medium tabular-nums" style={{ color: STATUS.critical }}>
                 {health?.offline ?? "—"}
               </div>
             </div>
             <div>
-              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Streams</div>
-              <div className="font-medium tabular-nums">{streamsQ.data?.count ?? streams.length}</div>
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                Streams
+              </div>
+              <div className="font-medium tabular-nums">
+                {streamsQ.data?.count ?? streams.length}
+              </div>
             </div>
           </div>
         </Card>
@@ -244,7 +268,10 @@ export default function NvrIntegration() {
                       <span className="text-muted-foreground">Protocol:</span>{" "}
                       {detail.protocol ?? "—"}
                     </span>
-                    <StatusChip label={detail.status ?? "UNKNOWN"} tone={statusTone(detail.status)} />
+                    <StatusChip
+                      label={detail.status ?? "UNKNOWN"}
+                      tone={statusTone(detail.status)}
+                    />
                   </div>
                   <div className="text-[11px] font-semibold text-muted-foreground">
                     Channel mappings ({mappings.length})
@@ -446,10 +473,15 @@ export default function NvrIntegration() {
                 </thead>
                 <tbody>
                   {streams.map((s, i) => (
-                    <tr key={`${s.nvr_id}-${s.channel}-${i}`} className="border-t border-border align-top">
+                    <tr
+                      key={`${s.nvr_id}-${s.channel}-${i}`}
+                      className="border-t border-border align-top"
+                    >
                       <td className="py-1.5 pr-3">
                         <div className="font-medium">{s.nvr_name ?? s.nvr_id}</div>
-                        <div className="font-mono text-[10px] text-muted-foreground">{s.nvr_id}</div>
+                        <div className="font-mono text-[10px] text-muted-foreground">
+                          {s.nvr_id}
+                        </div>
                       </td>
                       <td className="py-1.5 pr-3 tabular-nums">{s.channel}</td>
                       <td className="py-1.5 pr-3 font-mono text-[11px]">{s.camera_id ?? "—"}</td>

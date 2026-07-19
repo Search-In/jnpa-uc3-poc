@@ -279,8 +279,7 @@ export default function CommandCenter() {
   const topJam = bottleneckList[0];
   const topJamLabel = topJam ? (topJam.name ?? topJam.segment_id ?? "—") : null;
 
-  const trtMin =
-    trtQ.data?.avg_trt_min != null ? Math.round(Number(trtQ.data.avg_trt_min)) : null;
+  const trtMin = trtQ.data?.avg_trt_min != null ? Math.round(Number(trtQ.data.avg_trt_min)) : null;
   const trtLive = trtQ.data?.source === "live";
 
   const reeferTotals = reeferQ.data?.totals ?? {};
@@ -418,16 +417,32 @@ export default function CommandCenter() {
           const items: { label: string; crit: boolean; to: string }[] = [];
           const openAcc = (accidentQ.data as any)?.open ?? 0;
           if (openAcc > 0)
-            items.push({ label: `${openAcc} open accident${openAcc > 1 ? "s" : ""}`, crit: true, to: "/alerts?tab=accidents" });
-          const crit = ((alertsQ.data as any)?.alerts ?? []).filter((a: any) => a?.severity === "critical").length;
-          if (crit > 0) items.push({ label: `${crit} critical alert${crit > 1 ? "s" : ""}`, crit: true, to: "/alerts" });
+            items.push({
+              label: `${openAcc} open accident${openAcc > 1 ? "s" : ""}`,
+              crit: true,
+              to: "/alerts?tab=accidents",
+            });
+          const crit = ((alertsQ.data as any)?.alerts ?? []).filter(
+            (a: any) => a?.severity === "critical",
+          ).length;
+          if (crit > 0)
+            items.push({
+              label: `${crit} critical alert${crit > 1 ? "s" : ""}`,
+              crit: true,
+              to: "/alerts",
+            });
           const q = (queuedQ.data as any)?.count ?? (queuedQ.data as any)?.devices?.length ?? 0;
           if (q >= 15) items.push({ label: `Gate queue ${q}`, crit: false, to: "/live" });
           const bn = (bottlenecksQ.data as any)?.bottlenecks?.[0];
           if (bn && (bn.jam_factor ?? 0) >= 6)
-            items.push({ label: `Bottleneck: ${bn.name ?? bn.segment_id}`, crit: false, to: "/geofencing" });
+            items.push({
+              label: `Bottleneck: ${bn.name ?? bn.segment_id}`,
+              crit: false,
+              to: "/geofencing",
+            });
           const trt = (trtQ.data as any)?.avg_trt_min ?? 0;
-          if (trt >= 120) items.push({ label: `TRT ${Math.round(trt)} min`, crit: false, to: "/live?tab=trt" });
+          if (trt >= 120)
+            items.push({ label: `TRT ${Math.round(trt)} min`, crit: false, to: "/live?tab=trt" });
           if (items.length === 0)
             return (
               <span className="rounded-full border border-emerald-300 bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700">

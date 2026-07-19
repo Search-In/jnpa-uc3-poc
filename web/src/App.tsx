@@ -266,7 +266,10 @@ function DashboardShell({
               standalone routes redirect into the host (+tab) so deep-links and
               Command-Center/Demo shortcuts keep resolving (no sidebar entry). --- */}
           <Route path="/accidents" element={<Navigate to="/alerts?tab=accidents" replace />} />
-          <Route path="/transporters" element={<Navigate to="/vehicles?tab=transporters" replace />} />
+          <Route
+            path="/transporters"
+            element={<Navigate to="/vehicles?tab=transporters" replace />}
+          />
           <Route path="/camera-ai" element={<Navigate to="/gate-customs" replace />} />
           <Route path="/document-ocr" element={<Navigate to="/follow-the-box" replace />} />
           <Route path="/nvr" element={<Navigate to="/health" replace />} />

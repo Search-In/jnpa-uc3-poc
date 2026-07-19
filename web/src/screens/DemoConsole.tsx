@@ -212,7 +212,6 @@ export default function DemoConsole() {
         }
       />
 
-
       {/* Operator banner (live WS) */}
       <div className="px-4 pt-3">
         <div

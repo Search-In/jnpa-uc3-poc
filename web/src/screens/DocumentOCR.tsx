@@ -16,16 +16,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { EmptyState, LoadingState } from "@/components/ui/misc";
 import { fmtDateTimeIST } from "@/lib/utils";
 
-const DOC_TYPES = [
-  "LR",
-  "INVOICE",
-  "EWAYBILL",
-  "PERMIT",
-  "RC",
-  "DL",
-  "FORM13",
-  "UNKNOWN",
-];
+const DOC_TYPES = ["LR", "INVOICE", "EWAYBILL", "PERMIT", "RC", "DL", "FORM13", "UNKNOWN"];
 
 function pct(v: any): string {
   const n = Number(v);
@@ -65,16 +56,15 @@ function FieldGrid({ fields }: { fields: any }) {
   return (
     <dl className="grid grid-cols-1 gap-x-4 gap-y-2 sm:grid-cols-2">
       {entries.map(([k, v]) => (
-        <div key={k} className="min-w-0 rounded-md border border-border/60 bg-muted/30 px-2.5 py-1.5">
+        <div
+          key={k}
+          className="min-w-0 rounded-md border border-border/60 bg-muted/30 px-2.5 py-1.5"
+        >
           <dt className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
             {k.replace(/[_-]+/g, " ")}
           </dt>
           <dd className="break-words text-[13px] font-medium text-foreground">
-            {v == null || v === ""
-              ? "—"
-              : typeof v === "object"
-                ? JSON.stringify(v)
-                : String(v)}
+            {v == null || v === "" ? "—" : typeof v === "object" ? JSON.stringify(v) : String(v)}
           </dd>
         </div>
       ))}
@@ -250,7 +240,8 @@ export default function DocumentOCR() {
               <FieldGrid fields={result.fields} />
               {result.status && (
                 <div className="mt-2 flex items-center gap-2 text-[11px] text-muted-foreground">
-                  status <StatusChip label={String(result.status)} tone={statusTone(result.status)} />
+                  status{" "}
+                  <StatusChip label={String(result.status)} tone={statusTone(result.status)} />
                   {result.storage_url && (
                     <a
                       href={result.storage_url}
@@ -272,9 +263,7 @@ export default function DocumentOCR() {
           <div className="mb-3 flex flex-wrap items-center gap-2">
             <FileSearch size={15} />
             <h3 className="text-sm font-semibold">Processed documents</h3>
-            <span className="text-[11px] text-muted-foreground">
-              ({docsQ.data?.count ?? 0})
-            </span>
+            <span className="text-[11px] text-muted-foreground">({docsQ.data?.count ?? 0})</span>
             <select
               value={filterType}
               onChange={(e) => setFilterType(e.target.value)}

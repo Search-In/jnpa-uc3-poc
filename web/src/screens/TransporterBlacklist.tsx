@@ -97,7 +97,11 @@ function Highlight({ text, query }: { text?: string | null; query: string }) {
 
 /* ==================== Screen ==================== */
 
-export default function TransporterBlacklist({ mode = "master" }: { mode?: "master" | "blacklist" }) {
+export default function TransporterBlacklist({
+  mode = "master",
+}: {
+  mode?: "master" | "blacklist";
+}) {
   const qc = useQueryClient();
   const embedded = useEmbedded();
   const isBlacklistMode = mode === "blacklist";
@@ -288,19 +292,33 @@ export default function TransporterBlacklist({ mode = "master" }: { mode?: "mast
               isBlacklistMode ? (
                 <DetailEmpty
                   icon={ShieldCheck}
-                  title={q ? "No blacklisted transporters match" : "No active blacklisted transporters found."}
-                  hint={q ? `Nothing matches “${q}”.` : "No transporters are currently denied at the gate."}
+                  title={
+                    q
+                      ? "No blacklisted transporters match"
+                      : "No active blacklisted transporters found."
+                  }
+                  hint={
+                    q
+                      ? `Nothing matches “${q}”.`
+                      : "No transporters are currently denied at the gate."
+                  }
                 />
               ) : (
                 <DetailEmpty
                   icon={Inbox}
                   title="No transporters match"
-                  hint={q ? `Nothing matches “${q}”. Try a company, contact, mobile or ID.` : "The registry is empty."}
+                  hint={
+                    q
+                      ? `Nothing matches “${q}”. Try a company, contact, mobile or ID.`
+                      : "The registry is empty."
+                  }
                 />
               )
             ) : (
               <>
-                <div className={`overflow-x-auto transition-opacity ${listFetching ? "opacity-60" : ""}`}>
+                <div
+                  className={`overflow-x-auto transition-opacity ${listFetching ? "opacity-60" : ""}`}
+                >
                   {isBlacklistMode ? (
                     <table className="w-full min-w-[440px] border-collapse text-[12.5px]">
                       <thead>
@@ -332,7 +350,10 @@ export default function TransporterBlacklist({ mode = "master" }: { mode?: "mast
                                 </div>
                               </td>
                               <td className="px-2.5 py-2.5">
-                                <StatusChip label={b.severity || "—"} tone={severityTone(b.severity)} />
+                                <StatusChip
+                                  label={b.severity || "—"}
+                                  tone={severityTone(b.severity)}
+                                />
                               </td>
                               <td className="px-2.5 py-2.5 text-muted-foreground">
                                 <Highlight text={b.reason} query={dq} />
@@ -403,8 +424,14 @@ export default function TransporterBlacklist({ mode = "master" }: { mode?: "mast
                 {/* Pagination / count footer */}
                 <div className="flex flex-wrap items-center gap-2 border-t border-border px-4 py-2.5 text-[11.5px] text-muted-foreground">
                   <span>
-                    Showing <span className="font-semibold text-foreground">{showingFrom}–{showingTo}</span> of{" "}
-                    <span className="font-semibold text-foreground">{rows.length.toLocaleString()}</span>
+                    Showing{" "}
+                    <span className="font-semibold text-foreground">
+                      {showingFrom}–{showingTo}
+                    </span>{" "}
+                    of{" "}
+                    <span className="font-semibold text-foreground">
+                      {rows.length.toLocaleString()}
+                    </span>
                     {isBlacklistMode
                       ? q
                         ? " matches"
@@ -457,7 +484,11 @@ export default function TransporterBlacklist({ mode = "master" }: { mode?: "mast
               </Card>
             ) : !detailQ.data ? (
               <Card className="flex min-h-[320px] items-center justify-center rounded-2xl p-6">
-                <DetailEmpty icon={Inbox} title="Transporter not found" hint="It may have been removed." />
+                <DetailEmpty
+                  icon={Inbox}
+                  title="Transporter not found"
+                  hint="It may have been removed."
+                />
               </Card>
             ) : (
               <TransporterDetail detail={detailQ.data} onChanged={invalidate} />
@@ -473,10 +504,18 @@ export default function TransporterBlacklist({ mode = "master" }: { mode?: "mast
           <>
             {/* Utilities: validation + create */}
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              <SectionCard icon={ScanLine} title="Vehicle validation" hint="live gate-enforcement check">
+              <SectionCard
+                icon={ScanLine}
+                title="Vehicle validation"
+                hint="live gate-enforcement check"
+              >
                 <VehicleValidation />
               </SectionCard>
-              <SectionCard icon={Plus} title="Register transporter" hint="add a company to the master">
+              <SectionCard
+                icon={Plus}
+                title="Register transporter"
+                hint="add a company to the master"
+              >
                 <CreateTransporter onCreated={invalidate} />
               </SectionCard>
             </div>
@@ -573,7 +612,15 @@ function SectionCard({
   );
 }
 
-function DetailEmpty({ icon: Icon, title, hint }: { icon: LucideIcon; title: string; hint?: string }) {
+function DetailEmpty({
+  icon: Icon,
+  title,
+  hint,
+}: {
+  icon: LucideIcon;
+  title: string;
+  hint?: string;
+}) {
   return (
     <div className="flex flex-col items-center justify-center gap-2 py-10 text-center">
       <span className="flex h-12 w-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
@@ -585,7 +632,17 @@ function DetailEmpty({ icon: Icon, title, hint }: { icon: LucideIcon; title: str
   );
 }
 
-function Field({ icon: Icon, label, value, mono }: { icon?: LucideIcon; label: string; value?: ReactNode; mono?: boolean }) {
+function Field({
+  icon: Icon,
+  label,
+  value,
+  mono,
+}: {
+  icon?: LucideIcon;
+  label: string;
+  value?: ReactNode;
+  mono?: boolean;
+}) {
   const empty = value == null || value === "";
   return (
     <div className="min-w-0">
@@ -593,7 +650,9 @@ function Field({ icon: Icon, label, value, mono }: { icon?: LucideIcon; label: s
         {Icon && <Icon size={11} />}
         {label}
       </div>
-      <div className={`mt-0.5 break-words text-[13px] ${empty ? "text-muted-foreground/60" : "text-foreground"} ${mono ? "font-mono" : ""}`}>
+      <div
+        className={`mt-0.5 break-words text-[13px] ${empty ? "text-muted-foreground/60" : "text-foreground"} ${mono ? "font-mono" : ""}`}
+      >
         {empty ? "—" : value}
       </div>
     </div>
@@ -607,7 +666,9 @@ function TransporterDetail({ detail, onChanged }: { detail: any; onChanged: () =
   const vehicles: any[] = detail.vehicles ?? [];
   const history: any[] = detail.blacklist_history ?? [];
   const isBlacklisted = t.blacklisted || t.status === "BLACKLISTED";
-  const activeBl = history.find((h) => (h.status ?? "").toUpperCase() === "ACTIVE") ?? (isBlacklisted ? history[0] : undefined);
+  const activeBl =
+    history.find((h) => (h.status ?? "").toUpperCase() === "ACTIVE") ??
+    (isBlacklisted ? history[0] : undefined);
 
   const [vehNo, setVehNo] = useState("");
   const [driverId, setDriverId] = useState("");
@@ -616,7 +677,10 @@ function TransporterDetail({ detail, onChanged }: { detail: any; onChanged: () =
 
   const addVehicle = useMutation({
     mutationFn: () =>
-      api.transporterAddVehicle(t.id, { vehicle_no: vehNo.trim(), driver_id: driverId.trim() || undefined }),
+      api.transporterAddVehicle(t.id, {
+        vehicle_no: vehNo.trim(),
+        driver_id: driverId.trim() || undefined,
+      }),
     onSuccess: () => {
       setVehNo("");
       setDriverId("");
@@ -678,7 +742,15 @@ function TransporterDetail({ detail, onChanged }: { detail: any; onChanged: () =
             <Field icon={Mail} label="Email" value={t.email} />
             <Field icon={FileText} label="Document Type" value={t.doc_type} />
             <Field label="GSTIN" value={t.gstin} mono />
-            <Field label="Status" value={<StatusChip label={isBlacklisted ? "BLACKLISTED" : t.status || "ACTIVE"} tone={isBlacklisted ? "critical" : "ok"} />} />
+            <Field
+              label="Status"
+              value={
+                <StatusChip
+                  label={isBlacklisted ? "BLACKLISTED" : t.status || "ACTIVE"}
+                  tone={isBlacklisted ? "critical" : "ok"}
+                />
+              }
+            />
           </div>
           <div className="mt-3">
             <Field icon={MapPin} label="Address" value={t.address} />
@@ -694,13 +766,21 @@ function TransporterDetail({ detail, onChanged }: { detail: any; onChanged: () =
           </span>
           <h3 className="text-sm font-semibold">Fleet Information</h3>
           <div className="ml-auto flex items-center gap-3 text-[11px] text-muted-foreground">
-            <span><span className="font-semibold text-foreground">{vehicles.length}</span> vehicles</span>
-            <span><span className="font-semibold text-foreground">{driverCount}</span> drivers</span>
+            <span>
+              <span className="font-semibold text-foreground">{vehicles.length}</span> vehicles
+            </span>
+            <span>
+              <span className="font-semibold text-foreground">{driverCount}</span> drivers
+            </span>
           </div>
         </div>
         <div className="space-y-3 p-4">
           {!vehicles.length ? (
-            <DetailEmpty icon={Truck} title="No vehicles mapped" hint="Map a vehicle below to assign it to this transporter." />
+            <DetailEmpty
+              icon={Truck}
+              title="No vehicles mapped"
+              hint="Map a vehicle below to assign it to this transporter."
+            />
           ) : (
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               {vehicles.map((v, i) => (
@@ -778,12 +858,33 @@ function TransporterDetail({ detail, onChanged }: { detail: any; onChanged: () =
           {isBlacklisted ? (
             <div
               className="rounded-xl border p-3"
-              style={{ borderColor: `${STATUS.critical}55`, backgroundColor: `${STATUS.critical}0f` }}
+              style={{
+                borderColor: `${STATUS.critical}55`,
+                backgroundColor: `${STATUS.critical}0f`,
+              }}
             >
               <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3">
-                <Field label="Current Status" value={<StatusChip label="BLACKLISTED" tone="critical" />} />
-                <Field label="Severity" value={activeBl?.severity ? <StatusChip label={activeBl.severity} tone={severityTone(activeBl.severity)} /> : "—"} />
-                <Field label="Blacklisted Date" value={activeBl?.blacklisted_at ? fmtDateTimeIST(activeBl.blacklisted_at) : "—"} />
+                <Field
+                  label="Current Status"
+                  value={<StatusChip label="BLACKLISTED" tone="critical" />}
+                />
+                <Field
+                  label="Severity"
+                  value={
+                    activeBl?.severity ? (
+                      <StatusChip
+                        label={activeBl.severity}
+                        tone={severityTone(activeBl.severity)}
+                      />
+                    ) : (
+                      "—"
+                    )
+                  }
+                />
+                <Field
+                  label="Blacklisted Date"
+                  value={activeBl?.blacklisted_at ? fmtDateTimeIST(activeBl.blacklisted_at) : "—"}
+                />
                 <Field label="Blacklisted By" value={activeBl?.blacklisted_by} />
               </div>
               <div className="mt-2">
@@ -855,7 +956,11 @@ function TransporterDetail({ detail, onChanged }: { detail: any; onChanged: () =
               History ({history.length})
             </div>
             {!history.length ? (
-              <DetailEmpty icon={ShieldCheck} title="No blacklist history" hint="This transporter has never been blacklisted." />
+              <DetailEmpty
+                icon={ShieldCheck}
+                title="No blacklist history"
+                hint="This transporter has never been blacklisted."
+              />
             ) : (
               <div className="space-y-1.5">
                 {history.map((h, i) => {

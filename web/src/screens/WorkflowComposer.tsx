@@ -87,8 +87,7 @@ export default function WorkflowComposer() {
     const matchOne = (hints: string[]) => {
       for (const hint of hints) {
         const m = fields.find(
-          (f) =>
-            f.key.toLowerCase().includes(hint) || f.label.toLowerCase().includes(hint),
+          (f) => f.key.toLowerCase().includes(hint) || f.label.toLowerCase().includes(hint),
         );
         if (m) return m;
       }
@@ -99,8 +98,7 @@ export default function WorkflowComposer() {
       for (const hint of hints) {
         for (const a of actions) {
           if (
-            (a.key.toLowerCase().includes(hint) ||
-              a.label.toLowerCase().includes(hint)) &&
+            (a.key.toLowerCase().includes(hint) || a.label.toLowerCase().includes(hint)) &&
             !chosen.includes(a.key)
           ) {
             chosen.push(a.key);
@@ -196,8 +194,7 @@ export default function WorkflowComposer() {
               ))}
             </div>
             <p className="mt-2 text-[11px] text-muted-foreground">
-              Templates prefill the rule editor with a starting point; review and Save to
-              persist.
+              Templates prefill the rule editor with a starting point; review and Save to persist.
             </p>
           </Card>
 

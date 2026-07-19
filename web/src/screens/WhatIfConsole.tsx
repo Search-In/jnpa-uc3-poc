@@ -189,7 +189,6 @@ export default function WhatIfConsole() {
         }
       />
 
-
       {/* Status summary */}
       <div className="px-4 pt-3">
         <StatGrid className="lg:grid-cols-4">
@@ -267,8 +266,8 @@ export default function WhatIfConsole() {
             cascading sub-effects inside Heavy Rain; Major Accident has no
             backend scenario yet. */}
         <p className="mt-2 text-[11px] text-muted-foreground">
-          Driver Shortage and Fuel Shortage are sub-effects modelled inside Heavy Rain
-          (Monsoon Friday). Major Accident is planned — no live scenario yet.
+          Driver Shortage and Fuel Shortage are sub-effects modelled inside Heavy Rain (Monsoon
+          Friday). Major Accident is planned — no live scenario yet.
         </p>
 
         {/* Scenario comparison */}

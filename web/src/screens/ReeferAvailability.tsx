@@ -16,12 +16,7 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
-import {
-  PageContainer,
-  PageHeader,
-  StatGrid,
-  StatCard,
-} from "@/components/ui/dtccc";
+import { PageContainer, PageHeader, StatGrid, StatCard } from "@/components/ui/dtccc";
 
 // Status → tile styling. AVAILABLE green, OCCUPIED blue, RESERVED amber, FAULT red.
 function slotTone(status?: string): { border: string; bg: string; text: string; dot: string } {
@@ -84,10 +79,7 @@ function SlotTile({
       <div className="flex items-center justify-between gap-1">
         <span className="font-mono text-xs font-semibold text-foreground">{slot.slot_code}</span>
         {slot.powered ? (
-          <span
-            className="inline-flex items-center gap-0.5 text-amber-600"
-            title="Powered slot"
-          >
+          <span className="inline-flex items-center gap-0.5 text-amber-600" title="Powered slot">
             <Zap className="h-3 w-3" fill="currentColor" />
           </span>
         ) : (
@@ -102,7 +94,10 @@ function SlotTile({
       </div>
       {occupied && (
         <>
-          <div className="truncate font-mono text-[10px] text-foreground" title={slot.container_number}>
+          <div
+            className="truncate font-mono text-[10px] text-foreground"
+            title={slot.container_number}
+          >
             {slot.container_number ?? "—"}
           </div>
           <div className="flex items-center gap-1 text-[10px] text-muted-foreground tabular-nums">
@@ -375,7 +370,9 @@ export default function ReeferAvailability() {
 
             <Card className="p-3">
               {slotsQ.isLoading ? (
-                <div className="py-10 text-center text-sm text-muted-foreground">Loading slots…</div>
+                <div className="py-10 text-center text-sm text-muted-foreground">
+                  Loading slots…
+                </div>
               ) : slots.length === 0 ? (
                 <div className="py-10 text-center text-sm text-muted-foreground">
                   No slots match the current filter.

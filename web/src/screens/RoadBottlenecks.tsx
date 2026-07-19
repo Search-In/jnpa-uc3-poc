@@ -202,9 +202,7 @@ export default function RoadBottlenecks() {
         {bottlenecksQ.isLoading ? (
           <LoadingState />
         ) : !bottlenecks.length ? (
-          <EmptyState>
-            No bottlenecks available — start the gateway or take a snapshot.
-          </EmptyState>
+          <EmptyState>No bottlenecks available — start the gateway or take a snapshot.</EmptyState>
         ) : (
           <>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3">

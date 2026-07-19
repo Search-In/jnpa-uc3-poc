@@ -198,7 +198,9 @@ export default function DriverAdvisory() {
                     <tr>
                       <th className="px-4 py-2">{t("advisory.colRef", "Ref")}</th>
                       <th className="px-4 py-2">{t("advisory.colSeverity", "Severity")}</th>
-                      <th className="px-4 py-2">{t("advisory.colLocation", "Location / Segment")}</th>
+                      <th className="px-4 py-2">
+                        {t("advisory.colLocation", "Location / Segment")}
+                      </th>
                       <th className="px-4 py-2">{t("advisory.colPlate")}</th>
                       <th className="px-4 py-2">{t("advisory.colAdvisory", "Advisory")}</th>
                     </tr>
@@ -243,9 +245,7 @@ export default function DriverAdvisory() {
             ) : (
               <div className="text-foreground">
                 {t("advisory.weatherModelPath", "Congestion model path")}:{" "}
-                <span className="font-mono text-xs">
-                  {weather.data?.decision_path ?? "—"}
-                </span>
+                <span className="font-mono text-xs">{weather.data?.decision_path ?? "—"}</span>
               </div>
             )}
             <p className="text-xs text-muted-foreground">

@@ -196,7 +196,6 @@ export default function Fastag() {
         }
       />
 
-
       {/* RC search */}
       <div className="flex flex-wrap items-center gap-2 border-b border-border bg-card px-4 py-3">
         <div className="relative min-w-0 flex-1 sm:max-w-md">

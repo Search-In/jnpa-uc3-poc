@@ -191,7 +191,6 @@ export default function VehicleManagement() {
         }
       />
 
-
       <div className="px-4 pt-3">
         <SegmentedTabs<PageTab>
           value={pageTab}
@@ -207,70 +206,73 @@ export default function VehicleManagement() {
 
       {pageTab === "fleet" && (
         <>
-      <div className="px-4 pt-3">
-        <StatGrid className="lg:grid-cols-4">
-          <StatCard
-            icon={Truck}
-            label={t("vehicles.total", "Total Vehicles")}
-            value={stats?.total ?? 0}
-            tone="info"
-            loading={statsQ.isLoading}
-          />
-          <StatCard
-            icon={CheckCircle2}
-            label={t("vehicles.active", "Active Vehicles")}
-            value={stats?.active ?? 0}
-            tone="ok"
-            loading={statsQ.isLoading}
-          />
-          <StatCard
-            icon={CircleSlash}
-            label={t("vehicles.assigned", "Assigned Vehicles")}
-            value={stats?.assigned ?? 0}
-            tone="neutral"
-            loading={statsQ.isLoading}
-          />
-          <StatCard
-            icon={Power}
-            label={t("vehicles.available", "Available Vehicles")}
-            value={stats?.available ?? 0}
-            tone={stats && stats.available > 0 ? "ok" : "warn"}
-            loading={statsQ.isLoading}
-          />
-        </StatGrid>
-      </div>
+          <div className="px-4 pt-3">
+            <StatGrid className="lg:grid-cols-4">
+              <StatCard
+                icon={Truck}
+                label={t("vehicles.total", "Total Vehicles")}
+                value={stats?.total ?? 0}
+                tone="info"
+                loading={statsQ.isLoading}
+              />
+              <StatCard
+                icon={CheckCircle2}
+                label={t("vehicles.active", "Active Vehicles")}
+                value={stats?.active ?? 0}
+                tone="ok"
+                loading={statsQ.isLoading}
+              />
+              <StatCard
+                icon={CircleSlash}
+                label={t("vehicles.assigned", "Assigned Vehicles")}
+                value={stats?.assigned ?? 0}
+                tone="neutral"
+                loading={statsQ.isLoading}
+              />
+              <StatCard
+                icon={Power}
+                label={t("vehicles.available", "Available Vehicles")}
+                value={stats?.available ?? 0}
+                tone={stats && stats.available > 0 ? "ok" : "warn"}
+                loading={statsQ.isLoading}
+              />
+            </StatGrid>
+          </div>
 
-      <div className="px-4 py-3">
-        <SegmentedTabs
-          value={filter}
-          onChange={setFilter}
-          className="mb-3"
-          tabs={FILTERS.map((f) => ({
-            key: f,
-            label: f.charAt(0) + f.slice(1).toLowerCase(),
-            count: counts[f],
-          }))}
-        />
-        <Card className="overflow-hidden">
-          <DataTable
-            columns={columns}
-            rows={rows}
-            rowKey={(v) => v.vehicle_id}
-            status={listQ}
-            onRetry={() => listQ.refetch()}
-            emptyLabel={t("vehicles.empty", "No vehicles in this view.")}
-            search={(v, q) =>
-              `${v.vehicle_id} ${v.vehicle_number ?? ""} ${v.vehicle_type ?? ""} ${
-                v.assigned_driver?.name ?? ""
-              }`
-                .toLowerCase()
-                .includes(q)
-            }
-            searchPlaceholder={t("vehicles.searchPlaceholder", "Search vehicle / plate / driver…")}
-            pageSize={12}
-          />
-        </Card>
-      </div>
+          <div className="px-4 py-3">
+            <SegmentedTabs
+              value={filter}
+              onChange={setFilter}
+              className="mb-3"
+              tabs={FILTERS.map((f) => ({
+                key: f,
+                label: f.charAt(0) + f.slice(1).toLowerCase(),
+                count: counts[f],
+              }))}
+            />
+            <Card className="overflow-hidden">
+              <DataTable
+                columns={columns}
+                rows={rows}
+                rowKey={(v) => v.vehicle_id}
+                status={listQ}
+                onRetry={() => listQ.refetch()}
+                emptyLabel={t("vehicles.empty", "No vehicles in this view.")}
+                search={(v, q) =>
+                  `${v.vehicle_id} ${v.vehicle_number ?? ""} ${v.vehicle_type ?? ""} ${
+                    v.assigned_driver?.name ?? ""
+                  }`
+                    .toLowerCase()
+                    .includes(q)
+                }
+                searchPlaceholder={t(
+                  "vehicles.searchPlaceholder",
+                  "Search vehicle / plate / driver…",
+                )}
+                pageSize={12}
+              />
+            </Card>
+          </div>
         </>
       )}
 

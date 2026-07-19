@@ -63,9 +63,21 @@ export default function Integrations() {
   const [tab, setTab] = useState<TabKey>("pdp");
 
   // Health of each adapter (drives the top row of cards).
-  const pdpHealthQ = useQuery({ queryKey: ["pdp-health"], queryFn: () => api.pdpHealth(), retry: false });
-  const ldbHealthQ = useQuery({ queryKey: ["ldb-health"], queryFn: () => api.ldbHealth(), retry: false });
-  const rmsHealthQ = useQuery({ queryKey: ["rms-health"], queryFn: () => api.rmsHealth(), retry: false });
+  const pdpHealthQ = useQuery({
+    queryKey: ["pdp-health"],
+    queryFn: () => api.pdpHealth(),
+    retry: false,
+  });
+  const ldbHealthQ = useQuery({
+    queryKey: ["ldb-health"],
+    queryFn: () => api.ldbHealth(),
+    retry: false,
+  });
+  const rmsHealthQ = useQuery({
+    queryKey: ["rms-health"],
+    queryFn: () => api.rmsHealth(),
+    retry: false,
+  });
 
   const updatedAt = Math.max(
     pdpHealthQ.dataUpdatedAt || 0,
@@ -168,11 +180,7 @@ function HealthCard({
           </span>
           <span className="text-sm font-semibold text-foreground">{name}</span>
         </div>
-        {query.isLoading ? (
-          <StatusChip label="…" tone="neutral" />
-        ) : (
-          <ModeBadge mode={mode} />
-        )}
+        {query.isLoading ? <StatusChip label="…" tone="neutral" /> : <ModeBadge mode={mode} />}
       </div>
       <p className="text-[11px] text-muted-foreground">{detail}</p>
       <dl className="grid grid-cols-2 gap-x-2 gap-y-1 border-t border-border/60 pt-2 text-[11px] text-muted-foreground">
@@ -201,25 +209,49 @@ function PdpTab() {
     enabled: !!plate,
     retry: false,
   });
-  const trafficQ = useQuery({ queryKey: ["pdp-traffic"], queryFn: () => api.pdpTraffic(), retry: false });
+  const trafficQ = useQuery({
+    queryKey: ["pdp-traffic"],
+    queryFn: () => api.pdpTraffic(),
+    retry: false,
+  });
 
   const vehicle: any = vehicleQ.data;
   const segments: any[] = trafficQ.data?.segments ?? [];
 
   const segColumns: Column<any>[] = useMemo(
     () => [
-      { key: "segment", header: "Segment", className: "font-medium", render: (s) => s.name ?? s.segment ?? s.id ?? "—" },
-      { key: "speed", header: "Speed", align: "right", render: (s) => (s.speed_kmph ?? s.speed ?? null) != null ? `${s.speed_kmph ?? s.speed} km/h` : "—" },
+      {
+        key: "segment",
+        header: "Segment",
+        className: "font-medium",
+        render: (s) => s.name ?? s.segment ?? s.id ?? "—",
+      },
+      {
+        key: "speed",
+        header: "Speed",
+        align: "right",
+        render: (s) =>
+          (s.speed_kmph ?? s.speed ?? null) != null ? `${s.speed_kmph ?? s.speed} km/h` : "—",
+      },
       {
         key: "congestion",
         header: "Congestion",
         render: (s) => {
           const lvl = String(s.congestion ?? s.level ?? s.status ?? "—");
-          const tone: Tone = /high|severe|jam/i.test(lvl) ? "critical" : /med/i.test(lvl) ? "warn" : "ok";
+          const tone: Tone = /high|severe|jam/i.test(lvl)
+            ? "critical"
+            : /med/i.test(lvl)
+              ? "warn"
+              : "ok";
           return <StatusChip label={lvl} tone={tone} />;
         },
       },
-      { key: "updated", header: "Updated", className: "text-muted-foreground", render: (s) => (s.ts ? fmtDateTimeIST(s.ts) : "—") },
+      {
+        key: "updated",
+        header: "Updated",
+        className: "text-muted-foreground",
+        render: (s) => (s.ts ? fmtDateTimeIST(s.ts) : "—"),
+      },
     ],
     [],
   );
@@ -335,7 +367,8 @@ function LdbTab() {
   const movements: any[] = movementsQ.data?.movements ?? [];
   // newest first
   const sortedMovements = useMemo(
-    () => [...movements].sort((a, b) => new Date(b.ts ?? 0).getTime() - new Date(a.ts ?? 0).getTime()),
+    () =>
+      [...movements].sort((a, b) => new Date(b.ts ?? 0).getTime() - new Date(a.ts ?? 0).getTime()),
     [movements],
   );
 
@@ -375,7 +408,9 @@ function LdbTab() {
             ) : tracking ? (
               <div className="rounded-md border border-border bg-background p-3">
                 <div className="mb-2 flex items-center justify-between">
-                  <span className="font-mono text-sm font-semibold text-foreground">{containerNo}</span>
+                  <span className="font-mono text-sm font-semibold text-foreground">
+                    {containerNo}
+                  </span>
                   <SourceBadge value={containerQ.data?.source} />
                 </div>
                 <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[12px]">
@@ -384,7 +419,10 @@ function LdbTab() {
                   <Field label="Terminal" value={tracking.terminal} />
                   <Field label="Last Event" value={tracking.last_event ?? tracking.event} />
                   <Field label="Line" value={tracking.line ?? tracking.shipping_line} />
-                  <Field label="ETA" value={tracking.eta ? fmtDateTimeIST(tracking.eta) : tracking.eta} />
+                  <Field
+                    label="ETA"
+                    value={tracking.eta ? fmtDateTimeIST(tracking.eta) : tracking.eta}
+                  />
                 </dl>
               </div>
             ) : null}
@@ -422,7 +460,9 @@ function LdbTab() {
                 <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-primary" aria-hidden />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-[13px] font-medium text-foreground">{m.event ?? "—"}</span>
+                    <span className="text-[13px] font-medium text-foreground">
+                      {m.event ?? "—"}
+                    </span>
                     <span className="shrink-0 text-[11px] text-muted-foreground">
                       {m.ts ? fmtDateTimeIST(m.ts) : "—"}
                     </span>
@@ -430,7 +470,12 @@ function LdbTab() {
                   <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
                     <span>{m.location ?? "—"}</span>
                     {m.terminal && <span>· {m.terminal}</span>}
-                    {m.mode && <StatusChip label={String(m.mode).toUpperCase()} tone={provenanceTone(m.mode)} />}
+                    {m.mode && (
+                      <StatusChip
+                        label={String(m.mode).toUpperCase()}
+                        tone={provenanceTone(m.mode)}
+                      />
+                    )}
                   </div>
                 </div>
               </li>
@@ -460,7 +505,8 @@ function RmsTab() {
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["rms-slots"] }),
   });
   const bookM = useMutation({
-    mutationFn: (slotCode: string) => api.rmsBook({ slot_code: slotCode, vehicle_id: "TRK-000123" }),
+    mutationFn: (slotCode: string) =>
+      api.rmsBook({ slot_code: slotCode, vehicle_id: "TRK-000123" }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["rms-slots"] }),
   });
 
@@ -468,7 +514,12 @@ function RmsTab() {
 
   const columns: Column<any>[] = useMemo(
     () => [
-      { key: "slot_code", header: "Slot", className: "font-mono", render: (s) => s.slot_code ?? "—" },
+      {
+        key: "slot_code",
+        header: "Slot",
+        className: "font-mono",
+        render: (s) => s.slot_code ?? "—",
+      },
       { key: "gate", header: "Gate", render: (s) => s.gate_id ?? "—" },
       {
         key: "window",
@@ -487,7 +538,11 @@ function RmsTab() {
         header: "Status",
         render: (s) => {
           const st = String(s.status ?? "—");
-          const tone: Tone = /full|closed/i.test(st) ? "critical" : /open|available/i.test(st) ? "ok" : "neutral";
+          const tone: Tone = /full|closed/i.test(st)
+            ? "critical"
+            : /open|available/i.test(st)
+              ? "ok"
+              : "neutral";
           return <StatusChip label={st} tone={tone} />;
         },
       },
@@ -548,10 +603,10 @@ function RmsTab() {
           </button>
         </form>
         {seedM.isError && <p className="mt-2 text-[12px] text-severity-critical">Seed failed.</p>}
-        {bookM.isError && <p className="mt-2 text-[12px] text-severity-critical">Booking failed.</p>}
-        {bookM.isSuccess && (
-          <p className="mt-2 text-[12px] text-ok">Slot booked for TRK-000123.</p>
+        {bookM.isError && (
+          <p className="mt-2 text-[12px] text-severity-critical">Booking failed.</p>
         )}
+        {bookM.isSuccess && <p className="mt-2 text-[12px] text-ok">Slot booked for TRK-000123.</p>}
       </Card>
 
       <Card className="overflow-hidden">

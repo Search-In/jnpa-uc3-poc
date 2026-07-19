@@ -283,7 +283,6 @@ export default function SystemHealth() {
         actions={<AssumptionsPanel />}
       />
 
-
       {/* Integration status area — additive tabs; Services preserves existing behavior */}
       <div className="px-4 pt-3">
         <SegmentedTabs
@@ -318,83 +317,90 @@ export default function SystemHealth() {
 
       {tab === "services" && (
         <>
-      {/* Overall status */}
-      <div className="px-4 pt-3">
-        <StatGrid className="lg:grid-cols-4">
-          <StatCard icon={Server} label="Services" value={services.length} tone="info" />
-          <StatCard icon={Activity} label="Healthy" value={healthy} tone="ok" />
-          <StatCard
-            icon={Activity}
-            label="Degraded"
-            value={degraded}
-            tone={degraded > 0 ? "warn" : "ok"}
-          />
-          <StatCard icon={Activity} label="Down" value={down} tone={down > 0 ? "critical" : "ok"} />
-        </StatGrid>
-      </div>
-
-      {/* Backing legend */}
-      <div className="flex flex-wrap items-center gap-2 px-4 pt-3 text-[11px] text-muted-foreground">
-        <span className="font-medium">Backing:</span>
-        <StatusChip label="LIVE" tone="ok" /> real vendor
-        <StatusChip label="SIM" tone="warn" /> simulator
-        <StatusChip label="RDS" tone="info" /> persisted
-        <StatusChip label="EPHEMERAL" tone="neutral" /> in-memory
-      </div>
-
-      {/* Service cards */}
-      {sourcesQ.isLoading ? (
-        <div className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
-          <Spinner /> {t("health.loadingSourceHealth")}
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 gap-3 px-4 py-3 sm:grid-cols-2 xl:grid-cols-4">
-          {services.map((s) => (
-            <ServiceCard
-              key={s.key}
-              svc={s}
-              onClick={
-                s.api ? () => setDrawer({ title: s.name, api: s.api, source: s.source }) : undefined
-              }
-            />
-          ))}
-        </div>
-      )}
-
-      {/* Cameras detail */}
-      <div className="px-4 pb-3">
-        <Card className="p-3">
-          <h2 className="mb-2 text-sm font-semibold">{t("health.anprCamerasTitle")}</h2>
-          <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-6">
-            {cameras.map((c) => (
-              <CameraChip
-                key={c.camera_id}
-                cam={c}
-                onClick={() => setDrawer({ title: c.camera_id, api: "anpr" })}
+          {/* Overall status */}
+          <div className="px-4 pt-3">
+            <StatGrid className="lg:grid-cols-4">
+              <StatCard icon={Server} label="Services" value={services.length} tone="info" />
+              <StatCard icon={Activity} label="Healthy" value={healthy} tone="ok" />
+              <StatCard
+                icon={Activity}
+                label="Degraded"
+                value={degraded}
+                tone={degraded > 0 ? "warn" : "ok"}
               />
-            ))}
-            {cameras.length === 0 && (
-              <span className="text-xs text-muted-foreground">No camera feeds reported.</span>
-            )}
+              <StatCard
+                icon={Activity}
+                label="Down"
+                value={down}
+                tone={down > 0 ? "critical" : "ok"}
+              />
+            </StatGrid>
           </div>
-        </Card>
-      </div>
 
-      {/* AI model performance — evaluator-verifiable eval metrics (UC-3 P0) */}
-      <div className="px-4 pb-3">
-        <ModelPerformancePanel />
-      </div>
+          {/* Backing legend */}
+          <div className="flex flex-wrap items-center gap-2 px-4 pt-3 text-[11px] text-muted-foreground">
+            <span className="font-medium">Backing:</span>
+            <StatusChip label="LIVE" tone="ok" /> real vendor
+            <StatusChip label="SIM" tone="warn" /> simulator
+            <StatusChip label="RDS" tone="info" /> persisted
+            <StatusChip label="EPHEMERAL" tone="neutral" /> in-memory
+          </div>
 
-      {/* Platform maturity — Production Capability + OSS Inventory (UC-3 P2) */}
-      <div className="grid grid-cols-1 gap-3 px-4 pb-3 xl:grid-cols-2">
-        <ProductionCapabilityPanel />
-        <OssInventoryPanel />
-      </div>
+          {/* Service cards */}
+          {sourcesQ.isLoading ? (
+            <div className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
+              <Spinner /> {t("health.loadingSourceHealth")}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-3 px-4 py-3 sm:grid-cols-2 xl:grid-cols-4">
+              {services.map((s) => (
+                <ServiceCard
+                  key={s.key}
+                  svc={s}
+                  onClick={
+                    s.api
+                      ? () => setDrawer({ title: s.name, api: s.api, source: s.source })
+                      : undefined
+                  }
+                />
+              ))}
+            </div>
+          )}
 
-      {/* Driver identity verification (preserved) */}
-      <div className="px-4 pb-6">
-        <IdentityPanel />
-      </div>
+          {/* Cameras detail */}
+          <div className="px-4 pb-3">
+            <Card className="p-3">
+              <h2 className="mb-2 text-sm font-semibold">{t("health.anprCamerasTitle")}</h2>
+              <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-6">
+                {cameras.map((c) => (
+                  <CameraChip
+                    key={c.camera_id}
+                    cam={c}
+                    onClick={() => setDrawer({ title: c.camera_id, api: "anpr" })}
+                  />
+                ))}
+                {cameras.length === 0 && (
+                  <span className="text-xs text-muted-foreground">No camera feeds reported.</span>
+                )}
+              </div>
+            </Card>
+          </div>
+
+          {/* AI model performance — evaluator-verifiable eval metrics (UC-3 P0) */}
+          <div className="px-4 pb-3">
+            <ModelPerformancePanel />
+          </div>
+
+          {/* Platform maturity — Production Capability + OSS Inventory (UC-3 P2) */}
+          <div className="grid grid-cols-1 gap-3 px-4 pb-3 xl:grid-cols-2">
+            <ProductionCapabilityPanel />
+            <OssInventoryPanel />
+          </div>
+
+          {/* Driver identity verification (preserved) */}
+          <div className="px-4 pb-6">
+            <IdentityPanel />
+          </div>
         </>
       )}
 

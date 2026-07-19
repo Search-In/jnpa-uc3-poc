@@ -94,7 +94,10 @@ export default function EcyTrt() {
       setMsg({ tone: "ok", text: `${vid} advanced to ${phase.replace("_", " ")}.` });
       refreshAll();
     } catch (e: any) {
-      setMsg({ tone: "critical", text: e?.message ? String(e.message) : "Failed to advance phase." });
+      setMsg({
+        tone: "critical",
+        text: e?.message ? String(e.message) : "Failed to advance phase.",
+      });
     } finally {
       setBusy(null);
     }
@@ -107,16 +110,39 @@ export default function EcyTrt() {
       className: "font-mono",
       render: (r) => r.plate || r.vehicle_id || "—",
     },
-    { key: "trip", header: "Trip", className: "font-mono text-muted-foreground", render: (r) => r.trip_id ?? "—" },
+    {
+      key: "trip",
+      header: "Trip",
+      className: "font-mono text-muted-foreground",
+      render: (r) => r.trip_id ?? "—",
+    },
     {
       key: "gate_in",
       header: "Gate In",
       className: "text-muted-foreground",
       render: (r) => (r.gate_in_at ? fmtDateTimeIST(r.gate_in_at) : "—"),
     },
-    { key: "g2p", header: "Gate→Park", align: "right", className: "tabular-nums", render: (r) => mins(r.gate_to_park_min) },
-    { key: "p2l", header: "Park→Load", align: "right", className: "tabular-nums", render: (r) => mins(r.park_to_load_min) },
-    { key: "l2o", header: "Load→Out", align: "right", className: "tabular-nums", render: (r) => mins(r.load_to_out_min) },
+    {
+      key: "g2p",
+      header: "Gate→Park",
+      align: "right",
+      className: "tabular-nums",
+      render: (r) => mins(r.gate_to_park_min),
+    },
+    {
+      key: "p2l",
+      header: "Park→Load",
+      align: "right",
+      className: "tabular-nums",
+      render: (r) => mins(r.park_to_load_min),
+    },
+    {
+      key: "l2o",
+      header: "Load→Out",
+      align: "right",
+      className: "tabular-nums",
+      render: (r) => mins(r.load_to_out_min),
+    },
     {
       key: "trt",
       header: "TRT",
@@ -155,20 +181,33 @@ export default function EcyTrt() {
                     color: live ? STATUS.ok : STATUS.warning,
                     backgroundColor: `${live ? STATUS.ok : STATUS.warning}1a`,
                   }}
-                  title={live ? "Aggregated from live TRT records" : "No completed records yet — showing baseline"}
+                  title={
+                    live
+                      ? "Aggregated from live TRT records"
+                      : "No completed records yet — showing baseline"
+                  }
                 >
                   {live ? "Live" : "Baseline"}
                 </span>
               </div>
               <div className="mt-1 flex items-baseline gap-1.5">
                 <span className="text-4xl font-bold tabular-nums text-foreground">
-                  {summaryQ.isLoading ? "…" : summary.avg_trt_min != null ? Math.round(Number(summary.avg_trt_min)) : "—"}
+                  {summaryQ.isLoading
+                    ? "…"
+                    : summary.avg_trt_min != null
+                      ? Math.round(Number(summary.avg_trt_min))
+                      : "—"}
                 </span>
                 <span className="text-sm text-muted-foreground">minutes</span>
               </div>
             </div>
             <div className="flex gap-2">
-              <MiniStat label="Completed" value={summary.completed ?? "—"} tone="ok" icon={CheckCircle2} />
+              <MiniStat
+                label="Completed"
+                value={summary.completed ?? "—"}
+                tone="ok"
+                icon={CheckCircle2}
+              />
               <MiniStat label="Open" value={summary.open ?? "—"} tone="warn" icon={Hourglass} />
             </div>
           </div>
@@ -317,7 +356,7 @@ function StepNode({
   icon: typeof LogIn;
   accent?: boolean;
 }) {
-  const colour = accent ? STATUS.ok : STATUS.info ?? "#2563eb";
+  const colour = accent ? STATUS.ok : (STATUS.info ?? "#2563eb");
   return (
     <div className="flex shrink-0 flex-col items-center gap-1">
       <span

@@ -76,7 +76,6 @@ export default function GeoAnalytics({ defaultTab = "zones" }: { defaultTab?: Ta
         onRefresh={refreshAll}
       />
 
-
       <div className="px-4 pt-3">
         <StatGrid className="lg:grid-cols-5">
           <StatCard

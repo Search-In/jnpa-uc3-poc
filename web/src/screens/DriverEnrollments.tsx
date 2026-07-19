@@ -74,7 +74,10 @@ export default function DriverEnrollments() {
   const [prefill, setPrefill] = useState<{ name: string; license: string } | null>(null);
   useEffect(() => {
     if (searchParams.get("create") === "1") {
-      setPrefill({ name: searchParams.get("name") || "", license: searchParams.get("license") || "" });
+      setPrefill({
+        name: searchParams.get("name") || "",
+        license: searchParams.get("license") || "",
+      });
       setCreateOpen(true);
       const next = new URLSearchParams(searchParams);
       ["create", "name", "license"].forEach((k) => next.delete(k));
@@ -289,8 +292,16 @@ export default function DriverEnrollments() {
 // /api/identity/drivers which creates a PENDING enrollment (source=ADMIN). The
 // driver flows through the SAME approve action; on approval the Vehicle ID
 // becomes eligible for PWA login.
-function CreateDriverForm({ onClose, onCreated, initialName, initialLicense }: {
-  onClose: () => void; onCreated: () => void; initialName?: string; initialLicense?: string;
+function CreateDriverForm({
+  onClose,
+  onCreated,
+  initialName,
+  initialLicense,
+}: {
+  onClose: () => void;
+  onCreated: () => void;
+  initialName?: string;
+  initialLicense?: string;
 }) {
   const { t } = useTranslation();
   const [name, setName] = useState(initialName || "");

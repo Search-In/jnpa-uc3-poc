@@ -38,6 +38,7 @@ from . import seed as seed_mod
 from . import icegate_sim
 from . import persistence
 from . import providers
+from . import customs_adapter
 
 cfg = GateConfig.from_env()
 configure_logging(cfg.log_level)
@@ -155,9 +156,25 @@ async def _persist_dataset_once() -> None:
         log.warning("gate_persist_skipped_no_dsn")
         return
     await persistence.ensure_gate_schema(cfg.postgres_dsn)
+    # When the ICEGATE customs adapter is on, ICEGATE captures come from the REAL
+    # customs tables (below), not the seed — so skip the synthetic ICEGATE upsert.
+    # e-Seal / Form-13 / Weighbridge are unaffected (still seeded / SIM).
+    adapter_on = customs_adapter.enabled()
+    if adapter_on:
+        log.info("icegate_adapter_enabled")
+    else:
+        # Symmetric rollback: the adapter is OFF, so purge any LIVE ICEGATE rows left
+        # by a prior adapter run before re-seeding the synthetic ICEGATE below — no
+        # stale LIVE records may remain after rollback.
+        log.info("icegate_adapter_disabled")
+        removed = await customs_adapter.purge_live_icegate(cfg.postgres_dsn)
+        if removed:
+            log.info("icegate_rollback_executed", live_rows_removed=removed)
     captured = 0
     for cn, rec in _STORE.items():
         for source in providers.SOURCES:
+            if source == "ICEGATE" and adapter_on:
+                continue
             payload, status, captured_at, mode_used = await providers.capture_source(
                 source, cn, rec, dsn=cfg.postgres_dsn
             )
@@ -168,6 +185,9 @@ async def _persist_dataset_once() -> None:
                 captured_at=captured_at, payload=payload, dsn=cfg.postgres_dsn,
             )
             captured += 1
+    if adapter_on:
+        synced = await customs_adapter.sync_icegate_captures(cfg.postgres_dsn)
+        log.info("icegate_adapter_active", icegate_captures=synced)
     results = reconcile_all(dataset=_STORE, weight_tolerance_pct=cfg.weight_tolerance_pct)
     flagged = 0
     for result in results:

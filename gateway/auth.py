@@ -81,6 +81,11 @@ _POLICY: tuple[tuple[str, frozenset[str]], ...] = (
     # the police reports it writes into.
     ("/api/violations", CONTROL_ROOM | {Role.TRAFFIC_POLICE.value, Role.CUSTOMS.value}),
     ("/api/gate-data", CONTROL_ROOM | {Role.CUSTOMS.value}),
+    # Customs module (IGM/OOC/SMTP/RMS/LEO/Shipping Bill import + reads + workflow).
+    # The customs clearance pipeline is customs + control-room only — the same
+    # audience as gate-data; a DRIVER/police token can never touch it. Covers both
+    # the read surface and the import/workflow writes under one prefix.
+    ("/api/customs", CONTROL_ROOM | {Role.CUSTOMS.value}),
     # FASTag (toll balance / transactions / enroute) — operational logistics data
     # for the control room + customs (same audience as gate-data).
     ("/api/fastag", CONTROL_ROOM | {Role.CUSTOMS.value}),

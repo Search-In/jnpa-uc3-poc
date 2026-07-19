@@ -1079,6 +1079,11 @@ services:
       POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
       LOG_LEVEL: ${GATE_DATA_LOG_LEVEL:-INFO}
       TZ: Etc/UTC
+      # Phase 4 — ICEGATE Customs Adapter feature flag. Empty (default) keeps ICEGATE
+      # on the seed simulator (SIM). Set GATE_ICEGATE_ADAPTER=customs to serve REAL
+      # ICEGATE captures from the customs tables (module 5); flip back by clearing it.
+      # e-Seal / Form-13 / Weighbridge are unaffected (remain SIM).
+      GATE_ICEGATE_ADAPTER: ${GATE_ICEGATE_ADAPTER:-}
     ports:
       - "8350:8350"
     volumes:

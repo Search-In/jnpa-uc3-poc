@@ -78,25 +78,42 @@ jobs:
           ssh -i ~/.ssh/id_rsa ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }} << 'EOF'
             set -e
             echo "== disk before cleanup =="; df -h / || true
-            # Reclaim Docker space aggressively: stopped containers, unused images,
-            # networks AND the build cache (the big accumulator across --build runs).
+            # Root-volume free space in whole GiB. Gates the destructive,
+            # cache-DESTROYING prunes so they run ONLY under real disk pressure.
+            # -Pk forces POSIX 1K blocks so $4 (available) is portable; grep keeps
+            # the result numeric even if df/awk emit nothing.
+            free_gb() { df -Pk / 2>/dev/null | awk 'NR==2 { print int($4/1024/1024) }' | grep -E '^[0-9]+$' || echo 0; }
+            MIN_FREE_GB=15   # tune to the instance's root volume; below this we reclaim
+
+            # Always-safe, cheap reclamation — never touches live data OR the
+            # reusable layer/build cache: stopped containers, DANGLING images,
+            # unused networks, DANGLING volumes, host logs and stray temp files.
+            # (pgdata, minio-data, kafka-data are NAMED volumes, so never dangling.)
             docker container prune -f || true
-            docker image prune -af || true
-            docker builder prune -af || true
+            docker image prune -f || true
             docker network prune -f || true
-            # Orphaned anonymous volumes from prior container generations (e.g. the
-            # old Kafka log dir) are NOT removed by image/builder prune and can hold
-            # many GB. Only DANGLING (unattached) volumes are removed, so live data
-            # (pgdata, minio-data, kafka-data, ...) is safe.
             docker volume prune -f || true
-            # Reclaim host-level space too — the in-container build's transient
-            # /tmp wheel cache lives on this same root volume, so journal logs and
-            # the apt cache compete with it for space.
             sudo journalctl --vacuum-size=50M 2>/dev/null || true
             sudo apt-get clean 2>/dev/null || true
             rm -rf /tmp/pip-* 2>/dev/null || true
             # Drop stale rsync temp files from any prior failed run.
             find /home/ec2-user/jnpa-uc3-poc -name '.*.??????' -type f -delete 2>/dev/null || true
+
+            # THE BUILD CACHE IS THE DEPLOY'S BIGGEST TIME SAVER. With it warm, an
+            # unchanged service is a cache-hit no-op and only genuinely-changed
+            # layers rebuild (the multi-GB torch/paddle/opencv layers stay cached).
+            # The old UNCONDITIONAL `builder prune -af` + `image prune -af` here
+            # wiped it every run, forcing a full from-scratch rebuild of EVERY image
+            # on EVERY deploy — the "total rebuild / wasted minutes" this fixes. So
+            # reclaim the cache + all unused tagged images ONLY when actually low.
+            FREE="$(free_gb)"; echo "free on /: ${FREE} GiB"
+            if [ "${FREE}" -lt "${MIN_FREE_GB}" ]; then
+              echo "free < ${MIN_FREE_GB} GiB — reclaiming ALL unused images + build cache"
+              docker image prune -af || true
+              docker builder prune -af || true
+            else
+              echo "free >= ${MIN_FREE_GB} GiB — KEEPING build cache so unchanged images skip rebuild"
+            fi
             echo "== disk after cleanup =="; df -h / || true
           EOF
 
@@ -214,38 +231,48 @@ jobs:
             bash scripts/fetch_face_model.sh || \
               echo "WARN: face model fetch failed (no egress?) — identity will crash-loop until models are placed in data/models/"
 
-            # 2. Build EVERY service ONE AT A TIME. The root volume is too small to
-            #    absorb many concurrent `pip install` /tmp unpacks: the default
-            #    parallel `up --build` exhausts it (Errno 28) even on tiny services
-            #    like asyncpg/setuptools. Serialising caps the transient peak to a
-            #    single build at a time.
+            # 2. Build services ONE AT A TIME (serial). The root volume can't absorb
+            #    many concurrent `pip install` /tmp unpacks: the default parallel
+            #    `up --build` exhausts it (Errno 28) even on tiny services. Serialising
+            #    caps the transient peak to a single build. CRUCIALLY we no longer
+            #    prune the build cache between builds — with it warm, an unchanged
+            #    service's `build` is a cache-hit no-op (seconds) and only
+            #    genuinely-changed layers rebuild.
             COMPOSE="docker compose -f docker-compose.yml -f docker-compose.aws.yml"
 
+            # Reclaim the build cache ONLY when the root volume is genuinely low —
+            # keeping it warm is the whole point. Checked BEFORE each heavy build so
+            # there is headroom for that build's transient peak.
+            free_gb() { df -Pk / 2>/dev/null | awk 'NR==2 { print int($4/1024/1024) }' | grep -E '^[0-9]+$' || echo 0; }
+            MIN_FREE_GB=15   # keep in sync with the pre-sync cleanup step
+            reclaim_if_low() {
+              local free; free="$(free_gb)"; echo "  free on /: ${free} GiB"
+              if [ "${free}" -lt "${MIN_FREE_GB}" ]; then
+                echo "  free < ${MIN_FREE_GB} GiB — pruning build cache + dangling images"
+                docker builder prune -af || true
+                docker image prune -f || true
+              fi
+            }
+
             # 2a. Heavy AI images first (each pulls torch/torchvision/paddle/
-            #     ultralytics + opencv) — built when the most disk is free, before
-            #     the other images commit their layers.
+            #     ultralytics + opencv) — built while the most disk is free. Their
+            #     Dockerfiles layer these multi-GB deps ABOVE the source COPY, so an
+            #     unchanged service reuses those layers instead of recompiling them.
             for svc in anpr anomaly congestion; do
+              reclaim_if_low
               echo "== building ${svc} =="
               ${COMPOSE} build "${svc}"
               df -h / || true
             done
 
-            # 2b. Reclaim the heavy BuildKit cache (torch/paddle wheels, several GB)
-            #     now that those images are committed. The committed images survive;
-            #     we start with `up -d` (NOT --build) below, so the cache is no
-            #     longer needed and is pure reclaimable space for the builds below.
-            docker builder prune -af || true
-            df -h / || true
-
-            # 2c. Build the remaining (light) services one at a time too. Image-only
+            # 2b. Build the remaining (light) services one at a time too. Image-only
             #     services (postgres, redis, kafka, ...) have no build context and
-            #     are skipped by `build`. Prune dangling cache between each to keep
-            #     the transient footprint flat across the whole sweep.
+            #     are skipped by `build`. These are small and share the cached python
+            #     base layer, so no per-service prune is needed.
             for svc in $(${COMPOSE} config --services); do
               case "${svc}" in anpr|anomaly|congestion) continue;; esac
               echo "== building ${svc} =="
               ${COMPOSE} build "${svc}"
-              docker builder prune -f || true
             done
 
             # 2d. Clear any stale fixed-name containers left by a prior partial or
@@ -312,8 +339,11 @@ jobs:
             #     spike). `up -d` just creates/starts the remaining containers.
             ${COMPOSE} up -d --remove-orphans
 
-            # 3. Reclaim space again post-build (old image layers + build cache).
-            docker image prune -af || true
-            docker builder prune -af || true
+            # 3. Reclaim only DANGLING image layers — superseded image versions become
+            #    untagged after a rebuild and are freed here (cheap, safe). DO NOT nuke
+            #    the build cache: keeping it warm is exactly what makes the NEXT deploy
+            #    incremental instead of another full from-scratch rebuild. A genuinely
+            #    tight volume is handled by the conditional reclaim above.
+            docker image prune -f || true
             echo "== disk after deploy =="; df -h / || true
           EOF

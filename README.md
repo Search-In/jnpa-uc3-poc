@@ -1,4 +1,4 @@
-# JNPA Digital Twin — Use Case III PoC
+# JNPT Digital Twin — Use Case III PoC
 
 ***Traffic Monitoring & Vehicular Decongestion*** along the NH-348 corridor from
 JNPA (Jawaharlal Nehru Port Authority) to Karal Phata.

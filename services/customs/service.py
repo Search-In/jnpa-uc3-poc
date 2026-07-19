@@ -253,6 +253,18 @@ class CustomsService:
             "cleared_for_release": bool(st.get("ooc_cleared")),
         }
 
+    @staticmethod
+    def _derive_import_export(view: Mapping[str, Any]) -> Optional[str]:
+        """Classify the customs track of a container from which document tables reference
+        it: IGM/OOC are the import track, SMTP is transhipment. The export track (Shipping
+        Bill -> LEO) is SB-keyed and never appears in this per-container view, so those
+        fields are surfaced as 'N/A (Import Container)' by the client."""
+        if view.get("igm") or view.get("ooc"):
+            return "IMPORT"
+        if view.get("smtp"):
+            return "TRANSHIPMENT"
+        return None
+
     # -------------------------------------------------------------------- reads
     async def list_events(self, **filters: Any) -> list[dict]:
         return await self._repo.list_events(**filters)
@@ -319,4 +331,8 @@ class CustomsService:
     async def container_customs(self, container_no: str) -> dict:
         view = await self._repo.container_customs(container_no)
         view["workflow"] = self._derive_workflow(view)
+        # Last customs event for this box (from the existing append-only event log).
+        events = await self._repo.list_events(container_no=container_no, limit=1)
+        view["last_event"] = events[0] if events else None
+        view["import_export"] = self._derive_import_export(view)
         return view

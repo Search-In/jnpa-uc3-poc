@@ -175,6 +175,80 @@ export interface AutoLeoResult {
   lon?: number;
 }
 
+// Customs document view for one container (GET /api/customs/containers/{cn}).
+// Aggregates the existing customs_* tables (module 5) — surfaced in the ICEGATE
+// details drawer on the Customs & Gate page. All fields are read-only.
+export interface CustomsContainerStatus {
+  container_no: string;
+  igm_no: string | null;
+  declared_igm: boolean | null;
+  rms_selected: boolean | null;
+  ooc_cleared: boolean | null;
+  smtp_bonded: boolean | null;
+}
+
+export interface CustomsContainerVessel {
+  igm_no: string | null;
+  igm_date: string | null;
+  vessel_code: string | null;
+  voyage_no: string | null;
+  shipping_line_code: string | null;
+  port_of_arrival: string | null;
+  expected_arrival: string | null;
+  entry_inward: string | null;
+  message_id: number | null;
+}
+
+export interface CustomsEvent {
+  id: number;
+  event: string;
+  module: string;
+  reference: string | null;
+  container_no: string | null;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface CustomsContainerView {
+  container_no: string;
+  status: CustomsContainerStatus | null;
+  vessel: CustomsContainerVessel | null;
+  message_id: number | null;
+  igm: Array<{
+    igm_no: string;
+    line_no: string | number | null;
+    container_no: string;
+    seal_no: string | null;
+    container_status: string | null;
+    iso_size_type: string | null;
+  }>;
+  ooc: Array<{
+    bill_of_entry_no: string | null;
+    out_of_charge_no: string | null;
+    out_of_charge_date: string | null;
+    importer_name: string | null;
+  }>;
+  smtp: Array<{
+    smtp_no: string | null;
+    bond_no: string | null;
+    destination_code: string | null;
+    consignee_name: string | null;
+  }>;
+  rms: Array<{
+    igm_no: string | null;
+    scan_machine: string | null;
+    scan_location: string | null;
+    cfs_name: string | null;
+  }>;
+  workflow: {
+    import_stage: "MANIFESTED" | "SCAN_SELECTED" | "OUT_OF_CHARGE" | null;
+    transhipment: "BONDED" | null;
+    cleared_for_release: boolean;
+  };
+  last_event: CustomsEvent | null;
+  import_export: "IMPORT" | "TRANSHIPMENT" | null;
+}
+
 // Identity / face-recognition (/api/identity)
 export type IdentitySimMode = "genuine" | "impostor" | "unknown";
 

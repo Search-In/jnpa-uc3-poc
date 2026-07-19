@@ -109,12 +109,31 @@ async function assemble(deviceId: string, plate?: string | null): Promise<Driver
     }
   }
 
-  // Identity from the driver's own enrollment record, if this device enrolled.
-  if (driverId) {
+  // AUTHORITATIVE identity: the APPROVED driver profile linked to this device's
+  // vehicle (GET /api/driver/profile). This is the single source that resolves an
+  // ACTIVE driver by vehicle regardless of HOW the driver was enrolled — so an
+  // admin-created + approved driver (Driver Master bridge) is recognised here,
+  // not only PWA self-enrollments that stashed a local driver_id.
+  try {
+    const prof = await api.driverProfile(deviceId);
+    if (prof && prof.driver) {
+      driverId = prof.driver.id || driverId;
+      name = prof.driver.name || name;
+      vehicle = prof.vehicle?.vehicle_id || vehicle;
+      status = normaliseStatus(prof.enrollment?.status || prof.driver.status);
+    }
+  } catch {
+    /* no approved profile linked to this vehicle yet — fall through below */
+  }
+
+  // Fallback for PRE-approval states the profile endpoint doesn't return (PENDING /
+  // REJECTED / REENROLL): the driver's own PWA enrollment record, if this device
+  // self-enrolled and stashed its driver_id.
+  if (status === "UNVERIFIED" && driverId) {
     try {
       const rec = await api.enrollStatus(driverId);
       driverId = rec.driver_id || driverId;
-      name = (rec as any).name ?? null;
+      name = (rec as any).name ?? name;
       vehicle = (rec as any).vehicle_no || vehicle;
       status = normaliseStatus(rec.status);
     } catch {

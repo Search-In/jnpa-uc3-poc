@@ -50,6 +50,7 @@ from .routers import (
     control,
     debug,
     driver as driver_router,
+    drivers_master,
     empty_container,
     evidence,
     fastag,
@@ -75,6 +76,24 @@ from .routers import (
     violations,
     workflows,
     ws,
+)
+# UC-III Final-Completion routers (additive; see gateway/uc3_ext.py + migration 0024).
+from .routers import (
+    accidents,
+    bottlenecks,
+    camera_ai,
+    cfs_ecy,
+    document_ocr,
+    double_trip,
+    ldb,
+    nvr,
+    pdp,
+    performance,
+    performance_upload,
+    reefer,
+    rms_tas,
+    transporters,
+    trt,
 )
 from .state import GatewayState
 
@@ -182,6 +201,44 @@ async def _lifespan(app: FastAPI):
         await kpi_router.ensure_kpi_gate_schema(cfg.postgres_dsn or None)
     except Exception as exc:  # noqa: BLE001
         log.warning("kpi_gate_schema_boot_failed", error=str(exc))
+
+    # UC-III Final-Completion tables (accidents / transporters / camera-AI /
+    # trailer / container / document-OCR / NVR / TRT / bottlenecks / reefer /
+    # integration-audit / LDB / RMS-TAS / double-trip). Idempotent, additive —
+    # mirrors migration 0024 so a dev DB that never ran it still gets the tables.
+    try:
+        from . import uc3_ext
+        await uc3_ext.ensure_uc3_schema(cfg.postgres_dsn or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("uc3_ext_schema_boot_failed", error=str(exc))
+
+    # CFS-ECY CODECO movements (module 13): the off-dock gate-movement table + dwell
+    # view. Idempotent, additive — mirrors migration 0027 so a dev DB that never ran
+    # it still gets the objects. Read-only wrt every existing table.
+    try:
+        from . import cfs_ecy_ext
+        await cfs_ecy_ext.ensure_cfs_ecy_schema(cfg.postgres_dsn or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("cfs_ecy_schema_boot_failed", error=str(exc))
+
+    # Performance & Daily Reports (module 12): the perf_* analytical tables for the
+    # official JNPA Daily Status Report / monthly TEUs / NLDS-LDB Analytics feeds.
+    # Idempotent, additive — mirrors migration 0028 so a dev DB that never ran it
+    # still gets the objects. Read-only wrt every existing table.
+    try:
+        from . import performance_ext
+        await performance_ext.ensure_performance_schema(cfg.postgres_dsn or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("performance_schema_boot_failed", error=str(exc))
+
+    # Performance Data Upload (module 12 sub-module): upload lifecycle tables
+    # (perf_uploads / perf_import_logs / perf_upload_errors). Idempotent, additive —
+    # mirrors migration 0030. Read/write only within this sub-module.
+    try:
+        from . import performance_upload_ext
+        await performance_upload_ext.ensure_performance_upload_schema(cfg.postgres_dsn or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("performance_upload_schema_boot_failed", error=str(exc))
 
     # Vehicle Master (fleet registry): ensure the table, then migrate the truck-sim
     # fleet into it (idempotent, never clobbering an operator edit) so no existing
@@ -394,6 +451,7 @@ app.include_router(meta.router)
 app.include_router(workflows.router)
 app.include_router(identity.router)
 app.include_router(driver_router.router)
+app.include_router(drivers_master.router)    # Driver Master & Intelligence (read-only, additive)
 app.include_router(vehicle_identity.router)
 app.include_router(vehicles.router)
 app.include_router(parking.router)
@@ -401,6 +459,22 @@ app.include_router(debug.router)
 app.include_router(control.router)
 app.include_router(ai_events.router)
 app.include_router(otp.router)
+# --- UC-III Final-Completion routers (additive) ---
+app.include_router(accidents.router)         # accident lifecycle
+app.include_router(transporters.router)      # transporter blacklist + validation
+app.include_router(camera_ai.router)         # camera-AI counting / trailer / container
+app.include_router(document_ocr.router)      # document OCR
+app.include_router(nvr.router)               # NVR device/stream integration
+app.include_router(trt.router)               # ECY TRT KPI
+app.include_router(cfs_ecy.router)           # CFS-ECY CODECO gate movements (module 13, read-only)
+app.include_router(performance.router)       # Performance & Daily Reports (module 12, read-only, additive)
+app.include_router(performance_upload.router)  # Performance Data Upload (module 12 sub-module, admin-only, additive)
+app.include_router(bottlenecks.router)       # three-road bottleneck analytics
+app.include_router(reefer.router)            # reefer availability
+app.include_router(pdp.router)               # PDP adapter
+app.include_router(ldb.router)               # LDB adapter
+app.include_router(rms_tas.router)           # RMS-TAS persisted appointment surface
+app.include_router(double_trip.router)       # TT double-trip workflow
 app.include_router(ws.router)
 app.include_router(checkin.router)
 

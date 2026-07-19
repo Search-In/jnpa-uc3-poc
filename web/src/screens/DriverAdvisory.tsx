@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getAdapter } from "@/data";
+import { api } from "@/lib/api";
 import type { TruckDevice } from "@/lib/types";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -15,7 +16,15 @@ import {
 import { Spinner, EmptyState } from "@/components/ui/misc";
 import { PageContainer, PageHeader, StatGrid, StatCard } from "@/components/ui/dtccc";
 import { fmtEta } from "@/lib/utils";
-import { Navigation, CheckCircle2, AlertCircle, Route, DoorOpen } from "lucide-react";
+import {
+  Navigation,
+  CheckCircle2,
+  AlertCircle,
+  Route,
+  DoorOpen,
+  AlertTriangle,
+  CloudRain,
+} from "lucide-react";
 
 const GATES = ["G-NSICT", "G-JNPCT", "G-NSIGT", "G-BMCT"];
 
@@ -44,6 +53,32 @@ export default function DriverAdvisory() {
   });
 
   const devices = queued.data ?? [];
+
+  // --- Accident Route Advisory (additive) ---------------------------------
+  // Reuse the existing accidents API to surface ACTIVE (REPORTED /
+  // INVESTIGATING) accidents as route hazards. No new data is fabricated.
+  const accReported = useQuery({
+    queryKey: ["accidents", "REPORTED", "advisory"],
+    queryFn: () => api.accidents({ status: "REPORTED", limit: 20 }),
+  });
+  const accInvestigating = useQuery({
+    queryKey: ["accidents", "INVESTIGATING", "advisory"],
+    queryFn: () => api.accidents({ status: "INVESTIGATING", limit: 20 }),
+  });
+  const activeAccidents = [
+    ...(accReported.data?.accidents ?? []),
+    ...(accInvestigating.data?.accidents ?? []),
+  ];
+  const accidentsLoading = accReported.isLoading || accInvestigating.isLoading;
+
+  // --- Weather Advisory (additive) ----------------------------------------
+  // There is no live weather feed. This panel only reflects the existing
+  // traffic/congestion model output; weather advisories surface via the
+  // Monsoon what-if scenario, never from invented weather data.
+  const weather = useQuery({
+    queryKey: ["traffic", "predict", "advisory"],
+    queryFn: () => api.trafficPredict(15),
+  });
 
   // Queue depth per gate -> the recommendation steers toward the shortest queue.
   const depth = new Map<string, number>();
@@ -95,6 +130,10 @@ export default function DriverAdvisory() {
       </div>
 
       <div className="px-4 py-3">
+        <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+          <Route className="h-4 w-4 text-muted-foreground" />
+          {t("advisory.congestionRerouting", "Congestion Rerouting")}
+        </div>
         {queued.isLoading ? (
           <Card className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
             <Spinner /> {t("advisory.loadingQueue")}
@@ -135,8 +174,102 @@ export default function DriverAdvisory() {
           </Card>
         )}
       </div>
+
+      {/* Accident Route Advisory (additive) */}
+      <div className="px-4 py-3">
+        <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+          <AlertTriangle className="h-4 w-4 text-severity-crit" />
+          {t("advisory.accidentAdvisory", "Accident Route Advisory")}
+        </div>
+        <Card>
+          <CardContent className="p-0">
+            {accidentsLoading ? (
+              <div className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
+                <Spinner /> {t("advisory.loadingAccidents", "Checking active accidents…")}
+              </div>
+            ) : activeAccidents.length === 0 ? (
+              <EmptyState>
+                {t("advisory.emptyAccidents", "No active accidents on the corridor.")}
+              </EmptyState>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="border-b border-border bg-muted/60 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+                    <tr>
+                      <th className="px-4 py-2">{t("advisory.colRef", "Ref")}</th>
+                      <th className="px-4 py-2">{t("advisory.colSeverity", "Severity")}</th>
+                      <th className="px-4 py-2">
+                        {t("advisory.colLocation", "Location / Segment")}
+                      </th>
+                      <th className="px-4 py-2">{t("advisory.colPlate")}</th>
+                      <th className="px-4 py-2">{t("advisory.colAdvisory", "Advisory")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {activeAccidents.map((a: any) => (
+                      <tr
+                        key={a.id ?? a.accident_ref}
+                        className="border-b border-border/50 hover:bg-muted/40"
+                      >
+                        <td className="px-4 py-2 font-mono text-xs">
+                          {a.accident_ref ?? a.id ?? "—"}
+                        </td>
+                        <td className="px-4 py-2">{a.severity ?? "—"}</td>
+                        <td className="px-4 py-2">{accidentLocation(a)}</td>
+                        <td className="px-4 py-2 font-mono text-xs">{a.plate ?? "—"}</td>
+                        <td className="px-4 py-2 text-severity-crit">
+                          {t("advisory.avoidSegment", "Avoid affected corridor segment")}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Weather Advisory (additive, honest) */}
+      <div className="px-4 py-3">
+        <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+          <CloudRain className="h-4 w-4 text-muted-foreground" />
+          {t("advisory.weatherAdvisory", "Weather Advisory")}
+        </div>
+        <Card>
+          <CardContent className="space-y-2 p-4 text-sm">
+            {weather.isLoading ? (
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Spinner /> {t("advisory.loadingWeather", "Loading advisory context…")}
+              </div>
+            ) : (
+              <div className="text-foreground">
+                {t("advisory.weatherModelPath", "Congestion model path")}:{" "}
+                <span className="font-mono text-xs">{weather.data?.decision_path ?? "—"}</span>
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground">
+              {t(
+                "advisory.weatherCaption",
+                "Weather advisories surface during the Monsoon what-if scenario; no live weather feed is connected.",
+              )}
+            </p>
+          </CardContent>
+        </Card>
+      </div>
     </PageContainer>
   );
+}
+
+// Best-effort human label for an accident's location. `location` may be a JSON
+// object (parsed by the API) or a plain string; fall back to accident_type.
+function accidentLocation(a: any): string {
+  const loc = a?.location;
+  if (typeof loc === "string" && loc) return loc;
+  if (loc && typeof loc === "object") {
+    return loc.name ?? loc.segment ?? loc.detail ?? loc.corridor ?? a?.accident_type ?? "—";
+  }
+  return a?.accident_type ?? "—";
 }
 
 function QueueRow({

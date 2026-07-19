@@ -92,6 +92,10 @@ _POLICY: tuple[tuple[str, frozenset[str]], ...] = (
     # resolves the driver from the token's device binding, never client input);
     # control room + customs may view for support.
     ("/api/driver", {Role.DRIVER.value} | CONTROL_ROOM | {Role.CUSTOMS.value}),
+    # Driver Master & Intelligence (read-only registry) — same audience as the
+    # enrollment/identity admin surface it complements. Longest-prefix wins over
+    # the DRIVER-scoped /api/driver rule above for /api/drivers/*.
+    ("/api/drivers", {Role.CUSTOMS.value, Role.DTCCC_ADMIN.value}),
     ("/api/identity", {Role.CUSTOMS.value, Role.DTCCC_ADMIN.value}),
     # Vehicle Master administration — same audience as the enrollment surface it
     # feeds (customs + admin create/manage vehicles + the assign-vehicle dropdown).

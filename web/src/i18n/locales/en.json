@@ -10,7 +10,8 @@
   "navSection": {
     "operations": "Operations",
     "analytics": "Analytics",
-    "administration": "Administration"
+    "administration": "Administration",
+    "completion": "UC-III Completion"
   },
   "navGroup": {
     "traffic": "Traffic Operations",
@@ -27,6 +28,8 @@
     "fastag": "FASTag",
     "intelligence": "Vehicle & Driver Intelligence",
     "followBox": "Follow the Box",
+    "cfsEcy": "CFS / ECY Movements",
+    "performance": "Performance & Reports",
     "gateCustoms": "Customs & Gate",
     "parking": "Parking",
     "health": "System Health",
@@ -35,7 +38,17 @@
     "simulator": "Simulator",
     "demo": "Demo Console",
     "enrollments": "Driver Enrollment",
-    "vehicles": "Vehicle Management"
+    "vehicles": "Vehicle Management",
+    "accidents": "Accident Management",
+    "transporters": "Transporter Blacklist",
+    "cameraAi": "Camera AI",
+    "documentOcr": "Document OCR",
+    "nvr": "NVR Integration",
+    "trt": "ECY TRT",
+    "bottlenecks": "Road Bottlenecks",
+    "reefer": "Reefer Availability",
+    "integrations": "Integrations",
+    "doubleTrip": "Double Trip"
   },
   "followBox": {
     "title": "Follow the Box",

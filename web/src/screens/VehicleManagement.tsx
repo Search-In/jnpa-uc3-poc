@@ -4,7 +4,8 @@
 // Enrollment "assign vehicle" dropdown draws ONLY from the ACTIVE, unassigned
 // vehicles here (GET /api/vehicles/available). Restricted to CUSTOMS / ADMIN.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Truck, Plus, Pencil, Eye, Power, Wrench, CheckCircle2, CircleSlash } from "lucide-react";
@@ -21,11 +22,16 @@ import {
   SegmentedTabs,
   DataTable,
   StatusChip,
+  Embedded,
   type Column,
   type Tone,
 } from "@/components/ui/dtccc";
+import TransporterBlacklist from "@/screens/TransporterBlacklist";
+import DriverMaster from "@/screens/DriverMaster";
 import { STATUS } from "@/lib/tokens";
 import { fmtDateTimeIST } from "@/lib/utils";
+
+type PageTab = "fleet" | "transporters" | "drivers" | "blacklist";
 
 const FILTERS = ["ALL", "ACTIVE", "INACTIVE", "MAINTENANCE"] as const;
 type Filter = (typeof FILTERS)[number];
@@ -46,6 +52,20 @@ function statusTone(status?: string): Tone {
 export default function VehicleManagement() {
   const { t } = useTranslation();
   const qc = useQueryClient();
+  const [searchParams] = useSearchParams();
+  const [pageTab, setPageTab] = useState<PageTab>(() => {
+    const tab = searchParams.get("tab");
+    return tab === "transporters" || tab === "blacklist" || tab === "drivers" ? tab : "fleet";
+  });
+  // Sync the active tab when the ?tab= param changes via in-app navigation (e.g.
+  // "Open Transporter" from Driver Master) — the useState initializer only runs
+  // on first mount, so without this an in-app URL change wouldn't switch tabs.
+  useEffect(() => {
+    const tab = searchParams.get("tab");
+    if (tab === "transporters" || tab === "blacklist" || tab === "drivers" || tab === "fleet") {
+      setPageTab(tab as PageTab);
+    }
+  }, [searchParams]);
   const [filter, setFilter] = useState<Filter>("ALL");
   const [createOpen, setCreateOpen] = useState(false);
   const [editVehicle, setEditVehicle] = useState<FleetVehicle | null>(null);
@@ -172,69 +192,107 @@ export default function VehicleManagement() {
       />
 
       <div className="px-4 pt-3">
-        <StatGrid className="lg:grid-cols-4">
-          <StatCard
-            icon={Truck}
-            label={t("vehicles.total", "Total Vehicles")}
-            value={stats?.total ?? 0}
-            tone="info"
-            loading={statsQ.isLoading}
-          />
-          <StatCard
-            icon={CheckCircle2}
-            label={t("vehicles.active", "Active Vehicles")}
-            value={stats?.active ?? 0}
-            tone="ok"
-            loading={statsQ.isLoading}
-          />
-          <StatCard
-            icon={CircleSlash}
-            label={t("vehicles.assigned", "Assigned Vehicles")}
-            value={stats?.assigned ?? 0}
-            tone="neutral"
-            loading={statsQ.isLoading}
-          />
-          <StatCard
-            icon={Power}
-            label={t("vehicles.available", "Available Vehicles")}
-            value={stats?.available ?? 0}
-            tone={stats && stats.available > 0 ? "ok" : "warn"}
-            loading={statsQ.isLoading}
-          />
-        </StatGrid>
+        <SegmentedTabs<PageTab>
+          value={pageTab}
+          onChange={setPageTab}
+          tabs={[
+            { key: "fleet", label: t("vehicles.tabFleet", "Fleet") },
+            { key: "transporters", label: t("vehicles.tabTransporters", "Transporters") },
+            { key: "drivers", label: t("vehicles.tabDrivers", "Drivers") },
+            { key: "blacklist", label: t("vehicles.tabBlacklist", "Blacklist") },
+          ]}
+        />
       </div>
 
-      <div className="px-4 py-3">
-        <SegmentedTabs
-          value={filter}
-          onChange={setFilter}
-          className="mb-3"
-          tabs={FILTERS.map((f) => ({
-            key: f,
-            label: f.charAt(0) + f.slice(1).toLowerCase(),
-            count: counts[f],
-          }))}
-        />
-        <Card className="overflow-hidden">
-          <DataTable
-            columns={columns}
-            rows={rows}
-            rowKey={(v) => v.vehicle_id}
-            status={listQ}
-            onRetry={() => listQ.refetch()}
-            emptyLabel={t("vehicles.empty", "No vehicles in this view.")}
-            search={(v, q) =>
-              `${v.vehicle_id} ${v.vehicle_number ?? ""} ${v.vehicle_type ?? ""} ${
-                v.assigned_driver?.name ?? ""
-              }`
-                .toLowerCase()
-                .includes(q)
-            }
-            searchPlaceholder={t("vehicles.searchPlaceholder", "Search vehicle / plate / driver…")}
-            pageSize={12}
-          />
-        </Card>
-      </div>
+      {pageTab === "fleet" && (
+        <>
+          <div className="px-4 pt-3">
+            <StatGrid className="lg:grid-cols-4">
+              <StatCard
+                icon={Truck}
+                label={t("vehicles.total", "Total Vehicles")}
+                value={stats?.total ?? 0}
+                tone="info"
+                loading={statsQ.isLoading}
+              />
+              <StatCard
+                icon={CheckCircle2}
+                label={t("vehicles.active", "Active Vehicles")}
+                value={stats?.active ?? 0}
+                tone="ok"
+                loading={statsQ.isLoading}
+              />
+              <StatCard
+                icon={CircleSlash}
+                label={t("vehicles.assigned", "Assigned Vehicles")}
+                value={stats?.assigned ?? 0}
+                tone="neutral"
+                loading={statsQ.isLoading}
+              />
+              <StatCard
+                icon={Power}
+                label={t("vehicles.available", "Available Vehicles")}
+                value={stats?.available ?? 0}
+                tone={stats && stats.available > 0 ? "ok" : "warn"}
+                loading={statsQ.isLoading}
+              />
+            </StatGrid>
+          </div>
+
+          <div className="px-4 py-3">
+            <SegmentedTabs
+              value={filter}
+              onChange={setFilter}
+              className="mb-3"
+              tabs={FILTERS.map((f) => ({
+                key: f,
+                label: f.charAt(0) + f.slice(1).toLowerCase(),
+                count: counts[f],
+              }))}
+            />
+            <Card className="overflow-hidden">
+              <DataTable
+                columns={columns}
+                rows={rows}
+                rowKey={(v) => v.vehicle_id}
+                status={listQ}
+                onRetry={() => listQ.refetch()}
+                emptyLabel={t("vehicles.empty", "No vehicles in this view.")}
+                search={(v, q) =>
+                  `${v.vehicle_id} ${v.vehicle_number ?? ""} ${v.vehicle_type ?? ""} ${
+                    v.assigned_driver?.name ?? ""
+                  }`
+                    .toLowerCase()
+                    .includes(q)
+                }
+                searchPlaceholder={t(
+                  "vehicles.searchPlaceholder",
+                  "Search vehicle / plate / driver…",
+                )}
+                pageSize={12}
+              />
+            </Card>
+          </div>
+        </>
+      )}
+
+      {pageTab === "transporters" && (
+        <Embedded>
+          <TransporterBlacklist />
+        </Embedded>
+      )}
+
+      {pageTab === "drivers" && (
+        <Embedded>
+          <DriverMaster />
+        </Embedded>
+      )}
+
+      {pageTab === "blacklist" && (
+        <Embedded>
+          <TransporterBlacklist mode="blacklist" />
+        </Embedded>
+      )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent className="p-0">

@@ -6,7 +6,8 @@
 // /api/identity (getAdapter().enrollments / enrollmentDetail / approve / reject /
 // reenroll) — query keys and endpoints UNCHANGED. Restricted to CUSTOMS / ADMIN.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -66,6 +67,23 @@ export default function DriverEnrollments() {
   const [filter, setFilter] = useState<Filter>("PENDING");
   const [openId, setOpenId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  // Bridge from Driver Master: /enrollments?create=1&name=&license= opens the
+  // existing admin create-profile form pre-filled (reuses POST /api/identity/drivers;
+  // no new API/flow). The admin then assigns a Vehicle ID and submits as usual.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [prefill, setPrefill] = useState<{ name: string; license: string } | null>(null);
+  useEffect(() => {
+    if (searchParams.get("create") === "1") {
+      setPrefill({
+        name: searchParams.get("name") || "",
+        license: searchParams.get("license") || "",
+      });
+      setCreateOpen(true);
+      const next = new URLSearchParams(searchParams);
+      ["create", "name", "license"].forEach((k) => next.delete(k));
+      setSearchParams(next, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
 
   // Fetch the full set once (small table); filter client-side for the tabs so
   // per-status counts stay live. Key stays under the ["enrollments"] prefix that
@@ -253,6 +271,8 @@ export default function DriverEnrollments() {
           </DialogHeader>
           {createOpen && (
             <CreateDriverForm
+              initialName={prefill?.name}
+              initialLicense={prefill?.license}
               onClose={() => setCreateOpen(false)}
               onCreated={() => {
                 invalidate();
@@ -272,10 +292,20 @@ export default function DriverEnrollments() {
 // /api/identity/drivers which creates a PENDING enrollment (source=ADMIN). The
 // driver flows through the SAME approve action; on approval the Vehicle ID
 // becomes eligible for PWA login.
-function CreateDriverForm({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+function CreateDriverForm({
+  onClose,
+  onCreated,
+  initialName,
+  initialLicense,
+}: {
+  onClose: () => void;
+  onCreated: () => void;
+  initialName?: string;
+  initialLicense?: string;
+}) {
   const { t } = useTranslation();
-  const [name, setName] = useState("");
-  const [license, setLicense] = useState("");
+  const [name, setName] = useState(initialName || "");
+  const [license, setLicense] = useState(initialLicense || "");
   const [mobile, setMobile] = useState("");
   const [emergency, setEmergency] = useState("");
   const [vehicle, setVehicle] = useState<string>("");

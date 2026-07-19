@@ -10,7 +10,7 @@
 
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Shapes, MapPinned, LogIn, TriangleAlert, Cpu, Flame, LogOut } from "lucide-react";
+import { Shapes, MapPinned, LogIn, TriangleAlert, Cpu, Flame, LogOut, Gauge } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api } from "@/lib/api";
 import { getAdapter } from "@/data";
@@ -19,6 +19,7 @@ import { ArcgisMap } from "@/components/map/ArcgisMap";
 import { useMapSettings } from "@/lib/mapSettings";
 import { resolveIncidents } from "@/lib/incidents";
 import GeofencingManager from "@/screens/GeofencingManager";
+import RoadBottlenecks from "@/screens/RoadBottlenecks";
 import {
   PageContainer,
   PageHeader,
@@ -27,6 +28,7 @@ import {
   SegmentedTabs,
   DataTable,
   StatusChip,
+  Embedded,
   type Column,
 } from "@/components/ui/dtccc";
 import { EmptyState, LoadingState, ErrorState } from "@/components/ui/misc";
@@ -34,7 +36,7 @@ import { STATUS } from "@/lib/tokens";
 import { fmtDateTimeIST, relativeAge } from "@/lib/utils";
 import type { AiEvent, GeofenceEvent, GeoVehicleInZone } from "@/lib/types";
 
-type TabKey = "zones" | "inside" | "events" | "violations" | "ai" | "heatmap";
+type TabKey = "zones" | "inside" | "events" | "violations" | "ai" | "heatmap" | "bottlenecks";
 
 export default function GeoAnalytics({ defaultTab = "zones" }: { defaultTab?: TabKey }) {
   const [tab, setTab] = useState<TabKey>(defaultTab);
@@ -140,6 +142,7 @@ export default function GeoAnalytics({ defaultTab = "zones" }: { defaultTab?: Ta
             },
             { key: "ai", label: "AI Events", icon: Cpu, count: aiQ.data?.events?.length },
             { key: "heatmap", label: "Heatmap", icon: Flame },
+            { key: "bottlenecks", label: "Bottlenecks", icon: Gauge },
           ]}
         />
 
@@ -185,6 +188,11 @@ export default function GeoAnalytics({ defaultTab = "zones" }: { defaultTab?: Ta
             aiEvents={aiQ.data?.events ?? []}
             events={eventsQ.data?.events ?? []}
           />
+        )}
+        {tab === "bottlenecks" && (
+          <Embedded>
+            <RoadBottlenecks />
+          </Embedded>
         )}
       </div>
     </PageContainer>

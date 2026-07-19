@@ -14,7 +14,14 @@ import { useQuery } from "@tanstack/react-query";
 import { Box, Search, Ship, Truck, ArrowRight, ArrowDown, Check, Radio } from "lucide-react";
 import { getAdapter, DATA_MODE } from "@/data";
 import { isValidContainerNo } from "@/lib/iso6346";
-import { PageContainer, PageHeader, StatusChip } from "@/components/ui/dtccc";
+import {
+  PageContainer,
+  PageHeader,
+  StatusChip,
+  SegmentedTabs,
+  Embedded,
+} from "@/components/ui/dtccc";
+import DocumentOCR from "@/screens/DocumentOCR";
 import { Card } from "@/components/ui/card";
 import { EmptyState, LoadingState } from "@/components/ui/misc";
 import { STATUS } from "@/lib/tokens";
@@ -241,6 +248,7 @@ export default function FollowTheBox() {
   const [params, setParams] = useSearchParams();
   const [term, setTerm] = useState(params.get("c") || DEMO_CONTAINER);
   const [submitted, setSubmitted] = useState(params.get("c") || DEMO_CONTAINER);
+  const [tab, setTab] = useState<"journey" | "ocr">("journey");
 
   useEffect(() => {
     const c = params.get("c");
@@ -273,60 +281,80 @@ export default function FollowTheBox() {
       <PageHeader title={t("followBox.title")} subtitle={t("followBox.subtitle")} icon={Box} />
 
       <div className="px-4 pt-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-2 rounded-md border border-border bg-card px-2 py-1.5">
-            <Search size={14} className="text-muted-foreground" />
-            <input
-              value={term}
-              onChange={(e) => setTerm(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && go()}
-              placeholder={t("followBox.searchPlaceholder")}
-              className="w-56 bg-transparent text-sm outline-none"
-              spellCheck={false}
-            />
-          </div>
-          <button
-            onClick={go}
-            className="rounded-md bg-primary px-3 py-1.5 text-[13px] font-semibold text-primary-foreground hover:bg-primary/90"
-          >
-            {t("followBox.follow")}
-          </button>
-          {submitted && (
-            <StatusChip
-              label={valid ? t("followBox.isoValid") : t("followBox.isoInvalid")}
-              tone={valid ? "ok" : "critical"}
-            />
-          )}
-          <span className="ml-auto text-[11px] text-muted-foreground">
-            DATA_MODE: <strong className="text-foreground">{q.data?.data_mode ?? DATA_MODE}</strong>
-          </span>
-        </div>
+        <SegmentedTabs
+          value={tab}
+          onChange={setTab}
+          tabs={[
+            { key: "journey", label: "Container Journey", icon: Box },
+            { key: "ocr", label: "OCR Verification", icon: Search },
+          ]}
+        />
       </div>
 
-      <div className="space-y-3 px-4 py-3">
-        {q.isLoading ? (
-          <LoadingState />
-        ) : !q.data ? (
-          <EmptyState>{t("followBox.unavailable")}</EmptyState>
-        ) : (
-          <>
-            <MetaBar j={q.data} />
-            <JourneyStatusBar j={q.data} />
-
-            <div className="grid grid-cols-1 items-stretch gap-3 lg:grid-cols-[1fr_16rem_1fr]">
-              <TwinColumn twin="UC-II" icon={Ship} stages={uc2} />
-              <HandoffCard j={q.data} />
-              <TwinColumn twin="UC-III" icon={Truck} stages={uc3} />
+      {tab === "ocr" ? (
+        <Embedded>
+          <DocumentOCR />
+        </Embedded>
+      ) : (
+        <>
+          <div className="px-4 pt-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-2 rounded-md border border-border bg-card px-2 py-1.5">
+                <Search size={14} className="text-muted-foreground" />
+                <input
+                  value={term}
+                  onChange={(e) => setTerm(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && go()}
+                  placeholder={t("followBox.searchPlaceholder")}
+                  className="w-56 bg-transparent text-sm outline-none"
+                  spellCheck={false}
+                />
+              </div>
+              <button
+                onClick={go}
+                className="rounded-md bg-primary px-3 py-1.5 text-[13px] font-semibold text-primary-foreground hover:bg-primary/90"
+              >
+                {t("followBox.follow")}
+              </button>
+              {submitted && (
+                <StatusChip
+                  label={valid ? t("followBox.isoValid") : t("followBox.isoInvalid")}
+                  tone={valid ? "ok" : "critical"}
+                />
+              )}
+              <span className="ml-auto text-[11px] text-muted-foreground">
+                DATA_MODE:{" "}
+                <strong className="text-foreground">{q.data?.data_mode ?? DATA_MODE}</strong>
+              </span>
             </div>
+          </div>
 
-            {q.data.note && (
-              <p className="text-[11px] leading-snug text-muted-foreground">
-                <strong>Note:</strong> {t("followBox.note")}
-              </p>
+          <div className="space-y-3 px-4 py-3">
+            {q.isLoading ? (
+              <LoadingState />
+            ) : !q.data ? (
+              <EmptyState>{t("followBox.unavailable")}</EmptyState>
+            ) : (
+              <>
+                <MetaBar j={q.data} />
+                <JourneyStatusBar j={q.data} />
+
+                <div className="grid grid-cols-1 items-stretch gap-3 lg:grid-cols-[1fr_16rem_1fr]">
+                  <TwinColumn twin="UC-II" icon={Ship} stages={uc2} />
+                  <HandoffCard j={q.data} />
+                  <TwinColumn twin="UC-III" icon={Truck} stages={uc3} />
+                </div>
+
+                {q.data.note && (
+                  <p className="text-[11px] leading-snug text-muted-foreground">
+                    <strong>Note:</strong> {t("followBox.note")}
+                  </p>
+                )}
+              </>
             )}
-          </>
-        )}
-      </div>
+          </div>
+        </>
+      )}
     </PageContainer>
   );
 }

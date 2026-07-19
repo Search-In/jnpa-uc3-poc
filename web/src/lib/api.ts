@@ -405,6 +405,470 @@ export const api = {
     }),
   wfExecutions: (limit = 50) =>
     http<{ executions: WfExecution[]; count: number }>(`/api/workflows/executions?limit=${limit}`),
+
+  // ===================================================================
+  // UC-III Final-Completion feature APIs (additive; gateway routers 0024)
+  // ===================================================================
+  // --- Accidents (Feature 1) ---
+  accidents: (params?: {
+    status?: string;
+    accident_type?: string;
+    vehicle_id?: string;
+    limit?: number;
+  }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<{ count: number; accidents: any[] }>(
+      `/api/accidents${q.toString() ? `?${q}` : ""}`,
+    );
+  },
+  accidentDashboard: () => http<any>("/api/accidents/dashboard"),
+  accident: (id: number) => http<{ accident: any; timeline: any[] }>(`/api/accidents/${id}`),
+  accidentReport: (body: Record<string, any>) =>
+    http<{ created: boolean; accident: any }>("/api/accidents", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  accidentStatus: (id: number, body: Record<string, any>) =>
+    http<any>(`/api/accidents/${id}/status`, { method: "POST", body: JSON.stringify(body) }),
+  accidentInvestigation: (id: number, body: Record<string, any>) =>
+    http<any>(`/api/accidents/${id}/investigation`, { method: "POST", body: JSON.stringify(body) }),
+  accidentResolve: (id: number, body: Record<string, any>) =>
+    http<any>(`/api/accidents/${id}/resolve`, { method: "POST", body: JSON.stringify(body) }),
+
+  // --- Transporter blacklist (Feature 2) ---
+  transporters: (params?: { q?: string; status?: string; limit?: number }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<{ count: number; transporters: any[] }>(
+      `/api/transporters${q.toString() ? `?${q}` : ""}`,
+    );
+  },
+  transporterBlacklist: () =>
+    http<{ count: number; blacklist: any[] }>("/api/transporters/blacklist"),
+  transporter: (id: number) =>
+    http<{ transporter: any; vehicles: any[]; blacklist_history: any[] }>(
+      `/api/transporters/${id}`,
+    ),
+  transporterCreate: (body: Record<string, any>) =>
+    http<any>("/api/transporters", { method: "POST", body: JSON.stringify(body) }),
+  transporterAddVehicle: (id: number, body: Record<string, any>) =>
+    http<any>(`/api/transporters/${id}/vehicles`, { method: "POST", body: JSON.stringify(body) }),
+  transporterBlacklistAdd: (id: number, body: Record<string, any>) =>
+    http<any>(`/api/transporters/${id}/blacklist`, { method: "POST", body: JSON.stringify(body) }),
+  transporterLift: (id: number, body?: Record<string, any>) =>
+    http<any>(`/api/transporters/${id}/lift`, { method: "POST", body: JSON.stringify(body || {}) }),
+  validateVehicle: (plate: string) =>
+    http<any>(`/api/transporters/validate/vehicle/${encodeURIComponent(plate)}`),
+  validateDriver: (driverId: string) =>
+    http<any>(`/api/transporters/validate/driver/${encodeURIComponent(driverId)}`),
+
+  // --- Driver Master & Intelligence (read-only registry) ---
+  driversMaster: (params?: {
+    q?: string;
+    company?: string;
+    status?: string;
+    enrolled?: boolean;
+    verification?: string;
+    transporter_id?: number;
+    sort?: string;
+    direction?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/drivers/master${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  driverMasterStats: () =>
+    http<{
+      total_drivers: number;
+      active_pdp: number;
+      expiring_soon: number;
+      expired_pdp: number;
+      companies: number;
+      enrolled: number;
+      pending_enrollment: number;
+      not_enrolled: number;
+    }>("/api/drivers/master/stats"),
+  driverMaster: (licence: string) =>
+    http<any>(`/api/drivers/master/${encodeURIComponent(licence)}`),
+  driverMasterPdpHistory: (licence: string, params?: { limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && qs.set(k, String(v)));
+    return http<{
+      licence: string;
+      appl_number: string | null;
+      items: any[];
+      total: number;
+      limit: number;
+      offset: number;
+      count: number;
+    }>(
+      `/api/drivers/master/${encodeURIComponent(licence)}/pdp-history${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  driverMasterValidate: (licence: string) =>
+    http<any>(`/api/drivers/master/validate/${encodeURIComponent(licence)}`),
+
+  // --- CFS-ECY CODECO gate movements (module 13, read-only) ---
+  cfsEcyMovements: (params?: {
+    facility?: string;
+    mode?: string;
+    container?: string;
+    from?: string;
+    to?: string;
+    sort?: string;
+    direction?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/cfs-ecy/movements${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  cfsEcyStats: (params?: { facility?: string; from?: string; to?: string }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{
+      total_in: number;
+      total_out: number;
+      total_events: number;
+      container_count: number;
+      active_containers: number;
+      iso_invalid: number;
+      average_dwell_hours: number | null;
+      median_dwell_hours: number | null;
+      dwell_count: number;
+      daily_throughput: { day: string; in_count: number; out_count: number }[];
+    }>(`/api/cfs-ecy/stats${qs.toString() ? `?${qs}` : ""}`);
+  },
+  cfsEcyDwell: (params?: { from?: string; to?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; summary: any; note: string }>(
+      `/api/cfs-ecy/dwell${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  cfsEcyContainer: (containerNumber: string) =>
+    http<any>(`/api/cfs-ecy/containers/${encodeURIComponent(containerNumber)}`),
+
+  // --- Performance & Daily Reports (module 12, read-only) ---
+  perfTerminals: () => http<{ items: any[]; count: number }>(`/api/performance/terminals`),
+  perfMeta: () =>
+    http<{ report_dates: string[]; latest_report_date: string | null; ldb_months: string[] }>(
+      `/api/performance/meta`,
+    ),
+  // --- Performance Data Upload (module 12 sub-module, admin-only) ---
+  perfDownloadTemplate: (reportType: string) =>
+    downloadFile(`/api/performance/templates/${reportType}`, `${reportType}_template.csv`),
+  perfUploadValidate: (reportType: string, file: File) => {
+    const f = new FormData();
+    f.append("report_type", reportType);
+    f.append("file", file);
+    return postForm<any>(`/api/performance/validate`, f);
+  },
+  perfUploadImport: (reportType: string, file: File) => {
+    const f = new FormData();
+    f.append("report_type", reportType);
+    f.append("file", file);
+    return postForm<any>(`/api/performance/upload`, f);
+  },
+  perfUploads: (params?: {
+    report_type?: string;
+    status?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/performance/uploads${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  perfKpi: (date?: string) => {
+    const qs = new URLSearchParams();
+    if (date) qs.set("date", date);
+    return http<{
+      report_date: string;
+      prev_report_date: string | null;
+      metrics: Record<string, number | null>;
+      deltas: Record<string, number>;
+    }>(`/api/performance/kpi${qs.toString() ? `?${qs}` : ""}`);
+  },
+  perfDaily: (date: string) => http<any>(`/api/performance/daily?date=${encodeURIComponent(date)}`),
+  perfTraffic: (params?: {
+    from?: string;
+    to?: string;
+    terminal?: string;
+    period?: string;
+    sort?: string;
+    direction?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/performance/daily/traffic${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  perfStatus: (params?: { date?: string; terminal?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/performance/daily/status${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  perfVessels: (params?: { date?: string; terminal?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/performance/daily/vessels${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  perfMonthly: (params?: {
+    fiscal_year?: string;
+    terminal?: string;
+    from?: string;
+    to?: string;
+    sort?: string;
+    direction?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/performance/monthly-teu${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  perfTrends: (params?: {
+    metric?: string;
+    grain?: string;
+    terminal?: string;
+    from?: string;
+    to?: string;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{
+      metric: string;
+      grain: string;
+      terminal: string | null;
+      count: number;
+      series: { t: string; terminal_code: string; value: number | null }[];
+    }>(`/api/performance/trends${qs.toString() ? `?${qs}` : ""}`);
+  },
+  perfStats: (params?: { from?: string; to?: string }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{
+      days: number;
+      latest_kpi: any;
+      daily: {
+        day: string;
+        total_teus: number | null;
+        gate_in_teus: number | null;
+        gate_out_teus: number | null;
+        yard_occupancy_pct: number | null;
+      }[];
+    }>(`/api/performance/stats${qs.toString() ? `?${qs}` : ""}`);
+  },
+  perfDwell: (params?: { month?: string; terminal?: string; cycle?: string; segment?: string }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; count: number }>(
+      `/api/performance/dwell${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  perfCfsIcd: (params?: {
+    month?: string;
+    facility_type?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/performance/cfs-icd${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  perfCongestion: (params?: { month?: string; cycle?: string }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; count: number }>(
+      `/api/performance/congestion${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  perfRoutes: (params?: { month?: string; cycle?: string; transport_mode?: string }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; count: number }>(
+      `/api/performance/routes${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  perfWeather: (params?: { month?: string; terminal?: string; cycle?: string }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; count: number }>(
+      `/api/performance/weather${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+
+  // --- Camera AI (Features 3/4/5) ---
+  cameraCounts: (params?: { camera_id?: string; gate_id?: string; limit?: number }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<{ count: number; counts: any[] }>(
+      `/api/camera-ai/counts${q.toString() ? `?${q}` : ""}`,
+    );
+  },
+  cameraSummary: () => http<any>("/api/camera-ai/summary"),
+  cameraDashboard: () => http<any>("/api/camera-ai/dashboard"),
+  cameraTrailers: (limit = 100) =>
+    http<{ count: number; trailers: any[] }>(`/api/camera-ai/trailer?limit=${limit}`),
+  cameraContainers: (limit = 100) =>
+    http<{ count: number; containers: any[] }>(`/api/camera-ai/container?limit=${limit}`),
+  cameraCountIngest: (body: Record<string, any>) =>
+    http<any>("/api/camera-ai/counts", { method: "POST", body: JSON.stringify(body) }),
+  cameraTrailerIngest: (body: Record<string, any>) =>
+    http<any>("/api/camera-ai/trailer", { method: "POST", body: JSON.stringify(body) }),
+  cameraContainerIngest: (body: Record<string, any>) =>
+    http<any>("/api/camera-ai/container", { method: "POST", body: JSON.stringify(body) }),
+
+  // --- Document OCR (Feature 6) ---
+  ocrDocuments: (params?: { doc_type?: string; limit?: number }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<{ count: number; documents: any[] }>(
+      `/api/ocr/documents${q.toString() ? `?${q}` : ""}`,
+    );
+  },
+  ocrDocument: (id: number) => http<any>(`/api/ocr/documents/${id}`),
+  ocrHealth: () => http<any>("/api/ocr/health"),
+  ocrUpload: (file: File, docType: string, sourceRef?: string) => {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    fd.append("doc_type", docType);
+    if (sourceRef) fd.append("source_ref", sourceRef);
+    return postForm<any>("/api/ocr/document", fd);
+  },
+
+  // --- NVR (Feature 7) ---
+  nvrDevices: () => http<{ count: number; devices: any[] }>("/api/nvr/devices"),
+  nvrDevice: (id: string) => http<any>(`/api/nvr/devices/${encodeURIComponent(id)}`),
+  nvrStreams: () => http<{ count: number; streams: any[] }>("/api/nvr/streams"),
+  nvrHealth: () => http<any>("/api/nvr/health"),
+  nvrRegister: (body: Record<string, any>) =>
+    http<any>("/api/nvr/devices", { method: "POST", body: JSON.stringify(body) }),
+  nvrMapChannel: (id: string, body: Record<string, any>) =>
+    http<any>(`/api/nvr/devices/${encodeURIComponent(id)}/channels`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  // --- ECY TRT (Feature 8) ---
+  trtSummary: () => http<any>("/api/trt/summary"),
+  trtRecords: (params?: { status?: string; vehicle_id?: string; limit?: number }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<{ count: number; records: any[] }>(
+      `/api/trt/records${q.toString() ? `?${q}` : ""}`,
+    );
+  },
+  trtPhase: (body: Record<string, any>) =>
+    http<any>("/api/trt/phase", { method: "POST", body: JSON.stringify(body) }),
+
+  // --- Bottlenecks (Feature 9) ---
+  bottlenecks: (top = 3) => http<any>(`/api/bottlenecks?top=${top}`),
+  bottleneckSnapshot: () => http<any>("/api/bottlenecks/snapshot", { method: "POST" }),
+  bottleneckHistory: (limit = 100) =>
+    http<{ count: number; snapshots: any[] }>(`/api/bottlenecks/history?limit=${limit}`),
+
+  // --- Reefer (Feature 11) ---
+  reeferSlots: (params?: { facility_id?: string; status?: string }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<{ count: number; slots: any[] }>(`/api/reefer/slots${q.toString() ? `?${q}` : ""}`);
+  },
+  reeferAvailability: () => http<any>("/api/reefer/availability"),
+  reeferSeed: (count = 24) =>
+    http<any>("/api/reefer/seed", { method: "POST", body: JSON.stringify({ count }) }),
+  reeferAllocate: (body: Record<string, any>) =>
+    http<any>("/api/reefer/allocate", { method: "POST", body: JSON.stringify(body) }),
+  reeferRelease: (body: Record<string, any>) =>
+    http<any>("/api/reefer/release", { method: "POST", body: JSON.stringify(body) }),
+
+  // --- Integrations: PDP / LDB / RMS-TAS (Features 12/13/14) ---
+  pdpVehicle: (plate: string) => http<any>(`/api/pdp/vehicle/${encodeURIComponent(plate)}`),
+  pdpTraffic: () => http<any>("/api/pdp/traffic"),
+  pdpHealth: () => http<any>("/api/pdp/health"),
+  ldbContainer: (no: string) => http<any>(`/api/ldb/container/${encodeURIComponent(no)}`),
+  ldbMovements: (no: string) => http<any>(`/api/ldb/container/${encodeURIComponent(no)}/movements`),
+  ldbHealth: () => http<any>("/api/ldb/health"),
+  rmsSlots: (params?: { gate_id?: string; date?: string }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<{ count: number; slots: any[] }>(
+      `/api/rms-tas/slots${q.toString() ? `?${q}` : ""}`,
+    );
+  },
+  rmsHealth: () => http<any>("/api/rms-tas/health"),
+  rmsSeed: (body: Record<string, any>) =>
+    http<any>("/api/rms-tas/seed", { method: "POST", body: JSON.stringify(body) }),
+  rmsBook: (body: Record<string, any>) =>
+    http<any>("/api/rms-tas/book", { method: "POST", body: JSON.stringify(body) }),
+
+  // --- TT Double Trip (Feature 15) ---
+  doubleTripStatistics: () => http<any>("/api/double-trip/statistics"),
+  doubleTripCycles: (params?: { vehicle_id?: string; limit?: number }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<{ count: number; cycles: any[] }>(
+      `/api/double-trip/cycles${q.toString() ? `?${q}` : ""}`,
+    );
+  },
+  doubleTripStart: (body: Record<string, any>) =>
+    http<any>("/api/double-trip/start", { method: "POST", body: JSON.stringify(body) }),
+  doubleTripComplete: (tripId: number) =>
+    http<any>(`/api/double-trip/${tripId}/complete`, { method: "POST" }),
 };
 
 export interface WfField {

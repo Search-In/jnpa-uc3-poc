@@ -21,6 +21,7 @@ import DemoConsole from "@/screens/DemoConsole";
 import DriverEnrollments from "@/screens/DriverEnrollments";
 import VehicleManagement from "@/screens/VehicleManagement";
 import CfsEcyMovements from "@/screens/CfsEcyMovements";
+import PerformanceReports from "@/screens/PerformanceReports";
 import WorkflowComposer from "@/screens/WorkflowComposer";
 import SimulatorPage from "@/sim/SimulatorPage";
 import Launcher from "@/screens/Launcher";
@@ -250,6 +251,14 @@ function DashboardShell({
             element={
               <Guard path="/cfs-ecy">
                 <CfsEcyMovements />
+              </Guard>
+            }
+          />
+          <Route
+            path="/performance"
+            element={
+              <Guard path="/performance">
+                <PerformanceReports />
               </Guard>
             }
           />

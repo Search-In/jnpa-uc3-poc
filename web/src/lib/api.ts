@@ -510,6 +510,130 @@ export const api = {
   cfsEcyContainer: (containerNumber: string) =>
     http<any>(`/api/cfs-ecy/containers/${encodeURIComponent(containerNumber)}`),
 
+  // --- Performance & Daily Reports (module 12, read-only) ---
+  perfTerminals: () => http<{ items: any[]; count: number }>(`/api/performance/terminals`),
+  perfMeta: () =>
+    http<{ report_dates: string[]; latest_report_date: string | null; ldb_months: string[] }>(
+      `/api/performance/meta`,
+    ),
+  // --- Performance Data Upload (module 12 sub-module, admin-only) ---
+  perfDownloadTemplate: (reportType: string) =>
+    downloadFile(`/api/performance/templates/${reportType}`, `${reportType}_template.csv`),
+  perfUploadValidate: (reportType: string, file: File) => {
+    const f = new FormData();
+    f.append("report_type", reportType);
+    f.append("file", file);
+    return postForm<any>(`/api/performance/validate`, f);
+  },
+  perfUploadImport: (reportType: string, file: File) => {
+    const f = new FormData();
+    f.append("report_type", reportType);
+    f.append("file", file);
+    return postForm<any>(`/api/performance/upload`, f);
+  },
+  perfUploads: (params?: { report_type?: string; status?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)));
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/performance/uploads${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  perfKpi: (date?: string) => {
+    const qs = new URLSearchParams();
+    if (date) qs.set("date", date);
+    return http<{
+      report_date: string; prev_report_date: string | null;
+      metrics: Record<string, number | null>; deltas: Record<string, number>;
+    }>(`/api/performance/kpi${qs.toString() ? `?${qs}` : ""}`);
+  },
+  perfDaily: (date: string) => http<any>(`/api/performance/daily?date=${encodeURIComponent(date)}`),
+  perfTraffic: (params?: {
+    from?: string; to?: string; terminal?: string; period?: string;
+    sort?: string; direction?: string; limit?: number; offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)));
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/performance/daily/traffic${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  perfStatus: (params?: { date?: string; terminal?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)));
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/performance/daily/status${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  perfVessels: (params?: { date?: string; terminal?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)));
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/performance/daily/vessels${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  perfMonthly: (params?: {
+    fiscal_year?: string; terminal?: string; from?: string; to?: string;
+    sort?: string; direction?: string; limit?: number; offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)));
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/performance/monthly-teu${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  perfTrends: (params?: { metric?: string; grain?: string; terminal?: string; from?: string; to?: string }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)));
+    return http<{ metric: string; grain: string; terminal: string | null; count: number;
+      series: { t: string; terminal_code: string; value: number | null }[] }>(
+      `/api/performance/trends${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  perfStats: (params?: { from?: string; to?: string }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)));
+    return http<{
+      days: number; latest_kpi: any;
+      daily: { day: string; total_teus: number | null; gate_in_teus: number | null;
+        gate_out_teus: number | null; yard_occupancy_pct: number | null }[];
+    }>(`/api/performance/stats${qs.toString() ? `?${qs}` : ""}`);
+  },
+  perfDwell: (params?: { month?: string; terminal?: string; cycle?: string; segment?: string }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)));
+    return http<{ items: any[]; count: number }>(
+      `/api/performance/dwell${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  perfCfsIcd: (params?: { month?: string; facility_type?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)));
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/performance/cfs-icd${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  perfCongestion: (params?: { month?: string; cycle?: string }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)));
+    return http<{ items: any[]; count: number }>(
+      `/api/performance/congestion${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  perfRoutes: (params?: { month?: string; cycle?: string; transport_mode?: string }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)));
+    return http<{ items: any[]; count: number }>(
+      `/api/performance/routes${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  perfWeather: (params?: { month?: string; terminal?: string; cycle?: string }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)));
+    return http<{ items: any[]; count: number }>(
+      `/api/performance/weather${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+
   // --- Camera AI (Features 3/4/5) ---
   cameraCounts: (params?: { camera_id?: string; gate_id?: string; limit?: number }) => {
     const q = new URLSearchParams();

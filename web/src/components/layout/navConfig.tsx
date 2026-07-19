@@ -30,6 +30,7 @@ import {
   FlaskConical,
   SlidersHorizontal,
   Workflow,
+  BarChart3,
   Boxes,
 } from "lucide-react";
 
@@ -91,6 +92,7 @@ export const NAV_SECTIONS: NavSection[] = [
       leaf("/intelligence", "nav.intelligence", ScanSearch),
       leaf("/follow-the-box", "nav.followBox", Box),
       leaf("/cfs-ecy", "nav.cfsEcy", Boxes),
+      leaf("/performance", "nav.performance", BarChart3),
       // Geo-fencing Manager + Geo-fence Events are merged into one Geo Analytics
       // screen, so the sidebar shows a SINGLE entry (no duplicate operational
       // pages). Both /geofencing and /geofence-events routes remain valid for

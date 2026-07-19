@@ -88,6 +88,8 @@ from .routers import (
     ldb,
     nvr,
     pdp,
+    performance,
+    performance_upload,
     reefer,
     rms_tas,
     transporters,
@@ -218,6 +220,25 @@ async def _lifespan(app: FastAPI):
         await cfs_ecy_ext.ensure_cfs_ecy_schema(cfg.postgres_dsn or None)
     except Exception as exc:  # noqa: BLE001
         log.warning("cfs_ecy_schema_boot_failed", error=str(exc))
+
+    # Performance & Daily Reports (module 12): the perf_* analytical tables for the
+    # official JNPA Daily Status Report / monthly TEUs / NLDS-LDB Analytics feeds.
+    # Idempotent, additive — mirrors migration 0028 so a dev DB that never ran it
+    # still gets the objects. Read-only wrt every existing table.
+    try:
+        from . import performance_ext
+        await performance_ext.ensure_performance_schema(cfg.postgres_dsn or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("performance_schema_boot_failed", error=str(exc))
+
+    # Performance Data Upload (module 12 sub-module): upload lifecycle tables
+    # (perf_uploads / perf_import_logs / perf_upload_errors). Idempotent, additive —
+    # mirrors migration 0030. Read/write only within this sub-module.
+    try:
+        from . import performance_upload_ext
+        await performance_upload_ext.ensure_performance_upload_schema(cfg.postgres_dsn or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("performance_upload_schema_boot_failed", error=str(exc))
 
     # Vehicle Master (fleet registry): ensure the table, then migrate the truck-sim
     # fleet into it (idempotent, never clobbering an operator edit) so no existing
@@ -446,6 +467,8 @@ app.include_router(document_ocr.router)      # document OCR
 app.include_router(nvr.router)               # NVR device/stream integration
 app.include_router(trt.router)               # ECY TRT KPI
 app.include_router(cfs_ecy.router)           # CFS-ECY CODECO gate movements (module 13, read-only)
+app.include_router(performance.router)       # Performance & Daily Reports (module 12, read-only, additive)
+app.include_router(performance_upload.router)  # Performance Data Upload (module 12 sub-module, admin-only, additive)
 app.include_router(bottlenecks.router)       # three-road bottleneck analytics
 app.include_router(reefer.router)            # reefer availability
 app.include_router(pdp.router)               # PDP adapter

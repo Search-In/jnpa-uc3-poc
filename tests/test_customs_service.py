@@ -60,3 +60,99 @@ def test_discover_finds_all_customer_files():
     assert len(files) == 20
     assert "shippingbill.xlsx" in names and "leodetails.xlsx" in names
     assert not any(n.startswith(".") for n in names)
+
+
+# --------------------------------------------------------------------------
+# Container customs view — additive-field regression (GET /api/customs/
+# containers/{cn}). The service enriches the repository view with workflow,
+# last_event and import_export; the repository now also carries vessel (with
+# voyage) and message_id. These tests assert those fields WITHOUT touching the
+# existing backward-compatible keys. An injected fake repository keeps them
+# DB-free and deterministic (like tests/test_customs_api.py::FakeCustomsRepo).
+# --------------------------------------------------------------------------
+class _FakeContainerRepo:
+    """Minimal repo stand-in returning a fixed container_customs view + events."""
+
+    def __init__(self, view: dict, events: list | None = None) -> None:
+        self._view = view
+        self._events = events if events is not None else []
+
+    async def container_customs(self, container_no: str) -> dict:
+        return dict(self._view, container_no=container_no)
+
+    async def list_events(self, **kwargs) -> list:
+        return list(self._events)
+
+
+def _run(coro):
+    import asyncio
+    return asyncio.run(coro)
+
+
+def _import_container_view() -> dict:
+    """An import container: IGM-declared + RMS-selected, with vessel/message id."""
+    return {
+        "container_no": "CAIU6709422",
+        "status": {"container_no": "CAIU6709422", "igm_no": "1194792",
+                   "declared_igm": True, "rms_selected": True,
+                   "ooc_cleared": False, "smtp_bonded": False},
+        "vessel": {"igm_no": "1194792", "igm_date": "2026-07-01",
+                   "vessel_code": "INMAA1", "voyage_no": "V-123",
+                   "shipping_line_code": "MAEU", "port_of_arrival": "INNSA1",
+                   "expected_arrival": None, "entry_inward": None, "message_id": 42},
+        "message_id": 42,
+        "igm": [{"igm_no": "1194792", "line_no": 30, "container_no": "CAIU6709422"}],
+        "ooc": [], "smtp": [], "rms": [],
+    }
+
+
+def test_container_customs_returns_additive_fields():
+    from services.customs.service import CustomsService
+    event = {"id": 7, "event": "customs.rms_selected", "module": "RMS",
+             "reference": "1191409", "container_no": "CAIU6709422",
+             "created_at": "2026-07-02T10:00:00Z"}
+    svc = CustomsService(repository=_FakeContainerRepo(_import_container_view(), [event]))
+
+    view = _run(svc.container_customs("CAIU6709422"))
+
+    # New additive fields are present and correctly derived.
+    assert view["vessel"]["vessel_code"] == "INMAA1"
+    assert view["vessel"]["voyage_no"] == "V-123"          # voyage
+    assert view["message_id"] == 42
+    assert view["import_export"] == "IMPORT"               # IGM present -> import track
+    assert view["last_event"]["event"] == "customs.rms_selected"
+    assert view["workflow"]["import_stage"] == "SCAN_SELECTED"
+
+    # Backward compatibility: every pre-existing key is preserved.
+    for key in ("container_no", "status", "igm", "ooc", "smtp", "rms"):
+        assert key in view
+
+
+def test_container_customs_transhipment_and_missing_event():
+    from services.customs.service import CustomsService
+    # SMTP-only box -> transhipment track; no events -> last_event is None.
+    smtp_view = {"status": None, "vessel": None, "message_id": None,
+                 "igm": [], "ooc": [], "smtp": [{"smtp_no": "2697414"}], "rms": []}
+    svc = CustomsService(repository=_FakeContainerRepo(smtp_view, []))
+    view = _run(svc.container_customs("SMTP1"))
+    assert view["import_export"] == "TRANSHIPMENT"
+    assert view["last_event"] is None
+    assert view["vessel"] is None and view["message_id"] is None
+
+
+def test_container_customs_no_documents_import_export_none():
+    from services.customs.service import CustomsService
+    empty_view = {"status": None, "vessel": None, "message_id": None,
+                  "igm": [], "ooc": [], "smtp": [], "rms": []}
+    svc = CustomsService(repository=_FakeContainerRepo(empty_view, []))
+    view = _run(svc.container_customs("UNKNOWN1"))
+    assert view["import_export"] is None
+    assert view["workflow"]["import_stage"] is None
+
+
+def test_derive_import_export_static():
+    from services.customs.service import CustomsService as CS
+    assert CS._derive_import_export({"igm": [{"x": 1}], "ooc": [], "smtp": []}) == "IMPORT"
+    assert CS._derive_import_export({"igm": [], "ooc": [{"x": 1}], "smtp": []}) == "IMPORT"
+    assert CS._derive_import_export({"igm": [], "ooc": [], "smtp": [{"x": 1}]}) == "TRANSHIPMENT"
+    assert CS._derive_import_export({"igm": [], "ooc": [], "smtp": []}) is None

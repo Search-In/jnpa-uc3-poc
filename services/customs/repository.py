@@ -272,6 +272,16 @@ class CustomsRepository:
         status = await self._one(
             "SELECT container_no, igm_no, declared_igm, rms_selected, ooc_cleared, smtp_bonded "
             "FROM jnpa.v_customs_container_status WHERE container_no = :cn", {"cn": container_no})
+        # Vessel/voyage/message-id + IGM timestamps for this box, via the same
+        # container -> cargo_line -> vessel join the ICEGATE adapter uses. One box maps
+        # to one cargo line -> one vessel; ORDER BY id DESC LIMIT 1 picks the latest.
+        vessel = await self._one(
+            "SELECT v.igm_no, v.igm_date, v.vessel_code, v.voyage_no, v.shipping_line_code, "
+            "v.port_of_arrival, v.expected_arrival, v.entry_inward, v.message_id "
+            "FROM jnpa.customs_igm_container c "
+            "JOIN jnpa.customs_igm_cargo_line l ON l.id = c.cargo_line_id "
+            "JOIN jnpa.customs_igm_vessel v ON v.id = l.vessel_id "
+            "WHERE c.container_no = :cn ORDER BY v.id DESC LIMIT 1", {"cn": container_no})
         igm = await self._rows(
             "SELECT igm_no, line_no, container_no, seal_no, container_status, iso_size_type "
             "FROM jnpa.customs_igm_container WHERE container_no = :cn ORDER BY id", {"cn": container_no})
@@ -286,7 +296,8 @@ class CustomsRepository:
         rms = await self._rows(
             "SELECT igm_no, scan_machine, scan_location, cfs_name "
             "FROM jnpa.customs_rms_container WHERE container_no = :cn ORDER BY id", {"cn": container_no})
-        return {"container_no": container_no, "status": status,
+        return {"container_no": container_no, "status": status, "vessel": vessel,
+                "message_id": (vessel or {}).get("message_id"),
                 "igm": igm, "ooc": ooc, "smtp": smtp, "rms": rms}
 
     async def summary(self) -> dict:

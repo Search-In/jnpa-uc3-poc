@@ -32,6 +32,7 @@ import {
   type Tone,
 } from "@/components/ui/dtccc";
 import CameraAI from "@/screens/CameraAI";
+import CustomsDetailsDrawer from "@/components/panels/CustomsDetailsDrawer";
 import { fmtDateTimeIST } from "@/lib/utils";
 import type { CustomsAlert, GateCapture, LeoReconciliation } from "@/lib/types";
 
@@ -53,6 +54,8 @@ export default function GateCustoms() {
   const qc = useQueryClient();
   const [tab, setTab] = useState<TabKey>("captures");
   const [captureType, setCaptureType] = useState<string>("ESEAL");
+  // Container selected for the ICEGATE customs details drawer (null = closed).
+  const [selectedContainer, setSelectedContainer] = useState<string | null>(null);
 
   const providersQ = useQuery({ queryKey: ["gate-providers"], queryFn: () => api.gateProviders() });
   const capturesQ = useQuery({
@@ -177,6 +180,7 @@ export default function GateCustoms() {
               status={capturesQ}
               onRetry={() => capturesQ.refetch()}
               type={captureType}
+              onRowClick={(c) => c.container_no && setSelectedContainer(c.container_no)}
             />
           </Card>
         )}
@@ -196,6 +200,12 @@ export default function GateCustoms() {
           </Embedded>
         )}
       </div>
+
+      {/* ICEGATE row details — customs document view + workflow timeline. */}
+      <CustomsDetailsDrawer
+        containerNo={selectedContainer}
+        onClose={() => setSelectedContainer(null)}
+      />
     </PageContainer>
   );
 }
@@ -209,11 +219,13 @@ function CapturesTable({
   status,
   onRetry,
   type,
+  onRowClick,
 }: {
   rows: GateCapture[];
   status: any;
   onRetry: () => void;
   type: string;
+  onRowClick?: (c: GateCapture) => void;
 }) {
   const columns: Column<GateCapture>[] = useMemo(
     () => [
@@ -251,6 +263,7 @@ function CapturesTable({
       rowKey={(c) => String(c.id)}
       status={status}
       onRetry={onRetry}
+      onRowClick={type === "ICEGATE" ? onRowClick : undefined}
       emptyLabel={`No ${type} captures in RDS yet.`}
       search={(c, q) =>
         `${c.container_no ?? ""} ${c.vehicle_plate ?? ""} ${c.status ?? ""}`

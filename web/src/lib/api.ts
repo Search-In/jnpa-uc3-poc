@@ -283,6 +283,12 @@ export const api = {
     http<{ count: number; alerts: import("./types").CustomsAlert[] }>(
       `/api/gate-data/customs/history?limit=${limit}`,
     ),
+  // Full customs document view of one container (module 5, /api/customs). Reused
+  // by the ICEGATE details drawer; RBAC matches /api/gate-data (CONTROL_ROOM|CUSTOMS).
+  customsContainer: (containerNo: string) =>
+    http<import("./types").CustomsContainerView>(
+      `/api/customs/containers/${encodeURIComponent(containerNo)}`,
+    ),
 
   // --- Parking Management (RDS-backed: parking_facilities/slots/transactions/events) ---
   parkingAvailability: () =>

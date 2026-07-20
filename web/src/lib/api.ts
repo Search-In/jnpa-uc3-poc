@@ -572,6 +572,30 @@ export const api = {
   cfsEcyContainer: (containerNumber: string) =>
     http<any>(`/api/cfs-ecy/containers/${encodeURIComponent(containerNumber)}`),
 
+  // --- CFS-ECY Data Upload (module 13 sub-module) — mirrors the shipping-lines helpers ---
+  cfsEcyDownloadTemplate: (facility: string) =>
+    downloadFile(`/api/cfs-ecy/templates/${facility}`, `cfs_ecy_${facility}_template.csv`),
+  cfsEcyUploadValidate: (facility: string, file: File) => {
+    const f = new FormData();
+    f.append("file", file);
+    f.append("facility", facility);
+    return postForm<any>("/api/cfs-ecy/validate", f);
+  },
+  cfsEcyUpload: (facility: string, file: File) => {
+    const f = new FormData();
+    f.append("file", file);
+    f.append("facility", facility);
+    return postForm<any>("/api/cfs-ecy/upload", f);
+  },
+  cfsEcyUploads: (params?: { facility?: string; status?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && qs.set(k, String(v)));
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/cfs-ecy/uploads${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  cfsEcyUploadDetail: (fileId: number) => http<any>(`/api/cfs-ecy/uploads/${fileId}`),
+
   // --- Performance & Daily Reports (module 12, read-only) ---
   perfTerminals: () => http<{ items: any[]; count: number }>(`/api/performance/terminals`),
   perfMeta: () =>

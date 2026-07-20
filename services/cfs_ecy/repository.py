@@ -17,9 +17,10 @@ whitelist, never interpolated from client input; every VALUE is a bound paramete
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Sequence
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from jnpa_shared.db import get_engine
 from jnpa_shared.logging import get_logger
@@ -244,3 +245,229 @@ class CfsEcyRepository:
                 "ORDER BY d.dwell_hours DESC NULLS LAST, d.container_number ASC "
                 "LIMIT :limit OFFSET :offset"), params)).mappings().all()
         return [dict(r) for r in rows], (int(total_row["n"]) if total_row else 0)
+
+    # ================================================================ Data Upload
+    # Persistence + import-ledger for the reusable Data-Upload sub-module (migration
+    # 0034). Writes ONLY the new ledger tables (cfs_ecy_import_files /
+    # cfs_ecy_import_errors) and inserts movement rows through the SAME
+    # (facility_type, container_number, event_ts, mode) UNIQUE key with ON CONFLICT
+    # DO NOTHING — idempotent, duplicate-safe, and it NEVER overwrites an existing row.
+
+    async def find_file_by_sha(self, sha256: str) -> Optional[dict]:
+        """The prior ledger row for identical bytes (content-level dedup), or None."""
+        async with get_engine(self._dsn).connect() as conn:
+            row = (await conn.execute(text(
+                "SELECT id, facility_type, source_file, import_status, record_count, "
+                "imported_count, error_count, duplicate_count, created_at "
+                "FROM jnpa.cfs_ecy_import_files WHERE source_sha256 = :sha"),
+                {"sha": sha256})).mappings().first()
+        return dict(row) if row else None
+
+    async def persist(self, records: Sequence[Mapping[str, Any]], *, facility_type: str,
+                      source_file: str, source_sha256: str, physical_format: str,
+                      file_size: Optional[int] = None, uploaded_by: Optional[str] = None,
+                      source: str = "UPLOAD") -> dict:
+        """Persist one uploaded CFS-ECY file atomically + idempotently.
+
+        The ledger row, every movement insert and the final status update run in ONE
+        transaction. Re-uploading identical bytes is a no-op (SKIPPED_DUPLICATE); rows
+        that collide with an EXISTING movement are silently skipped (counted as
+        duplicates) and never overwrite it. Returns the outcome envelope."""
+        existing = await self.find_file_by_sha(source_sha256)
+        if existing is not None:
+            return {"file_id": existing["id"], "import_status": "SKIPPED_DUPLICATE",
+                    "record_count": existing["record_count"],
+                    "imported_count": existing["imported_count"],
+                    "error_count": existing["error_count"],
+                    "duplicate_count": existing["duplicate_count"], "duplicate": True}
+
+        envelope = {
+            "facility_type": facility_type, "physical_format": physical_format,
+            "source_file": source_file, "source_sha256": source_sha256,
+            "file_size_bytes": file_size, "record_count": len(records),
+            "uploaded_by": uploaded_by, "source": source,
+        }
+        rows = [{"facility_type": r["facility_type"], "container_number": r["container_number"],
+                 "iso_valid": bool(r["iso_valid"]), "event_ts": r["event_ts"],
+                 "mode": r["mode"], "source": r.get("source") or "UPLOAD",
+                 "source_file": r.get("source_file") or source_file}
+                for r in records]
+        try:
+            async with get_engine(self._dsn).begin() as conn:
+                fid = (await conn.execute(text(_FILE_INSERT), envelope)).mappings().first()["id"]
+                imported = 0
+                if rows:
+                    for r in rows:
+                        r["import_file_id"] = fid
+                    await conn.execute(text(_MOVEMENT_INSERT), rows)
+                    imported = int((await conn.execute(text(
+                        "SELECT count(*) FROM jnpa.cfs_ecy_movements WHERE import_file_id = :id"),
+                        {"id": fid})).scalar() or 0)
+                dup = len(records) - imported
+                await conn.execute(text(
+                    "UPDATE jnpa.cfs_ecy_import_files SET import_status = 'SUCCESS', "
+                    "imported_count = :imp, duplicate_count = :dup, error_count = 0, "
+                    "updated_at = now() WHERE id = :id"),
+                    {"imp": imported, "dup": dup, "id": fid})
+            return {"file_id": fid, "import_status": "SUCCESS", "record_count": len(records),
+                    "imported_count": imported, "error_count": 0,
+                    "duplicate_count": dup, "duplicate": False}
+        except IntegrityError as exc:
+            dup_row = await self.find_file_by_sha(source_sha256)
+            if dup_row is not None:
+                return {"file_id": dup_row["id"], "import_status": "SKIPPED_DUPLICATE",
+                        "record_count": dup_row["record_count"],
+                        "imported_count": dup_row["imported_count"],
+                        "error_count": dup_row["error_count"],
+                        "duplicate_count": dup_row["duplicate_count"], "duplicate": True}
+            return await self._record_failure(envelope, str(getattr(exc, "orig", exc)))
+        except Exception as exc:  # noqa: BLE001 — record + surface as FAILED, never partial
+            log.warning("cfs_ecy.persist_failed", extra={"source_file": source_file,
+                                                         "error": str(exc)})
+            return await self._record_failure(envelope, str(exc))
+
+    async def _record_failure(self, envelope: Mapping[str, Any], detail: str) -> dict:
+        row = dict(envelope)
+        row["error_detail"] = detail[:4000]
+        try:
+            async with get_engine(self._dsn).begin() as conn:
+                fid = (await conn.execute(text(_FILE_INSERT_FAILED), row)).mappings().first()["id"]
+                await conn.execute(text(
+                    "INSERT INTO jnpa.cfs_ecy_import_errors (import_file_id, record_ref, "
+                    "error_code, error_detail) VALUES (:fid, NULL, 'PERSIST_FAILED', :d)"),
+                    {"fid": fid, "d": detail[:4000]})
+            fail_id: Optional[int] = fid
+        except Exception as exc:  # noqa: BLE001
+            log.error("cfs_ecy.failure_record_failed", extra={"error": str(exc)})
+            fail_id = None
+        return {"file_id": fail_id, "import_status": "FAILED",
+                "record_count": envelope["record_count"], "imported_count": 0,
+                "error_count": 1, "duplicate_count": 0, "duplicate": False}
+
+    async def record_rejected_upload(self, *, facility_type: Optional[str],
+                                     physical_format: str, source_file: str,
+                                     source_sha256: str, file_size: Optional[int],
+                                     uploaded_by: Optional[str], detail: str,
+                                     errors: Sequence[Mapping[str, Any]]) -> Optional[int]:
+        """Record a structurally-rejected upload (e.g. missing required columns / no
+        valid rows) as a FAILED ledger row so it appears in upload history, with its
+        column/row errors. Writes NO movement rows. De-dupes on sha256."""
+        existing = await self.find_file_by_sha(source_sha256)
+        if existing is not None:
+            return existing["id"]
+        envelope = {
+            "facility_type": facility_type, "physical_format": physical_format,
+            "source_file": source_file, "source_sha256": source_sha256,
+            "file_size_bytes": file_size, "record_count": 0,
+            "error_detail": detail[:4000], "uploaded_by": uploaded_by, "source": "UPLOAD",
+        }
+        try:
+            async with get_engine(self._dsn).begin() as conn:
+                fid = (await conn.execute(text(_FILE_INSERT_FAILED), envelope)).mappings().first()["id"]
+            await self.add_row_errors(fid, errors)
+            return fid
+        except Exception as exc:  # noqa: BLE001
+            log.warning("cfs_ecy.reject_record_failed", extra={"error": str(exc)})
+            return None
+
+    async def add_row_errors(self, file_id: int, errors: Sequence[Mapping[str, Any]]) -> None:
+        """Bulk-insert per-row validation errors for one upload. Best-effort."""
+        rows = [{"fid": file_id,
+                 "ref": (f"row {e.get('row_number')}" if e.get("row_number") is not None
+                         else e.get("column_name")),
+                 "code": e.get("error_code") or "INVALID",
+                 "detail": (e.get("error_detail") or "")[:2000]}
+                for e in errors]
+        if not rows:
+            return
+        async with get_engine(self._dsn).begin() as conn:
+            await conn.execute(text(
+                "INSERT INTO jnpa.cfs_ecy_import_errors (import_file_id, record_ref, "
+                "error_code, error_detail) VALUES (:fid, :ref, :code, :detail)"), rows)
+
+    async def mark_partial(self, file_id: int, *, error_count: int) -> None:
+        """Flip a successful import to PARTIAL when some source rows were skipped as
+        invalid (records the honest outcome; the valid rows are already persisted)."""
+        async with get_engine(self._dsn).begin() as conn:
+            await conn.execute(text(
+                "UPDATE jnpa.cfs_ecy_import_files SET import_status = 'PARTIAL', "
+                "error_count = :n, updated_at = now() WHERE id = :id"),
+                {"n": error_count, "id": file_id})
+
+    # ------------------------------------------------------------- ledger reads
+    @staticmethod
+    def _file_where(filters: Mapping[str, Any]) -> tuple[str, dict]:
+        clauses, params = [], {}
+        for col in ("facility_type", "import_status", "source"):
+            if filters.get(col) is not None:
+                clauses.append(f"{col} = :{col}")
+                params[col] = filters[col]
+        return ((" WHERE " + " AND ".join(clauses)) if clauses else ""), params
+
+    async def list_files(self, *, filters: Mapping[str, Any], limit: int, offset: int) -> list[dict]:
+        where, params = self._file_where(filters)
+        params.update(limit=limit, offset=offset)
+        async with get_engine(self._dsn).connect() as conn:
+            res = await conn.execute(text(
+                "SELECT id, facility_type, physical_format, source_file, record_count, "
+                "imported_count, error_count, duplicate_count, import_status, error_detail, "
+                "uploaded_by, source, created_at, updated_at "
+                f"FROM jnpa.cfs_ecy_import_files{where} "
+                "ORDER BY id DESC LIMIT :limit OFFSET :offset"), params)
+            return [dict(r) for r in res.mappings().all()]
+
+    async def count_files(self, *, filters: Mapping[str, Any]) -> int:
+        where, params = self._file_where(filters)
+        async with get_engine(self._dsn).connect() as conn:
+            return int((await conn.execute(
+                text(f"SELECT count(*) FROM jnpa.cfs_ecy_import_files{where}"), params)).scalar() or 0)
+
+    async def get_file(self, file_id: int) -> Optional[dict]:
+        async with get_engine(self._dsn).connect() as conn:
+            row = (await conn.execute(text(
+                "SELECT id, facility_type, physical_format, source_file, source_sha256, "
+                "file_size_bytes, record_count, imported_count, error_count, duplicate_count, "
+                "import_status, error_detail, uploaded_by, source, created_at, updated_at "
+                "FROM jnpa.cfs_ecy_import_files WHERE id = :id"), {"id": file_id})).mappings().first()
+        return dict(row) if row else None
+
+    async def list_file_errors(self, file_id: int, *, limit: int, offset: int) -> list[dict]:
+        async with get_engine(self._dsn).connect() as conn:
+            res = await conn.execute(text(
+                "SELECT id, record_ref, error_code, error_detail, created_at "
+                "FROM jnpa.cfs_ecy_import_errors WHERE import_file_id = :id "
+                "ORDER BY id LIMIT :limit OFFSET :offset"),
+                {"id": file_id, "limit": limit, "offset": offset})
+            return [dict(r) for r in res.mappings().all()]
+
+
+# --------------------------------------------------------------------------- SQL
+_FILE_INSERT = """
+INSERT INTO jnpa.cfs_ecy_import_files
+    (facility_type, physical_format, source_file, source_sha256, file_size_bytes,
+     record_count, import_status, uploaded_by, source)
+VALUES
+    (:facility_type, :physical_format, :source_file, :source_sha256, :file_size_bytes,
+     :record_count, 'PENDING', :uploaded_by, :source)
+RETURNING id
+"""
+
+_FILE_INSERT_FAILED = """
+INSERT INTO jnpa.cfs_ecy_import_files
+    (facility_type, physical_format, source_file, source_sha256, file_size_bytes,
+     record_count, import_status, error_detail, uploaded_by, source)
+VALUES
+    (:facility_type, :physical_format, :source_file, :source_sha256, :file_size_bytes,
+     :record_count, 'FAILED', :error_detail, :uploaded_by, :source)
+RETURNING id
+"""
+
+_MOVEMENT_INSERT = """
+INSERT INTO jnpa.cfs_ecy_movements
+    (facility_type, container_number, iso_valid, event_ts, mode, source, source_file,
+     import_file_id)
+VALUES
+    (:facility_type, :container_number, :iso_valid, :event_ts, :mode, :source, :source_file,
+     :import_file_id)
+ON CONFLICT ON CONSTRAINT uq_cfs_ecy_movement DO NOTHING
+"""

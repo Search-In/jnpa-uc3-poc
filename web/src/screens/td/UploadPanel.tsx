@@ -100,7 +100,10 @@ export default function TransportersDriversUploadPanel() {
   });
 
   const errors: any[] = (validation?.errors ?? []).map((e: any, i: number) => ({ _k: i, ...e }));
-  const warnings: any[] = (validation?.warnings ?? []).map((w: any, i: number) => ({ _k: i, ...w }));
+  const warnings: any[] = (validation?.warnings ?? []).map((w: any, i: number) => ({
+    _k: i,
+    ...w,
+  }));
   const preview: any[] = (validation?.preview ?? []).map((r: any, i: number) => ({ _k: i, ...r }));
   const canImport = !!file && validation?.valid === true && !importResult;
   const busy = validateMut.isPending || importMut.isPending;
@@ -161,7 +164,12 @@ export default function TransportersDriversUploadPanel() {
       align: "right",
       render: (r) => r.imported_count ?? 0,
     },
-    { key: "duplicate_count", header: "Dupes", align: "right", render: (r) => r.duplicate_count ?? 0 },
+    {
+      key: "duplicate_count",
+      header: "Dupes",
+      align: "right",
+      render: (r) => r.duplicate_count ?? 0,
+    },
     { key: "error_count", header: "Errors", align: "right", render: (r) => r.error_count ?? 0 },
     { key: "uploaded_by", header: "By", render: (r) => r.uploaded_by ?? "—" },
   ];
@@ -243,9 +251,8 @@ export default function TransportersDriversUploadPanel() {
           {isTransporter
             ? "Required columns: Company ID · Company Name (idempotency key: Company ID)."
             : "Required columns: Licence Number · Driver Name (idempotency key: Licence Number)."}{" "}
-          Column names are flexible (e.g. “Transporter Name”, “Driver_Name”, “DL Number” all
-          map). Re-uploading the same file is safe — duplicates are skipped and existing rows
-          are updated.
+          Column names are flexible (e.g. “Transporter Name”, “Driver_Name”, “DL Number” all map).
+          Re-uploading the same file is safe — duplicates are skipped and existing rows are updated.
         </p>
         {(validateMut.isError || importMut.isError) && (
           <div className="mt-3 flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-[13px] text-critical">
@@ -260,12 +267,7 @@ export default function TransportersDriversUploadPanel() {
         <>
           <StatGrid className="lg:grid-cols-3 xl:grid-cols-5">
             <StatCard icon={FileUp} label="Total rows" value={sum?.rows ?? 0} tone="neutral" />
-            <StatCard
-              icon={CheckCircle2}
-              label="Valid rows"
-              value={sum?.valid ?? 0}
-              tone="info"
-            />
+            <StatCard icon={CheckCircle2} label="Valid rows" value={sum?.valid ?? 0} tone="info" />
             <StatCard
               icon={Ban}
               label="Invalid rows"

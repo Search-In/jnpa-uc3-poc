@@ -90,7 +90,10 @@ export default function ShippingUploadPanel() {
   });
 
   const errors: any[] = (validation?.errors ?? []).map((e: any, i: number) => ({ _k: i, ...e }));
-  const warnings: any[] = (validation?.warnings ?? []).map((w: any, i: number) => ({ _k: i, ...w }));
+  const warnings: any[] = (validation?.warnings ?? []).map((w: any, i: number) => ({
+    _k: i,
+    ...w,
+  }));
   const preview: any[] = (validation?.preview ?? []).map((r: any, i: number) => ({ _k: i, ...r }));
   const canImport = !!file && validation?.valid === true && !importResult;
   const busy = validateMut.isPending || importMut.isPending;
@@ -226,8 +229,8 @@ export default function ShippingUploadPanel() {
           </div>
         </div>
         <p className="mt-2 text-[11.5px] text-muted-foreground">
-          Supported: CSV · XLS · XLSX. Column names are flexible (e.g. “Container No”, “CNTR_NO”
-          all map). Re-uploading the same file is safe — duplicates are skipped automatically.
+          Supported: CSV · XLS · XLSX. Column names are flexible (e.g. “Container No”, “CNTR_NO” all
+          map). Re-uploading the same file is safe — duplicates are skipped automatically.
         </p>
         {(validateMut.isError || importMut.isError) && (
           <div className="mt-3 flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-[13px] text-critical">
@@ -242,12 +245,7 @@ export default function ShippingUploadPanel() {
         <>
           <StatGrid className="lg:grid-cols-3 xl:grid-cols-5">
             <StatCard icon={FileUp} label="Total rows" value={sum?.rows ?? 0} tone="neutral" />
-            <StatCard
-              icon={CheckCircle2}
-              label="Valid rows"
-              value={sum?.valid ?? 0}
-              tone="info"
-            />
+            <StatCard icon={CheckCircle2} label="Valid rows" value={sum?.valid ?? 0} tone="info" />
             <StatCard
               icon={Ban}
               label="Invalid rows"

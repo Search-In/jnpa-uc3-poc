@@ -203,7 +203,9 @@ export default function ShippingLines() {
   };
 
   const toggleSort = (key: SortKey) =>
-    setSort((s) => (s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" }));
+    setSort((s) =>
+      s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" },
+    );
 
   return (
     <PageContainer>
@@ -395,13 +397,23 @@ export default function ShippingLines() {
                 <table className="w-full min-w-[840px] text-left text-[13px]">
                   <thead className="bg-muted/60 text-[11px] uppercase tracking-wide text-muted-foreground">
                     <tr>
-                      <SortTh label="Container No." k="container_no" sort={sort} onSort={toggleSort} />
+                      <SortTh
+                        label="Container No."
+                        k="container_no"
+                        sort={sort}
+                        onSort={toggleSort}
+                      />
                       <th className="px-3 py-2 font-semibold">List</th>
                       <SortTh label="Terminal" k="terminal" sort={sort} onSort={toggleSort} />
                       <SortTh label="Line" k="shipping_line_code" sort={sort} onSort={toggleSort} />
                       <th className="px-3 py-2 font-semibold">Category</th>
                       <th className="px-3 py-2 font-semibold">Freight</th>
-                      <SortTh label="Gross Wt." k="gross_weight_kg" sort={sort} onSort={toggleSort} />
+                      <SortTh
+                        label="Gross Wt."
+                        k="gross_weight_kg"
+                        sort={sort}
+                        onSort={toggleSort}
+                      />
                       <SortTh label="POD" k="pod" sort={sort} onSort={toggleSort} />
                       <th className="px-3 py-2 font-semibold">BL</th>
                     </tr>
@@ -585,7 +597,9 @@ function ContainerDrawer({
               )}
               {s?.list_type && <StatusChip label={s.list_type} tone={listTone(s.list_type)} />}
               {s?.category && <StatusChip label={s.category} tone={catTone(s.category)} />}
-              {s?.freight_kind && <StatusChip label={s.freight_kind} tone={fkTone(s.freight_kind)} />}
+              {s?.freight_kind && (
+                <StatusChip label={s.freight_kind} tone={fkTone(s.freight_kind)} />
+              )}
               {s?.terminal && <StatusChip label={`Terminal ${s.terminal}`} tone="info" />}
               <StatusChip
                 label={inCargo ? "Linked to Cargo lifecycle" : "Not in Cargo lifecycle"}
@@ -601,7 +615,10 @@ function ContainerDrawer({
               <dl className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-3">
                 <Field label="ISO type" value={s?.iso_code} />
                 <Field label="Gross weight" value={fmtWeight(s?.gross_weight_kg)} />
-                <Field label="POL → POD" value={[s?.pol, s?.pod].filter(Boolean).join(" → ") || undefined} />
+                <Field
+                  label="POL → POD"
+                  value={[s?.pol, s?.pod].filter(Boolean).join(" → ") || undefined}
+                />
                 <Field label="Vessel visit" value={s?.vessel_visit} />
                 <Field label="Bill of Lading" value={s?.bill_of_lading} mono />
                 <Field label="Reefer" value={s?.reefer_status} />
@@ -635,7 +652,9 @@ function ContainerDrawer({
                         <td className="px-2.5 py-1.5">{a.terminal}</td>
                         <td className="px-2.5 py-1.5 font-medium">{a.shipping_line_code ?? "—"}</td>
                         <td className="px-2.5 py-1.5">{a.category}</td>
-                        <td className="px-2.5 py-1.5 tabular-nums">{fmtWeight(a.gross_weight_kg)}</td>
+                        <td className="px-2.5 py-1.5 tabular-nums">
+                          {fmtWeight(a.gross_weight_kg)}
+                        </td>
                         <td className="px-2.5 py-1.5">{a.pod ?? "—"}</td>
                         <td className="px-2.5 py-1.5 font-mono text-[11px]">{a.seal_no ?? "—"}</td>
                       </tr>
@@ -665,7 +684,9 @@ function ContainerDrawer({
                       className="flex flex-wrap items-center gap-2 rounded-md border border-border px-3 py-2 text-[12.5px]"
                     >
                       <StatusChip label={`Gate pass ${o.gate_pass_no ?? "—"}`} tone="info" />
-                      {o.vehicle_no && <StatusChip label={`Vehicle ${o.vehicle_no}`} tone="neutral" />}
+                      {o.vehicle_no && (
+                        <StatusChip label={`Vehicle ${o.vehicle_no}`} tone="neutral" />
+                      )}
                       {o.shipping_agent_code && (
                         <StatusChip label={`Agent ${o.shipping_agent_code}`} tone="ok" />
                       )}

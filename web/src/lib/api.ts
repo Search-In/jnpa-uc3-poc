@@ -598,7 +598,10 @@ export const api = {
 
   // --- Transporters & Drivers Data Upload (UC-III sub-module) — mirrors the cfs-ecy helpers ---
   tdUploadDownloadTemplate: (entity: string) =>
-    downloadFile(`/api/td-upload/templates/${entity}`, `${entity.toLowerCase()}_upload_template.csv`),
+    downloadFile(
+      `/api/td-upload/templates/${entity}`,
+      `${entity.toLowerCase()}_upload_template.csv`,
+    ),
   tdUploadValidate: (entity: string, file: File) => {
     const f = new FormData();
     f.append("file", file);
@@ -955,18 +958,14 @@ export const api = {
     ),
   shippingLinesByBl: (bl: string, params?: { limit?: number; offset?: number }) => {
     const qs = new URLSearchParams();
-    Object.entries(params || {}).forEach(
-      ([k, v]) => v !== undefined && qs.set(k, String(v)),
-    );
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && qs.set(k, String(v)));
     return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
       `/api/shipping-lines/bl/${encodeURIComponent(bl)}${qs.toString() ? `?${qs}` : ""}`,
     );
   },
   shippingLinesLines: (params?: { limit?: number; offset?: number }) => {
     const qs = new URLSearchParams();
-    Object.entries(params || {}).forEach(
-      ([k, v]) => v !== undefined && qs.set(k, String(v)),
-    );
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && qs.set(k, String(v)));
     return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
       `/api/shipping-lines/lines${qs.toString() ? `?${qs}` : ""}`,
     );
@@ -1004,14 +1003,19 @@ export const api = {
   // 404s when the container is not a cargo record; callers fall back to
   // shippingLinesContainer for a non-cargo container-detail view.
   cargoShippingLine: (containerNo: string) =>
-    http<{ container_number: string; shipping_line: any; advance_lists: any[]; delivery_orders: any[] }>(
-      `/api/cargo/${encodeURIComponent(containerNo)}/shipping-line`,
-    ),
+    http<{
+      container_number: string;
+      shipping_line: any;
+      advance_lists: any[];
+      delivery_orders: any[];
+    }>(`/api/cargo/${encodeURIComponent(containerNo)}/shipping-line`),
 
   // --- Shipping Lines Data Upload (module 4 sub-module) — mirrors the perf upload helpers ---
   shippingLinesDownloadTemplate: (listType: string) =>
-    downloadFile(`/api/shipping-lines/templates/${listType}`,
-                 `shipping_lines_${listType}_template.csv`),
+    downloadFile(
+      `/api/shipping-lines/templates/${listType}`,
+      `shipping_lines_${listType}_template.csv`,
+    ),
   shippingLinesUploadValidate: (listType: string, file: File) => {
     const f = new FormData();
     f.append("file", file);
@@ -1031,8 +1035,7 @@ export const api = {
       `/api/shipping-lines/uploads${qs.toString() ? `?${qs}` : ""}`,
     );
   },
-  shippingLinesUploadDetail: (fileId: number) =>
-    http<any>(`/api/shipping-lines/uploads/${fileId}`),
+  shippingLinesUploadDetail: (fileId: number) => http<any>(`/api/shipping-lines/uploads/${fileId}`),
 };
 
 export interface WfField {

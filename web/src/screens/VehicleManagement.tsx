@@ -28,10 +28,17 @@ import {
 } from "@/components/ui/dtccc";
 import TransporterBlacklist from "@/screens/TransporterBlacklist";
 import DriverMaster from "@/screens/DriverMaster";
+import TransportersDriversUploadPanel from "@/screens/td/UploadPanel";
+import { authEnabled, getRole } from "@/lib/auth";
 import { STATUS } from "@/lib/tokens";
 import { fmtDateTimeIST } from "@/lib/utils";
 
-type PageTab = "fleet" | "transporters" | "drivers" | "blacklist";
+type PageTab = "fleet" | "transporters" | "drivers" | "blacklist" | "upload";
+
+// Master-data upload is write-gated to control room + customs (+ admin), mirroring
+// the gateway RBAC on /api/td-upload. Client gate only — the API enforces it too.
+const UPLOAD_ROLES = ["JNPA_TRAFFIC", "DTCCC_ADMIN", "TERMINAL_OPS", "CUSTOMS"];
+const CAN_UPLOAD = !authEnabled() || UPLOAD_ROLES.includes(getRole() ?? "");
 
 const FILTERS = ["ALL", "ACTIVE", "INACTIVE", "MAINTENANCE"] as const;
 type Filter = (typeof FILTERS)[number];
@@ -55,14 +62,25 @@ export default function VehicleManagement() {
   const [searchParams] = useSearchParams();
   const [pageTab, setPageTab] = useState<PageTab>(() => {
     const tab = searchParams.get("tab");
-    return tab === "transporters" || tab === "blacklist" || tab === "drivers" ? tab : "fleet";
+    return tab === "transporters" ||
+      tab === "blacklist" ||
+      tab === "drivers" ||
+      (tab === "upload" && CAN_UPLOAD)
+      ? (tab as PageTab)
+      : "fleet";
   });
   // Sync the active tab when the ?tab= param changes via in-app navigation (e.g.
   // "Open Transporter" from Driver Master) — the useState initializer only runs
   // on first mount, so without this an in-app URL change wouldn't switch tabs.
   useEffect(() => {
     const tab = searchParams.get("tab");
-    if (tab === "transporters" || tab === "blacklist" || tab === "drivers" || tab === "fleet") {
+    if (
+      tab === "transporters" ||
+      tab === "blacklist" ||
+      tab === "drivers" ||
+      tab === "fleet" ||
+      (tab === "upload" && CAN_UPLOAD)
+    ) {
       setPageTab(tab as PageTab);
     }
   }, [searchParams]);
@@ -200,6 +218,9 @@ export default function VehicleManagement() {
             { key: "transporters", label: t("vehicles.tabTransporters", "Transporters") },
             { key: "drivers", label: t("vehicles.tabDrivers", "Drivers") },
             { key: "blacklist", label: t("vehicles.tabBlacklist", "Blacklist") },
+            ...(CAN_UPLOAD
+              ? [{ key: "upload" as const, label: t("vehicles.tabUpload", "Data Upload") }]
+              : []),
           ]}
         />
       </div>
@@ -292,6 +313,12 @@ export default function VehicleManagement() {
         <Embedded>
           <TransporterBlacklist mode="blacklist" />
         </Embedded>
+      )}
+
+      {pageTab === "upload" && CAN_UPLOAD && (
+        <div className="px-4 py-3">
+          <TransportersDriversUploadPanel />
+        </div>
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>

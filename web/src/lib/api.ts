@@ -596,6 +596,30 @@ export const api = {
   },
   cfsEcyUploadDetail: (fileId: number) => http<any>(`/api/cfs-ecy/uploads/${fileId}`),
 
+  // --- Transporters & Drivers Data Upload (UC-III sub-module) — mirrors the cfs-ecy helpers ---
+  tdUploadDownloadTemplate: (entity: string) =>
+    downloadFile(`/api/td-upload/templates/${entity}`, `${entity.toLowerCase()}_upload_template.csv`),
+  tdUploadValidate: (entity: string, file: File) => {
+    const f = new FormData();
+    f.append("file", file);
+    f.append("entity", entity);
+    return postForm<any>("/api/td-upload/validate", f);
+  },
+  tdUpload: (entity: string, file: File) => {
+    const f = new FormData();
+    f.append("file", file);
+    f.append("entity", entity);
+    return postForm<any>("/api/td-upload/upload", f);
+  },
+  tdUploads: (params?: { entity?: string; status?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && qs.set(k, String(v)));
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/td-upload/uploads${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  tdUploadDetail: (fileId: number) => http<any>(`/api/td-upload/uploads/${fileId}`),
+
   // --- Performance & Daily Reports (module 12, read-only) ---
   perfTerminals: () => http<{ items: any[]; count: number }>(`/api/performance/terminals`),
   perfMeta: () =>

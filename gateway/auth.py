@@ -92,6 +92,11 @@ _POLICY: tuple[tuple[str, frozenset[str]], ...] = (
     # CFS-ECY CODECO gate movements (module 13) — off-dock container logistics for the
     # control room + customs, covering both the read surface and the Data-Upload write.
     ("/api/cfs-ecy", CONTROL_ROOM | {Role.CUSTOMS.value}),
+    # Transporters & Drivers Data Upload (UC-III sub-module) — master-data upload for
+    # the control room + customs (+ admin ⊂ control room). Same audience as the other
+    # Data-Upload modules; more specific than the /api/drivers admin rule below is not
+    # a concern (distinct /api/td-upload prefix).
+    ("/api/td-upload", CONTROL_ROOM | {Role.CUSTOMS.value}),
     # FASTag (toll balance / transactions / enroute) — operational logistics data
     # for the control room + customs (same audience as gate-data).
     ("/api/fastag", CONTROL_ROOM | {Role.CUSTOMS.value}),

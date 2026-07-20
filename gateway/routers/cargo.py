@@ -91,6 +91,21 @@ def get_service(request: Request) -> CargoService:
     return _service
 
 
+# Read-only Shipping Lines enrichment (module 4). Additive: a separate accessor +
+# a dedicated sub-resource so the existing CargoOut DTO and jnpa.cargo table are
+# untouched. Soft, by-value link (container_no) to jnpa.v_shipping_line_container.
+_sl_service = None
+
+
+def get_shipping_lines_service(request: Request):
+    global _sl_service
+    if _sl_service is None:
+        from services.shipping_lines import ShippingLinesService
+        cfg = getattr(getattr(request.app.state, "gw", None), "cfg", None)
+        _sl_service = ShippingLinesService(dsn=getattr(cfg, "postgres_dsn", None) or None)
+    return _sl_service
+
+
 # ------------------------------------------------------------------- validation
 def _clean_container_no(value: str) -> str:
     """Normalise + ISO-6346-validate a container number (the follow-the-box PK)."""
@@ -962,6 +977,37 @@ async def get_cargo(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "not_found", "container_number": container_number})
     return _to_out(row)
+
+
+@router.get("/{container_number}/shipping-line",
+            summary="Read-only Shipping Lines enrichment for one cargo container")
+async def cargo_shipping_line(
+    container_number: str,
+    request: Request,
+    service: CargoService = Depends(get_service),
+) -> dict:
+    """Additive, READ-ONLY: surface the IAL/EAL advance-list + EDO delivery-order
+    facts for a cargo container (module 4), joined BY VALUE on container_no. Does not
+    modify jnpa.cargo or the CargoOut model. 404 only if the cargo record itself is
+    unknown; if the box exists but has no shipping-line document the ``shipping_line``
+    block is ``null`` (an enrichment, never an error)."""
+    cn = _require_container_no(container_number)
+    row = await service.get_cargo(cn)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail={"error": "not_found", "container_number": cn})
+    sl = get_shipping_lines_service(request)
+    try:
+        view = await sl.container_view(cn)
+    except Exception:  # noqa: BLE001 — enrichment must never break the cargo read
+        view = {"summary": None, "advance_lists": [], "delivery_orders": []}
+    has_data = bool(view.get("advance_lists") or view.get("delivery_orders"))
+    return {
+        "container_number": cn,
+        "shipping_line": view.get("summary") if has_data else None,
+        "advance_lists": view.get("advance_lists", []),
+        "delivery_orders": view.get("delivery_orders", []),
+    }
 
 
 @router.put("/{container_number}", response_model=CargoOut, responses=_ERROR_RESPONSES,

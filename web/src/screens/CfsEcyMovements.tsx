@@ -22,6 +22,8 @@ import {
   ChevronRight,
   Inbox,
   RotateCcw,
+  LayoutList,
+  UploadCloud,
 } from "lucide-react";
 
 import {
@@ -38,6 +40,14 @@ import { Card } from "@/components/ui/card";
 import { LoadingState, ErrorState } from "@/components/ui/misc";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { api } from "@/lib/api";
+import { authEnabled, getRole } from "@/lib/auth";
+import CfsEcyUploadPanel from "@/screens/cfs/UploadPanel";
+
+// Data Upload is a WRITE surface — show it only to control-room / customs / admin
+// (the gateway enforces the same policy on /api/cfs-ecy).
+const UPLOAD_ROLES = ["JNPA_TRAFFIC", "DTCCC_ADMIN", "TERMINAL_OPS", "CUSTOMS"];
+const CAN_UPLOAD = !authEnabled() || UPLOAD_ROLES.includes(getRole() ?? "");
+type TopTab = "browse" | "upload";
 
 type Facility = "all" | "CFS" | "ECY";
 
@@ -103,6 +113,7 @@ function friendlyError(err: unknown): string {
 }
 
 export default function CfsEcyMovements() {
+  const [topTab, setTopTab] = useState<TopTab>("browse");
   const [tab, setTab] = useState<Facility>("all");
   const [mode, setMode] = useState<string>("");
   const [searchInput, setSearchInput] = useState("");
@@ -187,7 +198,27 @@ export default function CfsEcyMovements() {
         }}
       />
 
-      <div className="flex flex-col gap-4 p-4">
+      {/* Top-level tabs: Browse the movements vs upload new CODECO files (module 13 sub-module). */}
+      <div className="px-4 pt-3">
+        <SegmentedTabs<TopTab>
+          tabs={[
+            { key: "browse", label: "Browse", icon: LayoutList },
+            ...(CAN_UPLOAD
+              ? [{ key: "upload" as TopTab, label: "Data Upload", icon: UploadCloud }]
+              : []),
+          ]}
+          value={topTab}
+          onChange={setTopTab}
+        />
+      </div>
+
+      {topTab === "upload" && CAN_UPLOAD && (
+        <div className="p-4">
+          <CfsEcyUploadPanel />
+        </div>
+      )}
+
+      <div className={`flex flex-col gap-4 p-4 ${topTab === "browse" ? "" : "hidden"}`}>
         {/* KPIs — scoped by facility + date range */}
         <StatGrid>
           <StatCard

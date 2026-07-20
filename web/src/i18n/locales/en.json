@@ -29,6 +29,7 @@
     "intelligence": "Vehicle & Driver Intelligence",
     "followBox": "Follow the Box",
     "cfsEcy": "CFS / ECY Movements",
+    "shippingLines": "Shipping Lines",
     "performance": "Performance & Reports",
     "gateCustoms": "Customs & Gate",
     "parking": "Parking",
@@ -126,6 +127,7 @@
     "vehicle": "Vehicle / RC",
     "driver": "Driver / DL",
     "container": "Container",
+    "shippingLine": "Shipping Line / Container",
     "fastag": "FASTag",
     "alert": "Alert",
     "case": "Case ID"

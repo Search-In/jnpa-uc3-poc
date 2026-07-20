@@ -60,6 +60,43 @@ _DDL: list[str] = [
             END AS dwell_hours
         FROM jnpa.cfs_ecy_movements m
         GROUP BY m.container_number, m.facility_type""",
+    # --- Data Upload sub-module (migration 0034) — additive import ledger ----------
+    # Reusable upload lifecycle: mirrors migration 0034 exactly so a dev/mock DB that
+    # never ran it still gets the ledger tables + the movements.import_file_id link.
+    "ALTER TABLE jnpa.cfs_ecy_movements ADD COLUMN IF NOT EXISTS import_file_id bigint",
+    "CREATE INDEX IF NOT EXISTS idx_cfsecy_import_file ON jnpa.cfs_ecy_movements (import_file_id)",
+    """CREATE TABLE IF NOT EXISTS jnpa.cfs_ecy_import_files (
+        id               bigserial PRIMARY KEY,
+        facility_type    text CHECK (facility_type IN ('CFS','ECY')),
+        physical_format  text NOT NULL CHECK (physical_format IN ('CSV','XLS','XLSX')),
+        source_file      text,
+        source_sha256    text,
+        file_size_bytes  bigint,
+        record_count     integer NOT NULL DEFAULT 0,
+        imported_count   integer NOT NULL DEFAULT 0,
+        error_count      integer NOT NULL DEFAULT 0,
+        duplicate_count  integer NOT NULL DEFAULT 0,
+        import_status    text NOT NULL DEFAULT 'PENDING'
+                         CHECK (import_status IN
+                                ('PENDING','SUCCESS','PARTIAL','FAILED','SKIPPED_DUPLICATE')),
+        error_detail     text,
+        uploaded_by      text,
+        source           text NOT NULL DEFAULT 'UPLOAD' CHECK (source IN ('DIRECTORY','UPLOAD')),
+        created_at       timestamptz NOT NULL DEFAULT now(),
+        updated_at       timestamptz NOT NULL DEFAULT now(),
+        CONSTRAINT uq_cfs_ecy_import_file_sha UNIQUE (source_sha256))""",
+    "CREATE INDEX IF NOT EXISTS idx_cfsecy_file_status ON jnpa.cfs_ecy_import_files (import_status, id DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_cfsecy_file_source ON jnpa.cfs_ecy_import_files (source, id DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_cfsecy_file_facility ON jnpa.cfs_ecy_import_files (facility_type, id DESC)",
+    """CREATE TABLE IF NOT EXISTS jnpa.cfs_ecy_import_errors (
+        id               bigserial PRIMARY KEY,
+        import_file_id   bigint NOT NULL
+                         REFERENCES jnpa.cfs_ecy_import_files (id) ON DELETE CASCADE,
+        record_ref       text,
+        error_code       text NOT NULL,
+        error_detail     text,
+        created_at       timestamptz NOT NULL DEFAULT now())""",
+    "CREATE INDEX IF NOT EXISTS idx_cfsecy_err_file ON jnpa.cfs_ecy_import_errors (import_file_id, id)",
 ]
 
 

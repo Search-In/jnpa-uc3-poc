@@ -21,15 +21,22 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query, Request,
+                     Response, UploadFile, status)
 from pydantic import BaseModel, ConfigDict
 
+from ..auth import CONTROL_ROOM, Role, auth_enabled
 from ..metrics import REQUESTS
-from services.cfs_ecy import CfsEcyService
+from services.cfs_ecy import CfsEcyService, CfsEcyUploadService
 
 router = APIRouter(prefix="/api/cfs-ecy", tags=["cfs-ecy"])
 
+_MAX_UPLOAD_BYTES = 10 * 1024 * 1024   # 10 MB, mirrors the shipping-lines upload cap
+# Roles allowed to upload: control room + customs (+ admin ⊂ control room).
+_UPLOADER_ROLES = CONTROL_ROOM | {Role.CUSTOMS.value}
+
 _service: Optional[CfsEcyService] = None
+_upload_service: Optional[CfsEcyUploadService] = None
 
 
 def get_service(request: Request) -> CfsEcyService:
@@ -38,6 +45,62 @@ def get_service(request: Request) -> CfsEcyService:
         cfg = getattr(getattr(request.app.state, "gw", None), "cfg", None)
         _service = CfsEcyService(dsn=getattr(cfg, "postgres_dsn", None) or None)
     return _service
+
+
+def get_upload_service(request: Request) -> CfsEcyUploadService:
+    global _upload_service
+    if _upload_service is None:
+        cfg = getattr(getattr(request.app.state, "gw", None), "cfg", None)
+        _upload_service = CfsEcyUploadService(dsn=getattr(cfg, "postgres_dsn", None) or None)
+    return _upload_service
+
+
+def require_uploader(request: Request) -> str:
+    """Upload write-gate. Reads the auth-middleware principal WITHOUT modifying auth /
+    JWT / RBAC (mirrors shipping_lines.require_uploader). Returns the uploader id for
+    the audit. When AUTH_ENABLED is off (dev/mock), the app is open → 'dev'."""
+    if not auth_enabled():
+        return "dev"
+    principal = getattr(request.state, "principal", None)
+    role = getattr(principal, "role", None)
+    if principal is None or role not in _UPLOADER_ROLES:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail={"error": "upload_forbidden",
+                                    "detail": "CFS-ECY upload requires CONTROL_ROOM, CUSTOMS or ADMIN"})
+    return getattr(principal, "sub", "uploader")
+
+
+def _check_facility(facility: str) -> str:
+    v = (facility or "").strip().upper()
+    if v not in ("CFS", "ECY"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail={"error": "invalid_facility", "facility": facility,
+                                    "allowed": ["CFS", "ECY"]})
+    return v
+
+
+async def _read_upload(file: UploadFile) -> bytes:
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail={"error": "empty_file"})
+    if len(content) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                            detail={"error": "file_too_large", "max_bytes": _MAX_UPLOAD_BYTES})
+    return content
+
+
+class Page(BaseModel):
+    items: List[Dict[str, Any]]
+    total: int
+    limit: int
+    offset: int
+    count: int
+
+
+def _page(items: List[dict], total: int, limit: int, offset: int, response: Response) -> Page:
+    response.headers["X-Total-Count"] = str(total)
+    return Page(items=items, total=total, limit=limit, offset=offset, count=len(items))
 
 
 # --------------------------------------------------------------------- DTOs
@@ -193,4 +256,71 @@ async def container_timeline(container_number: str,
                             detail={"error": "container_not_found",
                                     "container_number": container_number})
     REQUESTS.labels("cfs_ecy", "ok").inc()
+    return res
+
+
+# ============================================================ Data Upload sub-module
+# Reusable upload workflow (module 13): template → validate (dry-run preview) → confirm
+# import. Reuses the SAME jnpa.cfs_ecy_movements table + its (facility_type,
+# container_number, event_ts, mode) UNIQUE key (idempotent). Write-gated to
+# CONTROL_ROOM + CUSTOMS (+ admin ⊂ control room). Facility (CFS/ECY) comes from the
+# selector — it is not a column in the JNPA CODECO files.
+@router.get("/templates/{facility}", summary="Download a CFS-ECY upload template")
+async def upload_template(facility: str, request: Request,
+                          svc: CfsEcyUploadService = Depends(get_upload_service)) -> Response:
+    require_uploader(request)
+    fac = _check_facility(facility)
+    csv_text = svc.template()
+    return Response(content=csv_text, media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="cfs_ecy_{fac}_template.csv"'})
+
+
+@router.post("/validate", summary="Validate a CFS-ECY upload (dry-run: parse + preview, no import)")
+async def upload_validate(request: Request,
+                          file: UploadFile = File(...),
+                          facility: str = Form(...),
+                          svc: CfsEcyUploadService = Depends(get_upload_service)) -> Dict[str, Any]:
+    uploader = require_uploader(request)
+    fac = _check_facility(facility)
+    content = await _read_upload(file)
+    return await svc.validate(fac, content, file.filename or "upload.csv", uploader)
+
+
+@router.post("/upload", summary="Import a CFS-ECY upload (valid rows persisted; idempotent)")
+async def upload_import(request: Request,
+                        file: UploadFile = File(...),
+                        facility: str = Form(...),
+                        svc: CfsEcyUploadService = Depends(get_upload_service)) -> Dict[str, Any]:
+    uploader = require_uploader(request)
+    fac = _check_facility(facility)
+    content = await _read_upload(file)
+    return await svc.import_file(fac, content, file.filename or "upload.csv", uploader)
+
+
+@router.get("/uploads", response_model=Page, summary="CFS-ECY upload history (import ledger)")
+async def upload_history(
+    response: Response,
+    request: Request,
+    facility: Optional[str] = None,
+    status_: Optional[str] = Query(default=None, alias="status"),
+    source: Optional[str] = Query(default="UPLOAD"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    svc: CfsEcyUploadService = Depends(get_upload_service),
+) -> Page:
+    require_uploader(request)
+    filters = {"facility_type": (facility.strip().upper() if facility else None),
+               "import_status": status_, "source": (source or None)}
+    res = await svc.list_uploads(filters, limit=limit, offset=offset)
+    return _page(res["items"], res["total"], limit, offset, response)
+
+
+@router.get("/uploads/{file_id}", summary="One CFS-ECY upload with its row errors")
+async def upload_detail(file_id: int, request: Request,
+                        svc: CfsEcyUploadService = Depends(get_upload_service)) -> Dict[str, Any]:
+    require_uploader(request)
+    res = await svc.get_upload(file_id)
+    if res is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail={"error": "upload_not_found", "file_id": file_id})
     return res

@@ -13,5 +13,6 @@ Layering mirrors :mod:`services.cargo` / :mod:`services.driver_master`:
 
 from .repository import CfsEcyRepository
 from .service import CfsEcyService
+from .upload_service import CfsEcyUploadService
 
-__all__ = ["CfsEcyRepository", "CfsEcyService"]
+__all__ = ["CfsEcyRepository", "CfsEcyService", "CfsEcyUploadService"]

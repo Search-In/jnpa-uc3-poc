@@ -121,19 +121,33 @@ async def sync_icegate_captures(dsn: Optional[str]) -> int:
     from jnpa_shared.db import get_engine
 
     t0 = time.perf_counter()
+    log.info("customs_sync_start", msg="Starting Customs sync")
     try:
         async with get_engine(dsn).begin() as conn:      # one atomic transaction
+            # Count the source IGM containers FIRST so 'fetched' is logged even when it is
+            # zero — that distinguishes "no source data to convert" (fetched=0, an import
+            # problem) from "source present but insert failed" (fetched>0 then an error).
+            fetched = int((await conn.execute(text(_COUNT_CANDIDATES_SQL))).scalar() or 0)
+            log.info("customs_sync_fetched", records=fetched,
+                     msg=f"Fetched {fetched} customs records")
             await conn.execute(text(_PURGE_SIM_SQL))
             inserted = _rowcount(await conn.execute(text(_INSERT_SQL)))
-            candidates = int((await conn.execute(text(_COUNT_CANDIDATES_SQL))).scalar() or 0)
+        skipped = max(0, fetched - inserted)
         duration_ms = round((time.perf_counter() - t0) * 1000, 1)
-        log.info("customs_adapter_synced", rows_synchronized=inserted,
-                 rows_skipped=max(0, candidates - inserted), candidates=candidates,
-                 duration_ms=duration_ms, atomic=True)
+        log.info("customs_sync_inserted", captures=inserted,
+                 msg=f"Inserted {inserted} ICEGATE captures")
+        log.info("customs_sync_skipped", duplicates=skipped,
+                 msg=f"Skipped {skipped} duplicates")
+        log.info("customs_sync_complete", fetched=fetched, inserted=inserted,
+                 skipped=skipped, duration_ms=duration_ms, atomic=True,
+                 msg="Completed Customs sync")
         return inserted
     except Exception as exc:  # noqa: BLE001 — never break boot; the transaction already rolled back
-        log.warning("customs_adapter_sync_failed", error=str(exc),
-                    duration_ms=round((time.perf_counter() - t0) * 1000, 1))
+        # Surface the real failure loudly (previously swallowed at warning): a missing
+        # object/column would otherwise leave ICEGATE silently empty despite LIVE.
+        log.error("customs_sync_failed", error=str(exc), error_type=type(exc).__name__,
+                  duration_ms=round((time.perf_counter() - t0) * 1000, 1),
+                  msg="Customs sync failed; ICEGATE left unchanged")
         return 0
 
 

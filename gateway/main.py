@@ -93,7 +93,9 @@ from .routers import (
     performance_upload,
     reefer,
     rms_tas,
+    shipping_lines,
     transporters,
+    transporters_drivers_upload,
     trt,
 )
 from .state import GatewayState
@@ -250,6 +252,25 @@ async def _lifespan(app: FastAPI):
         await customs_ext.ensure_customs_schema(cfg.postgres_dsn or None)
     except Exception as exc:  # noqa: BLE001
         log.warning("customs_schema_boot_failed", error=str(exc))
+
+    # Shipping Lines module (module 4: IAL/EAL/EDO) schema — additive; mirrors
+    # migration 0032 so a DB that never ran it still gets the objects. Soft-links to
+    # jnpa.cargo BY VALUE (container_no); touches no existing table.
+    try:
+        from . import shipping_lines_ext
+        await shipping_lines_ext.ensure_shipping_lines_schema(cfg.postgres_dsn or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("shipping_lines_schema_boot_failed", error=str(exc))
+
+    # Transporters & Drivers Data Upload (UC-III sub-module): the import-ledger tables
+    # (td_import_files / td_import_errors) + the masters' import_file_id link.
+    # Idempotent, additive — mirrors migration 0035. Upserts into the EXISTING
+    # jnpa.transporters / jnpa.driver_master; creates no business tables.
+    try:
+        from . import td_upload_ext
+        await td_upload_ext.ensure_td_upload_schema(cfg.postgres_dsn or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("td_upload_schema_boot_failed", error=str(exc))
 
     # Vehicle Master (fleet registry): ensure the table, then migrate the truck-sim
     # fleet into it (idempotent, never clobbering an operator edit) so no existing
@@ -473,12 +494,14 @@ app.include_router(otp.router)
 # --- UC-III Final-Completion routers (additive) ---
 app.include_router(accidents.router)         # accident lifecycle
 app.include_router(transporters.router)      # transporter blacklist + validation
+app.include_router(transporters_drivers_upload.router)  # Transporters & Drivers Data Upload (UC-III sub-module)
 app.include_router(camera_ai.router)         # camera-AI counting / trailer / container
 app.include_router(document_ocr.router)      # document OCR
 app.include_router(nvr.router)               # NVR device/stream integration
 app.include_router(trt.router)               # ECY TRT KPI
 app.include_router(cfs_ecy.router)           # CFS-ECY CODECO gate movements (module 13, read-only)
 app.include_router(customs.router)           # Customs docs (module 5: IGM/OOC/SMTP/RMS/LEO/SB)
+app.include_router(shipping_lines.router)     # Shipping Lines (module 4: IAL/EAL/EDO, read-only + import)
 app.include_router(performance.router)       # Performance & Daily Reports (module 12, read-only, additive)
 app.include_router(performance_upload.router)  # Performance Data Upload (module 12 sub-module, admin-only, additive)
 app.include_router(bottlenecks.router)       # three-road bottleneck analytics

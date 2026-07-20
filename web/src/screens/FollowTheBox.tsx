@@ -9,10 +9,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Box, Search, Ship, Truck, ArrowRight, ArrowDown, Check, Radio } from "lucide-react";
 import { getAdapter, DATA_MODE } from "@/data";
+import { api } from "@/lib/api";
 import { isValidContainerNo } from "@/lib/iso6346";
 import {
   PageContainer,
@@ -352,9 +353,79 @@ export default function FollowTheBox() {
                 )}
               </>
             )}
+
+            {/* Shipping Lines enrichment renders independently of the cross-twin
+                journey, so a container's advance-list facts surface even when the
+                journey feed is empty. Self-hides when the box has no SL history. */}
+            {submitted.trim() && <ShippingLineCard containerNo={submitted} />}
           </div>
         </>
       )}
     </PageContainer>
+  );
+}
+
+// --- Shipping Lines enrichment (module 4) -------------------------------------
+// Read-only cross-twin enrichment for the container in view. Tries the cargo
+// enrichment endpoint first (/api/cargo/{cn}/shipping-line — the soft cargo link);
+// if the box is not a cargo record it falls back to the shipping-line container
+// view (/api/shipping-lines/container/{cn}). Renders nothing when neither has data,
+// so it never adds visual noise for a container with no advance-list history.
+function ShippingLineCard({ containerNo }: { containerNo: string }) {
+  const cn = containerNo.trim().toUpperCase();
+  const q = useQuery({
+    queryKey: ["ftb-shipping-line", cn],
+    enabled: cn.length > 0,
+    retry: false,
+    queryFn: async () => {
+      try {
+        const c = await api.cargoShippingLine(cn); // cargo-context enrichment (may 404)
+        if (c && (c.advance_lists?.length || c.delivery_orders?.length)) {
+          return { summary: c.shipping_line, advance: c.advance_lists, orders: c.delivery_orders };
+        }
+      } catch {
+        /* not a cargo record — fall back to the shipping-line container view */
+      }
+      const s = await api.shippingLinesContainer(cn);
+      return { summary: s.summary, advance: s.advance_lists, orders: s.delivery_orders };
+    },
+  });
+
+  if (q.isLoading) return null;
+  const d = q.data;
+  const hasData = !!(d && (d.advance?.length || d.orders?.length));
+  if (q.isError || !hasData) return null;
+
+  const s = d!.summary;
+  const primary = s ?? d!.advance?.[0];
+
+  return (
+    <Card className="p-3" style={{ borderColor: STATUS.info + "66" }}>
+      <div className="mb-2 flex items-center gap-2">
+        <Ship size={15} className="text-muted-foreground" />
+        <span className="text-[13px] font-semibold">Shipping Line (advance list)</span>
+        <Link
+          to={`/shipping-lines?container=${encodeURIComponent(cn)}`}
+          className="ml-auto inline-flex items-center gap-1 text-[12px] font-medium text-primary hover:underline"
+        >
+          Open in Shipping Lines <ArrowRight size={12} />
+        </Link>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {primary?.shipping_line_code && (
+          <StatusChip label={`Line ${primary.shipping_line_code}`} tone="ok" />
+        )}
+        {primary?.list_type && <StatusChip label={primary.list_type} tone="info" />}
+        {primary?.terminal && <StatusChip label={`Terminal ${primary.terminal}`} tone="neutral" />}
+        {primary?.category && <StatusChip label={primary.category} tone="warn" />}
+        {primary?.pod && <StatusChip label={`POD ${primary.pod}`} tone="neutral" />}
+        {primary?.bill_of_lading && (
+          <StatusChip label={`BL ${primary.bill_of_lading}`} tone="neutral" />
+        )}
+        {!!d!.orders?.length && (
+          <StatusChip label={`${d!.orders.length} delivery order(s)`} tone="info" />
+        )}
+      </div>
+    </Card>
   );
 }

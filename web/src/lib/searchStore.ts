@@ -5,7 +5,14 @@
 
 import { useSyncExternalStore } from "react";
 
-export type SearchEntity = "vehicle" | "driver" | "container" | "fastag" | "alert" | "case";
+export type SearchEntity =
+  | "vehicle"
+  | "driver"
+  | "container"
+  | "shippingLine"
+  | "fastag"
+  | "alert"
+  | "case";
 
 export interface GlobalSearchState {
   query: string;

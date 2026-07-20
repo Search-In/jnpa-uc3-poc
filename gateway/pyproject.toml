@@ -37,6 +37,12 @@ dependencies = [
     # S3/MinIO client for driver-enrolment reference photos (gateway/objectstore).
     # Imported lazily; enrollment degrades to base64-in-Postgres if absent/unreachable.
     "minio==7.*",
+    # Spreadsheet readers for in-gateway ingest: the Shipping Lines Data-Upload
+    # endpoints (/api/shipping-lines/validate|upload) and the Customs LEO/Shipping-Bill
+    # parsers read .xlsx via openpyxl and legacy .xls via xlrd. Required in the image —
+    # without them an XLSX/XLS upload 500s (ModuleNotFoundError: openpyxl).
+    "openpyxl==3.1.*",
+    "xlrd==2.0.*",
 ]
 
 [project.optional-dependencies]

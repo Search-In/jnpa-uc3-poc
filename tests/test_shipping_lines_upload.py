@@ -98,6 +98,29 @@ def test_edo_flat_template_maps_delivery_orders():
     assert res.invalid_count == 1
 
 
+# --------------------------------------------------------------- spreadsheet deps (regression)
+def test_xlsx_dependency_present_and_parses():
+    """Guards the gateway image against a missing openpyxl (the XLSX-upload 500 bug):
+    building + reading a real .xlsx must work end-to-end through read_rows_from_bytes."""
+    openpyxl = pytest.importorskip("openpyxl", reason="openpyxl must be installed in the runtime image")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["Container Number", "ISO Code", "Gross Weight", "Shipping Line", "Category"])
+    ws.append(["MSCU1234565", "2210", "19880", "MSC", "IMPORT"])
+    buf = io.BytesIO()
+    wb.save(buf)
+    header, rows = P.read_rows_from_bytes(buf.getvalue(), "upload.xlsx")
+    assert "Container Number" in header and len(rows) == 1
+    res = P.parse("IAL", header, rows)
+    assert not res.rejected and len(res.records) == 1
+    assert res.records[0]["container_no"] == "MSCU1234565"
+
+
+def test_xls_dependency_present():
+    """xlrd must be installed so legacy .xls uploads don't 500 (the accept list allows .xls)."""
+    pytest.importorskip("xlrd", reason="xlrd must be installed in the runtime image for .xls uploads")
+
+
 # --------------------------------------------------------------- service orchestration
 class _FakeRepo:
     """In-memory stand-in — records persist calls; simulates sha256 dedup."""

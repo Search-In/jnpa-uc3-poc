@@ -32,6 +32,7 @@ import {
   Workflow,
   BarChart3,
   Boxes,
+  Ship,
 } from "lucide-react";
 
 export interface NavLeaf {
@@ -92,6 +93,7 @@ export const NAV_SECTIONS: NavSection[] = [
       leaf("/intelligence", "nav.intelligence", ScanSearch),
       leaf("/follow-the-box", "nav.followBox", Box),
       leaf("/cfs-ecy", "nav.cfsEcy", Boxes),
+      leaf("/shipping-lines", "nav.shippingLines", Ship),
       leaf("/performance", "nav.performance", BarChart3),
       // Geo-fencing Manager + Geo-fence Events are merged into one Geo Analytics
       // screen, so the sidebar shows a SINGLE entry (no duplicate operational

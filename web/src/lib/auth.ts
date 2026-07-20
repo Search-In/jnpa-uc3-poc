@@ -53,6 +53,8 @@ export const SCREEN_ROLES: Record<string, Role[]> = {
   // CFS-ECY CODECO off-dock container movements (read-only) — container/customs
   // audience, same as the Customs & Gate + FASTag consoles.
   "/cfs-ecy": [...CONTROL_ROOM, "CUSTOMS"],
+  // Shipping Lines (IAL/EAL/EDO) — mirrors gateway/auth.py /api/shipping-lines policy.
+  "/shipping-lines": [...CONTROL_ROOM, "CUSTOMS"],
   "/health": CONTROL_ROOM,
   "/what-if": CONTROL_ROOM,
   "/whatif": CONTROL_ROOM,

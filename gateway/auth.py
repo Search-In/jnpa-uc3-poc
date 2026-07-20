@@ -86,6 +86,9 @@ _POLICY: tuple[tuple[str, frozenset[str]], ...] = (
     # audience as gate-data; a DRIVER/police token can never touch it. Covers both
     # the read surface and the import/workflow writes under one prefix.
     ("/api/customs", CONTROL_ROOM | {Role.CUSTOMS.value}),
+    # Shipping Lines (IAL/EAL/EDO) shares the customs-clearance / cargo audience:
+    # control room + customs, for both the read surface and the import write.
+    ("/api/shipping-lines", CONTROL_ROOM | {Role.CUSTOMS.value}),
     # FASTag (toll balance / transactions / enroute) — operational logistics data
     # for the control room + customs (same audience as gate-data).
     ("/api/fastag", CONTROL_ROOM | {Role.CUSTOMS.value}),

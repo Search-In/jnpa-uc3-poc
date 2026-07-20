@@ -93,6 +93,7 @@ from .routers import (
     performance_upload,
     reefer,
     rms_tas,
+    shipping_lines,
     transporters,
     trt,
 )
@@ -250,6 +251,15 @@ async def _lifespan(app: FastAPI):
         await customs_ext.ensure_customs_schema(cfg.postgres_dsn or None)
     except Exception as exc:  # noqa: BLE001
         log.warning("customs_schema_boot_failed", error=str(exc))
+
+    # Shipping Lines module (module 4: IAL/EAL/EDO) schema — additive; mirrors
+    # migration 0032 so a DB that never ran it still gets the objects. Soft-links to
+    # jnpa.cargo BY VALUE (container_no); touches no existing table.
+    try:
+        from . import shipping_lines_ext
+        await shipping_lines_ext.ensure_shipping_lines_schema(cfg.postgres_dsn or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("shipping_lines_schema_boot_failed", error=str(exc))
 
     # Vehicle Master (fleet registry): ensure the table, then migrate the truck-sim
     # fleet into it (idempotent, never clobbering an operator edit) so no existing
@@ -479,6 +489,7 @@ app.include_router(nvr.router)               # NVR device/stream integration
 app.include_router(trt.router)               # ECY TRT KPI
 app.include_router(cfs_ecy.router)           # CFS-ECY CODECO gate movements (module 13, read-only)
 app.include_router(customs.router)           # Customs docs (module 5: IGM/OOC/SMTP/RMS/LEO/SB)
+app.include_router(shipping_lines.router)     # Shipping Lines (module 4: IAL/EAL/EDO, read-only + import)
 app.include_router(performance.router)       # Performance & Daily Reports (module 12, read-only, additive)
 app.include_router(performance_upload.router)  # Performance Data Upload (module 12 sub-module, admin-only, additive)
 app.include_router(bottlenecks.router)       # three-road bottleneck analytics

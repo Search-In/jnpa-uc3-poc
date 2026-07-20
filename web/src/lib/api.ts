@@ -876,6 +876,115 @@ export const api = {
     http<any>("/api/double-trip/start", { method: "POST", body: JSON.stringify(body) }),
   doubleTripComplete: (tripId: number) =>
     http<any>(`/api/double-trip/${tripId}/complete`, { method: "POST" }),
+
+  // --- Shipping Lines (module 4: IAL/EAL advance lists + EDO delivery orders) ---
+  // Fully server-driven: every filter, search and page is resolved by the backend
+  // (GET /api/shipping-lines) so they span the entire dataset, not a loaded page.
+  shippingLinesSummary: () => http<any>("/api/shipping-lines/summary"),
+  shippingLinesList: (params?: {
+    list_type?: string;
+    terminal?: string;
+    category?: string;
+    freight_kind?: string;
+    shipping_line?: string;
+    container?: string;
+    bl?: string;
+    q?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/shipping-lines${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  shippingLinesContainer: (containerNo: string) =>
+    http<{ container_no: string; summary: any; advance_lists: any[]; delivery_orders: any[] }>(
+      `/api/shipping-lines/container/${encodeURIComponent(containerNo)}`,
+    ),
+  shippingLinesByBl: (bl: string, params?: { limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/shipping-lines/bl/${encodeURIComponent(bl)}${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  shippingLinesLines: (params?: { limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/shipping-lines/lines${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  shippingLinesDeliveryOrders: (params?: {
+    container?: string;
+    vehicle?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/shipping-lines/delivery-orders${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  shippingLinesMessages: (params?: {
+    list_type?: string;
+    terminal?: string;
+    import_status?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/shipping-lines/messages${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  // Cargo enrichment (module-4 soft link): shipping-line facts for one cargo container.
+  // 404s when the container is not a cargo record; callers fall back to
+  // shippingLinesContainer for a non-cargo container-detail view.
+  cargoShippingLine: (containerNo: string) =>
+    http<{ container_number: string; shipping_line: any; advance_lists: any[]; delivery_orders: any[] }>(
+      `/api/cargo/${encodeURIComponent(containerNo)}/shipping-line`,
+    ),
+
+  // --- Shipping Lines Data Upload (module 4 sub-module) — mirrors the perf upload helpers ---
+  shippingLinesDownloadTemplate: (listType: string) =>
+    downloadFile(`/api/shipping-lines/templates/${listType}`,
+                 `shipping_lines_${listType}_template.csv`),
+  shippingLinesUploadValidate: (listType: string, file: File) => {
+    const f = new FormData();
+    f.append("file", file);
+    f.append("list_type", listType);
+    return postForm<any>("/api/shipping-lines/validate", f);
+  },
+  shippingLinesUpload: (listType: string, file: File) => {
+    const f = new FormData();
+    f.append("file", file);
+    f.append("list_type", listType);
+    return postForm<any>("/api/shipping-lines/upload", f);
+  },
+  shippingLinesUploads: (params?: { list_type?: string; status?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && qs.set(k, String(v)));
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/shipping-lines/uploads${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  shippingLinesUploadDetail: (fileId: number) =>
+    http<any>(`/api/shipping-lines/uploads/${fileId}`),
 };
 
 export interface WfField {

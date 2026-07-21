@@ -596,6 +596,72 @@ export const api = {
   },
   cfsEcyUploadDetail: (fileId: number) => http<any>(`/api/cfs-ecy/uploads/${fileId}`),
 
+  // --- Berthing Reports (module 7) — vessel calls + lifecycle + Data Upload ---
+  berthingReports: (params?: {
+    terminal?: string;
+    status?: string;
+    vessel?: string;
+    voyage?: string;
+    berthed_only?: boolean;
+    from?: string;
+    to?: string;
+    sort?: string;
+    direction?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/berthing${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  berthingStats: (params?: { terminal?: string; from?: string; to?: string }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{
+      total: number;
+      expected: number;
+      arrived: number;
+      berthed: number;
+      completed: number;
+      departed: number;
+      terminals: number;
+      avg_berth_hours: number | null;
+      by_terminal: { terminal: string; count: number; berthed: number }[];
+    }>(`/api/berthing/stats${qs.toString() ? `?${qs}` : ""}`);
+  },
+  berthingReport: (id: number) => http<any>(`/api/berthing/${id}`),
+  berthingTimeline: (id: number) => http<any>(`/api/berthing/${id}/timeline`),
+
+  // Data Upload (module 7 sub-module) — mirrors the cfs-ecy helpers.
+  berthingDownloadTemplate: (terminal: string) =>
+    downloadFile(`/api/berthing/templates/${terminal || "ALL"}`, `berthing_template.csv`),
+  berthingUploadValidate: (terminal: string, file: File) => {
+    const f = new FormData();
+    f.append("file", file);
+    if (terminal) f.append("terminal", terminal);
+    return postForm<any>("/api/berthing/validate", f);
+  },
+  berthingUpload: (terminal: string, file: File) => {
+    const f = new FormData();
+    f.append("file", file);
+    if (terminal) f.append("terminal", terminal);
+    return postForm<any>("/api/berthing/upload", f);
+  },
+  berthingUploads: (params?: { terminal?: string; status?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && qs.set(k, String(v)));
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/berthing/uploads${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  berthingUploadDetail: (fileId: number) => http<any>(`/api/berthing/uploads/${fileId}`),
+
   // --- Transporters & Drivers Data Upload (UC-III sub-module) — mirrors the cfs-ecy helpers ---
   tdUploadDownloadTemplate: (entity: string) =>
     downloadFile(

@@ -375,6 +375,14 @@ def test_pdf_invalid_bytes_rejected():
     assert repo.files[r["file_id"]]["physical_format"] == "PDF"
 
 
+def test_pdf_missing_pdfplumber_degrades(monkeypatch):
+    # If pdfplumber is not installed, a PDF upload must degrade to a clean REJECTED
+    # (ValueError → error ledger), never a bare ImportError / 500. Simulate absence.
+    monkeypatch.setitem(sys.modules, "pdfplumber", None)
+    res = P.parse_pdf(b"%PDF-1.7 anything", "x.pdf", terminal=None)
+    assert res.rejected and res.errors[0]["error_code"] == "unreadable_pdf"
+
+
 @pytest.mark.skipif(not _APM_PDF.exists(), reason="JNPA Berthing Reports data folder not present")
 def test_pdf_upload_validate_real():
     content = _APM_PDF.read_bytes()

@@ -218,10 +218,16 @@ def parse_text(text: str, terminal: str, kind: str, *, filename: str,
 
 
 def extract_text_from_bytes(content: bytes) -> str:
-    """Extract page text with pdfplumber. Raises ValueError if unreadable/empty."""
+    """Extract page text with pdfplumber. Raises ValueError (never a bare ImportError /
+    parse crash) so the upload layer degrades to a clean REJECTED rather than a 500 when
+    pdfplumber is missing or the bytes are not a real PDF."""
     import io
 
-    import pdfplumber
+    try:
+        import pdfplumber
+    except ImportError as exc:  # pdfplumber not installed in this environment
+        raise ValueError("unreadable_pdf: PDF support is unavailable on the server "
+                         "(pdfplumber is not installed)") from exc
 
     try:
         with pdfplumber.open(io.BytesIO(content)) as pdf:

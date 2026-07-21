@@ -171,12 +171,49 @@ export default function Berthing() {
       {topTab === "dashboard" && (
         <div className="flex flex-col gap-4 p-4">
           <StatGrid>
-            <StatCard icon={Ship} label="Total vessels" value={s?.total ?? "—"} tone="info" loading={statsQ.isLoading} />
-            <StatCard icon={Timer} label="Expected" value={s?.expected ?? "—"} tone="warn" loading={statsQ.isLoading} />
-            <StatCard icon={Anchor} label="Arrivals" value={(s ? s.arrived + s.berthed + s.completed + s.departed : "—") as any} tone="neutral" sub="arrived or later" loading={statsQ.isLoading} />
-            <StatCard icon={ShipWheel} label="Currently berthed" value={s?.berthed ?? "—"} tone="ok" loading={statsQ.isLoading} />
-            <StatCard icon={LogOut} label="Departures" value={s?.departed ?? "—"} tone="neutral" loading={statsQ.isLoading} />
-            <StatCard icon={CheckCircle2} label="Avg berth duration" value={fmtHours(s?.avg_berth_hours)} tone="info" loading={statsQ.isLoading} />
+            <StatCard
+              icon={Ship}
+              label="Total vessels"
+              value={s?.total ?? "—"}
+              tone="info"
+              loading={statsQ.isLoading}
+            />
+            <StatCard
+              icon={Timer}
+              label="Expected"
+              value={s?.expected ?? "—"}
+              tone="warn"
+              loading={statsQ.isLoading}
+            />
+            <StatCard
+              icon={Anchor}
+              label="Arrivals"
+              value={(s ? s.arrived + s.berthed + s.completed + s.departed : "—") as any}
+              tone="neutral"
+              sub="arrived or later"
+              loading={statsQ.isLoading}
+            />
+            <StatCard
+              icon={ShipWheel}
+              label="Currently berthed"
+              value={s?.berthed ?? "—"}
+              tone="ok"
+              loading={statsQ.isLoading}
+            />
+            <StatCard
+              icon={LogOut}
+              label="Departures"
+              value={s?.departed ?? "—"}
+              tone="neutral"
+              loading={statsQ.isLoading}
+            />
+            <StatCard
+              icon={CheckCircle2}
+              label="Avg berth duration"
+              value={fmtHours(s?.avg_berth_hours)}
+              tone="info"
+              loading={statsQ.isLoading}
+            />
           </StatGrid>
 
           <Card className="p-0">
@@ -184,7 +221,9 @@ export default function Berthing() {
               Per-terminal
             </div>
             {statsQ.isLoading ? (
-              <div className="p-6"><LoadingState /></div>
+              <div className="p-6">
+                <LoadingState />
+              </div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[420px] text-left text-[13px]">
@@ -239,13 +278,19 @@ export default function Berthing() {
                 label="Terminal"
                 value={terminal}
                 onChange={setTerminal}
-                options={[{ value: "", label: "All terminals" }, ...TERMINALS.map((t) => ({ value: t, label: t }))]}
+                options={[
+                  { value: "", label: "All terminals" },
+                  ...TERMINALS.map((t) => ({ value: t, label: t })),
+                ]}
               />
               <FilterSelect
                 label="Status"
                 value={statusF}
                 onChange={setStatusF}
-                options={[{ value: "", label: "All statuses" }, ...STATUSES.map((v) => ({ value: v, label: v.replace(/_/g, " ") }))]}
+                options={[
+                  { value: "", label: "All statuses" },
+                  ...STATUSES.map((v) => ({ value: v, label: v.replace(/_/g, " ") })),
+                ]}
               />
               {filtersActive && (
                 <button
@@ -264,7 +309,9 @@ export default function Berthing() {
             {listQ.isError ? (
               <ErrorState onRetry={() => listQ.refetch()} detail="Unable to load berthing data." />
             ) : listQ.isLoading ? (
-              <div className="p-6"><LoadingState /></div>
+              <div className="p-6">
+                <LoadingState />
+              </div>
             ) : rows.length === 0 ? (
               <div className="flex flex-col items-center justify-center gap-2 py-12 text-center">
                 <span className="flex h-12 w-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
@@ -278,7 +325,9 @@ export default function Berthing() {
               </div>
             ) : (
               <>
-                <div className={`overflow-x-auto transition-opacity ${listQ.isFetching ? "opacity-60" : ""}`}>
+                <div
+                  className={`overflow-x-auto transition-opacity ${listQ.isFetching ? "opacity-60" : ""}`}
+                >
                   <table className="w-full min-w-[820px] text-left text-[13px]">
                     <thead className="bg-muted/60 text-[11px] uppercase tracking-wide text-muted-foreground">
                       <tr>
@@ -299,8 +348,12 @@ export default function Berthing() {
                           onClick={() => setSelected(r.id)}
                           className="cursor-pointer hover:bg-muted/40"
                         >
-                          <td className="px-3 py-2 font-semibold text-foreground">{r.vessel_name}</td>
-                          <td className="px-3 py-2 tabular-nums text-muted-foreground">{r.imo_number ?? "—"}</td>
+                          <td className="px-3 py-2 font-semibold text-foreground">
+                            {r.vessel_name}
+                          </td>
+                          <td className="px-3 py-2 tabular-nums text-muted-foreground">
+                            {r.imo_number ?? "—"}
+                          </td>
                           <td className="px-3 py-2 font-mono">{r.voyage_number}</td>
                           <td className="px-3 py-2">
                             <StatusChip label={r.terminal} tone={terminalTone(r.terminal)} />
@@ -323,7 +376,9 @@ export default function Berthing() {
                     <span className="font-semibold text-foreground">
                       {total ? offset + 1 : 0}–{offset + rows.length}
                     </span>{" "}
-                    of <span className="font-semibold text-foreground">{total.toLocaleString()}</span> calls
+                    of{" "}
+                    <span className="font-semibold text-foreground">{total.toLocaleString()}</span>{" "}
+                    calls
                   </span>
                   <div className="ml-auto flex items-center gap-1">
                     <button

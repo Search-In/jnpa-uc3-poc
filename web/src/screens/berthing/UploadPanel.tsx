@@ -7,15 +7,7 @@
 // invalid rows are skipped with friendly errors.
 import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  Download,
-  FileUp,
-  CheckCircle2,
-  AlertTriangle,
-  Loader2,
-  Copy,
-  Ban,
-} from "lucide-react";
+import { Download, FileUp, CheckCircle2, AlertTriangle, Loader2, Copy, Ban } from "lucide-react";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import {
@@ -77,7 +69,10 @@ export default function BerthingUploadPanel() {
   });
 
   const errors: any[] = (validation?.errors ?? []).map((e: any, i: number) => ({ _k: i, ...e }));
-  const warnings: any[] = (validation?.warnings ?? []).map((w: any, i: number) => ({ _k: i, ...w }));
+  const warnings: any[] = (validation?.warnings ?? []).map((w: any, i: number) => ({
+    _k: i,
+    ...w,
+  }));
   const preview: any[] = (validation?.preview ?? []).map((r: any, i: number) => ({ _k: i, ...r }));
   const canImport = !!file && validation?.valid === true && !importResult;
   const busy = validateMut.isPending || importMut.isPending;
@@ -230,7 +225,12 @@ export default function BerthingUploadPanel() {
               <div className="border-b border-border px-3 py-2 text-sm font-semibold text-critical">
                 Validation errors ({errors.length})
               </div>
-              <DataTable columns={errorCols} rows={errors} rowKey={(r) => String(r._k)} pageSize={10} />
+              <DataTable
+                columns={errorCols}
+                rows={errors}
+                rowKey={(r) => String(r._k)}
+                pageSize={10}
+              />
             </Card>
           )}
           {preview.length > 0 && (
@@ -238,7 +238,12 @@ export default function BerthingUploadPanel() {
               <div className="border-b border-border px-3 py-2 text-sm font-semibold text-foreground">
                 Preview — first {preview.length} valid records
               </div>
-              <DataTable columns={previewCols} rows={preview} rowKey={(r) => String(r._k)} pageSize={10} />
+              <DataTable
+                columns={previewCols}
+                rows={preview}
+                rowKey={(r) => String(r._k)}
+                pageSize={10}
+              />
             </Card>
           )}
           {warnings.length > 0 && (
@@ -246,7 +251,12 @@ export default function BerthingUploadPanel() {
               <div className="border-b border-border px-3 py-2 text-sm font-semibold text-warn">
                 Warnings ({warnings.length}) — these rows still import
               </div>
-              <DataTable columns={warnCols} rows={warnings} rowKey={(r) => String(r._k)} pageSize={5} />
+              <DataTable
+                columns={warnCols}
+                rows={warnings}
+                rowKey={(r) => String(r._k)}
+                pageSize={5}
+              />
             </Card>
           )}
         </>

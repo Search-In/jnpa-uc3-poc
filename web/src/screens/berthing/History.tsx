@@ -52,7 +52,12 @@ export default function BerthingUploadHistory() {
     },
     { key: "total_rows", header: "Rows", align: "right", render: (r) => r.total_rows ?? 0 },
     { key: "success_rows", header: "Imported", align: "right", render: (r) => r.success_rows ?? 0 },
-    { key: "duplicate_rows", header: "Dupes", align: "right", render: (r) => r.duplicate_rows ?? 0 },
+    {
+      key: "duplicate_rows",
+      header: "Dupes",
+      align: "right",
+      render: (r) => r.duplicate_rows ?? 0,
+    },
     { key: "failed_rows", header: "Errors", align: "right", render: (r) => r.failed_rows ?? 0 },
     { key: "uploaded_by", header: "By", render: (r) => r.uploaded_by ?? "—" },
   ];

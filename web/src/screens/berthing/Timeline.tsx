@@ -99,7 +99,9 @@ export default function BerthingTimelineDialog({
             <div className="flex flex-wrap gap-2">
               <StatusChip label={data?.terminal} tone="info" />
               <StatusChip label={`Voyage ${data?.voyage_number}`} tone="neutral" />
-              {data?.berth_number && <StatusChip label={`Berth ${data.berth_number}`} tone="neutral" />}
+              {data?.berth_number && (
+                <StatusChip label={`Berth ${data.berth_number}`} tone="neutral" />
+              )}
               {data?.shipping_line && <StatusChip label={data.shipping_line} tone="neutral" />}
               <StatusChip label={data?.status} tone={statusTone(data?.status)} />
             </div>
@@ -120,7 +122,9 @@ export default function BerthingTimelineDialog({
                       ) : (
                         <Circle size={16} className="text-muted-foreground/40" />
                       )}
-                      <span className={done ? "font-medium text-foreground" : "text-muted-foreground"}>
+                      <span
+                        className={done ? "font-medium text-foreground" : "text-muted-foreground"}
+                      >
                         {LABEL[step]}
                       </span>
                       <span className="ml-auto tabular-nums text-muted-foreground">{fmtTs(t)}</span>

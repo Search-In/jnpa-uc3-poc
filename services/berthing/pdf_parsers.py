@@ -217,12 +217,17 @@ def parse_text(text: str, terminal: str, kind: str, *, filename: str,
     return records
 
 
-def parse_pdf_bytes(content: bytes, terminal: str, kind: str, *, filename: str,
-                    source_file: Optional[str] = None) -> list[dict[str, Any]]:
-    """Extract page text with pdfplumber and parse it. Raises ValueError if unreadable."""
+def extract_text_from_bytes(content: bytes) -> str:
+    """Extract page text with pdfplumber. Raises ValueError (never a bare ImportError /
+    parse crash) so the upload layer degrades to a clean REJECTED rather than a 500 when
+    pdfplumber is missing or the bytes are not a real PDF."""
     import io
 
-    import pdfplumber
+    try:
+        import pdfplumber
+    except ImportError as exc:  # pdfplumber not installed in this environment
+        raise ValueError("unreadable_pdf: PDF support is unavailable on the server "
+                         "(pdfplumber is not installed)") from exc
 
     try:
         with pdfplumber.open(io.BytesIO(content)) as pdf:
@@ -231,4 +236,54 @@ def parse_pdf_bytes(content: bytes, terminal: str, kind: str, *, filename: str,
         raise ValueError(f"unreadable_pdf: {exc}") from exc
     if not text.strip():
         raise ValueError("empty_pdf")
+    return text
+
+
+# terminal code -> anchor kind (used when the caller supplies the terminal by selector)
+_KIND_FOR_TERMINAL = {"APMT": "APM", "BMCT": "BMCT", "NSFT": "NSFT", "NSICT": "CB", "NSIGT": "CB"}
+
+
+def detect_terminal(text: str) -> Optional[tuple[str, str]]:
+    """Identify (terminal, anchor-kind) from a berthing report's text. Every terminal's
+    report carries a distinctive header/berth marker (verified across the 25 real files).
+    Returns None when no marker matches (caller can fall back to a selector)."""
+    u = text.upper()
+    if "NSICT" in u:
+        return ("NSICT", "CB")
+    if "NSIGT" in u:
+        return ("NSIGT", "CB")
+    if "NHAVA SHEVA FREEPORT" in u or "FREEPORT TERMINAL" in u:
+        return ("NSFT", "NSFT")
+    if "APM TERMINALS" in u or re.search(r"\bAPM\d{2}\b", u):
+        return ("APMT", "APM")
+    if re.search(r"\bBMCT\d{2}\b", u) or "BERTHING SHEET" in u:
+        return ("BMCT", "BMCT")
+    return None
+
+
+def parse_pdf_bytes(content: bytes, terminal: str, kind: str, *, filename: str,
+                    source_file: Optional[str] = None) -> list[dict[str, Any]]:
+    """Extract page text with pdfplumber and parse it (terminal + kind known)."""
+    text = extract_text_from_bytes(content)
     return parse_text(text, terminal, kind, filename=filename, source_file=source_file)
+
+
+def parse_pdf_bytes_auto(content: bytes, *, filename: str,
+                         selector_terminal: Optional[str] = None
+                         ) -> tuple[list[dict[str, Any]], str]:
+    """Parse an uploaded PDF whose terminal is auto-detected from its content (a per-file
+    selector, when given, is the fallback if detection is inconclusive). Returns
+    (records, resolved_terminal). Raises ValueError if unreadable or terminal-unknown."""
+    text = extract_text_from_bytes(content)
+    det = detect_terminal(text)
+    if det is None and selector_terminal:
+        t = selector_terminal.strip().upper()
+        if t in _KIND_FOR_TERMINAL:
+            det = (t, _KIND_FOR_TERMINAL[t])
+    if det is None:
+        raise ValueError(
+            "could_not_detect_terminal: this PDF does not match a known JNPA terminal "
+            "layout — pick the terminal in the selector and retry")
+    terminal, kind = det
+    records = parse_text(text, terminal, kind, filename=filename, source_file=filename)
+    return records, terminal

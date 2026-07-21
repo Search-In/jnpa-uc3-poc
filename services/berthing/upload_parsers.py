@@ -138,6 +138,10 @@ def template_csv() -> str:
     return buf.getvalue()
 
 
+def is_pdf(filename: str) -> bool:
+    return (filename or "").lower().endswith(".pdf")
+
+
 # ---------------------------------------------------------------- byte readers
 def read_rows_from_bytes(content: bytes, filename: str) -> tuple[list[str], list[dict[str, Any]]]:
     """Return (header, rows) from a CSV / XLS / XLSX byte payload. Raises ValueError on
@@ -203,6 +207,7 @@ class ParseResult:
         self.invalid_count = 0
         self.duplicate_count = 0
         self.rejected = False
+        self.detected_terminal: Optional[str] = None    # set by the PDF path
 
     def err(self, row, col, code, detail, raw=None):
         self.errors.append({"row_number": row, "column_name": col, "error_code": code,
@@ -346,3 +351,65 @@ def _derive_status(rec: dict[str, Any]) -> str:
     if rec.get("berthing_time") or rec.get("ata"):
         return "BERTH_ASSIGNED" if rec.get("berth_number") else "ARRIVED"
     return "EXPECTED"
+
+
+def _preview_row(r: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "Terminal": r["terminal"], "Vessel": r["vessel_name"], "Voyage": r["voyage_number"],
+        "Berth": r.get("berth_number") or "—", "Status": r["status"],
+        "ETA": r["eta"].strftime("%d/%m/%Y %H:%M") if r.get("eta") else "—",
+        "ATA": r["ata"].strftime("%d/%m/%Y %H:%M") if r.get("ata") else "—",
+    }
+
+
+def parse_pdf(content: bytes, filename: str,
+              terminal: Optional[str] = None) -> ParseResult:
+    """Validate + map an uploaded per-terminal Berthing Report PDF into the SAME
+    normalised vessel-call ParseResult the CSV/XLS/XLSX path produces — so the upload
+    service's validate → preview → import flow is format-agnostic. The terminal is
+    auto-detected from the PDF content (the ``terminal`` selector is the fallback).
+
+    Reuses the shared :mod:`pdf_parsers` (the exact per-terminal parsers the offline
+    importer uses) — no parsing logic is duplicated. Records it emits are already
+    validated by construction (vessel + voyage + terminal present, status derived); this
+    layer only de-dupes within the file and builds the preview."""
+    from . import pdf_parsers as PDF
+
+    res = ParseResult()
+    try:
+        records, detected = PDF.parse_pdf_bytes_auto(
+            content, filename=filename, selector_terminal=terminal)
+    except ValueError as exc:
+        res.rejected = True
+        res.err(None, None, str(exc).split(":", 1)[0],
+                f"could not read PDF: {exc}")
+        return res
+
+    res.detected_terminal = detected
+    res.row_count = len(records)
+    seen: set[tuple[str, str, str]] = set()
+    for i, rec in enumerate(records, start=1):
+        term, vessel, voyage = rec.get("terminal"), rec.get("vessel_name"), rec.get("voyage_number")
+        if not (term and vessel and voyage):
+            res.err(i, "Vessel Name", "empty_required",
+                    "row is missing terminal / vessel / voyage from the PDF")
+            res.invalid_count += 1
+            continue
+        key = (term, voyage, vessel)
+        if key in seen:
+            res.duplicate_count += 1
+            res.warn(i, "Voyage Number", "duplicate_in_file",
+                     f"{vessel} / {voyage} ({term}) already appears earlier in this file (skipped)")
+            continue
+        seen.add(key)
+        rec.setdefault("imo_number", None)
+        rec.setdefault("shipping_line", None)
+        rec["source_file"] = filename
+        res.records.append(rec)
+
+    if not res.records and not res.errors:
+        res.rejected = True
+        res.err(None, None, "no_rows",
+                f"no vessel rows found in this PDF (detected terminal: {detected})")
+    res.preview = [_preview_row(r) for r in res.records[:20]]
+    return res

@@ -43,6 +43,11 @@ dependencies = [
     # without them an XLSX/XLS upload 500s (ModuleNotFoundError: openpyxl).
     "openpyxl==3.1.*",
     "xlrd==2.0.*",
+    # PDF reader for in-gateway ingest: the Berthing Reports Data-Upload endpoints
+    # (/api/berthing/validate|upload) accept the original per-terminal daily report PDFs
+    # and parse them via services.berthing.pdf_parsers (pdfplumber). Required in the image
+    # — without it a PDF upload degrades to REJECTED ("PDF support unavailable").
+    "pdfplumber==0.11.*",
 ]
 
 [project.optional-dependencies]

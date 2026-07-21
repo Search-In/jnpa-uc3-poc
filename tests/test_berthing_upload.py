@@ -352,6 +352,75 @@ def test_events_derivation_from_timestamps():
     assert all(e["berthing_id"] == 7 for e in events)
 
 
+# --------------------------------------------------------------- PDF upload path
+_APM_PDF = _DATA_DIR / "APM Terminals" / "APMT_Berthing_Report_-_04-Jun-2026.pdf"
+
+
+def test_pdf_detection_and_is_pdf():
+    assert P.is_pdf("x.pdf") and not P.is_pdf("x.csv")
+    # Terminal auto-detect from report text markers.
+    assert PP.detect_terminal("DAILY BERTHING REPORT - NSICT") == ("NSICT", "CB")
+    assert PP.detect_terminal("NHAVA SHEVA FREEPORT TERMINAL") == ("NSFT", "NSFT")
+    assert PP.detect_terminal("APM Terminals Mumbai") == ("APMT", "APM")
+    assert PP.detect_terminal("random text") is None
+
+
+def test_pdf_invalid_bytes_rejected():
+    # A non-PDF / corrupt payload with a .pdf name → structured REJECTED, no crash.
+    res = P.parse_pdf(b"%PDF-not-really-a-pdf", "junk.pdf", terminal=None)
+    assert res.rejected and res.errors and res.errors[0]["error_code"] == "unreadable_pdf"
+    svc, repo = _svc()
+    r = asyncio.run(svc.import_file(None, b"%PDF-nope", "junk.pdf", "tester"))
+    assert r["status"] == "REJECTED" and r["imported"] == 0
+    assert repo.files[r["file_id"]]["physical_format"] == "PDF"
+
+
+def test_pdf_missing_pdfplumber_degrades(monkeypatch):
+    # If pdfplumber is not installed, a PDF upload must degrade to a clean REJECTED
+    # (ValueError → error ledger), never a bare ImportError / 500. Simulate absence.
+    monkeypatch.setitem(sys.modules, "pdfplumber", None)
+    res = P.parse_pdf(b"%PDF-1.7 anything", "x.pdf", terminal=None)
+    assert res.rejected and res.errors[0]["error_code"] == "unreadable_pdf"
+
+
+@pytest.mark.skipif(not _APM_PDF.exists(), reason="JNPA Berthing Reports data folder not present")
+def test_pdf_upload_validate_real():
+    content = _APM_PDF.read_bytes()
+    res = P.parse_pdf(content, _APM_PDF.name, terminal=None)
+    assert not res.rejected and res.detected_terminal == "APMT" and len(res.records) == 4
+    # Preview carries the requested columns.
+    assert set(res.preview[0]) >= {"Terminal", "Vessel", "Voyage", "ETA", "Berth", "Status"}
+    svc, _ = _svc()
+    out = asyncio.run(svc.validate(None, content, _APM_PDF.name, "tester"))
+    assert out["status"] == "VALIDATED" and out["valid"] is True and out["terminal"] == "APMT"
+
+
+@pytest.mark.skipif(not _APM_PDF.exists(), reason="JNPA Berthing Reports data folder not present")
+def test_pdf_import_success_then_duplicate_real():
+    content = _APM_PDF.read_bytes()
+    svc, repo = _svc()
+    r1 = asyncio.run(svc.import_file(None, content, _APM_PDF.name, "tester"))
+    assert r1["status"] in ("SUCCESS", "PARTIAL") and r1["imported"] == 4
+    # History shows the PDF filename + PDF format.
+    hist = asyncio.run(svc.list_uploads({}, limit=10, offset=0))
+    top = hist["items"][0]
+    assert top["filename"] == _APM_PDF.name and top["physical_format"] == "PDF"
+    assert top["terminal"] == "APMT"
+    # Re-uploading identical bytes → safe no-op.
+    r2 = asyncio.run(svc.import_file(None, content, _APM_PDF.name, "tester"))
+    assert r2["status"] == "SKIPPED_DUPLICATE" and r2["duplicate_file"] is True
+
+
+@pytest.mark.skipif(not _APM_PDF.exists(), reason="JNPA Berthing Reports data folder not present")
+def test_router_pdf_validate_real(client):
+    content = _APM_PDF.read_bytes()
+    r = client.post("/api/berthing/validate", data={"terminal": "ALL"},
+                    files={"file": (_APM_PDF.name, content, "application/pdf")})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "VALIDATED" and body["terminal"] == "APMT"
+
+
 # --------------------------------------------------------------- schema lock-step
 _TABLE = re.compile(r"CREATE TABLE IF NOT EXISTS\s+(jnpa\.\w+)", re.IGNORECASE)
 

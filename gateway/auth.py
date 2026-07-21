@@ -89,6 +89,9 @@ _POLICY: tuple[tuple[str, frozenset[str]], ...] = (
     # Shipping Lines (IAL/EAL/EDO) shares the customs-clearance / cargo audience:
     # control room + customs, for both the read surface and the import write.
     ("/api/shipping-lines", CONTROL_ROOM | {Role.CUSTOMS.value}),
+    # Berthing Reports (module 7) — per-terminal vessel-call surface + Data-Upload write.
+    # Same control-room + customs audience as the other terminal/cargo data modules.
+    ("/api/berthing", CONTROL_ROOM | {Role.CUSTOMS.value}),
     # CFS-ECY CODECO gate movements (module 13) — off-dock container logistics for the
     # control room + customs, covering both the read surface and the Data-Upload write.
     ("/api/cfs-ecy", CONTROL_ROOM | {Role.CUSTOMS.value}),

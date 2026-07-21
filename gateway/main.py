@@ -80,6 +80,7 @@ from .routers import (
 # UC-III Final-Completion routers (additive; see gateway/uc3_ext.py + migration 0024).
 from .routers import (
     accidents,
+    berthing,
     bottlenecks,
     camera_ai,
     cfs_ecy,
@@ -223,6 +224,15 @@ async def _lifespan(app: FastAPI):
         await cfs_ecy_ext.ensure_cfs_ecy_schema(cfg.postgres_dsn or None)
     except Exception as exc:  # noqa: BLE001
         log.warning("cfs_ecy_schema_boot_failed", error=str(exc))
+
+    # Berthing Reports (module 7): per-terminal vessel-call tables + lifecycle events +
+    # upload ledger. Idempotent, additive — mirrors migration 0036 so a dev DB that never
+    # ran it still gets the objects. Read-only wrt every existing table.
+    try:
+        from . import berthing_ext
+        await berthing_ext.ensure_berthing_schema(cfg.postgres_dsn or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("berthing_schema_boot_failed", error=str(exc))
 
     # Performance & Daily Reports (module 12): the perf_* analytical tables for the
     # official JNPA Daily Status Report / monthly TEUs / NLDS-LDB Analytics feeds.
@@ -502,6 +512,7 @@ app.include_router(trt.router)               # ECY TRT KPI
 app.include_router(cfs_ecy.router)           # CFS-ECY CODECO gate movements (module 13, read-only)
 app.include_router(customs.router)           # Customs docs (module 5: IGM/OOC/SMTP/RMS/LEO/SB)
 app.include_router(shipping_lines.router)     # Shipping Lines (module 4: IAL/EAL/EDO, read-only + import)
+app.include_router(berthing.router)          # Berthing Reports (module 7: per-terminal vessel calls + upload)
 app.include_router(performance.router)       # Performance & Daily Reports (module 12, read-only, additive)
 app.include_router(performance_upload.router)  # Performance Data Upload (module 12 sub-module, admin-only, additive)
 app.include_router(bottlenecks.router)       # three-road bottleneck analytics

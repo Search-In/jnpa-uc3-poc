@@ -55,6 +55,8 @@ export const SCREEN_ROLES: Record<string, Role[]> = {
   "/cfs-ecy": [...CONTROL_ROOM, "CUSTOMS"],
   // Shipping Lines (IAL/EAL/EDO) — mirrors gateway/auth.py /api/shipping-lines policy.
   "/shipping-lines": [...CONTROL_ROOM, "CUSTOMS"],
+  // Berthing Reports (module 7) — mirrors gateway/auth.py /api/berthing policy.
+  "/berthing": [...CONTROL_ROOM, "CUSTOMS"],
   "/health": CONTROL_ROOM,
   "/what-if": CONTROL_ROOM,
   "/whatif": CONTROL_ROOM,

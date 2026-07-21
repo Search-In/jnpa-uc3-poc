@@ -1,0 +1,112 @@
+"""Berthing Reports schema bootstrap (UC-III module 7) — idempotent, additive.
+
+Applies the same DDL as infra/postgres/migrations/0036_berthing_reports.sql at
+gateway boot so a dev/mock database that never ran the migration still gets the
+new tables lazily — exactly the pattern gateway/cfs_ecy_ext.ensure_cfs_ecy_schema
+and gateway/shipping_lines_ext.ensure_shipping_lines_schema already use.
+
+Every statement is CREATE ... IF NOT EXISTS: running it against a DB that already
+has the objects (because the migration ran) is a no-op. NEVER drops/alters existing
+objects. Called once from gateway/main.py::_lifespan (best-effort). Also reused by
+scripts/import_berthing_reports.py so the importer is self-contained.
+
+The _DDL list is kept byte-for-byte in lock-step with migration 0036 (a test asserts
+the two define the identical object set).
+"""
+from __future__ import annotations
+
+from typing import Optional
+
+from .logging import get_logger
+
+log = get_logger("gateway.berthing_ext")
+
+# One idempotent statement per list item (SQLAlchemy text() runs a single statement
+# per execute()). Mirrors migration 0036 exactly.
+_DDL: list[str] = [
+    "CREATE SCHEMA IF NOT EXISTS jnpa",
+    """CREATE TABLE IF NOT EXISTS jnpa.berthing_reports (
+        id                    bigserial PRIMARY KEY,
+        terminal              text NOT NULL,
+        vessel_name           text NOT NULL,
+        imo_number            text,
+        voyage_number         text NOT NULL,
+        shipping_line         text,
+        berth_number          text,
+        eta                   timestamptz,
+        ata                   timestamptz,
+        berthing_time         timestamptz,
+        departure_time        timestamptz,
+        cargo_operation_start timestamptz,
+        cargo_operation_end   timestamptz,
+        status                text NOT NULL DEFAULT 'EXPECTED'
+                              CHECK (status IN ('EXPECTED','ARRIVED','BERTH_ASSIGNED',
+                                                'BERTHING_STARTED','CARGO_OPERATION',
+                                                'COMPLETED','DEPARTED')),
+        source_file           text,
+        import_file_id        bigint,
+        created_at            timestamptz NOT NULL DEFAULT now(),
+        updated_at            timestamptz NOT NULL DEFAULT now(),
+        CONSTRAINT uq_berthing_call UNIQUE (terminal, voyage_number, vessel_name))""",
+    "CREATE INDEX IF NOT EXISTS idx_berthing_terminal_status ON jnpa.berthing_reports (terminal, status)",
+    "CREATE INDEX IF NOT EXISTS idx_berthing_voyage ON jnpa.berthing_reports (voyage_number)",
+    "CREATE INDEX IF NOT EXISTS idx_berthing_vessel ON jnpa.berthing_reports (vessel_name)",
+    "CREATE INDEX IF NOT EXISTS idx_berthing_eta ON jnpa.berthing_reports (eta DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_berthing_import_file ON jnpa.berthing_reports (import_file_id)",
+    """CREATE TABLE IF NOT EXISTS jnpa.berthing_events (
+        id           bigserial PRIMARY KEY,
+        berthing_id  bigint NOT NULL REFERENCES jnpa.berthing_reports (id) ON DELETE CASCADE,
+        event_type   text NOT NULL,
+        event_time   timestamptz,
+        created_by   text,
+        created_at   timestamptz NOT NULL DEFAULT now(),
+        CONSTRAINT uq_berthing_event UNIQUE (berthing_id, event_type))""",
+    "CREATE INDEX IF NOT EXISTS idx_berthing_event_call ON jnpa.berthing_events (berthing_id, id)",
+    """CREATE TABLE IF NOT EXISTS jnpa.berthing_import_files (
+        id               bigserial PRIMARY KEY,
+        filename         text,
+        file_hash        text,
+        terminal         text,
+        physical_format  text NOT NULL DEFAULT 'CSV'
+                         CHECK (physical_format IN ('CSV','XLS','XLSX','PDF')),
+        uploaded_by      text,
+        status           text NOT NULL DEFAULT 'PENDING'
+                         CHECK (status IN ('PENDING','SUCCESS','PARTIAL','FAILED','SKIPPED_DUPLICATE')),
+        total_rows       integer NOT NULL DEFAULT 0,
+        success_rows     integer NOT NULL DEFAULT 0,
+        failed_rows      integer NOT NULL DEFAULT 0,
+        duplicate_rows   integer NOT NULL DEFAULT 0,
+        source           text NOT NULL DEFAULT 'UPLOAD' CHECK (source IN ('DIRECTORY','UPLOAD')),
+        error_detail     text,
+        created_at       timestamptz NOT NULL DEFAULT now(),
+        updated_at       timestamptz NOT NULL DEFAULT now(),
+        CONSTRAINT uq_berthing_import_file_hash UNIQUE (file_hash))""",
+    "CREATE INDEX IF NOT EXISTS idx_berthing_file_status ON jnpa.berthing_import_files (status, id DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_berthing_file_terminal ON jnpa.berthing_import_files (terminal, id DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_berthing_file_source ON jnpa.berthing_import_files (source, id DESC)",
+    """CREATE TABLE IF NOT EXISTS jnpa.berthing_import_errors (
+        id              bigserial PRIMARY KEY,
+        import_file_id  bigint NOT NULL
+                        REFERENCES jnpa.berthing_import_files (id) ON DELETE CASCADE,
+        row_number      integer,
+        error_message   text,
+        raw_data        text,
+        created_at      timestamptz NOT NULL DEFAULT now())""",
+    "CREATE INDEX IF NOT EXISTS idx_berthing_err_file ON jnpa.berthing_import_errors (import_file_id, id)",
+]
+
+
+async def ensure_berthing_schema(dsn: Optional[str] = None) -> None:
+    """Create the berthing_* tables if absent. Idempotent."""
+    from sqlalchemy import text
+
+    from jnpa_shared.db import get_engine
+
+    engine = get_engine(dsn)
+    async with engine.begin() as conn:
+        for stmt in _DDL:
+            await conn.execute(text(stmt))
+    log.info("berthing_schema_ready")
+
+
+__all__ = ["ensure_berthing_schema"]

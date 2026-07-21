@@ -138,7 +138,7 @@ export default function BerthingUploadPanel() {
           <input
             ref={fileRef}
             type="file"
-            accept=".csv,.xls,.xlsx"
+            accept=".pdf,.csv,.xls,.xlsx"
             className="hidden"
             onChange={(e) => pickFile(e.target.files?.[0] ?? null)}
             aria-label="Choose data file"
@@ -181,10 +181,14 @@ export default function BerthingUploadPanel() {
           </div>
         </div>
         <p className="mt-2 text-[11.5px] text-muted-foreground">
-          Supported: CSV · XLS · XLSX. Required columns: Terminal · Vessel Name · Voyage Number
-          (Terminal optional here when a per-row Terminal column is present). Column names are
-          flexible (e.g. “Vessel”, “VIA” all map). Re-uploading the same file is safe — it is
-          skipped; an existing vessel call is updated in place.
+          <span className="font-medium text-foreground">
+            Berthing Reports support PDF source files
+          </span>{" "}
+          — upload the original per-terminal daily report PDFs directly (the terminal is
+          auto-detected). Also supported: CSV · XLS · XLSX, with required columns Terminal · Vessel
+          Name · Voyage Number (Terminal optional when a per-row Terminal column or the selector is
+          present; column names are flexible, e.g. “Vessel”, “VIA”). Re-uploading the same file is
+          safe — it is skipped; an existing vessel call is updated in place.
         </p>
         {(validateMut.isError || importMut.isError) && (
           <div className="mt-3 flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-[13px] text-critical">

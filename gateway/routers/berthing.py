@@ -233,7 +233,7 @@ async def upload_template(terminal: str, request: Request,
                     headers={"Content-Disposition": 'attachment; filename="berthing_template.csv"'})
 
 
-@router.post("/validate", summary="Validate a berthing upload (dry-run: parse + preview, no import)")
+@router.post("/validate", summary="Validate a berthing upload — PDF/CSV/XLS/XLSX (dry-run: parse + preview)")
 async def upload_validate(request: Request,
                           file: UploadFile = File(...),
                           terminal: Optional[str] = Form(default=None),
@@ -244,7 +244,7 @@ async def upload_validate(request: Request,
     return await svc.validate(term, content, file.filename or "upload.csv", uploader)
 
 
-@router.post("/upload", summary="Import a berthing upload (idempotent upsert)")
+@router.post("/upload", summary="Import a berthing upload — PDF/CSV/XLS/XLSX (idempotent upsert)")
 async def upload_import(request: Request,
                         file: UploadFile = File(...),
                         terminal: Optional[str] = Form(default=None),

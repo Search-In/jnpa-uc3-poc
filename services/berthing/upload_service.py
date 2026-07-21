@@ -29,6 +29,8 @@ def _sha256(content: bytes) -> str:
 
 def _fmt(filename: str) -> str:
     name = (filename or "").lower()
+    if name.endswith(".pdf"):
+        return "PDF"
     if name.endswith((".xlsx", ".xlsm")):
         return "XLSX"
     if name.endswith(".xls"):
@@ -47,8 +49,20 @@ class BerthingUploadService:
 
     # ---------------------------------------------------------------- parse core
     def _parse(self, terminal: Optional[str], content: bytes, filename: str) -> "P.ParseResult":
+        # PDF is the real Berthing source format — route it through the per-terminal PDF
+        # parsers (auto-detecting the terminal); CSV/XLS/XLSX use the tabular reader. Both
+        # yield the SAME normalised ParseResult, so validate/preview/import are unchanged.
+        if P.is_pdf(filename):
+            return P.parse_pdf(content, filename, terminal=terminal)
         header, rows = P.read_rows_from_bytes(content, filename)
         return P.parse(header, rows, terminal=terminal, source_file=filename)
+
+    @staticmethod
+    def _ledger_terminal(terminal: Optional[str], res: "P.ParseResult") -> Optional[str]:
+        """Terminal recorded on the import-ledger row: the selector if valid, else the
+        PDF-detected terminal, else the terminal of the parsed rows (single-terminal PDF)."""
+        return (P.terminal_ok(terminal) or getattr(res, "detected_terminal", None)
+                or (res.records[0]["terminal"] if res.records else None))
 
     @staticmethod
     def _summary(res: "P.ParseResult") -> Dict[str, Any]:
@@ -73,7 +87,8 @@ class BerthingUploadService:
                                                     "valid": summary["valid"],
                                                     "invalid": summary["invalid"],
                                                     "ms": round((perf_counter() - t0) * 1000, 1)})
-        return {"terminal": terminal, "status": status, "valid": summary["valid_bool"],
+        return {"terminal": (getattr(res, "detected_terminal", None) or terminal),
+                "status": status, "valid": summary["valid_bool"],
                 "summary": summary, "preview": res.preview,
                 "errors": res.errors[:200], "warnings": res.warnings[:200]}
 
@@ -94,7 +109,7 @@ class BerthingUploadService:
             detail = ("rejected — " + (res.errors[0]["error_detail"] if res.errors
                                        else "no importable rows"))
             file_id = await self._repo.record_rejected_upload(
-                terminal=P.terminal_ok(terminal), physical_format=physical_format,
+                terminal=self._ledger_terminal(terminal, res), physical_format=physical_format,
                 filename=filename, file_hash=sha, uploaded_by=uploaded_by,
                 detail=detail, errors=res.errors)
             return {"file_id": file_id, "status": "REJECTED", "imported": 0, "updated": 0,
@@ -102,9 +117,9 @@ class BerthingUploadService:
                     "summary": summary, "errors": res.errors[:200]}
 
         result = await self._repo.persist(
-            res.records, terminal=P.terminal_ok(terminal), filename=filename, file_hash=sha,
-            physical_format=physical_format, file_size=len(content), uploaded_by=uploaded_by,
-            source="UPLOAD")
+            res.records, terminal=self._ledger_terminal(terminal, res), filename=filename,
+            file_hash=sha, physical_format=physical_format, file_size=len(content),
+            uploaded_by=uploaded_by, source="UPLOAD")
 
         file_id = result.get("file_id")
         status = result["status"]                       # SUCCESS | SKIPPED_DUPLICATE | FAILED

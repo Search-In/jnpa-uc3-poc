@@ -37,7 +37,7 @@ import { Card } from "@/components/ui/card";
 import { LoadingState, ErrorState } from "@/components/ui/misc";
 import { api } from "@/lib/api";
 import { authEnabled, getRole } from "@/lib/auth";
-import BerthingUploadPanel from "@/screens/berthing/UploadPanel";
+import BerthingReportUpload from "@/screens/berthing/ReportUpload";
 import BerthingTimelineDialog, { statusTone } from "@/screens/berthing/Timeline";
 
 const UPLOAD_ROLES = ["JNPA_TRAFFIC", "DTCCC_ADMIN", "TERMINAL_OPS", "CUSTOMS"];
@@ -159,7 +159,7 @@ export default function Berthing() {
             { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
             { key: "list", label: "Vessel List", icon: LayoutList },
             ...(CAN_UPLOAD
-              ? [{ key: "upload" as TopTab, label: "Data Upload", icon: UploadCloud }]
+              ? [{ key: "upload" as TopTab, label: "Report Upload", icon: UploadCloud }]
               : []),
           ]}
           value={topTab}
@@ -410,10 +410,10 @@ export default function Berthing() {
         </div>
       )}
 
-      {/* Data Upload */}
+      {/* Report Upload — one flow for PDF (full extract) + CSV/XLS/XLSX (structured) */}
       {topTab === "upload" && CAN_UPLOAD && (
         <div className="p-4">
-          <BerthingUploadPanel />
+          <BerthingReportUpload />
         </div>
       )}
 

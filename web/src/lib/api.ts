@@ -662,6 +662,27 @@ export const api = {
   },
   berthingUploadDetail: (fileId: number) => http<any>(`/api/berthing/uploads/${fileId}`),
 
+  // --- Berthing Full Extract (module 7 sub-module) — verbatim every-table PDF capture ---
+  berthingExtract: (file: File) => {
+    const f = new FormData();
+    f.append("file", file);
+    return postForm<any>("/api/berthing/extract", f);
+  },
+  berthingExtractImport: (file: File) => {
+    const f = new FormData();
+    f.append("file", file);
+    return postForm<any>("/api/berthing/extract/import", f);
+  },
+  berthingDocuments: (params?: { terminal?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && qs.set(k, String(v)));
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/berthing/documents${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  berthingDocumentTables: (documentId: number) =>
+    http<any>(`/api/berthing/documents/${documentId}/tables`),
+
   // --- Transporters & Drivers Data Upload (UC-III sub-module) — mirrors the cfs-ecy helpers ---
   tdUploadDownloadTemplate: (entity: string) =>
     downloadFile(

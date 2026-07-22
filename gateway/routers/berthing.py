@@ -34,6 +34,8 @@ from ..auth import CONTROL_ROOM, Role, auth_enabled
 from ..metrics import REQUESTS
 from services.berthing import BerthingService, BerthingUploadService
 from services.berthing import upload_parsers as P
+from services.berthing import full_extractor as FX
+from services.berthing.document_repository import BerthingDocumentRepository
 
 router = APIRouter(prefix="/api/berthing", tags=["berthing"])
 
@@ -42,6 +44,7 @@ _UPLOADER_ROLES = CONTROL_ROOM | {Role.CUSTOMS.value}
 
 _service: Optional[BerthingService] = None
 _upload_service: Optional[BerthingUploadService] = None
+_doc_repo: Optional[BerthingDocumentRepository] = None
 
 
 def get_service(request: Request) -> BerthingService:
@@ -58,6 +61,14 @@ def get_upload_service(request: Request) -> BerthingUploadService:
         cfg = getattr(getattr(request.app.state, "gw", None), "cfg", None)
         _upload_service = BerthingUploadService(dsn=getattr(cfg, "postgres_dsn", None) or None)
     return _upload_service
+
+
+def get_doc_repo(request: Request) -> BerthingDocumentRepository:
+    global _doc_repo
+    if _doc_repo is None:
+        cfg = getattr(getattr(request.app.state, "gw", None), "cfg", None)
+        _doc_repo = BerthingDocumentRepository(dsn=getattr(cfg, "postgres_dsn", None) or None)
+    return _doc_repo
 
 
 def require_uploader(request: Request) -> str:
@@ -282,6 +293,68 @@ async def upload_detail(file_id: int, request: Request,
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "upload_not_found", "file_id": file_id})
     return res
+
+
+# ============================================================ Full-extract sub-module (module 7)
+# Verbatim capture of EVERY table on a terminal berthing PDF (docs/BERTHING_PDF_DATA_AUDIT.md),
+# stored additively in jnpa.berthing_report_documents / berthing_report_tables. Runs alongside —
+# never touching — the normalised vessel-call store. Write-gated to CONTROL_ROOM + CUSTOMS.
+def _extract_or_400(content: bytes, filename: str) -> Dict[str, Any]:
+    try:
+        return FX.extract_tables(content, filename)
+    except ValueError as exc:
+        code = str(exc).split(":", 1)[0]
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail={"error": code, "detail": str(exc)})
+
+
+@router.post("/extract", summary="Full-extract preview — every PDF table, no import (dry-run)")
+async def full_extract_preview(request: Request, file: UploadFile = File(...)) -> Dict[str, Any]:
+    require_uploader(request)
+    content = await _read_upload(file)
+    res = _extract_or_400(content, file.filename or "upload.pdf")
+    REQUESTS.labels("berthing", "ok").inc()
+    return res
+
+
+@router.post("/extract/import", summary="Full-extract import — persist every PDF table (idempotent)")
+async def full_extract_import(request: Request, file: UploadFile = File(...),
+                              repo: BerthingDocumentRepository = Depends(get_doc_repo)) -> Dict[str, Any]:
+    import hashlib
+    uploader = require_uploader(request)
+    content = await _read_upload(file)
+    res = _extract_or_400(content, file.filename or "upload.pdf")
+    pdf_hash = hashlib.sha256(content).hexdigest()
+    outcome = await repo.persist(res, pdf_hash=pdf_hash, uploaded_by=uploader)
+    REQUESTS.labels("berthing", "ok").inc()
+    return {**outcome, "file_name": res["file_name"], "terminal": res["terminal"],
+            "report_date": res.get("report_date"), "tables": res["tables"],
+            "missing_sections": res.get("missing_sections", []),
+            "uncaptured_lines": res.get("uncaptured_lines", 0)}
+
+
+@router.get("/documents", response_model=Page, summary="Full-extract document history")
+async def list_documents(response: Response, request: Request,
+                         terminal: Optional[str] = None,
+                         limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0),
+                         repo: BerthingDocumentRepository = Depends(get_doc_repo)) -> Page:
+    require_uploader(request)
+    res = await repo.list_documents(terminal=(_terminal_filter(terminal) if terminal else None),
+                                    limit=limit, offset=offset)
+    return _page(res["items"], res["total"], limit, offset, response)
+
+
+@router.get("/documents/{document_id}/tables",
+            summary="Every extracted table for one full-extract document (verbatim)")
+async def document_tables(document_id: int, request: Request,
+                          repo: BerthingDocumentRepository = Depends(get_doc_repo)) -> Dict[str, Any]:
+    require_uploader(request)
+    doc = await repo.get_document(document_id)
+    if doc is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail={"error": "document_not_found", "id": document_id})
+    doc["tables"] = await repo.get_tables(document_id)
+    return doc
 
 
 # ------------------------------------------------------------------- one call (declared last so

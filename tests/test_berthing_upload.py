@@ -431,15 +431,19 @@ def _tables(text: str) -> set:
 
 def test_migration_and_ext_define_same_objects():
     from gateway.berthing_ext import _DDL
-    mig = (REPO_ROOT / "infra" / "postgres" / "migrations" / "0036_berthing_reports.sql").read_text()
-    assert _tables(mig) == _tables("\n".join(_DDL)), "schema drift between migration 0036 and berthing_ext._DDL"
+    mig_dir = REPO_ROOT / "infra" / "postgres" / "migrations"
+    mig = ((mig_dir / "0036_berthing_reports.sql").read_text() + "\n"
+           + (mig_dir / "0037_berthing_report_documents.sql").read_text())
+    assert _tables(mig) == _tables("\n".join(_DDL)), (
+        "schema drift between migrations 0036+0037 and berthing_ext._DDL")
 
 
 def test_expected_objects_present():
     from gateway.berthing_ext import _DDL
     objs = _tables("\n".join(_DDL))
     for name in ("jnpa.berthing_reports", "jnpa.berthing_events",
-                 "jnpa.berthing_import_files", "jnpa.berthing_import_errors"):
+                 "jnpa.berthing_import_files", "jnpa.berthing_import_errors",
+                 "jnpa.berthing_report_documents", "jnpa.berthing_report_tables"):
         assert name in objs, f"missing berthing object: {name}"
 
 

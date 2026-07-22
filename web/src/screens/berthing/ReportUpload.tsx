@@ -55,7 +55,12 @@ function detectKind(name?: string): Kind {
   return null;
 }
 
-export default function BerthingReportUpload() {
+export default function BerthingReportUpload({
+  onImported,
+}: {
+  // Fired after a successful import so the host can open Report Details on the new document.
+  onImported?: (documentId: number, kind: "pdf" | "sheet") => void;
+}) {
   const qc = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
   const [terminal, setTerminal] = useState("ALL");
@@ -113,6 +118,8 @@ export default function BerthingReportUpload() {
       qc.invalidateQueries({
         predicate: (q) => Array.isArray(q.queryKey) && String(q.queryKey[0]).startsWith("berthing"),
       });
+      // A PDF import yields a document_id → let the host open Report Details on it.
+      if (kind === "pdf" && res?.document_id) onImported?.(res.document_id, "pdf");
     },
   });
 

@@ -63,7 +63,8 @@ class BerthingDocumentRepository:
                 "document_id": did, "terminal": result.get("terminal"),
                 "table_name": t["table_name"], "panel_index": i,
                 "page_number": t.get("page_number", 1),
-                "original_columns": json.dumps(t.get("original_columns", [])),
+                # Stored verbatim: columns = [{name,x_start,x_end}], rows = [{values:[...]}].
+                "original_columns": json.dumps(t.get("columns", t.get("original_columns", []))),
                 "rows": json.dumps(t.get("rows", [])),
                 "row_count": t.get("row_count", 0),
                 "extraction_note": t.get("extraction_note"),

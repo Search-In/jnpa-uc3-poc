@@ -357,6 +357,38 @@ async def document_tables(document_id: int, request: Request,
     return doc
 
 
+@router.get("/documents/{document_id}/full-view",
+            summary="Complete extracted report — every table, verbatim, with dynamic columns")
+async def document_full_view(document_id: int, request: Request,
+                             repo: BerthingDocumentRepository = Depends(get_doc_repo)) -> Dict[str, Any]:
+    """The Report-Details view surface: returns the document header + EVERY row of EVERY
+    table stored in jnpa.berthing_report_tables, exactly as extracted. No filtering, no
+    column dropping, no value transformation — the frontend renders columns dynamically
+    from ``columns`` so every terminal (APMT/BMCT/NSFT/NSICT/NSIGT) works unchanged."""
+    require_uploader(request)
+    doc = await repo.get_document(document_id)
+    if doc is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail={"error": "document_not_found", "id": document_id})
+    tabs = await repo.get_tables(document_id)
+    return {
+        "document_id": doc["id"],
+        "file_name": doc["file_name"],
+        "terminal": doc["terminal"],
+        "report_date": doc["report_date"],
+        "page_count": doc["page_count"],
+        "table_count": doc["table_count"],
+        "row_count": doc["row_count"],
+        "tables": [{
+            "table_name": t["table_name"],
+            "columns": t["original_columns"],          # verbatim header labels
+            "rows": t["rows"],                          # verbatim cell values
+            "row_count": t["row_count"],
+            "extraction_note": t["extraction_note"],
+        } for t in tabs],
+    }
+
+
 # ------------------------------------------------------------------- one call (declared last so
 # the static /stats, /templates, /validate, /upload, /uploads prefixes win)
 @router.get("/{report_id}", response_model=ReportOut, summary="One berthing vessel call")

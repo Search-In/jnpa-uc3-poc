@@ -91,6 +91,145 @@ def template_key(terminal: str) -> str:
     return "DPWORLD" if terminal in ("NSICT", "NSIGT") else terminal
 
 
+# ---------------------------------------------------------------- column calibration
+# Terminal + table specific column boxes, hand-calibrated from the REAL data-word x
+# positions across the 25 PDFs (absolute page x; the layouts are template-generated so x
+# is stable across a terminal's files). Each entry is an ordered list of (column_name,
+# x_start); x_end is the next column's x_start (last → the panel band edge). These take
+# priority over the generic header-anchor columns so wide values (vessel names) stay in
+# their own column instead of bleeding into the berth column. Words left of the first
+# box, or in no box, go to UNCAPTURED_DATA (no data loss). Only the vessel tables are
+# calibrated (the identity columns that must be exact: berth, vessel, voyage, LOA,
+# ETA, dates); other panels keep the generic coordinate fallback.
+_ON = "Ops Commenced"
+CALIBRATION: dict[str, dict[str, list[tuple[str, float]]]] = {
+    "APMT": {
+        "ON_BERTH_VESSEL": [
+            ("Berth", 0), ("Vessel", 40), ("VIA", 110), ("LOA", 138),
+            ("Alongside Date", 175), ("Alongside Time", 212), ("Side", 248),
+            (f"{_ON} Date", 272), (f"{_ON} Time", 308),
+            ("Ops Completed Date", 355), ("Ops Completed Time", 412),
+            ("QC Boom Date", 468), ("QC Boom Time", 512),
+            ("Imp", 545), ("Imp Bal", 580), ("Exp", 610), ("Exp Bal", 640),
+            ("Arrival BFL Date", 666), ("Arrival BFL Time", 698), ("Max Draft", 726),
+            ("ETC Date", 756), ("ETC Time", 788),
+        ],
+        "SAILED_VESSEL": [
+            ("Berth", 0), ("Vessel", 40), ("VIA", 110), ("LOA", 138),
+            ("Alongside Date", 175), ("Alongside Time", 212), ("Side", 248),
+            (f"{_ON} Date", 272), (f"{_ON} Time", 308),
+            ("Ops Completed Date", 355), ("Ops Completed Time", 412),
+            ("QC Boom Date", 468), ("QC Boom Time", 512),
+            ("Imp", 545), ("Imp Bal", 580), ("Exp", 610), ("Exp Bal", 640),
+            ("Arrival BFL Date", 666), ("Arrival BFL Time", 698), ("Max Draft", 726),
+            ("Sailing Date", 756), ("Sailing Time", 788),
+        ],
+        "VESSELS_EXPECTED": [
+            ("VIA", 0), ("Vessel", 40), ("Draft", 110), ("LOA", 138),
+            ("ETA Date", 175), ("ETA Time", 212),
+            ("Arrival BFL Date", 248), ("Arrival BFL Time", 278),
+            ("Gate Open Date", 300), ("Gate Open Time", 328),
+            ("Reefer Opening Date", 352), ("Reefer Opening Time", 383),
+            ("Reefer Cut-Off Date", 412), ("Reefer Cut-Off Time", 438),
+            ("Cut-Off Date", 465), ("Cut-Off Time", 493), ("Service", 518), ("Line", 556),
+        ],
+    },
+    "BMCT": {
+        "VESSELS_ON_BERTHED": [
+            ("Berth", 90), ("Vessel", 150), ("VIA", 250), ("LOA", 315),
+            ("Berthing Date", 370), ("Berthing Time", 450), ("Side", 520),
+            (f"{_ON} Date", 575), (f"{_ON} Time", 640), ("ETD Date", 780), ("ETD Time", 845),
+            ("IMP", 885), ("IMP Bal", 918), ("EXP", 955), ("EXP Bal", 992), ("Max Draft", 1035),
+        ],
+        "SAILED_VESSEL": [
+            ("Berth", 90), ("Vessel", 150), ("VIA", 250), ("LOA", 315),
+            ("Berthing Date", 370), ("Berthing Time", 450), ("Side", 520),
+            (f"{_ON} Date", 575), (f"{_ON} Time", 640),
+            ("Ops Completed Date", 710), ("Ops Completed Time", 800),
+            ("Sailing Date", 895), ("Sailing Time", 965), ("Max Draft", 1035),
+        ],
+        "VESSELS_EXPECTED": [
+            ("VIA No.", 90), ("Vessel Name", 150), ("Service", 240), ("Line", 272),
+            ("LOA", 305), ("Draft", 345), ("ETA Date", 380), ("ETA Time", 420),
+            ("Cargo", 460), ("Gate Open Date", 560), ("Gate Open Time", 598),
+            ("Reefer Opening Date", 628), ("Reefer Opening Time", 662),
+            ("Reefer Cut-OFF Date", 700), ("Reefer Cut-OFF Time", 733),
+            ("Cut-OFF Date", 800), ("Cut-OFF Time", 831),
+        ],
+    },
+    "NSFT": {
+        "VESSEL_SAILED_24H": [
+            ("SR No", 0), ("Vessel Name", 60), ("Via No", 130), ("LOA", 168),
+            ("Service", 200), ("Line", 238), ("Berthed Date", 268), ("Berthed Time", 292),
+            (f"{_ON} Date", 312), (f"{_ON} Time", 337),
+            ("Ops Completed Date", 355), ("Ops Completed Time", 378),
+            ("Sailed Date", 398), ("Sailed Time", 420),
+            ("Import Moves", 448), ("Export Moves", 490), ("Total Moves", 530),
+        ],
+        "VESSEL_AT_BERTH": [
+            ("SR No", 0), ("Vessel Name", 60), ("Via No", 130), ("LOA", 168),
+            ("Service", 200), ("Line", 238), ("Berthed Date", 268), ("Berthed Time", 292),
+            (f"{_ON} Date", 312), (f"{_ON} Time", 337), ("ETC Date", 355), ("ETC Time", 378),
+            ("Import Moves", 405), ("Import Balance", 450), ("Export Moves", 490),
+            ("Export Balance", 530),
+        ],
+        "VESSELS_EXPECTED": [
+            ("SR No", 0), ("Vessel Name", 60), ("VIA No", 130), ("LOA", 165),
+            ("Service", 200), ("Line", 238), ("ETA Date", 268), ("ETA Time", 292),
+            ("Gate Open Dry Date", 312), ("Gate Open Dry Time", 337),
+            ("Gate Open Reefer Date", 355), ("Gate Open Reefer Time", 378),
+            ("Gate Cut-off Dry Date", 398), ("Gate Cut-off Dry Time", 420),
+            ("Gate Cut-off Reefer Date", 440), ("Gate Cut-off Reefer Time", 462),
+            ("Import TEUs", 490), ("Export TEUs", 530),
+        ],
+    },
+    # NSICT and NSIGT share the DP-World layout but are NOT pixel-identical — NSIGT's x
+    # scale runs a few px left of NSICT's (growing rightward), so each gets its own boxes.
+    "NSICT": {
+        "VESSELS_ON_BERTH": [
+            ("Berth", 30), ("Vessel Name", 80), ("VIA", 145), ("LOA", 175),
+            ("Service", 215), ("Berth Side", 262), ("Import", 298), ("Export", 338),
+            ("TTL MVS", 375), ("ATA Date", 495), ("ATA Time", 525),
+            ("Ops Commence Date", 560), ("Ops Commence Time", 588),
+            ("ETC Date", 628), ("ETC Time", 658), ("ETD", 700),
+        ],
+        "SAILED_VESSELS": [
+            ("Berth", 30), ("Vessel Name", 80), ("VIA", 145), ("LOA", 175),
+            ("Service", 215), ("Berth Side", 262), ("ATA Date", 300), ("ATA Time", 340),
+            ("Ops Commence Date", 400), ("Ops Commence Time", 460),
+            ("ATC Date", 540), ("ATC Time", 600), ("ATD Date", 660), ("ATD Time", 720),
+        ],
+        "VESSELS_EXPECTED": [
+            ("SR No", 40), ("Vessel Name", 65), ("VIA", 180), ("LOA", 225),
+            ("Service", 262), ("VOA", 300), ("IMP", 330), ("EXP", 358), ("TOTAL", 378),
+            ("ETA Date", 400), ("ETA Time", 428),
+            ("Gate Cutoff 1", 458), ("Gate Cutoff 2", 500), ("Gate Cutoff 3", 545),
+        ],
+    },
+    "NSIGT": {
+        "VESSELS_ON_BERTH": [
+            ("Berth", 35), ("Vessel Name", 82), ("VIA", 142), ("LOA", 168),
+            ("Service", 205), ("Berth Side", 248), ("Import", 285), ("Export", 320),
+            ("TTL MVS", 350), ("ATA Date", 470), ("ATA Time", 502),
+            ("Ops Commence Date", 535), ("Ops Commence Time", 563),
+            ("ETC Date", 605), ("ETC Time", 636), ("ETD", 690),
+        ],
+        "SAILED_VESSELS": [
+            ("Berth", 35), ("Vessel Name", 82), ("VIA", 142), ("LOA", 168),
+            ("Service", 205), ("Berth Side", 248), ("ATA Date", 290), ("ATA Time", 330),
+            ("Ops Commence Date", 390), ("Ops Commence Time", 450),
+            ("ATC Date", 530), ("ATC Time", 590), ("ATD Date", 650), ("ATD Time", 710),
+        ],
+        "VESSELS_EXPECTED": [
+            ("SR No", 44), ("Vessel Name", 68), ("VIA", 178), ("LOA", 218),
+            ("Service", 250), ("VOA", 290), ("IMP", 318), ("EXP", 335), ("TOTAL", 356),
+            ("ETA Date", 380), ("ETA Time", 410),
+            ("Gate Cutoff 1", 438), ("Gate Cutoff 2", 480), ("Gate Cutoff 3", 540),
+        ],
+    },
+}
+
+
 # ---------------------------------------------------------------- report date
 _MONTHS = {m: i for i, m in enumerate(
     ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], 1)}
@@ -189,35 +328,51 @@ def _positional_anchors(rows: list[list[_Word]], lo: float, hi: float) -> list[t
     return [(float(x), f"col_{i + 1}") for i, x in enumerate(cols)]
 
 
-def _assign(ws: list[_Word], anchors: list[tuple[float, str]], lo: float, hi: float) -> dict[str, str]:
-    labels = [lbl for _, lbl in anchors]
-    xs = [x for x, _ in anchors]
-    row: dict[str, list[str]] = {}
-    for w in ws:
-        if not _in_band(w, lo, hi):
+def _cols_with_ranges(anchors: list[tuple[float, str]], lo: float, hi: float) -> list[dict]:
+    """Turn column anchors into ordered {name, x_start, x_end} boxes that TILE the band
+    contiguously: column 0 owns from the band start (so a data value printed slightly left
+    of its header is never lost), each column ends where the next begins, the last ends at
+    the band edge. Duplicate header names are kept verbatim (positional rows don't need
+    unique keys) — so 'Date Time Date Time' stays exactly that."""
+    cols: list[dict] = []
+    for i, (x, name) in enumerate(anchors):
+        x_start = lo if i == 0 else x
+        x_end = anchors[i + 1][0] if i + 1 < len(anchors) else hi
+        cols.append({"name": (name or f"col_{i + 1}"), "x_start": round(x_start, 1),
+                     "x_end": round(x_end, 1)})
+    return cols
+
+
+def _calibrated_cols(calib: list[tuple[str, float]], lo: float, hi: float) -> list[dict]:
+    """Turn a calibration list [(name, x_start)] into {name, x_start, x_end} boxes clamped
+    to the panel band; x_end = next column's x_start (last → band edge). Column 0 keeps its
+    calibrated left edge (NOT extended to the band start) so a stray value left of it lands
+    in UNCAPTURED_DATA rather than polluting the first column."""
+    cols: list[dict] = []
+    for i, (name, xs) in enumerate(calib):
+        x_end = calib[i + 1][1] if i + 1 < len(calib) else hi
+        xs_c, xe_c = max(float(xs), lo), min(float(x_end), hi)
+        if xe_c <= xs_c:
             continue
-        idx = 0
-        for i, ax in enumerate(xs):
-            if w.x0 >= ax - 4:
-                idx = i
-            else:
+        cols.append({"name": name, "x_start": round(xs_c, 1), "x_end": round(xe_c, 1)})
+    return cols
+
+
+def _row_values(ws: list[_Word], cols: list[dict]) -> tuple[list[str], list[str]]:
+    """Positional row: one value per column (empty string preserved), by x-range. A word
+    that falls in no column box goes to the uncaptured bucket (→ UNCAPTURED_DATA). Every
+    consumed word is marked used for the document-level coverage guarantee."""
+    buckets: list[list[str]] = [[] for _ in cols]
+    uncaptured: list[str] = []
+    for w in ws:
+        placed = False
+        for i, c in enumerate(cols):
+            if c["x_start"] - 2 <= w.x0 < c["x_end"]:
+                buckets[i].append(w.text); w.used = True; placed = True
                 break
-        key = labels[idx] if labels else "col_1"
-        row.setdefault(key, []).append(w.text)
-        w.used = True
-    return {k: " ".join(v) for k, v in row.items()}
-
-
-def _dedupe_labels(anchors: list[tuple[float, str]]) -> list[str]:
-    seen: dict[str, int] = {}
-    out = []
-    for _, lbl in anchors:
-        lbl = lbl or "col"
-        if lbl in seen:
-            seen[lbl] += 1; out.append(f"{lbl} ({seen[lbl]})")
-        else:
-            seen[lbl] = 1; out.append(lbl)
-    return out
+        if not placed:
+            uncaptured.append(w.text); w.used = True
+    return [" ".join(b) for b in buckets], uncaptured
 
 
 # ---------------------------------------------------------------- extraction
@@ -283,7 +438,7 @@ def extract_tables(content: bytes, filename: str) -> dict[str, Any]:
     for loc in located:
         spec = loc["spec"]
         if loc["top"] is None:
-            tables.append({"table_name": spec["name"], "original_columns": [], "rows": [],
+            tables.append({"table_name": spec["name"], "columns": [], "rows": [],
                            "row_count": 0, "page_number": 1, "extraction_note": "section_not_found"})
             continue
         lo, hi = loc["lo"], loc["hi"]
@@ -311,31 +466,45 @@ def extract_tables(content: bytes, filename: str) -> dict[str, Any]:
             anchors = _anchors(hdr, lo, hi)
             header_bottom = hdr[-1][0].top
 
-        labels = _dedupe_labels(anchors)
-        rows: list[dict[str, str]] = []
+        # Calibrated boxes take priority over the generic header-anchor columns (pixel-perfect
+        # identity columns); fall back to generic coordinate columns when no calibration exists.
+        calib = CALIBRATION.get(terminal, {}).get(spec["name"])
+        cols = _calibrated_cols(calib, lo, hi) if calib else _cols_with_ranges(anchors, lo, hi)
+        rows: list[dict[str, Any]] = []
+        any_unc = False
         for ws in lines:
             if ws[0].top <= header_bottom or ws[0].top >= y_end:
                 continue
             band_ws = [w for w in ws if _in_band(w, lo, hi)]
             if not band_ws:
                 continue
-            row = _assign(band_ws, anchors, lo, hi)
-            if any(v.strip() for v in row.values()):
-                rows.append(row)
-        tables.append({"table_name": spec["name"], "original_columns": labels, "rows": rows,
+            values, unc = _row_values(band_ws, cols)
+            if any(v.strip() for v in values) or unc:
+                rows.append({"values": values, "_unc": unc})
+                if unc:
+                    any_unc = True
+        # No-data-loss: expose any per-row unmapped words as a trailing UNCAPTURED_DATA column.
+        if any_unc:
+            cols.append({"name": "UNCAPTURED_DATA", "x_start": round(lo, 1), "x_end": round(hi, 1)})
+        for r in rows:
+            unc = r.pop("_unc")
+            if any_unc:
+                r["values"].append(" ".join(unc))
+        tables.append({"table_name": spec["name"], "columns": cols, "rows": rows,
                        "row_count": len(rows), "page_number": 1,
                        "extraction_note": None if rows else "empty"})
 
-    # 3) word-level coverage → nothing dropped
-    uncaptured: list[dict[str, str]] = []
+    # 3) word-level coverage → nothing dropped (document level)
+    uncaptured: list[dict[str, Any]] = []
     for li, ws in enumerate(lines):
         if li in header_line_ids:
             continue
         leftover = [w.text for w in ws if not w.used]
         if leftover:
-            uncaptured.append({"_raw": " ".join(leftover)})
+            uncaptured.append({"values": [" ".join(leftover)]})
     if uncaptured:
-        tables.append({"table_name": "UNCAPTURED_TEXT", "original_columns": ["_raw"],
+        tables.append({"table_name": "UNCAPTURED_TEXT",
+                       "columns": [{"name": "_raw", "x_start": 0.0, "x_end": round(width, 1)}],
                        "rows": uncaptured, "row_count": len(uncaptured), "page_number": 1,
                        "extraction_note": "raw_fallback (not attributed to a template panel)"})
 

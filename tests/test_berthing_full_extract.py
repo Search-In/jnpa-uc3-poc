@@ -113,6 +113,55 @@ class FakeDocRepo:
     async def list_documents(self, *, terminal, limit, offset):
         return {"items": list(self.docs.values()), "total": len(self.docs), "limit": limit, "offset": offset}
 
+    def seed(self, doc_id, terminal, tables):
+        self.docs[doc_id] = {"id": doc_id, "file_name": f"{terminal}.pdf", "terminal": terminal,
+                             "report_date": "2026-06-04", "page_count": 1,
+                             "table_count": len(tables), "row_count": sum(len(t["rows"]) for t in tables)}
+        self.tables = getattr(self, "tables", {}); self.tables[doc_id] = tables
+
+    async def get_document(self, document_id):
+        return self.docs.get(document_id)
+
+    async def get_tables(self, document_id):
+        return getattr(self, "tables", {}).get(document_id, [])
+
+
+def test_router_full_view_dynamic_columns(client):
+    # Seed the fake repo with a two-table document (different columns per table) and assert the
+    # full-view endpoint returns them verbatim with dynamic columns — no hardcoding.
+    from gateway.main import app
+    from gateway.routers import berthing as router
+    def col(name, xs, xe):
+        return {"name": name, "x_start": xs, "x_end": xe}
+    repo = FakeDocRepo()
+    repo.seed(7, "BMCT", [
+        {"table_name": "VESSELS_ON_BERTHED",
+         "original_columns": [col("Berth", 0, 40), col("Vessel", 40, 90), col("VIA", 90, 120), col("LOA", 120, 150)],
+         "rows": [{"values": ["BMCT01", "ONE READINESS", "S0473", "272"]}],
+         "row_count": 1, "extraction_note": None},
+        {"table_name": "ICD_PENDENCY",
+         "original_columns": [col("Dest", 890, 920), col("Moves", 920, 960), col("Teus", 960, 995)],
+         "rows": [{"values": ["AKV", "394", "657"]}],
+         "row_count": 1, "extraction_note": None},
+    ])
+    app.dependency_overrides[router.get_doc_repo] = lambda: repo
+    try:
+        r = client.get("/api/berthing/documents/7/full-view")
+        assert r.status_code == 200
+        j = r.json()
+        assert j["terminal"] == "BMCT" and j["report_date"] == "2026-06-04" and len(j["tables"]) == 2
+        t0 = j["tables"][0]
+        assert t0["table_name"] == "VESSELS_ON_BERTHED"
+        # coordinate-based columns, verbatim, same order as PDF
+        assert [c["name"] for c in t0["columns"]] == ["Berth", "Vessel", "VIA", "LOA"]
+        assert t0["columns"][0]["x_start"] == 0 and t0["columns"][0]["x_end"] == 40
+        assert t0["rows"][0]["values"] == ["BMCT01", "ONE READINESS", "S0473", "272"]   # positional
+        # a different table has entirely different columns — nothing hardcoded
+        assert [c["name"] for c in j["tables"][1]["columns"]] == ["Dest", "Moves", "Teus"]
+        assert client.get("/api/berthing/documents/999/full-view").status_code == 404
+    finally:
+        app.dependency_overrides[router.get_doc_repo] = lambda: FakeDocRepo()
+
 
 @pytest.fixture()
 def client():
@@ -163,10 +212,16 @@ def test_core_panels_present_and_uncontaminated(term):
     assert not missing, f"{term}: core panels absent entirely: {missing}"
     structured = {t["table_name"] for t in res["tables"] if t["extraction_note"] != "section_not_found"}
     assert not (_CORE[term] - structured), f"{term}: core panels not structured: {_CORE[term] - structured}"
+    # new shape: columns are {name,x_start,x_end}; rows are positional {values:[...]}
+    for t in res["tables"]:
+        for c in t["columns"]:
+            assert {"name", "x_start", "x_end"} <= set(c), f"{term}/{t['table_name']} bad column shape"
+        for row in t["rows"]:
+            assert len(row["values"]) == len(t["columns"]), "row values must align 1:1 with columns"
     # vessel tables must not contain ICD/CFS tokens (interleave separation)
     for t in res["tables"]:
         if t["table_name"] in ("VESSELS_EXPECTED", "VESSELS_ON_BERTH", "VESSELS_ON_BERTHED"):
-            blob = " ".join(str(v) for row in t["rows"] for v in row.values())
+            blob = " ".join(v for row in t["rows"] for v in row["values"])
             assert "CFS" not in blob and "MVS" not in blob, f"{term}/{t['table_name']} contaminated"
 
 
@@ -185,6 +240,28 @@ def test_all_25_pdfs_extract_with_coverage():
             assert isinstance(res["uncaptured_lines"], int)   # coverage tracked, never crashes
             assert res["total_rows"] > 0
     assert total == 25, f"expected 25 PDFs, saw {total}"
+
+
+@pytest.mark.skipif(not _DATA_DIR.exists(), reason="JNPA Berthing Reports data folder not present")
+@pytest.mark.parametrize("term,tbl,bname,vname", [
+    ("APMT", "ON_BERTH_VESSEL", "Berth", "Vessel"),
+    ("BMCT", "VESSELS_ON_BERTHED", "Berth", "Vessel"),
+    ("NSICT", "VESSELS_ON_BERTH", "Berth", "Vessel Name"),
+    ("NSIGT", "VESSELS_ON_BERTH", "Berth", "Vessel Name"),
+])
+def test_calibrated_columns_keep_values_in_place(term, tbl, bname, vname):
+    """Pixel-perfect acceptance: berth code stays in the Berth column (single token), the
+    full vessel name stays in the Vessel column, and the voyage is a single S0xxx token."""
+    res = FE.extract_tables(_read(term, _REP[term]), _REP[term])
+    t = next(x for x in res["tables"] if x["table_name"] == tbl)
+    names = [c["name"] for c in t["columns"]]
+    bi, vi, via_i = names.index(bname), names.index(vname), names.index("VIA")
+    row = next((r for r in t["rows"] if r["values"][vi].strip()), None)
+    assert row is not None, f"{term}: no populated vessel row"
+    berth, vessel, voy = row["values"][bi], row["values"][vi], row["values"][via_i]
+    assert berth.strip() and " " not in berth.strip(), f"{term}: berth not isolated: {berth!r}"
+    assert vessel.strip(), f"{term}: vessel name empty"
+    assert voy.strip().startswith("S0") and " " not in voy.strip(), f"{term}: voyage bad: {voy!r}"
 
 
 @pytest.mark.skipif(not (_DATA_DIR / _TERMS["NSICT"] / _REP["NSICT"]).exists(),

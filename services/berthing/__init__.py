@@ -13,8 +13,10 @@ table; it owns only the jnpa.berthing_* objects. Layering mirrors
 * :mod:`upload_parsers`           — CSV/XLS/XLSX → the SAME normalised model.
 """
 
+from .document_repository import BerthingDocumentRepository
 from .repository import BerthingRepository
 from .service import BerthingService
 from .upload_service import BerthingUploadService
 
-__all__ = ["BerthingRepository", "BerthingService", "BerthingUploadService"]
+__all__ = ["BerthingRepository", "BerthingService", "BerthingUploadService",
+           "BerthingDocumentRepository"]

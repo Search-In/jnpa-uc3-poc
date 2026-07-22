@@ -93,6 +93,38 @@ _DDL: list[str] = [
         raw_data        text,
         created_at      timestamptz NOT NULL DEFAULT now())""",
     "CREATE INDEX IF NOT EXISTS idx_berthing_err_file ON jnpa.berthing_import_errors (import_file_id, id)",
+    # --- Full-fidelity PDF capture (migration 0037) — additive verbatim table store ----------
+    # Mirrors migration 0037 exactly so a dev/mock DB that never ran it still gets the objects.
+    # Never touches the 0036 normalised tables above.
+    """CREATE TABLE IF NOT EXISTS jnpa.berthing_report_documents (
+        id            bigserial PRIMARY KEY,
+        file_name     text NOT NULL,
+        terminal      text,
+        report_date   date,
+        pdf_hash      text,
+        page_count    integer,
+        table_count   integer NOT NULL DEFAULT 0,
+        row_count     integer NOT NULL DEFAULT 0,
+        uploaded_by   text,
+        created_at    timestamptz NOT NULL DEFAULT now(),
+        CONSTRAINT uq_berthing_document_hash UNIQUE (pdf_hash))""",
+    "CREATE INDEX IF NOT EXISTS idx_brdoc_terminal ON jnpa.berthing_report_documents (terminal, id DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_brdoc_created ON jnpa.berthing_report_documents (id DESC)",
+    """CREATE TABLE IF NOT EXISTS jnpa.berthing_report_tables (
+        id                bigserial PRIMARY KEY,
+        document_id       bigint NOT NULL
+                          REFERENCES jnpa.berthing_report_documents (id) ON DELETE CASCADE,
+        terminal          text,
+        table_name        text NOT NULL,
+        panel_index       integer NOT NULL DEFAULT 0,
+        page_number       integer NOT NULL DEFAULT 1,
+        original_columns  jsonb NOT NULL,
+        rows              jsonb NOT NULL,
+        row_count         integer NOT NULL DEFAULT 0,
+        extraction_note   text,
+        created_at        timestamptz NOT NULL DEFAULT now())""",
+    "CREATE INDEX IF NOT EXISTS idx_brt_doc ON jnpa.berthing_report_tables (document_id, panel_index)",
+    "CREATE INDEX IF NOT EXISTS idx_brt_name ON jnpa.berthing_report_tables (terminal, table_name)",
 ]
 
 

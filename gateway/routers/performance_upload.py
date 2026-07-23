@@ -1,7 +1,7 @@
 """/api/performance (upload) — Performance Data Upload Management (module 12 sub-module).
 
 Admin-only WRITE surface that lets DTCCC_ADMIN users upload JNPA performance data
-(CSV/XLSX) into the EXISTING jnpa.perf_* dashboard tables. Thin router over
+(PDF/CSV/XLSX) into the EXISTING jnpa.perf_* dashboard tables. Thin router over
 services.performance.UploadService (UploadService → UploadRepository). Additive:
 it creates only the upload lifecycle tables and inserts into perf_* via idempotent
 ON CONFLICT. It does NOT modify auth/JWT/RBAC — admin enforcement reads the
@@ -29,7 +29,10 @@ from services.performance import UploadService
 
 router = APIRouter(prefix="/api/performance", tags=["performance-upload"])
 
-_MAX_BYTES = 10 * 1024 * 1024          # 10 MB upload cap
+# 25 MB upload cap — the official NLDS/LDB Analytics PDF is ~3 MB today but is a
+# 48-page graphics deck; CSV/XLSX templates are a few KB.
+_MAX_BYTES = 25 * 1024 * 1024
+_ALLOWED_EXT = (".pdf", ".csv", ".xlsx", ".xlsm", ".txt")
 _service: Optional[UploadService] = None
 
 
@@ -64,13 +67,21 @@ def _check_type(report_type: str) -> str:
 
 
 async def _read(file: UploadFile) -> bytes:
+    name = (file.filename or "").lower()
+    if name and not name.endswith(_ALLOWED_EXT):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail={"error": "unsupported_format",
+                                    "detail": "upload the official JNPA report PDF, or a "
+                                              "CSV/XLSX built from the template",
+                                    "allowed": list(_ALLOWED_EXT)})
     content = await file.read()
     if not content:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail={"error": "empty_file"})
     if len(content) > _MAX_BYTES:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                            detail={"error": "file_too_large", "max_bytes": _MAX_BYTES})
+                            detail={"error": "file_too_large", "max_bytes": _MAX_BYTES,
+                                    "size_bytes": len(content)})
     return content
 
 

@@ -279,16 +279,15 @@ CREATE INDEX IF NOT EXISTS idx_alerts_ts ON jnpa.alerts (ts DESC);
 -- Seed data
 -- ===========================================================================
 
--- 4 gates at berth-line centroids aligned to the JNPA satellite reference
--- (methodology + values adapted from jnpa_poc_2 config/terminals.json, which
--- fine-tuned each terminal onto the developed berth rather than open water).
--- Display coordinates only: gate throughput joins on jnpa.cameras.gate_id, and
--- the truck simulator's routing coords live in trucking_app/gates.py (unchanged).
+-- 4 gates aligned to the latest UC2 map gate positions (data/positions.json
+-- gate3d:<terminal>-G1, the primary gate marker per terminal). Display
+-- coordinates only: gate throughput joins on jnpa.cameras.gate_id, and the
+-- truck simulator's routing coords live in trucking_app/gates.py (unchanged).
 INSERT INTO jnpa.gates (id, name, lat, lon) VALUES
-    ('G-NSICT', 'Nhava Sheva International Container Terminal', 18.9527, 72.9505),
-    ('G-JNPCT', 'Jawaharlal Nehru Port Container Terminal',     18.9497, 72.9479),
-    ('G-NSIGT', 'Nhava Sheva India Gateway Terminal',           18.9550, 72.9525),
-    ('G-BMCT',  'Bharat Mumbai Container Terminals',            18.9386, 72.9383);
+    ('G-NSICT', 'Nhava Sheva International Container Terminal', 18.951073, 72.952064),
+    ('G-JNPCT', 'Jawaharlal Nehru Port Container Terminal',     18.929294, 72.952185),
+    ('G-NSIGT', 'Nhava Sheva India Gateway Terminal',           18.946600, 72.948576),
+    ('G-BMCT',  'Bharat Mumbai Container Terminals',            18.937704, 72.943475);
 
 -- 12 gate cameras (3 per gate: entry, exit, overview).
 INSERT INTO jnpa.cameras (id, gate_id, name, lat, lon, role) VALUES

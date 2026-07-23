@@ -82,12 +82,16 @@ export default function UploadPanel() {
     reset();
     if (f && !/\.(pdf|csv|xlsx|xlsm)$/i.test(f.name)) {
       setFile(null);
-      setPickError(`“${f.name}” is not a supported file — upload the official JNPA report PDF, or a CSV/XLSX built from the template.`);
+      setPickError(
+        `“${f.name}” is not a supported file — upload the official JNPA report PDF, or a CSV/XLSX built from the template.`,
+      );
       return;
     }
     if (f && f.size > MAX_MB * 1024 * 1024) {
       setFile(null);
-      setPickError(`“${f.name}” is ${(f.size / 1024 / 1024).toFixed(1)} MB — the limit is ${MAX_MB} MB.`);
+      setPickError(
+        `“${f.name}” is ${(f.size / 1024 / 1024).toFixed(1)} MB — the limit is ${MAX_MB} MB.`,
+      );
       return;
     }
     setFile(f);
@@ -250,10 +254,9 @@ export default function UploadPanel() {
           </div>
         </div>
         <p className="mt-2 text-[12px] text-muted-foreground">
-          Upload the official JNPA <strong>PDF</strong> — {PDF_HINT[reportType]} — and it is
-          parsed exactly as published. A CSV/XLSX built from the template also works. Max{" "}
-          {MAX_MB} MB. Re-uploading a corrected report replaces the figures for that
-          reporting period.
+          Upload the official JNPA <strong>PDF</strong> — {PDF_HINT[reportType]} — and it is parsed
+          exactly as published. A CSV/XLSX built from the template also works. Max {MAX_MB} MB.
+          Re-uploading a corrected report replaces the figures for that reporting period.
         </p>
         {pickError && (
           <div className="mt-3 flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-[13px] text-critical">
@@ -262,7 +265,8 @@ export default function UploadPanel() {
         )}
         {(validateMut.isError || importMut.isError) && (
           <div className="mt-3 flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-[13px] text-critical">
-            <AlertTriangle size={15} /> {errText(validateMut.error || importMut.error).slice(0, 300)}
+            <AlertTriangle size={15} />{" "}
+            {errText(validateMut.error || importMut.error).slice(0, 300)}
           </div>
         )}
       </Card>

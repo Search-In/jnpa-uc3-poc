@@ -1,13 +1,26 @@
-"""Performance upload — CSV/XLSX parsing, validation, and mapping to perf_* rows.
+"""Performance upload — PDF/CSV/XLSX parsing, validation, and mapping to perf_* rows.
 
-Pure functions (no DB, no HTTP). Reads an uploaded CSV or XLSX for one of the three
-report types, validates columns/dates/numbers/terminals, and maps valid rows into
+Pure functions (no DB, no HTTP). Reads an uploaded file for one of the three report
+types, validates columns/dates/numbers/terminals, and maps valid rows into
 insert-ready records for the EXISTING jnpa.perf_* tables. Terminal codes are
 normalised the same way as the PDF importer (GTI→APMT, BMCTPL→BMCT).
 
-For daily_status and monthly_teu it also derives the JN_PORT aggregate row (and the
-daily TOTAL status row) from the uploaded terminal rows, so an upload immediately
-drives the dashboard KPI cards (which read the JN_PORT / TOTAL rollups).
+Two input shapes, ONE output contract (:class:`ParseResult`), so validate / preview /
+import are identical whichever the client uploads:
+
+* **PDF** — the official JNPA report exactly as published. Routed to
+  :mod:`services.performance.pdf_parsers` (the validated extraction engine, shared
+  with the offline backfill script). This is the client's primary workflow.
+* **CSV / XLSX** — the normalised template produced by ``/templates/{report_type}``.
+
+Format is decided by CONTENT (magic bytes) first and only then by extension, so a
+mislabelled file is routed correctly instead of crashing the CSV reader.
+
+For daily_status and monthly_teu the CSV/XLSX path also derives the JN_PORT aggregate
+row (and the daily TOTAL status row) from the uploaded terminal rows, so an upload
+immediately drives the dashboard KPI cards (which read the JN_PORT / TOTAL rollups).
+The PDF path does NOT derive them — the official report prints its own JN Port /
+TOTAL columns and those authoritative figures are extracted verbatim.
 """
 from __future__ import annotations
 
@@ -16,6 +29,8 @@ import datetime as dt
 import io
 import re
 from typing import Any, Optional
+
+from . import pdf_parsers as PDF
 
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
 MONTHS = {"JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
@@ -105,44 +120,97 @@ def template_csv(report_type: str) -> str:
     return buf.getvalue()
 
 
+# --- format detection --------------------------------------------------------
+_PDF_MAGIC = b"%PDF"
+_ZIP_MAGIC = b"PK\x03\x04"          # XLSX/XLSM are ZIP containers
+_XLS_MAGIC = b"\xd0\xcf\x11\xe0"    # legacy OLE2 .xls
+
+
+def sniff_format(content: bytes, filename: str) -> str:
+    """Decide PDF / XLSX / CSV from the file's CONTENT, falling back to its extension.
+
+    Magic bytes win because clients routinely rename reports (a PDF saved as .csv used
+    to reach the CSV reader and blow up with a 500). Returns 'PDF' | 'XLSX' | 'CSV',
+    or raises ValueError('unsupported_format') for anything we cannot read.
+    """
+    head = (content or b"")[:8]
+    if head.startswith(_PDF_MAGIC):
+        return "PDF"
+    if head.startswith(_ZIP_MAGIC):
+        return "XLSX"
+    if head.startswith(_XLS_MAGIC):
+        # Legacy .xls has no reader here; say so explicitly rather than mis-parsing it.
+        raise ValueError("unsupported_format: legacy .xls is not supported — "
+                         "save as .xlsx or .csv, or upload the original PDF")
+    name = (filename or "").lower()
+    if name.endswith(".pdf"):
+        # Extension says PDF but the bytes do not — corrupt or truncated upload.
+        raise ValueError("unreadable_pdf: file is named .pdf but does not start with "
+                         "'%PDF' — it is corrupted or not a PDF")
+    if name.endswith((".xlsx", ".xlsm")):
+        raise ValueError("unreadable_file: file is named .xlsx but is not a valid "
+                         "Excel workbook")
+    if name.endswith((".csv", ".txt")) or name == "":
+        return "CSV"
+    raise ValueError("unsupported_format")
+
+
+def is_pdf(content: bytes, filename: str = "") -> bool:
+    return (content or b"").startswith(_PDF_MAGIC) or (filename or "").lower().endswith(".pdf")
+
+
 # --- reading -----------------------------------------------------------------
 def read_rows(content: bytes, filename: str) -> tuple[list[str], list[dict[str, Any]]]:
     """Return (header, rows) from a CSV or XLSX byte payload. Raises ValueError on
-    an unreadable/empty file or unsupported extension."""
-    name = (filename or "").lower()
-    if name.endswith(".xlsx") or name.endswith(".xlsm"):
-        import openpyxl
-        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True, read_only=True)
-        ws = wb[wb.sheetnames[0]]
-        it = ws.iter_rows(values_only=True)
+    an unreadable/empty file or unsupported format — never a bare csv/openpyxl error,
+    so the upload layer answers 400/REJECTED instead of 500."""
+    fmt = sniff_format(content, filename)
+    if fmt == "PDF":
+        # Callers must route PDFs to parse_pdf(); reaching here is a programming error.
+        raise ValueError("unsupported_format: PDF must be parsed via parse_pdf()")
+    if fmt == "XLSX":
         try:
-            header = [str(c).strip() if c is not None else "" for c in next(it)]
-        except StopIteration:
+            import openpyxl
+        except ImportError as exc:
+            raise ValueError("unreadable_file: XLSX support is unavailable on the "
+                             "server (openpyxl is not installed)") from exc
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True, read_only=True)
+        except Exception as exc:  # noqa: BLE001 — corrupt/encrypted workbook
+            raise ValueError(f"unreadable_file: {exc}") from exc
+        try:
+            ws = wb[wb.sheetnames[0]]
+            it = ws.iter_rows(values_only=True)
+            try:
+                header = [str(c).strip() if c is not None else "" for c in next(it)]
+            except StopIteration:
+                raise ValueError("empty_file")
+            rows = []
+            for values in it:
+                if not any(v not in (None, "") for v in values):
+                    continue
+                rows.append({header[i]: (values[i] if i < len(values) else None)
+                             for i in range(len(header))})
+        finally:
             wb.close()
-            raise ValueError("empty_file")
-        rows = []
-        for values in it:
-            if not any(v not in (None, "") for v in values):
-                continue
-            rows.append({header[i]: (values[i] if i < len(values) else None)
-                         for i in range(len(header))})
-        wb.close()
         return header, rows
-    if name.endswith(".csv") or name == "" or name.endswith(".txt"):
-        text = content.decode("utf-8-sig", errors="replace")
-        reader = csv.reader(io.StringIO(text))
+    # CSV
+    text = content.decode("utf-8-sig", errors="replace").replace("\x00", "")
+    try:
+        reader = csv.reader(io.StringIO(text, newline=""))
         all_rows = [r for r in reader if any((c or "").strip() for c in r)]
-        if not all_rows:
-            raise ValueError("empty_file")
-        header = [c.strip() for c in all_rows[0]]
-        rows = []
-        for r in all_rows[1:]:
-            # skip commented/example helper lines
-            if r and str(r[0]).strip().startswith("#"):
-                continue
-            rows.append({header[i]: (r[i] if i < len(r) else None) for i in range(len(header))})
-        return header, rows
-    raise ValueError("unsupported_format")
+    except csv.Error as exc:        # malformed CSV → clean rejection, not a 500
+        raise ValueError(f"unreadable_file: malformed CSV ({exc})") from exc
+    if not all_rows:
+        raise ValueError("empty_file")
+    header = [c.strip() for c in all_rows[0]]
+    rows = []
+    for r in all_rows[1:]:
+        # skip commented/example helper lines
+        if r and str(r[0]).strip().startswith("#"):
+            continue
+        rows.append({header[i]: (r[i] if i < len(r) else None) for i in range(len(header))})
+    return header, rows
 
 
 # --- validation + mapping ----------------------------------------------------
@@ -353,3 +421,184 @@ def _parse_ldb(res: ParseResult, rows: list[dict]) -> None:
                     "dwell_hours": nums.get("dwell_hours"), "dwell_hours_prev": nums.get("dwell_hours_prev")})
     res.records = {"ldb_port_dwell": ldb}
     res.preview = [dict(r) for r in ldb[:20]]
+
+
+# =============================================================================
+# PDF path — the official JNPA reports, as published
+# =============================================================================
+# Content fingerprints identifying which official report a PDF actually is. Used to
+# reject a right-file/wrong-report-type upload before it writes anything.
+_PDF_SIGNATURES: dict[str, tuple[str, ...]] = {
+    "daily_status": ("DAILY STATUS REPORT", "CONTAINER TERMINALS TRAFFIC"),
+    "monthly_teu": ("MONTHWISE TEUS HANDLED", "CONTAINER TERMINALS"),
+    "ldb_report": ("LOGISTICS DATA BANK", "NICDC LOGISTICS DATA SERVICES", "LDB"),
+}
+_REPORT_LABEL = {"daily_status": "Daily Status Report",
+                 "monthly_teu": "FY JN Port TEUs Report",
+                 "ldb_report": "NLDS/LDB Analytics Report"}
+
+# Report-date recovery from the PDF BODY, used only when the filename carries no date
+# (clients rename downloads). The parsers themselves read the date from the filename,
+# so we hand them a synthetic canonical name rather than touching extraction logic.
+_BODY_DATE = re.compile(r"As\s+on\s+(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})", re.I)
+_BODY_DATE2 = re.compile(r"Date\s*:?\s*(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})", re.I)
+_BODY_MON_YY = re.compile(r"\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*'?\s?(\d{2,4})\b")
+_LDB_MONTH_NAMES = {1: "January", 2: "February", 3: "March", 4: "April", 5: "May", 6: "June",
+                    7: "July", 8: "August", 9: "September", 10: "October", 11: "November",
+                    12: "December"}
+
+
+def pdf_text(content: bytes, *, max_pages: int = 6) -> str:
+    """First-N-pages text of an uploaded PDF, for type/date detection.
+
+    Raises ValueError('scanned_pdf') when the document has no text layer at all —
+    those need OCR, which this pipeline does not perform.
+    """
+    with PDF.open_pdf(content) as pdf:
+        pages = pdf.pages[:max_pages]
+        text = "\n".join((p.extract_text() or "") for p in pages)
+        if not text.strip() and not PDF._has_text(pdf):
+            raise ValueError("scanned_pdf: this PDF has no text layer (it looks like a "
+                             "scan or image export). Upload the original digital PDF "
+                             "published by JNPA, or convert it with OCR first")
+    if not text.strip():
+        raise ValueError("empty_pdf: no readable text on the first pages")
+    return text
+
+
+def detect_pdf_report_type(text: str) -> Optional[str]:
+    """Which official report this PDF is, from its content. None when inconclusive."""
+    u = " ".join((text or "").upper().split())
+    if "DAILY STATUS REPORT" in u:
+        return "daily_status"
+    if "MONTHWISE TEUS HANDLED" in u:
+        return "monthly_teu"
+    if "LOGISTICS DATA BANK" in u or "NICDC LOGISTICS DATA SERVICES" in u:
+        return "ldb_report"
+    return None
+
+
+def _canonical_daily_name(filename: str, text: str) -> str:
+    """A filename the validated parser can read a date from: the original when it
+    already carries one, else one rebuilt from the report body."""
+    if PDF.daily_date_from_name(filename or ""):
+        return filename
+    m = _BODY_DATE.search(text) or _BODY_DATE2.search(text)
+    if not m:
+        raise ValueError("missing_report_date: could not determine the report date from "
+                         "the filename or the PDF body — rename the file to include it "
+                         "(e.g. 'Daily Status Report 26.05.2026.pdf')")
+    d, mth, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    try:
+        dt.date(y, mth, d)
+    except ValueError as exc:
+        raise ValueError(f"invalid_report_date: '{m.group(0)}' is not a valid date") from exc
+    return f"Daily Status Report {d:02d}.{mth:02d}.{y:04d}.pdf"
+
+
+def _canonical_ldb_name(filename: str, text: str) -> str:
+    """Same idea for the LDB report, whose parser expects '<Month>_<YYYY>'."""
+    if PDF.ldb_month_from_name(filename or ""):
+        return filename
+    m = _BODY_MON_YY.search(text or "")
+    if not m:
+        raise ValueError("missing_report_month: could not determine the report month from "
+                         "the filename or the PDF body — rename the file to include it "
+                         "(e.g. 'NLDS_LDB_Full Analysis_March_2026.pdf')")
+    mon = MONTHS[m.group(1).upper()]
+    yr = int(m.group(2))
+    yr += 2000 if yr < 100 else 0
+    return f"LDB_{_LDB_MONTH_NAMES[mon]}_{yr}.pdf"
+
+
+def parse_pdf(report_type: str, content: bytes, filename: str) -> ParseResult:
+    """Parse an official JNPA report PDF into the SAME ParseResult the CSV/XLSX path
+    produces, so validate / preview / import are unchanged.
+
+    Extraction is delegated verbatim to :mod:`services.performance.pdf_parsers`; this
+    function only detects the report, recovers the report date when the filename lacks
+    it, and maps the parser output onto the repository's record keys.
+    """
+    res = ParseResult()
+    if report_type not in SPECS:
+        res.err(None, None, "unknown_report_type", f"unknown report type '{report_type}'")
+        res.rejected = True
+        return res
+
+    text = pdf_text(content)                       # raises on scanned / unreadable
+    detected = detect_pdf_report_type(text)
+    if detected and detected != report_type:
+        res.err(None, None, "report_type_mismatch",
+                f"this PDF is a {_REPORT_LABEL[detected]}, but '{_REPORT_LABEL[report_type]}' "
+                f"was selected — pick the matching report type and retry")
+        res.rejected = True
+        return res
+    if detected is None:
+        res.warn(None, None, "unrecognised_layout",
+                 "could not fingerprint this PDF as an official JNPA report — parsing it "
+                 f"as a {_REPORT_LABEL[report_type]}; check the preview carefully")
+
+    if report_type == "daily_status":
+        _pdf_daily(res, content, _canonical_daily_name(filename, text))
+    elif report_type == "monthly_teu":
+        _pdf_monthly(res, content, filename)
+    else:
+        _pdf_ldb(res, content, _canonical_ldb_name(filename, text))
+
+    if not res.rejected and not any(res.records.values()):
+        res.err(None, None, "no_data_extracted",
+                "the PDF was read but no data rows could be extracted — it may be an "
+                "unexpected layout or a different report")
+        res.rejected = True
+    return res
+
+
+def _pdf_daily(res: ParseResult, content: bytes, filename: str) -> None:
+    parsed = PDF.parse_daily(content, filename)
+    if parsed is None:
+        res.err(None, None, "missing_report_date",
+                "could not determine the report date for this Daily Status Report")
+        res.rejected = True
+        return
+    rd = parsed["report_date"]
+    res.report_keys.add(rd)
+    res.records = {
+        "snapshot": [{"report_date": rd, "as_of_ts": parsed.get("as_of_ts"),
+                      "source_file": parsed.get("source_file")}],
+        "traffic": parsed["traffic"],
+        "tonnage": parsed["tonnage"],
+        "status": parsed["status"],
+        "vessels": parsed["vessels"],
+    }
+    res.row_count = sum(len(v) for v in res.records.values())
+    # Preview mirrors the report's own section order so the operator recognises it.
+    res.preview = [dict(r) for r in parsed["status"][:20]]
+
+
+def _pdf_monthly(res: ParseResult, content: bytes, filename: str) -> None:
+    monthly = PDF.parse_monthly(content, filename)
+    for r in monthly:
+        res.report_keys.add(r["month_date"])
+    res.records = {"monthly": monthly}
+    res.row_count = len(monthly)
+    res.preview = [dict(r) for r in monthly[:20]]
+
+
+def _pdf_ldb(res: ParseResult, content: bytes, filename: str) -> None:
+    ldb = PDF.parse_ldb(content, filename)
+    if not ldb:
+        res.err(None, None, "missing_report_month",
+                "could not determine the report month for this LDB Analytics Report")
+        res.rejected = True
+        return
+    res.records = {
+        "ldb_port_dwell": ldb.get("port_dwell", []),
+        "ldb_facility": ldb.get("facility", []),
+        "ldb_congestion": ldb.get("congestion", []),
+        "ldb_routes": ldb.get("routes", []),
+        "ldb_weather": ldb.get("weather", []),
+    }
+    for r in res.records["ldb_port_dwell"]:
+        res.report_keys.add(r["report_month"])
+    res.row_count = sum(len(v) for v in res.records.values())
+    res.preview = [dict(r) for r in res.records["ldb_port_dwell"][:20]]

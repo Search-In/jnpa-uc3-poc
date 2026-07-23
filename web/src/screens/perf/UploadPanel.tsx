@@ -1,7 +1,9 @@
 // Performance Data Upload (module 12 sub-module) — admin-only.
-// Download template → pick CSV/XLSX → Validate (preview + errors) → Import
-// (atomic) → dashboard refresh. All data flows through /api/performance/* — nothing
-// is mocked; the preview and history come straight from the backend.
+// Pick the official JNPA report PDF (or a CSV/XLSX built from the template) →
+// Validate (preview + errors) → Import (atomic) → dashboard refresh. All data flows
+// through /api/performance/* — nothing is mocked; the preview and history come
+// straight from the backend, which parses the PDF with the same validated engine
+// used for the offline backfill.
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, FileUp, CheckCircle2, AlertTriangle, Loader2, RefreshCw } from "lucide-react";
@@ -22,6 +24,23 @@ const REPORT_TYPES = [
   { value: "monthly_teu", label: "Monthly TEU Report" },
   { value: "ldb_report", label: "LDB Report" },
 ];
+// What the official JNPA PDF for each report type looks like, so an operator can tell
+// at a glance whether they have picked the right file for the selected report type.
+const PDF_HINT: Record<string, string> = {
+  daily_status: "Daily Status Report — e.g. “Daily Status Report 26.05.2026.pdf”",
+  monthly_teu: "Monthwise TEUs handled in JNPA — e.g. “FY_2026-27_JN_Port_TEUs_April.pdf”",
+  ldb_report: "NLDS/LDB Analytics Report — e.g. “NLDS_LDB_Full Analysis_March_2026.pdf”",
+};
+const ACCEPT = ".pdf,.csv,.xlsx";
+const MAX_MB = 25;
+
+// The API answers 4xx with {detail:{error,detail}}; surface that instead of "[object Object]".
+function errText(e: unknown): string {
+  const d = (e as any)?.detail ?? (e as any)?.response?.data?.detail ?? e;
+  if (d && typeof d === "object")
+    return [d.error, d.detail].filter(Boolean).join(" — ") || JSON.stringify(d);
+  return String(d ?? "Upload failed");
+}
 const BTN =
   "inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50";
 const BTN_PRIMARY =
@@ -50,13 +69,28 @@ export default function UploadPanel() {
     queryFn: () => api.perfUploads({ limit: 25 }),
   });
 
+  const [pickError, setPickError] = useState<string | null>(null);
+
   const reset = () => {
     setValidation(null);
     setImportResult(null);
+    setPickError(null);
   };
+  // Client-side pre-checks so an obviously wrong file is caught before the round-trip.
+  // The server re-validates by content (magic bytes) regardless — this is UX, not a gate.
   const pickFile = (f: File | null) => {
-    setFile(f);
     reset();
+    if (f && !/\.(pdf|csv|xlsx|xlsm)$/i.test(f.name)) {
+      setFile(null);
+      setPickError(`“${f.name}” is not a supported file — upload the official JNPA report PDF, or a CSV/XLSX built from the template.`);
+      return;
+    }
+    if (f && f.size > MAX_MB * 1024 * 1024) {
+      setFile(null);
+      setPickError(`“${f.name}” is ${(f.size / 1024 / 1024).toFixed(1)} MB — the limit is ${MAX_MB} MB.`);
+      return;
+    }
+    setFile(f);
   };
 
   const validateMut = useMutation({
@@ -119,6 +153,11 @@ export default function UploadPanel() {
       render: (r) => <span className="font-mono">{r.original_filename}</span>,
     },
     {
+      key: "file_format",
+      header: "Format",
+      render: (r) => <StatusChip label={r.file_format ?? "—"} tone="neutral" />,
+    },
+    {
       key: "status",
       header: "Status",
       render: (r) => <StatusChip label={r.status} tone={statusTone(r.status)} />,
@@ -131,10 +170,10 @@ export default function UploadPanel() {
       render: (r) => r.inserted_count ?? 0,
     },
     {
-      key: "skipped_count",
-      header: "Skipped",
+      key: "updated_count",
+      header: "Refreshed",
       align: "right",
-      render: (r) => r.skipped_count ?? 0,
+      render: (r) => r.updated_count ?? 0,
     },
     { key: "error_count", header: "Errors", align: "right", render: (r) => r.error_count ?? 0 },
     { key: "uploaded_by", header: "By" },
@@ -168,10 +207,10 @@ export default function UploadPanel() {
           <input
             ref={fileRef}
             type="file"
-            accept=".csv,.xlsx"
+            accept={ACCEPT}
             className="hidden"
             onChange={(e) => pickFile(e.target.files?.[0] ?? null)}
-            aria-label="Choose data file"
+            aria-label="Choose report PDF or data file"
           />
           <button type="button" className={BTN} onClick={() => fileRef.current?.click()}>
             <FileUp size={15} /> {file ? "Change file" : "Choose file"}
@@ -210,10 +249,20 @@ export default function UploadPanel() {
             </button>
           </div>
         </div>
+        <p className="mt-2 text-[12px] text-muted-foreground">
+          Upload the official JNPA <strong>PDF</strong> — {PDF_HINT[reportType]} — and it is
+          parsed exactly as published. A CSV/XLSX built from the template also works. Max{" "}
+          {MAX_MB} MB. Re-uploading a corrected report replaces the figures for that
+          reporting period.
+        </p>
+        {pickError && (
+          <div className="mt-3 flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-[13px] text-critical">
+            <AlertTriangle size={15} /> {pickError}
+          </div>
+        )}
         {(validateMut.isError || importMut.isError) && (
           <div className="mt-3 flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-[13px] text-critical">
-            <AlertTriangle size={15} />{" "}
-            {String((validateMut.error || importMut.error) as any)?.slice(0, 200)}
+            <AlertTriangle size={15} /> {errText(validateMut.error || importMut.error).slice(0, 300)}
           </div>
         )}
       </Card>
@@ -289,10 +338,13 @@ export default function UploadPanel() {
           <div className="flex items-center gap-2 text-sm font-semibold">
             <StatusChip label={importResult.status} tone={statusTone(importResult.status)} />
             <span className="text-foreground">
-              {importResult.inserted} inserted · {importResult.skipped} skipped
+              {importResult.inserted} inserted · {importResult.updated ?? 0} refreshed
               {importResult.status === "IMPORTED" && " — dashboard updated"}
             </span>
           </div>
+          {importResult.error && (
+            <div className="mt-2 text-[13px] text-critical">{String(importResult.error)}</div>
+          )}
         </Card>
       )}
 

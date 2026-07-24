@@ -1,11 +1,11 @@
 """Alert sink + recent-alert query.
 
 Every alert the engine raises is:
-  1. written to ``jnpa.alerts`` (the operational alert table), and
+  1. written to ``core.alert`` (the operational alert table), and
   2. published to the Kafka ``alerts`` topic (the wire contract; see
      ``jnpa_shared.schemas.TOPIC_ALERTS``).
 
-``GET /alerts/recent`` reads back from ``jnpa.alerts``. Both paths are
+``GET /alerts/recent`` reads back from ``core.alert``. Both paths are
 best-effort and independently fault-tolerant: a Kafka outage must not stop the
 DB write, and vice-versa, so an alert is never silently lost on a single-sink
 failure (it is logged and the other sink still receives it).
@@ -84,7 +84,7 @@ class AlertSink:
             with psycopg.connect(self.cfg.postgres_dsn_libpq, connect_timeout=3) as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "INSERT INTO jnpa.alerts (id, ts, kind, severity, gate_id, plate, payload, ack)"
+                        "INSERT INTO core.alert (id, ts, kind, severity, gate_id, plate, payload, ack)"
                         " VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
                         " ON CONFLICT (id) DO NOTHING",
                         (
@@ -113,7 +113,7 @@ class AlertSink:
             return []
         sql = (
             "SELECT id, ts, kind, severity, gate_id, plate, payload, ack"
-            " FROM jnpa.alerts WHERE ts >= %s"
+            " FROM core.alert WHERE ts >= %s"
         )
         params: list = [since]
         if kinds:

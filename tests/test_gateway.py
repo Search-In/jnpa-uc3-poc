@@ -7,7 +7,7 @@ fallback rungs can be driven deterministically:
     token present   -> LIVE_PRIMARY   (vahan-live answers)
     token dropped    -> LIVE_FALLBACK  (vahan-sim answers)
     sim stopped      -> CACHED         (only the Redis cache has it)
-    cache flushed    -> PROVISIONAL    (+ jnpa.vehicle_master row when PG is up)
+    cache flushed    -> PROVISIONAL    (+ core.vehicle_rc row when PG is up)
 
 The provisional-writeback assertion needs a live Postgres (compose publishes it
 on host 5433) and is skipped automatically when it is unreachable.
@@ -246,7 +246,7 @@ def _pg_host_dsn() -> Optional[str]:
 @pytest.mark.skipif(_pg_host_dsn() is None,
                     reason="Postgres not reachable on localhost:5433; run `make up` first.")
 def test_provisional_writes_vehicle_master_row(monkeypatch):
-    """PROVISIONAL admission writes a provisional jnpa.vehicle_master row."""
+    """PROVISIONAL admission writes a provisional core.vehicle_rc row."""
     import asyncio
 
     dsn = _pg_host_dsn()
@@ -271,7 +271,7 @@ def test_provisional_writes_vehicle_master_row(monkeypatch):
     async def _row():
         await db.dispose_all()
         row = await db.fetch_one(
-            "SELECT plate, provisional, provisional_until FROM jnpa.vehicle_master WHERE plate = :p",
+            "SELECT plate, provisional, provisional_until FROM core.vehicle_rc WHERE plate = :p",
             {"p": plate}, dsn=dsn,
         )
         await db.dispose_all()

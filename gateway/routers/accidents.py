@@ -3,8 +3,8 @@
 Full lifecycle: detect/report -> investigate -> resolve -> close, with an
 append-only timeline, vehicle/driver association, severity, a dashboard rollup,
 a WebSocket ``accident`` broadcast and a control-room alert (reusing the existing
-jnpa.alerts pump + notification dispatcher). RDS-backed (jnpa.accidents +
-jnpa.accident_events). Additive — no existing endpoint/table is touched.
+core.alert pump + notification dispatcher). RDS-backed (core.accident +
+core.accident_event). Additive — no existing endpoint/table is touched.
 
     POST   /api/accidents                  -> report a new accident (+timeline REPORTED)
     GET    /api/accidents                   -> list (filter: status, type, vehicle_id, limit)
@@ -68,7 +68,7 @@ async def _timeline(dsn: str, accident_id: int, *, action: str, old: Optional[st
                     new: Optional[str], note: Optional[str], actor: Optional[str]) -> None:
     from jnpa_shared.db import execute
     await execute(
-        """INSERT INTO jnpa.accident_events (accident_id, action, old_status, new_status, note, actor)
+        """INSERT INTO core.accident_event (accident_id, action, old_status, new_status, note, actor)
            VALUES (:aid, :action, :old, :new, :note, :actor)""",
         {"aid": accident_id, "action": action, "old": old, "new": new, "note": note, "actor": actor},
         dsn=dsn,
@@ -93,7 +93,7 @@ async def report_accident(body: Dict[str, Any] = Body(...),
         raise HTTPException(400, f"severity must be one of {sorted(_SEVERITY)}")
 
     row = await execute_returning(
-        """INSERT INTO jnpa.accidents
+        """INSERT INTO core.accident
              (accident_type, severity, lat, lon, location, vehicle_id, plate,
               driver_id, description, reported_by, source, occurred_at)
            VALUES (:type, :sev, :lat, :lon, CAST(:loc AS jsonb), :vid, :plate,
@@ -114,13 +114,13 @@ async def report_accident(body: Dict[str, Any] = Body(...),
         raise HTTPException(500, "insert_failed")
     aid = int(row["id"])
     ref = f"ACC-{aid:06d}"
-    await execute("UPDATE jnpa.accidents SET accident_ref = :ref WHERE id = :id",
+    await execute("UPDATE core.accident SET accident_ref = :ref WHERE id = :id",
                   {"ref": ref, "id": aid}, dsn=dsn)
     row["accident_ref"] = ref
     await _timeline(dsn, aid, action="REPORTED", old=None, new="REPORTED",
                     note=body.get("description"), actor=body.get("reported_by"))
 
-    # Mirror to the control-room alert stream (same jnpa.alerts contract other
+    # Mirror to the control-room alert stream (same core.alert contract other
     # consoles read) so the accident surfaces on Alerts/Command Center, then
     # broadcast a live WS frame.
     payload = {"type": "accident", "accident_id": aid, "accident_ref": ref,
@@ -179,7 +179,7 @@ async def list_accidents(status: Optional[str] = Query(default=None),
         params["vid"] = vehicle_id
     clause = ("WHERE " + " AND ".join(where)) if where else ""
     rows = await fetch_all(
-        f"SELECT * FROM jnpa.accidents {clause} ORDER BY occurred_at DESC LIMIT :limit",
+        f"SELECT * FROM core.accident {clause} ORDER BY occurred_at DESC LIMIT :limit",
         params, dsn=dsn)
     REQUESTS.labels("accidents", "ok").inc()
     return {"count": len(rows), "accidents": [_iso(dict(r)) for r in rows]}
@@ -193,16 +193,16 @@ async def accidents_dashboard(state: GatewayState = Depends(get_state)) -> dict:
         return {"total": 0, "open": 0, "by_status": {}, "by_severity": {}, "by_type": {}}
     from jnpa_shared.db import fetch_all, fetch_one
 
-    total = await fetch_one("SELECT count(*) AS n FROM jnpa.accidents", {}, dsn=dsn)
+    total = await fetch_one("SELECT count(*) AS n FROM core.accident", {}, dsn=dsn)
     open_n = await fetch_one(
-        "SELECT count(*) AS n FROM jnpa.accidents WHERE status IN ('REPORTED','INVESTIGATING')",
+        "SELECT count(*) AS n FROM core.accident WHERE status IN ('REPORTED','INVESTIGATING')",
         {}, dsn=dsn)
     by_status = await fetch_all(
-        "SELECT status, count(*) AS n FROM jnpa.accidents GROUP BY status", {}, dsn=dsn)
+        "SELECT status, count(*) AS n FROM core.accident GROUP BY status", {}, dsn=dsn)
     by_sev = await fetch_all(
-        "SELECT severity, count(*) AS n FROM jnpa.accidents GROUP BY severity", {}, dsn=dsn)
+        "SELECT severity, count(*) AS n FROM core.accident GROUP BY severity", {}, dsn=dsn)
     by_type = await fetch_all(
-        "SELECT accident_type, count(*) AS n FROM jnpa.accidents GROUP BY accident_type", {}, dsn=dsn)
+        "SELECT accident_type, count(*) AS n FROM core.accident GROUP BY accident_type", {}, dsn=dsn)
     REQUESTS.labels("accidents", "ok").inc()
     return {
         "total": int(total["n"]) if total else 0,
@@ -220,12 +220,12 @@ async def get_accident(accident_id: int, state: GatewayState = Depends(get_state
         raise HTTPException(503, "database_unavailable")
     from jnpa_shared.db import fetch_all, fetch_one
 
-    row = await fetch_one("SELECT * FROM jnpa.accidents WHERE id = :id",
+    row = await fetch_one("SELECT * FROM core.accident WHERE id = :id",
                           {"id": accident_id}, dsn=dsn)
     if not row:
         raise HTTPException(404, "accident_not_found")
     events = await fetch_all(
-        "SELECT * FROM jnpa.accident_events WHERE accident_id = :id ORDER BY created_at",
+        "SELECT * FROM core.accident_event WHERE accident_id = :id ORDER BY created_at",
         {"id": accident_id}, dsn=dsn)
     return {"accident": _iso(dict(row)),
             "timeline": [_iso(dict(e)) for e in events]}
@@ -233,7 +233,7 @@ async def get_accident(accident_id: int, state: GatewayState = Depends(get_state
 
 async def _load(dsn: str, accident_id: int) -> Dict[str, Any]:
     from jnpa_shared.db import fetch_one
-    row = await fetch_one("SELECT * FROM jnpa.accidents WHERE id = :id",
+    row = await fetch_one("SELECT * FROM core.accident WHERE id = :id",
                           {"id": accident_id}, dsn=dsn)
     if not row:
         raise HTTPException(404, "accident_not_found")
@@ -252,7 +252,7 @@ async def set_status(accident_id: int, body: Dict[str, Any] = Body(...),
         raise HTTPException(400, f"status must be one of {sorted(_STATUS)}")
     cur = await _load(dsn, accident_id)
     old = cur["status"]
-    await execute("UPDATE jnpa.accidents SET status = :s, updated_at = now() WHERE id = :id",
+    await execute("UPDATE core.accident SET status = :s, updated_at = now() WHERE id = :id",
                   {"s": new, "id": accident_id}, dsn=dsn)
     await _timeline(dsn, accident_id, action="STATUS_CHANGE", old=old, new=new,
                     note=body.get("note"), actor=body.get("actor"))
@@ -278,7 +278,7 @@ async def set_investigation(accident_id: int, body: Dict[str, Any] = Body(...),
     # Setting investigation IN_PROGRESS also advances the case into INVESTIGATING.
     advance = cur["status"] == "REPORTED" and new in {"IN_PROGRESS", "COMPLETED"}
     await execute(
-        """UPDATE jnpa.accidents
+        """UPDATE core.accident
            SET investigation_status = :inv,
                status = CASE WHEN :advance THEN 'INVESTIGATING' ELSE status END,
                updated_at = now()
@@ -300,7 +300,7 @@ async def resolve_accident(accident_id: int, body: Dict[str, Any] = Body(...),
     cur = await _load(dsn, accident_id)
     resolution = body.get("resolution") or "Resolved"
     await execute(
-        """UPDATE jnpa.accidents
+        """UPDATE core.accident
            SET status = 'RESOLVED', investigation_status = 'COMPLETED',
                resolution = :res, updated_at = now()
            WHERE id = :id""",

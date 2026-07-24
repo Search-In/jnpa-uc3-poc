@@ -3,7 +3,7 @@
 The NEW persisted appointment surface for the RMS Terminal Appointment System.
 Unlike the legacy in-memory ``/api/tas/*`` mock (gateway/tas_mock.py, left
 untouched), every slot and booking here is durable in RDS
-(jnpa.tas_appointments / jnpa.tas_bookings, migration 0024 §14) so availability,
+(core.tas_appointment / core.tas_booking, migration 0024 §14) so availability,
 capacity and booking status survive a restart and are auditable.
 
 LIVE-vs-MOCK posture goes through the shared integration seam
@@ -99,7 +99,7 @@ async def list_slots(gate_id: Optional[str] = Query(default=None),
     rows = await fetch_all(
         f"""SELECT slot_code, gate_id, window_start, window_end,
                    capacity, booked, (capacity - booked) AS available, status
-              FROM jnpa.tas_appointments {clause}
+              FROM core.tas_appointment {clause}
           ORDER BY window_start LIMIT :limit""",
         params, dsn=dsn)
     REQUESTS.labels("rms_tas", "ok").inc()
@@ -132,7 +132,7 @@ async def seed_slots(body: Dict[str, Any] = Body(default={}),
         window_start = base.replace(hour=h % 24) + timedelta(days=h // 24)
         window_end = window_start + timedelta(hours=1)
         n = await execute(
-            """INSERT INTO jnpa.tas_appointments
+            """INSERT INTO core.tas_appointment
                    (slot_code, gate_id, window_start, window_end, capacity, booked, status, source)
                VALUES (:sc, :gate, CAST(:ws AS timestamptz), CAST(:we AS timestamptz),
                        :cap, 0, 'OPEN', 'LOCAL')
@@ -169,7 +169,7 @@ async def book_slot(body: Dict[str, Any] = Body(...),
     async with engine.begin() as conn:
         appt = (await conn.execute(
             text("""SELECT id, capacity, booked, status
-                      FROM jnpa.tas_appointments
+                      FROM core.tas_appointment
                      WHERE slot_code = :sc FOR UPDATE"""),
             {"sc": slot_code})).mappings().first()
         if not appt:
@@ -180,7 +180,7 @@ async def book_slot(body: Dict[str, Any] = Body(...),
             return {"booked": False, "reason": "slot_full"}
 
         booking = (await conn.execute(
-            text("""INSERT INTO jnpa.tas_bookings
+            text("""INSERT INTO core.tas_booking
                         (appointment_id, slot_code, vehicle_id, driver_id, status)
                     VALUES (:aid, :sc, :vid, :did, 'BOOKED')
                     RETURNING id"""),
@@ -189,7 +189,7 @@ async def book_slot(body: Dict[str, Any] = Body(...),
         new_booked = int(appt["booked"]) + 1
         new_status = "FULL" if new_booked >= int(appt["capacity"]) else "OPEN"
         await conn.execute(
-            text("""UPDATE jnpa.tas_appointments
+            text("""UPDATE core.tas_appointment
                        SET booked = :b, status = :s, updated_at = now()
                      WHERE id = :id"""),
             {"b": new_booked, "s": new_status, "id": appt["id"]})
@@ -224,7 +224,7 @@ async def set_booking_status(booking_id: int = Path(...), body: Dict[str, Any] =
     engine = get_engine(dsn)
     async with engine.begin() as conn:
         booking = (await conn.execute(
-            text("SELECT * FROM jnpa.tas_bookings WHERE id = :id FOR UPDATE"),
+            text("SELECT * FROM core.tas_booking WHERE id = :id FOR UPDATE"),
             {"id": booking_id})).mappings().first()
         if not booking:
             raise HTTPException(404, "booking_not_found")
@@ -232,17 +232,17 @@ async def set_booking_status(booking_id: int = Path(...), body: Dict[str, Any] =
         # Cancelling an active booking frees a seat on its appointment.
         if new == "CANCELLED" and old != "CANCELLED":
             await conn.execute(
-                text("""UPDATE jnpa.tas_appointments
+                text("""UPDATE core.tas_appointment
                            SET booked = GREATEST(booked - 1, 0),
                                status = CASE WHEN status = 'FULL' THEN 'OPEN' ELSE status END,
                                updated_at = now()
                          WHERE id = :aid"""),
                 {"aid": booking["appointment_id"]})
         await conn.execute(
-            text("UPDATE jnpa.tas_bookings SET status = :s, updated_at = now() WHERE id = :id"),
+            text("UPDATE core.tas_booking SET status = :s, updated_at = now() WHERE id = :id"),
             {"s": new, "id": booking_id})
         updated = (await conn.execute(
-            text("SELECT * FROM jnpa.tas_bookings WHERE id = :id"),
+            text("SELECT * FROM core.tas_booking WHERE id = :id"),
             {"id": booking_id})).mappings().first()
 
     REQUESTS.labels("rms_tas", "ok").inc()
@@ -258,11 +258,11 @@ async def get_booking(booking_id: int = Path(...),
     if not dsn:
         raise HTTPException(503, "database_unavailable")
     from jnpa_shared.db import fetch_one
-    booking = await fetch_one("SELECT * FROM jnpa.tas_bookings WHERE id = :id",
+    booking = await fetch_one("SELECT * FROM core.tas_booking WHERE id = :id",
                               {"id": booking_id}, dsn=dsn)
     if not booking:
         raise HTTPException(404, "booking_not_found")
-    appt = await fetch_one("SELECT * FROM jnpa.tas_appointments WHERE id = :id",
+    appt = await fetch_one("SELECT * FROM core.tas_appointment WHERE id = :id",
                            {"id": booking["appointment_id"]}, dsn=dsn)
     REQUESTS.labels("rms_tas", "ok").inc()
     return {"booking": _iso(dict(booking)),
@@ -284,7 +284,7 @@ async def list_bookings(vehicle_id: Optional[str] = Query(default=None),
         where = "WHERE vehicle_id = :vid"
         params["vid"] = vehicle_id
     rows = await fetch_all(
-        f"SELECT * FROM jnpa.tas_bookings {where} ORDER BY booked_at DESC LIMIT :limit",
+        f"SELECT * FROM core.tas_booking {where} ORDER BY booked_at DESC LIMIT :limit",
         params, dsn=dsn)
     REQUESTS.labels("rms_tas", "ok").inc()
     return {"count": len(rows), "bookings": [_iso(dict(r)) for r in rows]}
@@ -343,7 +343,7 @@ async def sync_slots(body: Dict[str, Any] = Body(default={}),
         if not slot_code or not window_start or not window_end:
             continue
         await execute(
-            """INSERT INTO jnpa.tas_appointments
+            """INSERT INTO core.tas_appointment
                    (slot_code, gate_id, window_start, window_end, capacity, booked, status, source)
                VALUES (:sc, :gate, CAST(:ws AS timestamptz), CAST(:we AS timestamptz),
                        COALESCE(:cap, 10), 0, 'OPEN', :src)

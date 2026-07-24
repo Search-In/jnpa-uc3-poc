@@ -1,6 +1,6 @@
 """/api/cargo — CRUD over the shared cargo record (POC-3 as common backend).
 
-POC-3 owns the single ``jnpa.cargo`` table on the shared RDS. This router is the
+POC-3 owns the single ``core.cargo`` table on the shared RDS. This router is the
 one CRUD surface over it, consumed by BOTH the POC-3 dashboard and the POC-2
 (Cargo Twin) frontend — POC-2 keeps no backend/DB of its own. It is a THIN
 router in the same mould as :mod:`gateway.routers.fastag`:
@@ -40,7 +40,7 @@ UC-2 notifications contract (GET /api/cargo/events). GET /api/cargo also accepts
 optional ``role`` scope (an authenticated principal's role wins over the param).
 
 The yard-assignment endpoint is a narrow, single-purpose write over the same
-``jnpa.cargo.yard_block`` column that PUT already patches — it exists so POC-2
+``core.cargo.yard_block`` column that PUT already patches — it exists so POC-2
 (Cargo Twin) has one intent-revealing call for "put this box in a block" that
 returns a compact {container_number, yard_block, status} envelope. It reuses the
 CargoService/CargoRepository update path; no separate yard table or service.
@@ -92,8 +92,8 @@ def get_service(request: Request) -> CargoService:
 
 
 # Read-only Shipping Lines enrichment (module 4). Additive: a separate accessor +
-# a dedicated sub-resource so the existing CargoOut DTO and jnpa.cargo table are
-# untouched. Soft, by-value link (container_no) to jnpa.v_shipping_line_container.
+# a dedicated sub-resource so the existing CargoOut DTO and core.cargo table are
+# untouched. Soft, by-value link (container_no) to mart.v_shipping_line_container.
 _sl_service = None
 
 
@@ -988,7 +988,7 @@ async def cargo_shipping_line(
 ) -> dict:
     """Additive, READ-ONLY: surface the IAL/EAL advance-list + EDO delivery-order
     facts for a cargo container (module 4), joined BY VALUE on container_no. Does not
-    modify jnpa.cargo or the CargoOut model. 404 only if the cargo record itself is
+    modify core.cargo or the CargoOut model. 404 only if the cargo record itself is
     unknown; if the box exists but has no shipping-line document the ``shipping_line``
     block is ``null`` (an enrichment, never an error)."""
     cn = _require_container_no(container_number)
@@ -1034,7 +1034,7 @@ async def assign_yard(
     request: Request,
     service: CargoService = Depends(get_service),
 ) -> YardAssignmentOut:
-    """Persist ``jnpa.cargo.yard_block`` for one container and confirm the
+    """Persist ``core.cargo.yard_block`` for one container and confirm the
     assignment (task #3). Sets the block (so ``cargo.yard_assigned`` still fires)
     and advances the lifecycle to YARD_ASSIGNED — the mandatory gate before the
     scan queue. 404 if the container is unknown; 400 (via the shared validation

@@ -3,7 +3,7 @@
 Pipeline:
   1. Build the corridor graph (graph.py).
   2. Generate ~14 days of synthetic 60-s history (synthetic.py); if Postgres is
-     reachable, enrich the most-recent tail with real ``jnpa.traffic_snapshots``
+     reachable, enrich the most-recent tail with real ``core.traffic_snapshot``
      joined with RFID/ANPR/trucking-derived counts.
   3. Build the dense feature tensor + sliding windows with onset labels
      (features.py). The held-out split is the LAST ``val_hours`` (24 h) of
@@ -59,7 +59,7 @@ def load_real_tail(cfg: CongestionConfig, graph: CorridorGraph) -> List[HistoryR
                     """
                     SELECT date_trunc('minute', ts) AS bucket, segment_id,
                            avg(speed_kmh) AS speed, avg(jam_factor) AS jam
-                    FROM jnpa.traffic_snapshots
+                    FROM core.traffic_snapshot
                     WHERE ts > now() - interval '14 days'
                     GROUP BY 1, 2 ORDER BY 1
                     """

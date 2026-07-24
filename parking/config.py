@@ -20,7 +20,7 @@ def _as_int(value: str | None, default: int) -> int:
 
 @dataclass
 class ParkingConfig:
-    # --- Service identity (for jnpa.services registry) ---
+    # --- Service identity (for core.ulip_service registry) ---
     service_name: str = "parking"
     service_kind: str = "sim"
     base_url: str = "http://parking:8370"

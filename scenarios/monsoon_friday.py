@@ -226,7 +226,7 @@ async def _resolve_alerts(cfg: ScenarioConfig, handle_id: str) -> None:
     from jnpa_shared.db import execute
     try:
         await execute(
-            "UPDATE jnpa.alerts SET ack = true WHERE payload->>'scenario' = :hid",
+            "UPDATE core.alert SET ack = true WHERE payload->>'scenario' = :hid",
             {"hid": handle_id}, dsn=cfg.postgres_dsn,
         )
     except Exception as exc:  # noqa: BLE001
@@ -238,11 +238,11 @@ _RAIN_FACTOR = {"light": 0.10, "moderate": 0.20, "heavy": 0.35, "severe": 0.50}
 
 
 async def _active_driver_base(cfg: ScenarioConfig) -> int:
-    """Best-effort real base: count ACTIVE drivers in jnpa.drivers; default 400."""
+    """Best-effort real base: count ACTIVE drivers in core.driver_identity; default 400."""
     try:
         from jnpa_shared.db import fetch_one
         row = await fetch_one(
-            "SELECT count(*) AS n FROM jnpa.drivers WHERE status = 'ACTIVE'",
+            "SELECT count(*) AS n FROM core.driver_identity WHERE status = 'ACTIVE'",
             {}, dsn=cfg.postgres_dsn)
         n = int(row["n"]) if row and row.get("n") else 0
         return n if n > 0 else 400

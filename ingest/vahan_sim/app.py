@@ -11,8 +11,8 @@ so the rest of the JNPA UC-III system is API-correct against either:
     GET  /metrics                 (Prometheus, mounted)
 
 The dataset is generated deterministically in-memory from `vahan_sim.seed` on
-startup. Every successful RC lookup is upserted into `jnpa.vehicle_master`
-(provisional=false). The service registers itself in `jnpa.services` on
+startup. Every successful RC lookup is upserted into `core.vehicle_rc`
+(provisional=false). The service registers itself in `core.ulip_service` on
 startup. An artificial 100ms +/- 50ms latency mimics Parivahan's real behaviour.
 """
 from __future__ import annotations
@@ -93,7 +93,7 @@ async def _lifespan(_app: FastAPI):
     n = _rebuild_store()
     log.info("dataset_built", plates=n)
 
-    # Best-effort: register in jnpa.services + ensure schema. DB may not be up
+    # Best-effort: register in core.ulip_service + ensure schema. DB may not be up
     # yet in some local bring-up orders; don't crash the API if so.
     try:
         await ensure_schema(dsn=cfg.postgres_dsn)

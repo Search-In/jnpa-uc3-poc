@@ -35,7 +35,7 @@ class GateConfig:
     # relative discrepancy exceeds this fraction (2% by default).
     weight_tolerance_pct: float = 2.0
 
-    # --- Service identity (for jnpa.services registry) ---
+    # --- Service identity (for core.ulip_service registry) ---
     service_name: str = "gate-data"
     service_kind: str = "sim"
     base_url: str = "http://gate-data:8350"

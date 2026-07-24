@@ -1,13 +1,13 @@
 """CFS-ECY CODECO persistence — raw-SQL repository over the shared async engine.
 
-The ONLY layer that speaks SQL to ``jnpa.cfs_ecy_movements`` (+ the derived
-``jnpa.v_cfs_ecy_dwell`` view). It performs no business logic and no HTTP; it just
+The ONLY layer that speaks SQL to ``core.cfs_ecy_movement`` (+ the derived
+``mart.v_cfs_ecy_dwell`` view). It performs no business logic and no HTTP; it just
 runs parameterised statements through the cached SQLAlchemy async engine
 (``jnpa_shared.db.get_engine``) exactly like :mod:`services.cargo.repository` —
 reads on a plain ``connect()``. No ORM.
 
 Read-only wrt every EXISTING table: the one cross-module read is a soft lookup of
-``jnpa.cargo.lifecycle_status`` by container_number (no write, no FK), used to
+``core.cargo.lifecycle_status`` by container_number (no write, no FK), used to
 enrich a container timeline with its lifecycle state when the container is also
 tracked by the Container Lifecycle module.
 
@@ -41,7 +41,7 @@ _SORTS = {"event_ts": "m.event_ts", "container_number": "m.container_number",
 
 
 class CfsEcyRepository:
-    """Raw-SQL reads for ``jnpa.cfs_ecy_movements``. Stateless apart from the DSN,
+    """Raw-SQL reads for ``core.cfs_ecy_movement``. Stateless apart from the DSN,
     so a single instance is safe to share across requests (engine + pool cached)."""
 
     def __init__(self, dsn: Optional[str] = None) -> None:
@@ -79,7 +79,7 @@ class CfsEcyRepository:
         order_dir = "ASC" if str(direction).lower() == "asc" else "DESC"
         params.update({"limit": limit, "offset": offset})
         sql = (
-            f"SELECT {_SELECT_COLS} FROM jnpa.cfs_ecy_movements m {clause} "
+            f"SELECT {_SELECT_COLS} FROM core.cfs_ecy_movement m {clause} "
             f"ORDER BY {order_col} {order_dir}, m.id DESC "
             "LIMIT :limit OFFSET :offset"
         )
@@ -89,7 +89,7 @@ class CfsEcyRepository:
 
     async def count(self, filters: Mapping[str, Any]) -> int:
         clause, params = self._where(filters)
-        sql = f"SELECT count(*) AS n FROM jnpa.cfs_ecy_movements m {clause}"
+        sql = f"SELECT count(*) AS n FROM core.cfs_ecy_movement m {clause}"
         async with get_engine(self._dsn).connect() as conn:
             result = await conn.execute(text(sql), params)
             row = result.mappings().first()
@@ -108,7 +108,7 @@ class CfsEcyRepository:
             "  count(DISTINCT m.container_number)   AS container_count, "
             "  count(*)                             AS total_events, "
             "  count(*) FILTER (WHERE m.iso_valid = false) AS iso_invalid "
-            f"FROM jnpa.cfs_ecy_movements m {clause}"
+            f"FROM core.cfs_ecy_movement m {clause}"
         )
         async with get_engine(self._dsn).connect() as conn:
             row = (await conn.execute(text(sql), params)).mappings().first()
@@ -116,7 +116,7 @@ class CfsEcyRepository:
             active_sql = (
                 "SELECT count(*) AS n FROM ("
                 "  SELECT m.container_number, m.facility_type "
-                f"  FROM jnpa.cfs_ecy_movements m {clause} "
+                f"  FROM core.cfs_ecy_movement m {clause} "
                 "  GROUP BY m.container_number, m.facility_type "
                 "  HAVING count(*) FILTER (WHERE m.mode='IN') > "
                 "         count(*) FILTER (WHERE m.mode='OUT')"
@@ -149,7 +149,7 @@ class CfsEcyRepository:
             "  round(percentile_cont(0.5) WITHIN GROUP (ORDER BY d.dwell_hours)::numeric, 2) "
             "    AS median_dwell_hours, "
             "  count(*) AS dwell_count "
-            "FROM jnpa.v_cfs_ecy_dwell d "
+            "FROM mart.v_cfs_ecy_dwell d "
             f"WHERE {' AND '.join(conds)}"
         )
         async with get_engine(self._dsn).connect() as conn:
@@ -168,7 +168,7 @@ class CfsEcyRepository:
             "SELECT (m.event_ts AT TIME ZONE 'Asia/Kolkata')::date AS day, "
             "  count(*) FILTER (WHERE m.mode='IN')  AS in_count, "
             "  count(*) FILTER (WHERE m.mode='OUT') AS out_count "
-            f"FROM jnpa.cfs_ecy_movements m {clause} "
+            f"FROM core.cfs_ecy_movement m {clause} "
             "GROUP BY day ORDER BY day ASC"
         )
         async with get_engine(self._dsn).connect() as conn:
@@ -182,7 +182,7 @@ class CfsEcyRepository:
         """All CODECO gate events for one container, across BOTH facilities,
         chronological (oldest-first)."""
         sql = (
-            f"SELECT {_SELECT_COLS} FROM jnpa.cfs_ecy_movements m "
+            f"SELECT {_SELECT_COLS} FROM core.cfs_ecy_movement m "
             "WHERE m.container_number = :cn ORDER BY m.event_ts ASC, m.id ASC"
         )
         async with get_engine(self._dsn).connect() as conn:
@@ -194,7 +194,7 @@ class CfsEcyRepository:
         sql = (
             "SELECT container_number, facility_type, first_in_ts, last_out_ts, "
             "  in_events, out_events, dwell_hours "
-            "FROM jnpa.v_cfs_ecy_dwell WHERE container_number = :cn "
+            "FROM mart.v_cfs_ecy_dwell WHERE container_number = :cn "
             "ORDER BY facility_type"
         )
         async with get_engine(self._dsn).connect() as conn:
@@ -203,13 +203,13 @@ class CfsEcyRepository:
 
     async def cargo_lifecycle(self, container_number: str) -> Optional[dict]:
         """Soft, read-only lookup of the container in the EXISTING Container
-        Lifecycle module (jnpa.cargo). Returns None when the container is not
+        Lifecycle module (core.cargo). Returns None when the container is not
         tracked there (the common case for pure off-dock CODECO events). Degrades
         gracefully if the cargo table is absent (returns None)."""
         sql = (
             "SELECT container_number, lifecycle_status, customs_status, "
             "  yard_block, is_released, vessel_name, vehicle_number, updated_at "
-            "FROM jnpa.cargo WHERE container_number = :cn"
+            "FROM core.cargo WHERE container_number = :cn"
         )
         try:
             async with get_engine(self._dsn).connect() as conn:
@@ -235,13 +235,13 @@ class CfsEcyRepository:
         where = " AND ".join(conds)
         async with get_engine(self._dsn).connect() as conn:
             total_row = (await conn.execute(
-                text(f"SELECT count(*) AS n FROM jnpa.v_cfs_ecy_dwell d WHERE {where}"),
+                text(f"SELECT count(*) AS n FROM mart.v_cfs_ecy_dwell d WHERE {where}"),
                 params)).mappings().first()
             params.update({"limit": limit, "offset": offset})
             rows = (await conn.execute(text(
                 "SELECT d.container_number, d.facility_type, d.first_in_ts, "
                 "  d.last_out_ts, d.in_events, d.out_events, d.dwell_hours "
-                f"FROM jnpa.v_cfs_ecy_dwell d WHERE {where} "
+                f"FROM mart.v_cfs_ecy_dwell d WHERE {where} "
                 "ORDER BY d.dwell_hours DESC NULLS LAST, d.container_number ASC "
                 "LIMIT :limit OFFSET :offset"), params)).mappings().all()
         return [dict(r) for r in rows], (int(total_row["n"]) if total_row else 0)
@@ -259,7 +259,7 @@ class CfsEcyRepository:
             row = (await conn.execute(text(
                 "SELECT id, facility_type, source_file, import_status, record_count, "
                 "imported_count, error_count, duplicate_count, created_at "
-                "FROM jnpa.cfs_ecy_import_files WHERE source_sha256 = :sha"),
+                "FROM core.cfs_ecy_import_file WHERE source_sha256 = :sha"),
                 {"sha": sha256})).mappings().first()
         return dict(row) if row else None
 
@@ -301,11 +301,11 @@ class CfsEcyRepository:
                         r["import_file_id"] = fid
                     await conn.execute(text(_MOVEMENT_INSERT), rows)
                     imported = int((await conn.execute(text(
-                        "SELECT count(*) FROM jnpa.cfs_ecy_movements WHERE import_file_id = :id"),
+                        "SELECT count(*) FROM core.cfs_ecy_movement WHERE import_file_id = :id"),
                         {"id": fid})).scalar() or 0)
                 dup = len(records) - imported
                 await conn.execute(text(
-                    "UPDATE jnpa.cfs_ecy_import_files SET import_status = 'SUCCESS', "
+                    "UPDATE core.cfs_ecy_import_file SET import_status = 'SUCCESS', "
                     "imported_count = :imp, duplicate_count = :dup, error_count = 0, "
                     "updated_at = now() WHERE id = :id"),
                     {"imp": imported, "dup": dup, "id": fid})
@@ -333,7 +333,7 @@ class CfsEcyRepository:
             async with get_engine(self._dsn).begin() as conn:
                 fid = (await conn.execute(text(_FILE_INSERT_FAILED), row)).mappings().first()["id"]
                 await conn.execute(text(
-                    "INSERT INTO jnpa.cfs_ecy_import_errors (import_file_id, record_ref, "
+                    "INSERT INTO core.cfs_ecy_import_error (import_file_id, record_ref, "
                     "error_code, error_detail) VALUES (:fid, NULL, 'PERSIST_FAILED', :d)"),
                     {"fid": fid, "d": detail[:4000]})
             fail_id: Optional[int] = fid
@@ -382,7 +382,7 @@ class CfsEcyRepository:
             return
         async with get_engine(self._dsn).begin() as conn:
             await conn.execute(text(
-                "INSERT INTO jnpa.cfs_ecy_import_errors (import_file_id, record_ref, "
+                "INSERT INTO core.cfs_ecy_import_error (import_file_id, record_ref, "
                 "error_code, error_detail) VALUES (:fid, :ref, :code, :detail)"), rows)
 
     async def mark_partial(self, file_id: int, *, error_count: int) -> None:
@@ -390,7 +390,7 @@ class CfsEcyRepository:
         invalid (records the honest outcome; the valid rows are already persisted)."""
         async with get_engine(self._dsn).begin() as conn:
             await conn.execute(text(
-                "UPDATE jnpa.cfs_ecy_import_files SET import_status = 'PARTIAL', "
+                "UPDATE core.cfs_ecy_import_file SET import_status = 'PARTIAL', "
                 "error_count = :n, updated_at = now() WHERE id = :id"),
                 {"n": error_count, "id": file_id})
 
@@ -412,7 +412,7 @@ class CfsEcyRepository:
                 "SELECT id, facility_type, physical_format, source_file, record_count, "
                 "imported_count, error_count, duplicate_count, import_status, error_detail, "
                 "uploaded_by, source, created_at, updated_at "
-                f"FROM jnpa.cfs_ecy_import_files{where} "
+                f"FROM core.cfs_ecy_import_file{where} "
                 "ORDER BY id DESC LIMIT :limit OFFSET :offset"), params)
             return [dict(r) for r in res.mappings().all()]
 
@@ -420,7 +420,7 @@ class CfsEcyRepository:
         where, params = self._file_where(filters)
         async with get_engine(self._dsn).connect() as conn:
             return int((await conn.execute(
-                text(f"SELECT count(*) FROM jnpa.cfs_ecy_import_files{where}"), params)).scalar() or 0)
+                text(f"SELECT count(*) FROM core.cfs_ecy_import_file{where}"), params)).scalar() or 0)
 
     async def get_file(self, file_id: int) -> Optional[dict]:
         async with get_engine(self._dsn).connect() as conn:
@@ -428,14 +428,14 @@ class CfsEcyRepository:
                 "SELECT id, facility_type, physical_format, source_file, source_sha256, "
                 "file_size_bytes, record_count, imported_count, error_count, duplicate_count, "
                 "import_status, error_detail, uploaded_by, source, created_at, updated_at "
-                "FROM jnpa.cfs_ecy_import_files WHERE id = :id"), {"id": file_id})).mappings().first()
+                "FROM core.cfs_ecy_import_file WHERE id = :id"), {"id": file_id})).mappings().first()
         return dict(row) if row else None
 
     async def list_file_errors(self, file_id: int, *, limit: int, offset: int) -> list[dict]:
         async with get_engine(self._dsn).connect() as conn:
             res = await conn.execute(text(
                 "SELECT id, record_ref, error_code, error_detail, created_at "
-                "FROM jnpa.cfs_ecy_import_errors WHERE import_file_id = :id "
+                "FROM core.cfs_ecy_import_error WHERE import_file_id = :id "
                 "ORDER BY id LIMIT :limit OFFSET :offset"),
                 {"id": file_id, "limit": limit, "offset": offset})
             return [dict(r) for r in res.mappings().all()]
@@ -443,7 +443,7 @@ class CfsEcyRepository:
 
 # --------------------------------------------------------------------------- SQL
 _FILE_INSERT = """
-INSERT INTO jnpa.cfs_ecy_import_files
+INSERT INTO core.cfs_ecy_import_file
     (facility_type, physical_format, source_file, source_sha256, file_size_bytes,
      record_count, import_status, uploaded_by, source)
 VALUES
@@ -453,7 +453,7 @@ RETURNING id
 """
 
 _FILE_INSERT_FAILED = """
-INSERT INTO jnpa.cfs_ecy_import_files
+INSERT INTO core.cfs_ecy_import_file
     (facility_type, physical_format, source_file, source_sha256, file_size_bytes,
      record_count, import_status, error_detail, uploaded_by, source)
 VALUES
@@ -463,7 +463,7 @@ RETURNING id
 """
 
 _MOVEMENT_INSERT = """
-INSERT INTO jnpa.cfs_ecy_movements
+INSERT INTO core.cfs_ecy_movement
     (facility_type, container_number, iso_valid, event_ts, mode, source, source_file,
      import_file_id)
 VALUES

@@ -1,6 +1,6 @@
 """JNPA gate geography + geo helpers for the trucking-app simulator.
 
-The 4 gate coordinates mirror ``jnpa.gates`` (infra/postgres/init.sql) and the
+The 4 gate coordinates mirror ``core.gate`` (infra/postgres/init.sql) and the
 RFID topology, so a truck heading to ``G-NSICT`` ends up exactly where the gate
 cameras/readers sit. ``port_boundary`` is a point a short way up the corridor
 from the gates; the segment between it and a gate is treated as "port road"
@@ -15,7 +15,7 @@ from typing import Dict, List, Tuple
 
 from jnpa_shared.corridor import haversine_km
 
-# Gate ids + coordinates (mirror jnpa.gates seed + rfid topology GATE_COORDS).
+# Gate ids + coordinates (mirror core.gate seed + rfid topology GATE_COORDS).
 GATE_COORDS: Dict[str, Tuple[float, float]] = {
     "G-NSICT": (18.9489, 72.9492),
     "G-JNPCT": (18.9512, 72.9505),

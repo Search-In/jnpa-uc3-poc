@@ -50,7 +50,7 @@ def enabled() -> bool:
 #   captured_at        ← COALESCE(entry-inward, ETA, message sent, message created) — never NULL
 # The payload keys mirror gate_data.icegate_sim.icegate_message() for shape fidelity.
 _INSERT_SQL = """
-INSERT INTO jnpa.gate_captures
+INSERT INTO core.gate_capture
     (capture_type, container_no, vehicle_plate, gate_id, source_mode, status, captured_at, payload)
 SELECT
     'ICEGATE',
@@ -59,7 +59,7 @@ SELECT
     NULL,
     'live',
     CASE WHEN vcs.ooc_cleared THEN 'GRANTED' ELSE 'PENDING' END,
-    COALESCE(v.entry_inward, v.expected_arrival, m.sent_ts, m.created_at),
+    COALESCE(v.entry_inward_ts, v.eta, m.sent_ts, m.created_at),
     jsonb_build_object(
         'shipping_bill_no', ooc.bill_of_entry_no,
         'container_no',     c.container_no,
@@ -70,14 +70,13 @@ SELECT
         'source',           'ICEGATE',
         'origin',           'customs-adapter'
     )
-FROM jnpa.customs_igm_container c
-JOIN jnpa.customs_igm_cargo_line l ON l.id = c.cargo_line_id
-JOIN jnpa.customs_igm_vessel     v ON v.id = l.vessel_id
-JOIN jnpa.customs_messages       m ON m.id = v.message_id
-LEFT JOIN jnpa.v_customs_container_status vcs ON vcs.container_no = c.container_no
+FROM core.igm_line_container c
+JOIN core.igm     v ON v.igm_no = c.igm_no
+JOIN core.customs_message       m ON m.id = v.message_id
+LEFT JOIN mart.v_customs_container_status vcs ON vcs.container_no = c.container_no
 LEFT JOIN LATERAL (
-    SELECT oc.bill_of_entry_no
-    FROM jnpa.customs_ooc_container oc
+    SELECT oc.be_no AS bill_of_entry_no
+    FROM core.ooc_item oc
     WHERE oc.container_no = c.container_no
     LIMIT 1
 ) ooc ON true
@@ -87,20 +86,20 @@ ON CONFLICT (container_no, capture_type, captured_at) DO NOTHING
 # Purge synthetic (seed) ICEGATE rows — runs INSIDE the atomic sync so the ICEGATE tab
 # shows ONLY real data when the adapter is active. Touches ICEGATE/sim rows only.
 _PURGE_SIM_SQL = (
-    "DELETE FROM jnpa.gate_captures "
+    "DELETE FROM core.gate_capture "
     "WHERE capture_type = 'ICEGATE' AND source_mode = 'sim'"
 )
 
 # Symmetric-rollback purge — removes previously-synced LIVE ICEGATE rows when the adapter
 # is disabled. Touches ICEGATE/live rows only.
 _PURGE_LIVE_SQL = (
-    "DELETE FROM jnpa.gate_captures "
+    "DELETE FROM core.gate_capture "
     "WHERE capture_type = 'ICEGATE' AND source_mode = 'live'"
 )
 
 # Candidate count (every IGM container yields one ICEGATE capture; FKs guarantee the join
 # parents exist), used only to log rows-skipped (= candidates - inserted, the dedup count).
-_COUNT_CANDIDATES_SQL = "SELECT count(*) FROM jnpa.customs_igm_container"
+_COUNT_CANDIDATES_SQL = "SELECT count(*) FROM core.igm_line_container"
 
 
 def _rowcount(result) -> int:
@@ -110,7 +109,7 @@ def _rowcount(result) -> int:
 
 async def sync_icegate_captures(dsn: Optional[str]) -> int:
     """Atomically materialise real ICEGATE captures from the customs tables into
-    ``jnpa.gate_captures``. The purge-synthetic + insert-real transform runs in a SINGLE
+    ``core.gate_capture``. The purge-synthetic + insert-real transform runs in a SINGLE
     transaction: on any error the whole thing rolls back and ICEGATE keeps its prior state
     (never left empty). Idempotent (ON CONFLICT DO NOTHING); returns rows inserted.
     Best-effort: an error is logged and swallowed so it can never abort gate-data boot."""

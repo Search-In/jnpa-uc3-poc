@@ -13,6 +13,8 @@ created before this PoC stage).
 """
 from __future__ import annotations
 
+import os
+
 from datetime import datetime
 from typing import Any, Dict, List
 
@@ -30,24 +32,24 @@ router = APIRouter(prefix="/api/kpi", tags=["kpi"])
 # Whitelisted KPI views (schema-qualified). The name segment in /api/kpi/{view}
 # is validated against these keys so the path can never inject arbitrary SQL.
 KPI_VIEWS: Dict[str, str] = {
-    "throughput": "jnpa.kpi_gate_throughput",
-    "dwell": "jnpa.kpi_gate_dwell",
-    "anpr_hourly": "jnpa.kpi_anpr_hourly",
-    "corridor_speed": "jnpa.kpi_corridor_speed",
-    "alerts_by_kind": "jnpa.kpi_alerts_by_kind",
-    "provisional_open": "jnpa.kpi_provisional_open",
-    # Event-driven Appendix-C gate KPIs (fed by jnpa.gate_events).
-    "gate_queue_wait": "jnpa.kpi_gate_queue_wait",
-    "gate_txn_time": "jnpa.kpi_gate_txn_time",
-    "tat_inside_port": "jnpa.kpi_tat_inside_port",
-    "gate_trip_timeline": "jnpa.kpi_gate_trip_timeline",
+    "throughput": "mart.v_gate_throughput",
+    "dwell": "mart.v_gate_dwell",
+    "anpr_hourly": "mart.v_anpr_hourly",
+    "corridor_speed": "mart.v_corridor_speed",
+    "alerts_by_kind": "mart.v_alerts_by_kind",
+    "provisional_open": "mart.v_provisional_open",
+    # Event-driven Appendix-C gate KPIs (fed by core.gate_event).
+    "gate_queue_wait": "mart.v_gate_queue_wait",
+    "gate_txn_time": "mart.v_gate_txn_time",
+    "tat_inside_port": "mart.v_tat_inside_port",
+    "gate_trip_timeline": "mart.v_gate_trip_timeline",
 }
 
 # Idempotent DDL for the gate-event capture table + KPI views, applied at gateway
 # boot so volumes created before this stage gain them without a reset. Mirrors the
 # canonical definitions in infra/postgres/init.sql.
 _GATE_KPI_DDL = """
-CREATE TABLE IF NOT EXISTS jnpa.gate_events (
+CREATE TABLE IF NOT EXISTS core.gate_event (
     id         bigserial PRIMARY KEY,
     ts         timestamptz NOT NULL DEFAULT now(),
     device_id  text NOT NULL,
@@ -59,10 +61,10 @@ CREATE TABLE IF NOT EXISTS jnpa.gate_events (
     lat        double precision,
     lon        double precision
 );
-CREATE INDEX IF NOT EXISTS idx_gate_events_trip ON jnpa.gate_events (trip_id);
-CREATE INDEX IF NOT EXISTS idx_gate_events_type_ts ON jnpa.gate_events (event_type, ts DESC);
-CREATE INDEX IF NOT EXISTS idx_gate_events_ts ON jnpa.gate_events (ts DESC);
-CREATE OR REPLACE VIEW jnpa.kpi_gate_trip_timeline AS
+CREATE INDEX IF NOT EXISTS idx_gate_events_trip ON core.gate_event (trip_id);
+CREATE INDEX IF NOT EXISTS idx_gate_events_type_ts ON core.gate_event (event_type, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_gate_events_ts ON core.gate_event (ts DESC);
+CREATE OR REPLACE VIEW mart.v_gate_trip_timeline AS
 SELECT trip_id,
     max(gate_id) AS gate_id,
     max(plate) AS plate,
@@ -70,28 +72,28 @@ SELECT trip_id,
     min(ts) FILTER (WHERE event_type = 'GATE_TXN_START') AS txn_start_ts,
     min(ts) FILTER (WHERE event_type = 'GATE_IN')        AS gate_in_ts,
     min(ts) FILTER (WHERE event_type = 'GATE_OUT')       AS gate_out_ts
-FROM jnpa.gate_events
+FROM core.gate_event
 WHERE ts > now() - interval '24 hours'
 GROUP BY trip_id;
-CREATE OR REPLACE VIEW jnpa.kpi_gate_queue_wait AS
+CREATE OR REPLACE VIEW mart.v_gate_queue_wait AS
 SELECT time_bucket('15 minutes', txn_start_ts) AS bucket,
     round(avg(EXTRACT(EPOCH FROM (txn_start_ts - arrival_ts)))::numeric/60.0, 2) AS wait_min,
     count(*) AS trips
-FROM jnpa.kpi_gate_trip_timeline
+FROM mart.v_gate_trip_timeline
 WHERE arrival_ts IS NOT NULL AND txn_start_ts IS NOT NULL AND txn_start_ts >= arrival_ts
 GROUP BY 1 ORDER BY 1 DESC;
-CREATE OR REPLACE VIEW jnpa.kpi_gate_txn_time AS
+CREATE OR REPLACE VIEW mart.v_gate_txn_time AS
 SELECT time_bucket('15 minutes', gate_in_ts) AS bucket,
     round(avg(EXTRACT(EPOCH FROM (gate_in_ts - txn_start_ts)))::numeric/60.0, 2) AS txn_min,
     count(*) AS trips
-FROM jnpa.kpi_gate_trip_timeline
+FROM mart.v_gate_trip_timeline
 WHERE txn_start_ts IS NOT NULL AND gate_in_ts IS NOT NULL AND gate_in_ts >= txn_start_ts
 GROUP BY 1 ORDER BY 1 DESC;
-CREATE OR REPLACE VIEW jnpa.kpi_tat_inside_port AS
+CREATE OR REPLACE VIEW mart.v_tat_inside_port AS
 SELECT time_bucket('15 minutes', gate_out_ts) AS bucket,
     round(avg(EXTRACT(EPOCH FROM (gate_out_ts - gate_in_ts)))::numeric/60.0, 2) AS tat_min,
     count(*) AS trips
-FROM jnpa.kpi_gate_trip_timeline
+FROM mart.v_gate_trip_timeline
 WHERE gate_in_ts IS NOT NULL AND gate_out_ts IS NOT NULL AND gate_out_ts >= gate_in_ts
 GROUP BY 1 ORDER BY 1 DESC;
 """
@@ -101,6 +103,9 @@ _GATE_SCHEMA_READY: Dict[str, bool] = {}
 
 async def ensure_kpi_gate_schema(dsn: str | None) -> None:
     """Apply the gate-events KPI DDL once per DSN (best-effort, cached)."""
+    if os.getenv("JNPA_RUNTIME_DDL", "0") != "1":
+        # schema-v3: DDL is owned by infra/postgres/v3 migrations, never runtime.
+        return
     if not dsn or _GATE_SCHEMA_READY.get(dsn):
         return
     from jnpa_shared.db import execute
@@ -193,7 +198,7 @@ async def kpi_strip(state: GatewayState = Depends(get_state)) -> dict:
 
     The four Appendix-C acceptance KPIs are computed from **real event data**:
       * gate_queue_wait / gate_txn_time / tat_inside_port — aggregated from
-        jnpa.gate_events (emitted per truck gate transition) via the KPI views;
+        core.gate_event (emitted per truck gate transition) via the KPI views;
       * trt_empty_ecd — the empty-container service's computed TRT.
     Each KPI carries ``source: "live"`` when it came from event data or
     ``"baseline"`` when no data exists yet — so a placeholder is never mistaken

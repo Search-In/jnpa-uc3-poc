@@ -35,7 +35,7 @@ class ShippingLineParseError(Exception):
 class ParsedList:
     """The uniform output of every shipping-line parser.
 
-    ``header`` holds list-level envelope columns for jnpa.sl_import_files
+    ``header`` holds list-level envelope columns for core.sl_import_file
     (list_type, terminal, physical_format, vessel_visit, voyage, line_code,
     direction). ``containers`` holds canonical IAL/EAL line-item dicts;
     ``delivery_orders`` holds canonical EDO/CODECO dicts. ``record_count`` is the

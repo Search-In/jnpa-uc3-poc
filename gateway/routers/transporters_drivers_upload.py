@@ -4,11 +4,11 @@ The template -> validate -> preview -> confirm-import -> history workflow for th
 Transporter and Driver masters, mirroring gateway/routers/cfs_ecy.py's Data-Upload
 endpoints exactly. A single combined module with an ENTITY selector (TRANSPORTER /
 DRIVER) — the analogue of CFS-ECY's facility (CFS / ECY) — so one import ledger
-(jnpa.td_import_files) carries both.
+(core.td_import_file) carries both.
 
 It REUSES the existing masters end to end (no duplicate business tables):
-  * TRANSPORTER -> jnpa.transporters      (upsert on source_company_id)
-  * DRIVER      -> jnpa.driver_master      (upsert on licence_no_norm)
+  * TRANSPORTER -> core.transporter      (upsert on source_company_id)
+  * DRIVER      -> core.driver      (upsert on licence_no_norm)
 Re-uploading identical bytes is a no-op (sha256 dedup); invalid rows are skipped with
 friendly errors; existing rows are updated (upsert), never blindly duplicated.
 

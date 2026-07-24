@@ -4,7 +4,7 @@ vehicles that a driver may be assigned to.
 Background: before this module the "list of vehicles" came straight from the
 truck-sim (``/devices/list``). That made the sim a hard dependency for driver
 enrollment and gave operators no way to register, deactivate or annotate a
-vehicle. This module introduces ``jnpa.fleet_vehicles`` as the enterprise vehicle
+vehicle. This module introduces ``core.vehicle`` as the enterprise vehicle
 master: every vehicle exists here first (ACTIVE / INACTIVE / MAINTENANCE) and the
 "assign vehicle" dropdown draws ONLY from here. The truck-sim is still ingested —
 its devices are migrated into the master on boot (idempotent, never clobbering an
@@ -17,6 +17,8 @@ init.sql re-run. In production an unreachable Postgres is fatal-per-request
 (ProductionSafetyError -> 503), never a silent memory fallback.
 """
 from __future__ import annotations
+
+import os
 
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional
@@ -40,8 +42,8 @@ _DEFAULT_TYPE = "Container Truck"
 # --- schema (idempotent; also applied at runtime so an existing volume gains the
 # table without an init.sql re-run) -----------------------------------------
 _DDL = """
-CREATE SCHEMA IF NOT EXISTS jnpa;
-CREATE TABLE IF NOT EXISTS jnpa.fleet_vehicles (
+CREATE SCHEMA IF NOT EXISTS core;
+CREATE TABLE IF NOT EXISTS core.vehicle (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     vehicle_id      text NOT NULL UNIQUE,
     vehicle_number  text,
@@ -54,9 +56,9 @@ CREATE TABLE IF NOT EXISTS jnpa.fleet_vehicles (
     created_at      timestamptz NOT NULL DEFAULT now(),
     updated_at      timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS idx_fleet_vehicles_vehicle_id ON jnpa.fleet_vehicles (vehicle_id);
-CREATE INDEX IF NOT EXISTS idx_fleet_vehicles_number ON jnpa.fleet_vehicles (vehicle_number);
-CREATE INDEX IF NOT EXISTS idx_fleet_vehicles_status ON jnpa.fleet_vehicles (status);
+CREATE INDEX IF NOT EXISTS idx_fleet_vehicles_vehicle_id ON core.vehicle (vehicle_id);
+CREATE INDEX IF NOT EXISTS idx_fleet_vehicles_number ON core.vehicle (vehicle_number);
+CREATE INDEX IF NOT EXISTS idx_fleet_vehicles_status ON core.vehicle (status);
 """
 
 # in-memory fallback store (DEV ONLY — used when no Postgres DSN is reachable),
@@ -65,7 +67,7 @@ _MEM: Dict[str, dict] = {}
 # Resolved backend per DSN: None (undetermined) | "db" | "mem".
 _BACKEND: Dict[str, str] = {}
 
-_COLS = ("vehicle_id, vehicle_number, vehicle_type, chassis_number, "
+_COLS = ("vehicle_id, NULLIF(vehicle_no, vehicle_id) AS vehicle_number, vehicle_type, chassis_number, "
          "rfid_fastag_id, status, created_by, created_at, updated_at")
 
 
@@ -88,11 +90,15 @@ async def _backend(dsn: str) -> str:
         _BACKEND[key] = "mem"
         return "mem"
     try:
-        from jnpa_shared.db import execute  # lazy import
+        from jnpa_shared.db import execute, fetch_one  # lazy import
 
-        for stmt in (s.strip() for s in _DDL.split(";")):
-            if stmt:
-                await execute(stmt, dsn=dsn)
+        if os.getenv("JNPA_RUNTIME_DDL", "0") == "1":
+            for stmt in (s.strip() for s in _DDL.split(";")):
+                if stmt:
+                    await execute(stmt, dsn=dsn)
+        else:
+            # schema-v3: DDL owned by infra/postgres/v3; probe connectivity only.
+            await fetch_one("SELECT 1 AS ok", dsn=dsn)
         _BACKEND[key] = "db"
         log.info("fleet_store_backend", backend="db")
         return "db"
@@ -146,7 +152,7 @@ async def next_vehicle_id(dsn: str) -> str:
         # Zero-padded ids sort lexically the same as numerically (<= 999999), so
         # MAX(vehicle_id) over the well-formed ids gives the highest suffix.
         row = await fetch_one(
-            "SELECT MAX(vehicle_id) AS m FROM jnpa.fleet_vehicles "
+            "SELECT MAX(vehicle_id) AS m FROM core.vehicle "
             "WHERE vehicle_id ~ '^TRK-[0-9]{6}$'", dsn=dsn)
         highest = _seq_of(row["m"]) if row and row.get("m") else 0
     else:
@@ -165,8 +171,8 @@ async def find_by_number(dsn: str, vehicle_number: str) -> Optional[dict]:
         from jnpa_shared.db import fetch_one
 
         row = await fetch_one(
-            f"SELECT {_COLS} FROM jnpa.fleet_vehicles "
-            "WHERE UPPER(TRIM(vehicle_number)) = :n LIMIT 1", {"n": needle}, dsn=dsn)
+            f"SELECT {_COLS} FROM core.vehicle "
+            "WHERE UPPER(TRIM(vehicle_no)) = :n LIMIT 1", {"n": needle}, dsn=dsn)
         return _row(row) if row else None
     for v in _MEM.values():
         if (v.get("vehicle_number") or "").strip().upper() == needle:
@@ -186,15 +192,15 @@ async def add_vehicle(dsn: str, *, vehicle_id: str, vehicle_number: str = "",
         from jnpa_shared.db import execute, fetch_one
 
         existing = await fetch_one(
-            "SELECT 1 FROM jnpa.fleet_vehicles WHERE vehicle_id = :v", {"v": vid}, dsn=dsn)
+            "SELECT 1 FROM core.vehicle WHERE vehicle_id = :v", {"v": vid}, dsn=dsn)
         if existing:
             raise ValueError("exists")
         await execute(
             """
-            INSERT INTO jnpa.fleet_vehicles
-                (vehicle_id, vehicle_number, vehicle_type, chassis_number,
+            INSERT INTO core.vehicle
+                (vehicle_id, vehicle_no, vehicle_type, chassis_number,
                  rfid_fastag_id, status, created_by, created_at, updated_at)
-            VALUES (:vid, :num, :type, :chassis, :rfid, :status, :by, :now, :now)
+            VALUES (:vid, COALESCE(:num, :vid), :type, :chassis, :rfid, :status, :by, :now, :now)
             """,
             {"vid": vid, "num": vehicle_number or None, "type": vehicle_type or None,
              "chassis": chassis_number or None, "rfid": rfid_fastag_id or None,
@@ -224,10 +230,12 @@ async def update_vehicle(dsn: str, vehicle_id: str, *,
     if await _backend(dsn) == "db":
         from jnpa_shared.db import execute
 
-        sets = ", ".join(f"{k} = :{k}" for k in updates)
+        # DTO field -> core.vehicle column (vehicle_number lives as vehicle_no)
+        _col = {"vehicle_number": "vehicle_no"}
+        sets = ", ".join(f"{_col.get(k, k)} = :{k}" for k in updates)
         params = {**updates, "vid": vid, "now": now}
         n = await execute(
-            f"UPDATE jnpa.fleet_vehicles SET {sets}, updated_at = :now "
+            f"UPDATE core.vehicle SET {sets}, updated_at = :now "
             f"WHERE vehicle_id = :vid", params, dsn=dsn)
         if not n:
             return None
@@ -258,11 +266,11 @@ async def sync_from_fleet(dsn: str, devices: List[Mapping[str, Any]]) -> int:
                 continue
             n = await execute(
                 """
-                INSERT INTO jnpa.fleet_vehicles
-                    (vehicle_id, vehicle_number, vehicle_type, status, created_by,
+                INSERT INTO core.vehicle
+                    (vehicle_id, vehicle_no, vehicle_type, status, created_by,
                      created_at, updated_at)
-                VALUES (:vid, :num, :type, 'ACTIVE', 'system:truck-sim', :now, :now)
-                ON CONFLICT (vehicle_id) DO NOTHING
+                VALUES (:vid, COALESCE(:num, :vid), :type, 'ACTIVE', 'system:truck-sim', :now, :now)
+                ON CONFLICT (vehicle_no) DO NOTHING
                 """,
                 {"vid": vid, "num": (dev.get("plate") or None), "type": _DEFAULT_TYPE,
                  "now": now}, dsn=dsn)
@@ -291,14 +299,14 @@ def _looks_like_trk_id(value: str) -> bool:
 async def sync_from_assignments(dsn: str) -> int:
     """Backfill the Vehicle Master from EXISTING driver assignments.
 
-    Every assigned vehicle (``jnpa.drivers.vehicle_no_norm``) MUST exist as a
-    ``jnpa.fleet_vehicles.vehicle_id`` — that is the canonical relationship the PWA
+    Every assigned vehicle (``core.driver_identity.vehicle_no_norm``) MUST exist as a
+    ``core.vehicle.vehicle_id`` — that is the canonical relationship the PWA
     login gate and the deployment audit depend on. The truck-sim sync only covers
     sim devices, so assignments that came from elsewhere (admin-created plates,
     non-sim TRK ids) were orphaned. This backfills a fleet row for each such
     Vehicle ID so no ACTIVE driver is left dangling.
 
-    CRITICAL: this NEVER touches ``jnpa.drivers`` — assignments, PWA login and JWTs
+    CRITICAL: this NEVER touches ``core.driver_identity`` — assignments, PWA login and JWTs
     are unchanged; it only *adds* the missing fleet rows the assignments point at.
     Idempotent (skips ids that already exist). Returns the number inserted.
 
@@ -335,8 +343,8 @@ async def orphan_active_drivers(dsn: str, *, active_only: bool = True) -> List[d
     vehicle. Mirrors the verification query
 
         SELECT d.driver_id, d.name, d.vehicle_no_norm
-        FROM jnpa.drivers d
-        LEFT JOIN jnpa.fleet_vehicles f ON d.vehicle_no_norm = f.vehicle_id
+        FROM core.driver_identity d
+        LEFT JOIN core.vehicle f ON d.vehicle_no_norm = f.vehicle_id
         WHERE f.vehicle_id IS NULL;
 
     Returns ``[{driver_id, name, vehicle_no_norm}, …]`` (empty == healthy). Only
@@ -349,8 +357,8 @@ async def orphan_active_drivers(dsn: str, *, active_only: bool = True) -> List[d
         rows = await fetch_all(
             f"""
             SELECT d.driver_id, d.name, d.vehicle_no_norm
-            FROM jnpa.drivers d
-            LEFT JOIN jnpa.fleet_vehicles f ON d.vehicle_no_norm = f.vehicle_id
+            FROM core.driver_identity d
+            LEFT JOIN core.vehicle f ON d.vehicle_no_norm = f.vehicle_id
             WHERE {status_clause} f.vehicle_id IS NULL
               AND d.vehicle_no_norm IS NOT NULL AND TRIM(d.vehicle_no_norm) <> ''
             ORDER BY d.driver_id
@@ -378,7 +386,7 @@ async def get_vehicle(dsn: str, vehicle_id: str) -> Optional[dict]:
         from jnpa_shared.db import fetch_one
 
         row = await fetch_one(
-            f"SELECT {_COLS} FROM jnpa.fleet_vehicles WHERE vehicle_id = :v",
+            f"SELECT {_COLS} FROM core.vehicle WHERE vehicle_id = :v",
             {"v": vid}, dsn=dsn)
         return _row(row) if row else None
     rec = _MEM.get(vid)
@@ -409,11 +417,11 @@ async def list_vehicles(dsn: str, *, q: Optional[str] = None,
             params["st"] = st
         if needle:
             clauses.append("(UPPER(vehicle_id) LIKE :needle OR "
-                           "UPPER(COALESCE(vehicle_number, '')) LIKE :needle)")
+                           "UPPER(COALESCE(vehicle_no, '')) LIKE :needle)")
             params["needle"] = f"%{needle}%"
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         rows = await fetch_all(
-            f"SELECT {_COLS} FROM jnpa.fleet_vehicles {where} "
+            f"SELECT {_COLS} FROM core.vehicle {where} "
             f"ORDER BY created_at DESC LIMIT :lim", params, dsn=dsn)
         return [_row(r) for r in rows]
     items = list(_MEM.values())

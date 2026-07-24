@@ -39,7 +39,7 @@ MQTT_TELEMETRY_SUFFIX = "telemetry"
 MQTT_ETA_SUFFIX = "eta"
 KAFKA_TELEMETRY_TOPIC = "truck.telemetry"
 KAFKA_ETA_TOPIC = "truck.eta"
-TELEMETRY_TABLE = "jnpa.truck_telemetry"
+TELEMETRY_TABLE = "core.truck_telemetry"
 # Redis key the dashboard writes congestion to: traffic:segment:{id}:jam_factor
 REDIS_JAM_KEY_FMT = "traffic:segment:{segment_id}:jam_factor"
 
@@ -113,7 +113,7 @@ class TruckConfig:
     log_level: str = "INFO"
     use_uvloop: bool = True
 
-    # --- Gate destinations (round-robin); ids mirror jnpa.gates seed rows ---
+    # --- Gate destinations (round-robin); ids mirror core.gate seed rows ---
     gate_ids: Tuple[str, ...] = field(
         default_factory=lambda: ("G-NSICT", "G-JNPCT", "G-NSIGT", "G-BMCT")
     )

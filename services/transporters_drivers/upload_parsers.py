@@ -6,9 +6,9 @@ CSV/XLS/XLSX byte payload into a validated, mapped record set plus a preview and
 user-friendly errors — WITHOUT touching the DB. The import step then hands the valid
 records to :class:`services.transporters_drivers.repository.TransportersDriversRepository`,
 which upserts them into the EXISTING masters:
-  * TRANSPORTER -> jnpa.transporters      (upsert on source_company_id, the same key
+  * TRANSPORTER -> core.transporter      (upsert on source_company_id, the same key
     scripts/import_transporter_master.py uses -> idempotent, duplicate-safe).
-  * DRIVER      -> jnpa.driver_master      (upsert on licence_no_norm, the same key
+  * DRIVER      -> core.driver      (upsert on licence_no_norm, the same key
     scripts/import_driver_master.py uses).
 
 Column mapping is ALIAS-DRIVEN (header is normalised, then matched against an alias

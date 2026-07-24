@@ -1,7 +1,7 @@
 """/api/camera-ai — Camera-AI counting + trailer/container identification.
 
 UC-III completion, Features 3/4/5. Backed by the additive migration 0024 tables
-(jnpa.camera_ai_counts / trailer_reads / container_reads):
+(core.camera_ai_count / trailer_reads / container_reads):
 
   * Feature 3 — periodic vehicle/queue COUNTING snapshots with a server-derived
     congestion level, plus a live ``camera_ai`` WebSocket broadcast and a
@@ -11,7 +11,7 @@ UC-III completion, Features 3/4/5. Backed by the additive migration 0024 tables
   * Feature 5 — CONTAINER identification reads with full ISO-6346 check-digit
     validation (owner + category + serial + check digit).
 
-Object-detection *events* already land in jnpa.digital_twin_events via
+Object-detection *events* already land in core.digital_twin_event via
 /api/ai/event; these tables are the counting/aggregation + OCR read snapshots.
 Additive — no existing endpoint/table is touched. RDS-backed; degrades cleanly
 when postgres is unavailable (reads empty, writes 503).
@@ -143,7 +143,7 @@ async def ingest_counts(body: Dict[str, Any] = Body(...),
         congestion = _derive_congestion(queue_count)
 
     row = await execute_returning(
-        """INSERT INTO jnpa.camera_ai_counts
+        """INSERT INTO core.camera_ai_count
              (camera_id, gate_id, vehicle_count, queue_count, class_counts,
               congestion_level, confidence, source, detail)
            VALUES (:cam, :gate, :vc, :qc, CAST(:cc AS jsonb),
@@ -191,7 +191,7 @@ async def list_counts(camera_id: Optional[str] = Query(default=None),
         params["gate"] = gate_id
     clause = ("WHERE " + " AND ".join(where)) if where else ""
     rows = await fetch_all(
-        f"SELECT * FROM jnpa.camera_ai_counts {clause} ORDER BY ts DESC LIMIT :limit",
+        f"SELECT * FROM core.camera_ai_count {clause} ORDER BY ts DESC LIMIT :limit",
         params, dsn=dsn)
     REQUESTS.labels("camera_ai", "ok").inc()
     return {"count": len(rows), "counts": [_iso(dict(r)) for r in rows]}
@@ -210,7 +210,7 @@ async def counts_summary(state: GatewayState = Depends(get_state)) -> dict:
     # Latest row per gate via DISTINCT ON.
     rows = await fetch_all(
         """SELECT DISTINCT ON (gate_id) *
-           FROM jnpa.camera_ai_counts
+           FROM core.camera_ai_count
            ORDER BY gate_id, ts DESC""",
         {}, dsn=dsn)
     gates = [_iso(dict(r)) for r in rows]
@@ -242,7 +242,7 @@ async def ingest_trailer(body: Dict[str, Any] = Body(...),
     from jnpa_shared.db import execute_returning
 
     row = await execute_returning(
-        """INSERT INTO jnpa.trailer_reads
+        """INSERT INTO core.trailer_read
              (camera_id, gate_id, trailer_number, plate, vehicle_id,
               confidence, image_url, source, detail)
            VALUES (:cam, :gate, :tn, :plate, :vid, :conf, :img, :src,
@@ -273,7 +273,7 @@ async def list_trailer(limit: int = Query(default=100, ge=1, le=1000),
         return {"count": 0, "reads": []}
     from jnpa_shared.db import fetch_all
     rows = await fetch_all(
-        "SELECT * FROM jnpa.trailer_reads ORDER BY ts DESC LIMIT :limit",
+        "SELECT * FROM core.trailer_read ORDER BY ts DESC LIMIT :limit",
         {"limit": limit}, dsn=dsn)
     REQUESTS.labels("camera_ai", "ok").inc()
     return {"count": len(rows), "reads": [_iso(dict(r)) for r in rows]}
@@ -295,7 +295,7 @@ async def ingest_container(body: Dict[str, Any] = Body(...),
     iso_type = str(body.get("iso_type") or body.get("size_type") or "")
 
     row = await execute_returning(
-        """INSERT INTO jnpa.container_reads
+        """INSERT INTO core.container_read
              (camera_id, gate_id, container_number, iso_type, check_digit_ok,
               valid, plate, vehicle_id, confidence, image_url, source, detail)
            VALUES (:cam, :gate, :num, :iso, :cdok, :valid, :plate, :vid,
@@ -329,7 +329,7 @@ async def list_container(limit: int = Query(default=100, ge=1, le=1000),
         return {"count": 0, "reads": []}
     from jnpa_shared.db import fetch_all
     rows = await fetch_all(
-        "SELECT * FROM jnpa.container_reads ORDER BY ts DESC LIMIT :limit",
+        "SELECT * FROM core.container_read ORDER BY ts DESC LIMIT :limit",
         {"limit": limit}, dsn=dsn)
     REQUESTS.labels("camera_ai", "ok").inc()
     return {"count": len(rows), "reads": [_iso(dict(r)) for r in rows]}
@@ -346,25 +346,25 @@ async def camera_ai_dashboard(state: GatewayState = Depends(get_state)) -> dict:
                 "congestion_by_gate": {}, "avg_confidence": {}}
     from jnpa_shared.db import fetch_all, fetch_one
 
-    trailer_n = await fetch_one("SELECT count(*) AS n FROM jnpa.trailer_reads", {}, dsn=dsn)
+    trailer_n = await fetch_one("SELECT count(*) AS n FROM core.trailer_read", {}, dsn=dsn)
     container = await fetch_one(
         """SELECT count(*) AS total,
                   count(*) FILTER (WHERE valid) AS valid,
                   count(*) FILTER (WHERE NOT valid) AS invalid
-           FROM jnpa.container_reads""",
+           FROM core.container_read""",
         {}, dsn=dsn)
     congestion_rows = await fetch_all(
         """SELECT DISTINCT ON (gate_id) gate_id, congestion_level
-           FROM jnpa.camera_ai_counts
+           FROM core.camera_ai_count
            WHERE gate_id IS NOT NULL
            ORDER BY gate_id, ts DESC""",
         {}, dsn=dsn)
     avg_counts = await fetch_one(
-        "SELECT avg(confidence) AS c FROM jnpa.camera_ai_counts", {}, dsn=dsn)
+        "SELECT avg(confidence) AS c FROM core.camera_ai_count", {}, dsn=dsn)
     avg_trailer = await fetch_one(
-        "SELECT avg(confidence) AS c FROM jnpa.trailer_reads", {}, dsn=dsn)
+        "SELECT avg(confidence) AS c FROM core.trailer_read", {}, dsn=dsn)
     avg_container = await fetch_one(
-        "SELECT avg(confidence) AS c FROM jnpa.container_reads", {}, dsn=dsn)
+        "SELECT avg(confidence) AS c FROM core.container_read", {}, dsn=dsn)
 
     def _f(row: Optional[Mapping]) -> float:
         return round(float(row["c"]), 4) if row and row["c"] is not None else 0.0

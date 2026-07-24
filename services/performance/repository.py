@@ -54,7 +54,7 @@ class PerformanceRepository:
     # ---------------------------------------------------------------- dimension
     async def terminals(self) -> list[dict]:
         sql = ("SELECT code, full_name, operator, terminal_type, is_container, "
-               "aliases, sort_order FROM jnpa.perf_terminals ORDER BY sort_order, code")
+               "aliases, sort_order FROM core.perf_terminal ORDER BY sort_order, code")
         async with get_engine(self._dsn).connect() as conn:
             rows = (await conn.execute(text(sql))).mappings().all()
         return [dict(r) for r in rows]
@@ -62,38 +62,38 @@ class PerformanceRepository:
     async def latest_report_date(self) -> Optional[date]:
         async with get_engine(self._dsn).connect() as conn:
             r = (await conn.execute(text(
-                "SELECT max(report_date) AS d FROM jnpa.perf_daily_snapshot"))).mappings().first()
+                "SELECT max(report_date) AS d FROM core.perf_daily_snapshot"))).mappings().first()
         return r["d"] if r and r["d"] else None
 
     async def prev_report_date(self, d: date) -> Optional[date]:
         async with get_engine(self._dsn).connect() as conn:
             r = (await conn.execute(text(
-                "SELECT max(report_date) AS d FROM jnpa.perf_daily_snapshot "
+                "SELECT max(report_date) AS d FROM core.perf_daily_snapshot "
                 "WHERE report_date < :d"), {"d": d})).mappings().first()
         return r["d"] if r and r["d"] else None
 
     async def report_dates(self, limit: int = 60) -> list[str]:
         async with get_engine(self._dsn).connect() as conn:
             rows = (await conn.execute(text(
-                "SELECT report_date FROM jnpa.perf_daily_snapshot "
+                "SELECT report_date FROM core.perf_daily_snapshot "
                 "ORDER BY report_date DESC LIMIT :limit"), {"limit": limit})).mappings().all()
         return [str(r["report_date"]) for r in rows]
 
     # ---------------------------------------------------------------- KPI headline
     async def _day_headline(self, conn, d: date) -> dict:
         teus = (await conn.execute(text(
-            "SELECT total_teus FROM jnpa.perf_daily_traffic "
+            "SELECT total_teus FROM core.perf_daily_traffic "
             "WHERE report_date=:d AND terminal_code='JN_PORT' AND period='DAY'"),
             {"d": d})).scalar()
         tonnage = (await conn.execute(text(
-            "SELECT total_tonnes, vessels FROM jnpa.perf_daily_tonnage "
+            "SELECT total_tonnes, vessels FROM core.perf_daily_tonnage "
             "WHERE report_date=:d AND category='JNPA_TOTAL' AND period='DAY'"),
             {"d": d})).mappings().first()
         st = (await conn.execute(text(
             "SELECT yard_occupancy_pct, gate_in_teus, gate_out_teus, gate_total_teus, "
             "  icd_pendency_teus, cfs_pendency_teus, reefer_total_slots, "
             "  reefer_occupied_slots, reefer_available_slots "
-            "FROM jnpa.perf_daily_terminal_status "
+            "FROM core.perf_daily_terminal_status "
             "WHERE report_date=:d AND terminal_code='TOTAL'"), {"d": d})).mappings().first()
         st = dict(st) if st else {}
         pend = None
@@ -117,12 +117,12 @@ class PerformanceRepository:
             d = report_date
             if d is None:
                 d = (await conn.execute(text(
-                    "SELECT max(report_date) AS d FROM jnpa.perf_daily_snapshot"))).scalar()
+                    "SELECT max(report_date) AS d FROM core.perf_daily_snapshot"))).scalar()
             if d is None:
                 return None
             cur = await self._day_headline(conn, d)
             pd = (await conn.execute(text(
-                "SELECT max(report_date) AS d FROM jnpa.perf_daily_snapshot "
+                "SELECT max(report_date) AS d FROM core.perf_daily_snapshot "
                 "WHERE report_date < :d"), {"d": d})).scalar()
             prev = await self._day_headline(conn, pd) if pd else {}
         deltas = {}
@@ -137,25 +137,25 @@ class PerformanceRepository:
     async def daily_bundle(self, d: date) -> Optional[dict]:
         async with get_engine(self._dsn).connect() as conn:
             snap = (await conn.execute(text(
-                "SELECT report_date, as_of_ts, source_file FROM jnpa.perf_daily_snapshot "
+                "SELECT report_date, as_of_ts, source_file FROM core.perf_daily_snapshot "
                 "WHERE report_date=:d"), {"d": d})).mappings().first()
             if not snap:
                 return None
             traffic = (await conn.execute(text(
                 "SELECT terminal_code, period, vessels, imp_teus, exp_teus, total_teus, "
                 "  rakes, rail_dis_teus, rail_ldg_teus, rail_total_teus "
-                "FROM jnpa.perf_daily_traffic WHERE report_date=:d "
+                "FROM core.perf_daily_traffic WHERE report_date=:d "
                 "ORDER BY period, terminal_code"), {"d": d})).mappings().all()
             tonnage = (await conn.execute(text(
                 "SELECT category, period, vessels, liquid_tonnes, dry_bulk_tonnes, "
-                "  break_bulk_tonnes, total_tonnes FROM jnpa.perf_daily_tonnage "
+                "  break_bulk_tonnes, total_tonnes FROM core.perf_daily_tonnage "
                 "WHERE report_date=:d ORDER BY period, category"), {"d": d})).mappings().all()
             status = (await conn.execute(text(
-                "SELECT * FROM jnpa.perf_daily_terminal_status WHERE report_date=:d "
+                "SELECT * FROM core.perf_daily_terminal_status WHERE report_date=:d "
                 "ORDER BY terminal_code"), {"d": d})).mappings().all()
             vessels = (await conn.execute(text(
                 "SELECT terminal_code, berth_no, via_no, vessel_name, cargo_commodity, "
-                "  berthed_on, expected_completion FROM jnpa.perf_daily_vessels "
+                "  berthed_on, expected_completion FROM core.perf_daily_vessel "
                 "WHERE report_date=:d ORDER BY terminal_code, berth_no"), {"d": d})).mappings().all()
         return {
             "snapshot": dict(snap),
@@ -182,12 +182,12 @@ class PerformanceRepository:
         order_dir = "ASC" if str(direction).lower() == "asc" else "DESC"
         async with get_engine(self._dsn).connect() as conn:
             total = (await conn.execute(text(
-                f"SELECT count(*) FROM jnpa.perf_daily_traffic {where}"), params)).scalar()
+                f"SELECT count(*) FROM core.perf_daily_traffic {where}"), params)).scalar()
             params.update({"limit": limit, "offset": offset})
             rows = (await conn.execute(text(
                 "SELECT report_date, terminal_code, period, vessels, imp_teus, exp_teus, "
                 "  total_teus, rakes, rail_dis_teus, rail_ldg_teus, rail_total_teus "
-                f"FROM jnpa.perf_daily_traffic {where} "
+                f"FROM core.perf_daily_traffic {where} "
                 f"ORDER BY {order_col} {order_dir}, terminal_code ASC "
                 "LIMIT :limit OFFSET :offset"), params)).mappings().all()
         return [dict(r) for r in rows], int(total or 0)
@@ -202,10 +202,10 @@ class PerformanceRepository:
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
         async with get_engine(self._dsn).connect() as conn:
             total = (await conn.execute(text(
-                f"SELECT count(*) FROM jnpa.perf_daily_terminal_status {where}"), params)).scalar()
+                f"SELECT count(*) FROM core.perf_daily_terminal_status {where}"), params)).scalar()
             params.update({"limit": limit, "offset": offset})
             rows = (await conn.execute(text(
-                f"SELECT * FROM jnpa.perf_daily_terminal_status {where} "
+                f"SELECT * FROM core.perf_daily_terminal_status {where} "
                 "ORDER BY report_date DESC, terminal_code ASC LIMIT :limit OFFSET :offset"),
                 params)).mappings().all()
         return [dict(r) for r in rows], int(total or 0)
@@ -220,12 +220,12 @@ class PerformanceRepository:
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
         async with get_engine(self._dsn).connect() as conn:
             total = (await conn.execute(text(
-                f"SELECT count(*) FROM jnpa.perf_daily_vessels {where}"), params)).scalar()
+                f"SELECT count(*) FROM core.perf_daily_vessel {where}"), params)).scalar()
             params.update({"limit": limit, "offset": offset})
             rows = (await conn.execute(text(
                 "SELECT report_date, terminal_code, berth_no, via_no, vessel_name, "
                 "  cargo_commodity, berthed_on, expected_completion "
-                f"FROM jnpa.perf_daily_vessels {where} "
+                f"FROM core.perf_daily_vessel {where} "
                 "ORDER BY report_date DESC, terminal_code, berth_no LIMIT :limit OFFSET :offset"),
                 params)).mappings().all()
         return [dict(r) for r in rows], int(total or 0)
@@ -246,12 +246,12 @@ class PerformanceRepository:
         order_dir = "ASC" if str(direction).lower() == "asc" else "DESC"
         async with get_engine(self._dsn).connect() as conn:
             total = (await conn.execute(text(
-                f"SELECT count(*) FROM jnpa.perf_monthly_teu {where}"), params)).scalar()
+                f"SELECT count(*) FROM core.perf_monthly_teu {where}"), params)).scalar()
             params.update({"limit": limit, "offset": offset})
             rows = (await conn.execute(text(
                 "SELECT fiscal_year, month_date, year_label, month_label, terminal_code, "
                 "  vessel_calls, discharge_teus, load_teus, total_teus "
-                f"FROM jnpa.perf_monthly_teu {where} "
+                f"FROM core.perf_monthly_teu {where} "
                 f"ORDER BY {order_col} {order_dir}, terminal_code ASC LIMIT :limit OFFSET :offset"),
                 params)).mappings().all()
         return [dict(r) for r in rows], int(total or 0)
@@ -268,7 +268,7 @@ class PerformanceRepository:
                 conds.append("terminal_code = 'JN_PORT'")
             where = "WHERE " + " AND ".join(conds)
             sql = ("SELECT month_date::text AS t, terminal_code, total_teus AS value "
-                   f"FROM jnpa.perf_monthly_teu {where} ORDER BY month_date ASC")
+                   f"FROM core.perf_monthly_teu {where} ORDER BY month_date ASC")
             async with get_engine(self._dsn).connect() as conn:
                 rows = (await conn.execute(text(sql), params)).mappings().all()
             return [{"t": r["t"], "terminal_code": r["terminal_code"], "value": _f(r["value"])}
@@ -284,14 +284,14 @@ class PerformanceRepository:
         if date_to:
             drange += " AND report_date <= :date_to"; params["date_to"] = date_to
         if src == "traffic_jnport":
-            sql = (f"SELECT report_date::text AS t, {col} AS value FROM jnpa.perf_daily_traffic "
+            sql = (f"SELECT report_date::text AS t, {col} AS value FROM core.perf_daily_traffic "
                    f"WHERE terminal_code='JN_PORT' AND period='DAY'{drange} ORDER BY report_date ASC")
         elif src == "tonnage_jnpa":
-            sql = (f"SELECT report_date::text AS t, {col} AS value FROM jnpa.perf_daily_tonnage "
+            sql = (f"SELECT report_date::text AS t, {col} AS value FROM core.perf_daily_tonnage "
                    f"WHERE category='JNPA_TOTAL' AND period='DAY'{drange} ORDER BY report_date ASC")
         else:  # status_total
             sql = (f"SELECT report_date::text AS t, {col} AS value "
-                   "FROM jnpa.perf_daily_terminal_status "
+                   "FROM core.perf_daily_terminal_status "
                    f"WHERE terminal_code='TOTAL'{drange} ORDER BY report_date ASC")
         async with get_engine(self._dsn).connect() as conn:
             rows = (await conn.execute(text(sql), params)).mappings().all()
@@ -309,10 +309,10 @@ class PerformanceRepository:
             "SELECT s.report_date::text AS day, "
             "  tr.total_teus AS total_teus, st.gate_in_teus, st.gate_out_teus, "
             "  st.yard_occupancy_pct "
-            "FROM jnpa.perf_daily_snapshot s "
-            "LEFT JOIN jnpa.perf_daily_traffic tr ON tr.report_date=s.report_date "
+            "FROM core.perf_daily_snapshot s "
+            "LEFT JOIN core.perf_daily_traffic tr ON tr.report_date=s.report_date "
             "  AND tr.terminal_code='JN_PORT' AND tr.period='DAY' "
-            "LEFT JOIN jnpa.perf_daily_terminal_status st ON st.report_date=s.report_date "
+            "LEFT JOIN core.perf_daily_terminal_status st ON st.report_date=s.report_date "
             "  AND st.terminal_code='TOTAL' "
             f"WHERE 1=1{drange} ORDER BY s.report_date ASC")
         async with get_engine(self._dsn).connect() as conn:
@@ -329,7 +329,7 @@ class PerformanceRepository:
                 conds.append(f"{col} = :{col}"); params[col] = filters[col]
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
         sql = ("SELECT report_month::text AS report_month, terminal_code, cycle, segment, "
-               "  dwell_hours, dwell_hours_prev FROM jnpa.perf_ldb_port_dwell "
+               "  dwell_hours, dwell_hours_prev FROM core.perf_ldb_port_dwell "
                f"{where} ORDER BY cycle, segment, terminal_code")
         async with get_engine(self._dsn).connect() as conn:
             rows = (await conn.execute(text(sql), params)).mappings().all()
@@ -344,11 +344,11 @@ class PerformanceRepository:
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
         async with get_engine(self._dsn).connect() as conn:
             total = (await conn.execute(text(
-                f"SELECT count(*) FROM jnpa.perf_ldb_facility_dwell {where}"), params)).scalar()
+                f"SELECT count(*) FROM core.perf_ldb_facility_dwell {where}"), params)).scalar()
             params.update({"limit": limit, "offset": offset})
             rows = (await conn.execute(text(
                 "SELECT report_month::text AS report_month, facility_type, facility_name, "
-                "  dwell_hours, dwell_hours_prev FROM jnpa.perf_ldb_facility_dwell "
+                "  dwell_hours, dwell_hours_prev FROM core.perf_ldb_facility_dwell "
                 f"{where} ORDER BY dwell_hours DESC NULLS LAST, facility_name "
                 "LIMIT :limit OFFSET :offset"), params)).mappings().all()
         return [dict(r) for r in rows], int(total or 0)
@@ -360,7 +360,7 @@ class PerformanceRepository:
                 conds.append(f"{col} = :{col}"); params[col] = filters[col]
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
         sql = ("SELECT report_month::text AS report_month, cycle, cluster_no, cluster_name, "
-               "  cfs_count, pct_containers, congestion_level FROM jnpa.perf_ldb_congestion "
+               "  cfs_count, pct_containers, congestion_level FROM core.perf_ldb_congestion "
                f"{where} ORDER BY cycle, cluster_no")
         async with get_engine(self._dsn).connect() as conn:
             rows = (await conn.execute(text(sql), params)).mappings().all()
@@ -373,7 +373,7 @@ class PerformanceRepository:
                 conds.append(f"{col} = :{col}"); params[col] = filters[col]
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
         sql = ("SELECT report_month::text AS report_month, cycle, transport_mode, route_name, "
-               f"pct_share FROM jnpa.perf_ldb_route_movement {where} "
+               f"pct_share FROM core.perf_ldb_route_movement {where} "
                "ORDER BY cycle, pct_share DESC")
         async with get_engine(self._dsn).connect() as conn:
             rows = (await conn.execute(text(sql), params)).mappings().all()
@@ -386,7 +386,7 @@ class PerformanceRepository:
                 conds.append(f"{col} = :{col}"); params[col] = filters[col]
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
         sql = ("SELECT report_month::text AS report_month, terminal_code, cycle, weather, "
-               f"dwell_hours FROM jnpa.perf_ldb_weather {where} "
+               f"dwell_hours FROM core.perf_ldb_weather {where} "
                "ORDER BY cycle, terminal_code, weather")
         async with get_engine(self._dsn).connect() as conn:
             rows = (await conn.execute(text(sql), params)).mappings().all()
@@ -395,6 +395,6 @@ class PerformanceRepository:
     async def ldb_months(self) -> list[str]:
         async with get_engine(self._dsn).connect() as conn:
             rows = (await conn.execute(text(
-                "SELECT DISTINCT report_month::text AS m FROM jnpa.perf_ldb_port_dwell "
+                "SELECT DISTINCT report_month::text AS m FROM core.perf_ldb_port_dwell "
                 "ORDER BY m DESC"))).mappings().all()
         return [r["m"] for r in rows]

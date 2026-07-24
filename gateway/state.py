@@ -51,7 +51,7 @@ class GatewayState:
     def __init__(self, cfg: GatewayConfig) -> None:
         self.cfg = cfg
         # Auditing HTTP client: every outbound (external) call is logged to
-        # jnpa.api_audit_log (request/response/status/latency/error). Drop-in for
+        # core.api_audit_log (request/response/status/latency/error). Drop-in for
         # httpx.AsyncClient — behaviour is unchanged, logging is fire-and-forget.
         self.http = AuditingAsyncClient(
             timeout=cfg.upstream_timeout_s, audit_dsn=cfg.postgres_dsn or None
@@ -62,7 +62,7 @@ class GatewayState:
         # Read at the top of each fallback chain to force a rung on demand.
         self.faults = FaultRegistry()
         self.ws = WsHub()
-        # DB-driven geo-fence enforcement engine (reads jnpa.geofence_zones live).
+        # DB-driven geo-fence enforcement engine (reads core.geofence_zone live).
         # Fed by the MQTT truck pump + POST /api/geo/evaluate (mobile location).
         self.geofence = GeofenceEngine(cfg.postgres_dsn or None)
         # Wire the engine's per-driver push (WebPush + FCM) — best-effort, only

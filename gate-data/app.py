@@ -13,7 +13,7 @@ automated Let Export Order.
     GET  /customs/flags            -> all current Customs flags (Customs feed)
 
 The dataset is generated deterministically in-memory from ``gate_data.seed`` on
-startup. The service registers itself in ``jnpa.services`` on startup (best
+startup. The service registers itself in ``core.ulip_service`` on startup (best
 effort; the API still serves if the DB is not up yet).
 """
 from __future__ import annotations
@@ -202,7 +202,7 @@ async def _lifespan(_app: FastAPI):
     n = _rebuild_store()
     log.info("dataset_built", containers=n)
 
-    # Best-effort registration in jnpa.services + ensure schema. DB may not be
+    # Best-effort registration in core.ulip_service + ensure schema. DB may not be
     # up yet in some local bring-up orders; don't crash the API if so.
     try:
         await ensure_schema(dsn=cfg.postgres_dsn)
@@ -335,7 +335,7 @@ async def reconciliations(
 
 @app.get("/customs/history")
 async def customs_history(limit: int = Query(default=200, ge=1, le=1000)) -> dict:
-    """Durable customs feed from jnpa.alerts (kind=CUSTOMS_FLAG), survives restart."""
+    """Durable customs feed from core.alert (kind=CUSTOMS_FLAG), survives restart."""
     rows = await persistence.customs_flag_history(limit=limit, dsn=cfg.postgres_dsn)
     return {"count": len(rows), "alerts": rows}
 

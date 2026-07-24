@@ -27,7 +27,7 @@ class CustomsParseError(Exception):
 class ParsedMessage:
     """The uniform output of every customs parser.
 
-    ``message`` holds the message-level envelope columns for jnpa.customs_messages
+    ``message`` holds the message-level envelope columns for core.customs_message
     (message_type, module, control_number, sender/receiver, sent_ts, primary_ref).
     ``payload`` holds the module-specific nested structure the repository persists
     (e.g. IGM: ``{"vessels": [...]}``); ``record_count`` is the number of leaf rows

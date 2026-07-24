@@ -1,7 +1,7 @@
 """Performance upload persistence — raw-SQL repository (Module 12 sub-module).
 
 The ONLY layer that speaks SQL for the upload lifecycle. Two responsibilities:
-  * upload lifecycle tables (jnpa.perf_uploads / perf_import_logs / perf_upload_errors)
+  * upload lifecycle tables (core.perf_upload / perf_import_logs / perf_upload_errors)
   * ATOMIC import of validated records into the EXISTING jnpa.perf_* dashboard
     tables (single engine.begin() transaction → all-or-nothing rollback), keyed on
     the migration-0028/0029 UNIQUE constraints.
@@ -90,7 +90,7 @@ def _build(key: str) -> tuple[str, tuple[str, ...]]:
     cols = bind + ("uploaded_at",)
     placeholders = ", ".join([f":{c}" for c in bind] + ["now()"])
     updates = ", ".join(f"{c} = EXCLUDED.{c}" for c in cols if c not in keys)
-    sql = (f"INSERT INTO jnpa.{table} ({', '.join(cols)}) VALUES ({placeholders}) "
+    sql = (f"INSERT INTO core.{table} ({', '.join(cols)}) VALUES ({placeholders}) "
            f"ON CONFLICT ON CONSTRAINT {constraint} DO UPDATE SET {updates} "
            f"RETURNING (xmax = 0) AS was_insert")
     return sql, bind
@@ -110,11 +110,11 @@ class UploadRepository:
         if not keys:
             return set()
         if report_type == "daily_status":
-            sql = "SELECT report_date AS k FROM jnpa.perf_daily_snapshot WHERE report_date = ANY(:ks)"
+            sql = "SELECT report_date AS k FROM core.perf_daily_snapshot WHERE report_date = ANY(:ks)"
         elif report_type == "monthly_teu":
-            sql = "SELECT DISTINCT month_date AS k FROM jnpa.perf_monthly_teu WHERE month_date = ANY(:ks)"
+            sql = "SELECT DISTINCT month_date AS k FROM core.perf_monthly_teu WHERE month_date = ANY(:ks)"
         else:
-            sql = "SELECT DISTINCT report_month AS k FROM jnpa.perf_ldb_port_dwell WHERE report_month = ANY(:ks)"
+            sql = "SELECT DISTINCT report_month AS k FROM core.perf_ldb_port_dwell WHERE report_month = ANY(:ks)"
         async with get_engine(self._dsn).connect() as conn:
             rows = (await conn.execute(text(sql), {"ks": list(keys)})).scalars().all()
         return set(rows)
@@ -123,7 +123,7 @@ class UploadRepository:
     async def create_upload(self, *, report_type: str, filename: str, size: int, uploaded_by: str,
                             status: str, row_count: int, error_count: int, notes: str,
                             file_format: str = "CSV") -> str:
-        sql = ("""INSERT INTO jnpa.perf_uploads
+        sql = ("""INSERT INTO core.perf_upload
             (report_type, original_filename, file_format, file_size_bytes, uploaded_by,
              status, row_count, error_count, notes)
             VALUES (:rt,:fn,:ff,:sz,:ub,:st,:rc,:ec,:no) RETURNING upload_id""")
@@ -136,7 +136,7 @@ class UploadRepository:
     async def add_errors(self, upload_id: str, errors: list[dict]) -> None:
         if not errors:
             return
-        sql = ("""INSERT INTO jnpa.perf_upload_errors
+        sql = ("""INSERT INTO core.perf_upload_error
             (upload_id, row_number, column_name, error_code, error_detail, raw_value)
             VALUES (:uid,:rn,:cn,:ec,:ed,:rv)""")
         async with get_engine(self._dsn).begin() as conn:
@@ -147,7 +147,7 @@ class UploadRepository:
 
     async def add_log(self, upload_id: str, phase: str, level: str, message: str,
                       target_table: Optional[str] = None, affected: Optional[int] = None) -> None:
-        sql = ("""INSERT INTO jnpa.perf_import_logs (upload_id, phase, level, message, target_table, affected_rows)
+        sql = ("""INSERT INTO core.perf_import_log (upload_id, phase, level, message, target_table, affected_rows)
                   VALUES (:uid,:ph,:lv,:msg,:tt,:af)""")
         async with get_engine(self._dsn).begin() as conn:
             await conn.execute(text(sql), {"uid": upload_id, "ph": phase, "lv": level,
@@ -193,7 +193,7 @@ class UploadRepository:
     async def finalize_upload(self, upload_id: str, *, status: str, inserted: int,
                               skipped: int, updated: int = 0,
                               notes: Optional[str] = None) -> None:
-        sql = ("""UPDATE jnpa.perf_uploads
+        sql = ("""UPDATE core.perf_upload
                   SET status=:st, inserted_count=:ins, skipped_count=:sk, updated_count=:up,
                       completed_at=now(), notes=COALESCE(:no, notes)
                   WHERE upload_id=:uid""")
@@ -210,13 +210,13 @@ class UploadRepository:
             conds.append("status = :st"); params["st"] = filters["status"]
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
         async with get_engine(self._dsn).connect() as conn:
-            total = (await conn.execute(text(f"SELECT count(*) FROM jnpa.perf_uploads {where}"), params)).scalar()
+            total = (await conn.execute(text(f"SELECT count(*) FROM core.perf_upload {where}"), params)).scalar()
             params.update({"limit": limit, "offset": offset})
             rows = (await conn.execute(text(
                 "SELECT upload_id::text, report_type, original_filename, file_format, "
                 "  file_size_bytes, status, uploaded_by, row_count, inserted_count, "
                 "  updated_count, skipped_count, error_count, notes, created_at, completed_at "
-                f"FROM jnpa.perf_uploads {where} ORDER BY created_at DESC LIMIT :limit OFFSET :offset"),
+                f"FROM core.perf_upload {where} ORDER BY created_at DESC LIMIT :limit OFFSET :offset"),
                 params)).mappings().all()
         return [dict(r) for r in rows], int(total or 0)
 
@@ -226,13 +226,13 @@ class UploadRepository:
                 "SELECT upload_id::text, report_type, original_filename, file_format, status, "
                 "  uploaded_by, row_count, inserted_count, updated_count, skipped_count, "
                 "  error_count, notes, created_at, completed_at "
-                "FROM jnpa.perf_uploads WHERE upload_id = :uid"), {"uid": upload_id})).mappings().first()
+                "FROM core.perf_upload WHERE upload_id = :uid"), {"uid": upload_id})).mappings().first()
             if not head:
                 return None
             logs = (await conn.execute(text(
                 "SELECT phase, level, message, target_table, affected_rows, created_at "
-                "FROM jnpa.perf_import_logs WHERE upload_id=:uid ORDER BY created_at"), {"uid": upload_id})).mappings().all()
+                "FROM core.perf_import_log WHERE upload_id=:uid ORDER BY created_at"), {"uid": upload_id})).mappings().all()
             errs = (await conn.execute(text(
                 "SELECT row_number, column_name, error_code, error_detail, raw_value "
-                "FROM jnpa.perf_upload_errors WHERE upload_id=:uid ORDER BY row_number LIMIT 500"), {"uid": upload_id})).mappings().all()
+                "FROM core.perf_upload_error WHERE upload_id=:uid ORDER BY row_number LIMIT 500"), {"uid": upload_id})).mappings().all()
         return {**dict(head), "logs": [dict(r) for r in logs], "errors": [dict(r) for r in errs]}

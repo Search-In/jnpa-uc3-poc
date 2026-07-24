@@ -7,7 +7,7 @@ vehicle_master.blacklist_status column with no enforcement). Adds:
   * vehicle & driver VALIDATION endpoints the gate/enforcement flow can call,
   * search, and a control-room notification on blacklist.
 
-RDS-backed (jnpa.transporters / transporter_vehicles / transporter_blacklist).
+RDS-backed (core.transporter / transporter_vehicles / transporter_blacklist).
 Additive — the legacy vehicle_master.blacklist_status column is left untouched;
 blacklisting a transporter ALSO stamps its mapped vehicles' vehicle_master row
 when present (best-effort) so existing read paths stay consistent.
@@ -41,6 +41,16 @@ router = APIRouter(prefix="/api/transporters", tags=["transporters"])
 
 _SEVERITY = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
 
+# core.transporter columns aliased back to the legacy jnpa.transporters DTO —
+# response payloads must stay byte-identical after the schema-v3 migration.
+_T_COLS = (
+    "id, code, company_name AS name, gstin, contact, status, created_at, "
+    "updated_at, company_id AS source_company_id, user_id AS source_user_id, "
+    "contact_person, designation, email, mobile_number AS mobile, address, "
+    "document_type AS doc_type, document_file AS doc_file"
+)
+_T_COLS_T = ", ".join("t." + c.strip() for c in _T_COLS.split(","))
+
 
 def _norm_plate(plate: str) -> str:
     return re.sub(r"[^A-Z0-9]", "", (plate or "").upper())
@@ -73,14 +83,18 @@ async def create_transporter(body: Dict[str, Any] = Body(...),
     # Transport Master callers may additionally send the extended fields below;
     # all are optional and default to NULL so nothing existing breaks.
     row = await execute_returning(
-        """INSERT INTO jnpa.transporters
-             (code, name, gstin, contact, status, source_company_id, source_user_id,
-              contact_person, designation, email, mobile, address, doc_type, doc_file)
+        f"""INSERT INTO core.transporter
+             (code, company_name, gstin, contact, status, company_id, user_id,
+              contact_person, designation, email, mobile_number, address,
+              document_type, document_file)
            VALUES (:code, :name, :gstin, CAST(:contact AS jsonb),
-                   COALESCE(:status, 'ACTIVE'), :source_company_id, :source_user_id,
+                   COALESCE(:status, 'ACTIVE'),
+                   COALESCE(CAST(:source_company_id AS integer),
+                            nextval('core.transporter_company_id_seq')::integer),
+                   :source_user_id,
                    :contact_person, :designation, :email, :mobile, :address,
                    :doc_type, :doc_file)
-           RETURNING *""",
+           RETURNING {_T_COLS}""",
         {"code": body.get("code"), "name": name, "gstin": body.get("gstin"),
          "contact": json.dumps(body.get("contact") or {}),
          "status": (body.get("status") or "ACTIVE"),
@@ -109,23 +123,23 @@ async def list_transporters(q: Optional[str] = Query(default=None),
     params: Dict[str, Any] = {"limit": limit}
     if q:
         where.append(
-            "(lower(name) LIKE :q OR lower(coalesce(code,'')) LIKE :q "
+            "(lower(company_name) LIKE :q OR lower(coalesce(code,'')) LIKE :q "
             "OR lower(coalesce(gstin,'')) LIKE :q "
             "OR lower(coalesce(contact_person,'')) LIKE :q "
             "OR lower(coalesce(email,'')) LIKE :q "
-            "OR coalesce(mobile,'') LIKE :q "
-            "OR coalesce(source_company_id::text,'') LIKE :q)")
+            "OR coalesce(mobile_number,'') LIKE :q "
+            "OR coalesce(company_id::text,'') LIKE :q)")
         params["q"] = f"%{q.lower()}%"
     if status:
         where.append("status = :status")
         params["status"] = status.upper()
     clause = ("WHERE " + " AND ".join(where)) if where else ""
     rows = await fetch_all(
-        f"""SELECT t.*,
-              (SELECT count(*) FROM jnpa.transporter_vehicles v WHERE v.transporter_id = t.id) AS vehicle_count,
-              EXISTS(SELECT 1 FROM jnpa.transporter_blacklist b
+        f"""SELECT {_T_COLS_T},
+              (SELECT count(*) FROM core.transporter_vehicle v WHERE v.transporter_id = t.id) AS vehicle_count,
+              EXISTS(SELECT 1 FROM core.transporter_blacklist b
                      WHERE b.transporter_id = t.id AND b.status = 'ACTIVE') AS blacklisted
-            FROM jnpa.transporters t {clause}
+            FROM core.transporter t {clause}
             ORDER BY t.created_at DESC LIMIT :limit""",
         params, dsn=dsn)
     REQUESTS.labels("transporters", "ok").inc()
@@ -140,9 +154,9 @@ async def active_blacklist(limit: int = Query(default=200, ge=1, le=1000),
         return {"count": 0, "blacklist": []}
     from jnpa_shared.db import fetch_all
     rows = await fetch_all(
-        """SELECT b.*, t.name AS transporter_name, t.code AS transporter_code
-           FROM jnpa.transporter_blacklist b
-           JOIN jnpa.transporters t ON t.id = b.transporter_id
+        """SELECT b.*, t.company_name AS transporter_name, t.code AS transporter_code
+           FROM core.transporter_blacklist b
+           JOIN core.transporter t ON t.id = b.transporter_id
            WHERE b.status = 'ACTIVE'
            ORDER BY b.blacklisted_at DESC LIMIT :limit""",
         {"limit": limit}, dsn=dsn)
@@ -161,11 +175,11 @@ async def validate_vehicle(plate: str, state: GatewayState = Depends(get_state))
     from jnpa_shared.db import fetch_one
     norm = _norm_plate(plate)
     row = await fetch_one(
-        """SELECT t.id AS transporter_id, t.name AS transporter_name,
+        """SELECT t.id AS transporter_id, t.company_name AS transporter_name,
                   b.reason, b.severity, b.blacklisted_at
-           FROM jnpa.transporter_vehicles v
-           JOIN jnpa.transporters t ON t.id = v.transporter_id
-           JOIN jnpa.transporter_blacklist b
+           FROM core.transporter_vehicle v
+           JOIN core.transporter t ON t.id = v.transporter_id
+           JOIN core.transporter_blacklist b
              ON b.transporter_id = t.id AND b.status = 'ACTIVE'
            WHERE v.vehicle_no_norm = :norm
            ORDER BY b.blacklisted_at DESC LIMIT 1""",
@@ -190,10 +204,10 @@ async def validate_driver(driver_id: str, state: GatewayState = Depends(get_stat
         return {"driver_id": driver_id, "blacklisted": False, "decision": "ALLOW", "source": "unavailable"}
     from jnpa_shared.db import fetch_one
     row = await fetch_one(
-        """SELECT t.id AS transporter_id, t.name AS transporter_name, b.reason, b.severity
-           FROM jnpa.transporter_vehicles v
-           JOIN jnpa.transporters t ON t.id = v.transporter_id
-           JOIN jnpa.transporter_blacklist b
+        """SELECT t.id AS transporter_id, t.company_name AS transporter_name, b.reason, b.severity
+           FROM core.transporter_vehicle v
+           JOIN core.transporter t ON t.id = v.transporter_id
+           JOIN core.transporter_blacklist b
              ON b.transporter_id = t.id AND b.status = 'ACTIVE'
            WHERE v.driver_id = :did
            ORDER BY b.blacklisted_at DESC LIMIT 1""",
@@ -212,15 +226,15 @@ async def get_transporter(transporter_id: int, state: GatewayState = Depends(get
     if not dsn:
         raise HTTPException(503, "database_unavailable")
     from jnpa_shared.db import fetch_all, fetch_one
-    row = await fetch_one("SELECT * FROM jnpa.transporters WHERE id = :id",
+    row = await fetch_one(f"SELECT {_T_COLS} FROM core.transporter WHERE id = :id",
                           {"id": transporter_id}, dsn=dsn)
     if not row:
         raise HTTPException(404, "transporter_not_found")
     vehicles = await fetch_all(
-        "SELECT * FROM jnpa.transporter_vehicles WHERE transporter_id = :id ORDER BY created_at",
+        "SELECT * FROM core.transporter_vehicle WHERE transporter_id = :id ORDER BY created_at",
         {"id": transporter_id}, dsn=dsn)
     blacklist = await fetch_all(
-        "SELECT * FROM jnpa.transporter_blacklist WHERE transporter_id = :id ORDER BY blacklisted_at DESC",
+        "SELECT * FROM core.transporter_blacklist WHERE transporter_id = :id ORDER BY blacklisted_at DESC",
         {"id": transporter_id}, dsn=dsn)
     return {"transporter": _iso(dict(row)),
             "vehicles": [_iso(dict(v)) for v in vehicles],
@@ -234,7 +248,7 @@ async def map_vehicle(transporter_id: int, body: Dict[str, Any] = Body(...),
     if not dsn:
         raise HTTPException(503, "database_unavailable")
     from jnpa_shared.db import execute, fetch_one
-    t = await fetch_one("SELECT id FROM jnpa.transporters WHERE id = :id",
+    t = await fetch_one("SELECT id FROM core.transporter WHERE id = :id",
                         {"id": transporter_id}, dsn=dsn)
     if not t:
         raise HTTPException(404, "transporter_not_found")
@@ -242,10 +256,10 @@ async def map_vehicle(transporter_id: int, body: Dict[str, Any] = Body(...),
     if not vno:
         raise HTTPException(400, "vehicle_no required")
     await execute(
-        """INSERT INTO jnpa.transporter_vehicles (transporter_id, vehicle_no, vehicle_no_norm, driver_id)
+        """INSERT INTO core.transporter_vehicle (transporter_id, vehicle_no, vehicle_no_norm, driver_id)
            VALUES (:tid, :vno, :norm, :did)
            ON CONFLICT (transporter_id, vehicle_no_norm)
-           DO UPDATE SET driver_id = COALESCE(EXCLUDED.driver_id, jnpa.transporter_vehicles.driver_id)""",
+           DO UPDATE SET driver_id = COALESCE(EXCLUDED.driver_id, core.transporter_vehicle.driver_id)""",
         {"tid": transporter_id, "vno": vno, "norm": _norm_plate(vno), "did": body.get("driver_id")},
         dsn=dsn)
     return {"mapped": True, "transporter_id": transporter_id, "vehicle_no": vno}
@@ -258,7 +272,7 @@ async def blacklist(transporter_id: int, body: Dict[str, Any] = Body(...),
     if not dsn:
         raise HTTPException(503, "database_unavailable")
     from jnpa_shared.db import execute, execute_returning, fetch_all, fetch_one
-    t = await fetch_one("SELECT * FROM jnpa.transporters WHERE id = :id",
+    t = await fetch_one(f"SELECT {_T_COLS} FROM core.transporter WHERE id = :id",
                         {"id": transporter_id}, dsn=dsn)
     if not t:
         raise HTTPException(404, "transporter_not_found")
@@ -270,21 +284,21 @@ async def blacklist(transporter_id: int, body: Dict[str, Any] = Body(...),
         raise HTTPException(400, f"severity must be one of {sorted(_SEVERITY)}")
     # Close any existing ACTIVE blacklist first (single active record invariant).
     await execute(
-        "UPDATE jnpa.transporter_blacklist SET status = 'LIFTED', lifted_at = now() WHERE transporter_id = :id AND status = 'ACTIVE'",
+        "UPDATE core.transporter_blacklist SET status = 'LIFTED', lifted_at = now() WHERE transporter_id = :id AND status = 'ACTIVE'",
         {"id": transporter_id}, dsn=dsn)
     bl = await execute_returning(
-        """INSERT INTO jnpa.transporter_blacklist (transporter_id, reason, severity, blacklisted_by)
+        """INSERT INTO core.transporter_blacklist (transporter_id, reason, severity, blacklisted_by)
            VALUES (:id, :reason, :sev, :by) RETURNING *""",
         {"id": transporter_id, "reason": reason, "sev": severity, "by": body.get("actor")},
         dsn=dsn)
-    await execute("UPDATE jnpa.transporters SET status = 'BLACKLISTED', updated_at = now() WHERE id = :id",
+    await execute("UPDATE core.transporter SET status = 'BLACKLISTED', updated_at = now() WHERE id = :id",
                   {"id": transporter_id}, dsn=dsn)
     # Best-effort: stamp mapped vehicles' legacy vehicle_master.blacklist_status so
     # existing read paths (reports, vehicle-intel) stay consistent. Never fails hard.
     try:
         await execute(
-            """UPDATE jnpa.vehicle_master vm SET blacklist_status = 'BLACKLISTED'
-               FROM jnpa.transporter_vehicles v
+            """UPDATE core.vehicle_rc vm SET blacklist_status = 'BLACKLISTED'
+               FROM core.transporter_vehicle v
                WHERE v.transporter_id = :id
                  AND regexp_replace(upper(vm.plate), '[^A-Z0-9]', '', 'g') = v.vehicle_no_norm""",
             {"id": transporter_id}, dsn=dsn)
@@ -317,17 +331,17 @@ async def lift_blacklist(transporter_id: int, body: Dict[str, Any] = Body(defaul
         raise HTTPException(503, "database_unavailable")
     from jnpa_shared.db import execute
     n = await execute(
-        """UPDATE jnpa.transporter_blacklist
+        """UPDATE core.transporter_blacklist
            SET status = 'LIFTED', lifted_at = now(), lifted_by = :by
            WHERE transporter_id = :id AND status = 'ACTIVE'""",
         {"id": transporter_id, "by": (body or {}).get("actor")}, dsn=dsn)
     if n:
-        await execute("UPDATE jnpa.transporters SET status = 'ACTIVE', updated_at = now() WHERE id = :id",
+        await execute("UPDATE core.transporter SET status = 'ACTIVE', updated_at = now() WHERE id = :id",
                       {"id": transporter_id}, dsn=dsn)
         try:
             await execute(
-                """UPDATE jnpa.vehicle_master vm SET blacklist_status = 'CLEAR'
-                   FROM jnpa.transporter_vehicles v
+                """UPDATE core.vehicle_rc vm SET blacklist_status = 'CLEAR'
+                   FROM core.transporter_vehicle v
                    WHERE v.transporter_id = :id
                      AND regexp_replace(upper(vm.plate), '[^A-Z0-9]', '', 'g') = v.vehicle_no_norm""",
                 {"id": transporter_id}, dsn=dsn)

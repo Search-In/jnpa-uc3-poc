@@ -82,7 +82,7 @@ class GatewayConfig:
 
     # --- PWA login eligibility gate ---
     # When true, POST /api/auth/device-token only mints a DRIVER token if the
-    # entered Vehicle ID is assigned to an ACTIVE driver in jnpa.drivers. Default
+    # entered Vehicle ID is assigned to an ACTIVE driver in core.driver_identity. Default
     # false for migration safety (the existing truck-sim/ULIP gate is unchanged);
     # set REQUIRE_DRIVER_PROFILE=true in production to enforce the assignment.
     require_driver_profile: bool = False
@@ -98,8 +98,8 @@ class GatewayConfig:
 
     # --- Automatic congestion alerting (UC-3 audit R4/R7) ---
     # When a segment's predicted congestion probability crosses this threshold the
-    # traffic path auto-raises a TRAFFIC_CONGESTION alert (jnpa.alerts +
-    # jnpa.notifications) and fans it out over WS + WebPush/FCM. Set to 1.0 (or
+    # traffic path auto-raises a TRAFFIC_CONGESTION alert (core.alert +
+    # core.notification) and fans it out over WS + WebPush/FCM. Set to 1.0 (or
     # above) to disable auto-alerting without touching code.
     congestion_alert_threshold: float = 0.80
 

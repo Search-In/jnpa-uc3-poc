@@ -1,8 +1,8 @@
-"""Cargo service package — raw-SQL repository + orchestration for jnpa.cargo.
+"""Cargo service package — raw-SQL repository + orchestration for core.cargo.
 
 POC-3 is the single common backend for the Traffic Twin (POC-3) and the Cargo
 Twin (POC-2): the Cargo CRUD surface (gateway/routers/cargo.py) drives this
-service, which is the only writer/reader of the shared ``jnpa.cargo`` table.
+service, which is the only writer/reader of the shared ``core.cargo`` table.
 
 Layering mirrors :mod:`services.fastag`:
 

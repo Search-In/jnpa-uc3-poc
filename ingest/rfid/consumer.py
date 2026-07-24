@@ -1,7 +1,7 @@
 """RFID MQTT consumer — JNPA UC-III PoC.
 
 Subscribes to ``rfid/readers/+``, validates each payload against the ``RfidRead``
-schema, writes valid reads to ``jnpa.rfid_reads`` (Timescale), and forwards them
+schema, writes valid reads to ``core.rfid_read`` (Timescale), and forwards them
 to the Kafka topic ``rfid.reads`` for downstream consumers (the correlator).
 
 Architecture: paho runs its network loop on a background thread and pushes
@@ -45,7 +45,7 @@ from rfid_ingest.metrics import (
 log = get_logger("rfid_ingest.consumer")
 
 _INSERT_SQL = (
-    "INSERT INTO jnpa.rfid_reads (ts, reader_id, tag_id, rssi) "
+    "INSERT INTO core.rfid_read (ts, reader_id, tag_id, rssi) "
     "VALUES ($1, $2, $3, $4)"
 )
 

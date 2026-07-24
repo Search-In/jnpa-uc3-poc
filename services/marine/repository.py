@@ -273,6 +273,23 @@ class VesselCallRepository:
         return {k: rec.get(k) for k in _CALL_COLS}
 
     @staticmethod
+    def _sea_channel_params(rec: Mapping[str, Any], fid: int) -> dict:
+        return {"name": rec.get("name"), "section_label": rec.get("section_label"),
+                "area_ha": rec.get("area_ha"), "length_m": rec.get("length_m"),
+                "geom_geojson": json.dumps(rec.get("geom_geojson") or {}, default=str),
+                "row_sha256": rec.get("row_sha256"), "import_file_id": fid}
+
+    @staticmethod
+    def _port_craft_params(rec: Mapping[str, Any], fid: int) -> dict:
+        p = {k: rec.get(k) for k in (
+            "name", "craft_type", "owned_or_hired", "owner_name", "year_built",
+            "loa_m", "breadth_m", "draft_m", "main_engines", "bollard_pull_t",
+            "design_speed_kn")}
+        p["extras"] = json.dumps(rec.get("extras") or {}, default=str)
+        p["import_file_id"] = fid
+        return p
+
+    @staticmethod
     def _pilotage_params(rec: Mapping[str, Any], fid: int) -> dict:
         p = {k: rec.get(k) for k in (
             "movement_type", "via_no", "imo_no", "vessel_name", "pilot_code",
@@ -353,7 +370,10 @@ class VesselCallRepository:
         events = [r for r in records if _target(r) == "vessel_call_event"]
         pilots = [r for r in records if _target(r) == "pilot"]
         pilotages = [r for r in records if _target(r) == "pilotage"]
-        _KNOWN = ("vessel", "vessel_call", "vessel_call_event", "pilot", "pilotage")
+        port_crafts = [r for r in records if _target(r) == "port_craft"]
+        sea_channels = [r for r in records if _target(r) == "sea_channel"]
+        _KNOWN = ("vessel", "vessel_call", "vessel_call_event", "pilot", "pilotage",
+                  "port_craft", "sea_channel")
         unknown = [r for r in records if _target(r) not in _KNOWN]
 
         ins = upd = dup = 0
@@ -425,6 +445,22 @@ class VesselCallRepository:
                         ins += 1
                     else:
                         dup += 1  # ON CONFLICT (row_sha256) DO NOTHING — same row already stored
+
+                # 7. PORT CRAFT register (upsert on the natural key `name`)
+                for pc in port_crafts:
+                    r = (await conn.execute(text(_PORT_CRAFT_UPSERT),
+                                            self._port_craft_params(pc, fid))).mappings().first()
+                    if r is not None:
+                        ins += bool(r["inserted"]); upd += (not bool(r["inserted"]))
+
+                # 8. SEA CHANNEL geometry (row-hash idempotent; name is not unique)
+                for sc in sea_channels:
+                    r = (await conn.execute(text(_SEA_CHANNEL_INSERT),
+                                            self._sea_channel_params(sc, fid))).mappings().first()
+                    if r is not None:
+                        ins += 1
+                    else:
+                        dup += 1  # ON CONFLICT (row_sha256) DO NOTHING
 
                 for u in unknown:
                     repo_errors.append({
@@ -711,6 +747,46 @@ _RESOLVE_BY_VIA = (
     "SELECT call_id FROM core.vessel_call WHERE via_no = :via_no "
     "ORDER BY eta DESC NULLS LAST, call_id DESC LIMIT 1"
 )
+
+# --------------------------------------------------------------------------- sea channel
+# Geometry insert. name is NOT unique on core.sea_channel, so the dedup key is the
+# content hash (uq_sea_channel_row). Geometry is GeoJSON (WGS84, reprojected at parse).
+_SEA_CHANNEL_INSERT = """
+INSERT INTO core.sea_channel
+    (name, section_label, area_ha, length_m, geom_geojson, import_file_id, row_sha256)
+VALUES
+    (:name, :section_label, :area_ha, :length_m, CAST(:geom_geojson AS jsonb),
+     :import_file_id, :row_sha256)
+ON CONFLICT (row_sha256) DO NOTHING
+RETURNING channel_id
+"""
+
+# --------------------------------------------------------------------------- port craft
+# Fleet-register upsert on the natural key `name`. All particulars are COALESCE-enriched
+# (a re-import never nulls a known value); extras carries the raw parsed row.
+_PORT_CRAFT_UPSERT = """
+INSERT INTO core.port_craft
+    (name, craft_type, owned_or_hired, owner_name, year_built, loa_m, breadth_m,
+     draft_m, main_engines, bollard_pull_t, design_speed_kn, import_file_id, extras)
+VALUES
+    (:name, :craft_type, :owned_or_hired, :owner_name, :year_built, :loa_m, :breadth_m,
+     :draft_m, :main_engines, :bollard_pull_t, :design_speed_kn, :import_file_id,
+     CAST(:extras AS jsonb))
+ON CONFLICT (name) DO UPDATE SET
+    craft_type      = COALESCE(EXCLUDED.craft_type, core.port_craft.craft_type),
+    owned_or_hired  = COALESCE(EXCLUDED.owned_or_hired, core.port_craft.owned_or_hired),
+    owner_name      = COALESCE(EXCLUDED.owner_name, core.port_craft.owner_name),
+    year_built      = COALESCE(EXCLUDED.year_built, core.port_craft.year_built),
+    loa_m           = COALESCE(EXCLUDED.loa_m, core.port_craft.loa_m),
+    breadth_m       = COALESCE(EXCLUDED.breadth_m, core.port_craft.breadth_m),
+    draft_m         = COALESCE(EXCLUDED.draft_m, core.port_craft.draft_m),
+    main_engines    = COALESCE(EXCLUDED.main_engines, core.port_craft.main_engines),
+    bollard_pull_t  = COALESCE(EXCLUDED.bollard_pull_t, core.port_craft.bollard_pull_t),
+    design_speed_kn = COALESCE(EXCLUDED.design_speed_kn, core.port_craft.design_speed_kn),
+    import_file_id  = EXCLUDED.import_file_id,
+    extras          = EXCLUDED.extras
+RETURNING (xmax = 0) AS inserted
+"""
 
 # --------------------------------------------------------------------------- pilotage
 # Pilot roster upsert (core.pilot). name is COALESCE-enriched, never nulled.

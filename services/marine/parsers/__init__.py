@@ -75,6 +75,16 @@ def parse_marine(content: bytes, filename: Optional[str] = None) -> ParseResult:
         from .pilot_card_xlsx import parse_pilot_card
         return parse_pilot_card(content, filename)
 
+    if fmt == "PDF":
+        # The only marine PDF source is the port-craft fleet register.
+        from .port_craft_pdf import parse_port_craft_pdf
+        return parse_port_craft_pdf(content, filename)
+
+    if fmt == "SHP":
+        # The only marine shapefile source is the JNPA sea-channels bundle.
+        from .sea_channel_shp import parse_sea_channel_shp
+        return parse_sea_channel_shp(content, filename)
+
     res = ParseResult()
     docs = extract_xml_documents(fmt, content)
     res.row_count = len(docs)

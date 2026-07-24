@@ -373,6 +373,58 @@ _DDL: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_pilotage_import_file ON core.pilotage (import_file_id)",
     "CREATE INDEX IF NOT EXISTS idx_pilotage_movement ON core.pilotage (movement_type)",
     "CREATE INDEX IF NOT EXISTS idx_pilotage_submitted ON core.pilotage (submitted_at DESC)",
+
+    # ==================================================================
+    # Migration 0048 — port-craft fleet register (core.port_craft). Additive;
+    # mirrors 0048. name is UNIQUE (upsert key); extras/import_file_id additive.
+    # ==================================================================
+    """CREATE TABLE IF NOT EXISTS core.port_craft (
+        craft_id        smallint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        name            text NOT NULL UNIQUE,
+        craft_type      text,
+        owned_or_hired  text,
+        owner_name      text,
+        year_built      text,
+        loa_m           numeric(6,2),
+        breadth_m       numeric(6,2),
+        draft_m         numeric(5,2),
+        main_engines    text,
+        bollard_pull_t  numeric(6,2),
+        design_speed_kn numeric(5,2),
+        import_file_id  bigint,
+        extras          jsonb NOT NULL DEFAULT '{}'::jsonb)""",
+    "CREATE INDEX IF NOT EXISTS idx_port_craft_type ON core.port_craft (craft_type)",
+    "CREATE INDEX IF NOT EXISTS idx_port_craft_import_file ON core.port_craft (import_file_id)",
+
+    # ==================================================================
+    # Migration 0049 — sea-channel import idempotency (import_file_id, row_sha256,
+    # unique index) on the existing core.sea_channel. Additive; mirrors 0049.
+    # ==================================================================
+    "ALTER TABLE core.sea_channel ADD COLUMN IF NOT EXISTS import_file_id bigint",
+    "ALTER TABLE core.sea_channel ADD COLUMN IF NOT EXISTS row_sha256 text",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_sea_channel_row ON core.sea_channel (row_sha256)",
+    "CREATE INDEX IF NOT EXISTS idx_sea_channel_import_file ON core.sea_channel (import_file_id)",
+
+    # ==================================================================
+    # Migration 0050 — allow 'ZIP'/'SHP' in the marine_import_files physical_format
+    # CHECK (the zipped shapefile upload). Idempotent guarded re-add; mirrors 0050.
+    # ==================================================================
+    """DO $$
+    DECLARE v_conname text;
+    BEGIN
+        SELECT c.conname INTO v_conname
+        FROM pg_constraint c
+        WHERE c.conrelid = 'core.marine_import_files'::regclass
+          AND c.contype = 'c'
+          AND pg_get_constraintdef(c.oid) ILIKE '%physical_format%'
+          AND pg_get_constraintdef(c.oid) NOT ILIKE '%ZIP%';
+        IF v_conname IS NOT NULL THEN
+            EXECUTE format('ALTER TABLE core.marine_import_files DROP CONSTRAINT %I', v_conname);
+            ALTER TABLE core.marine_import_files
+                ADD CONSTRAINT marine_import_files_physical_format_check
+                CHECK (physical_format IN ('CSV','XLS','XLSX','PDF','XML','LOG','ZIP','SHP'));
+        END IF;
+    END $$""",
 ]
 
 

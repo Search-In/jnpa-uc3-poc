@@ -92,6 +92,7 @@ from .routers import (
     marine_imports,
     marine_pilotage,
     marine_port_craft,
+    marine_sea_channel,
     nvr,
     pdp,
     performance,
@@ -532,6 +533,7 @@ app.include_router(marine_calls.router)      # UC-I Marine vessel-call spine (mo
 app.include_router(marine_imports.router)    # UC-I Marine Data-Upload sub-module (CSV: validate/upload/history)
 app.include_router(marine_pilotage.router)   # UC-I Marine pilotage movements (read-only; XLSX via marine_imports)
 app.include_router(marine_port_craft.router) # UC-I Marine port-craft register (read-only; PDF via marine_imports)
+app.include_router(marine_sea_channel.router) # UC-I Marine sea-channel geometry (read-only; SHP zip via marine_imports)
 app.include_router(performance.router)       # Performance & Daily Reports (module 12, read-only, additive)
 app.include_router(performance_upload.router)  # Performance Data Upload (module 12 sub-module, admin-only, additive)
 app.include_router(bottlenecks.router)       # three-road bottleneck analytics

@@ -34,8 +34,17 @@ def _sha256(content: bytes) -> str:
 
 
 def _physical_format(filename: str, content: bytes) -> str:
-    """Ledger physical_format from the detected envelope: 'CSV' | 'XML' | 'LOG'."""
-    return detect_format(filename, content)
+    """Ledger physical_format = the ACTUAL uploaded file container.
+
+    The parser's detect_format() returns a ROUTING format ('CSV'|'XML'|'LOG'|'XLSX'
+    |'PDF'|'SHP'); the shapefile ('SHP') is delivered as a ZIP bundle (or, rarely, a
+    bare .shp). The ledger stores what was uploaded — 'ZIP' for the zip, 'SHP' for a
+    bare .shp — while parser detection/routing stays 'SHP' internally, unchanged. All
+    other formats pass through as-is, so XML/XLSX/PDF/CSV uploads are unaffected."""
+    fmt = detect_format(filename, content)
+    if fmt == "SHP":
+        return "ZIP" if content[:4] == b"PK\x03\x04" else "SHP"
+    return fmt
 
 
 def _document_type(res: ParseResult) -> Optional[str]:

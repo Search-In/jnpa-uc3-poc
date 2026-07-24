@@ -14,11 +14,12 @@ VESARR and VESDEP share the ``.log`` extension but carry different root elements
 """
 from __future__ import annotations
 
+import io
 import json
 import re
 from typing import Literal, Optional
 
-Format = Literal["CSV", "XML", "LOG", "XLSX"]
+Format = Literal["CSV", "XML", "LOG", "XLSX", "PDF", "SHP"]
 
 # A JSON string body for the "XML" key: text between quotes, honouring \" escapes.
 _LOG_XML_RE = re.compile(r'"XML"\s*:\s*"((?:[^"\\]|\\.)*)"')
@@ -44,9 +45,25 @@ def detect_format(filename: Optional[str], content: bytes) -> Format:
     name = (filename or "").lower()
     if name.endswith(".csv"):
         return "CSV"
-    # Spreadsheet magic bytes win over extension: xlsx/xlsm are ZIP (PK\x03\x04),
-    # legacy xls is an OLE compound file (\xD0\xCF\x11\xE0). Pilot_card_data.xlsx.
-    if content[:4] == b"PK\x03\x04" or content[:4] == b"\xd0\xcf\x11\xe0":
+    # PDF magic (%PDF) — the port-craft roster (Details_of_Port_Crafts.pdf).
+    if content[:5] == b"%PDF-" or name.endswith(".pdf"):
+        return "PDF"
+    # A bare ESRI .shp starts with the big-endian file code 9994 (0x0000270A).
+    if content[:4] == b"\x00\x00\x27\x0a" or name.endswith(".shp"):
+        return "SHP"
+    # ZIP (PK\x03\x04) is ambiguous: a shapefile bundle OR an xlsx. Peek the entries —
+    # a member ending in .shp means a shapefile bundle; otherwise it's a spreadsheet.
+    if content[:4] == b"PK\x03\x04":
+        try:
+            import zipfile
+            with zipfile.ZipFile(io.BytesIO(content)) as z:
+                if any(n.lower().endswith(".shp") for n in z.namelist()):
+                    return "SHP"
+        except Exception:  # noqa: BLE001 — not a readable zip → fall through to XLSX
+            pass
+        return "XLSX"
+    # Legacy xls is an OLE compound file (\xD0\xCF\x11\xE0).
+    if content[:4] == b"\xd0\xcf\x11\xe0":
         return "XLSX"
     if name.endswith((".xlsx", ".xlsm", ".xls")):
         return "XLSX"

@@ -20,14 +20,14 @@ CREATE OR REPLACE VIEW mart.v_alerts_by_kind AS
   GROUP BY alert.kind, alert.severity
   ORDER BY (count(*)) DESC;
 CREATE OR REPLACE VIEW mart.v_anpr_hourly AS
- SELECT time_bucket('01:00:00'::interval, anpr_read.ts) AS bucket,
+ SELECT date_trunc('hour', anpr_read.ts) AS bucket,
     count(*) AS reads,
     count(*) FILTER (WHERE anpr_read.degraded) AS degraded_reads,
     round(avg(anpr_read.conf)::numeric, 3) AS avg_conf
    FROM core.anpr_read
   WHERE anpr_read.ts > (now() - '24:00:00'::interval)
-  GROUP BY (time_bucket('01:00:00'::interval, anpr_read.ts))
-  ORDER BY (time_bucket('01:00:00'::interval, anpr_read.ts)) DESC;
+  GROUP BY (date_trunc('hour', anpr_read.ts))
+  ORDER BY (date_trunc('hour', anpr_read.ts)) DESC;
 CREATE OR REPLACE VIEW mart.v_corridor_speed AS
  SELECT DISTINCT ON (traffic_snapshot.segment_id) traffic_snapshot.segment_id,
     traffic_snapshot.ts,
@@ -37,40 +37,40 @@ CREATE OR REPLACE VIEW mart.v_corridor_speed AS
    FROM core.traffic_snapshot
   ORDER BY traffic_snapshot.segment_id, traffic_snapshot.ts DESC;
 CREATE OR REPLACE VIEW mart.v_gate_dwell AS
- SELECT time_bucket('00:15:00'::interval, truck_telemetry.ts) AS bucket,
+ SELECT to_timestamp(floor(extract(epoch from truck_telemetry.ts) / 900) * 900) AS bucket,
     count(*) FILTER (WHERE truck_telemetry.speed_kmh <= 3::double precision) AS stationary_pings,
     count(*) AS total_pings,
     round(100.0 * count(*) FILTER (WHERE truck_telemetry.speed_kmh <= 3::double precision)::numeric / NULLIF(count(*), 0)::numeric, 1) AS stationary_pct
    FROM core.truck_telemetry
   WHERE truck_telemetry.ts > (now() - '06:00:00'::interval)
-  GROUP BY (time_bucket('00:15:00'::interval, truck_telemetry.ts))
-  ORDER BY (time_bucket('00:15:00'::interval, truck_telemetry.ts)) DESC;
+  GROUP BY (to_timestamp(floor(extract(epoch from truck_telemetry.ts) / 900) * 900))
+  ORDER BY (to_timestamp(floor(extract(epoch from truck_telemetry.ts) / 900) * 900)) DESC;
 CREATE OR REPLACE VIEW mart.v_gate_queue_wait AS
- SELECT time_bucket('00:15:00'::interval, v_gate_trip_timeline.txn_start_ts) AS bucket,
+ SELECT to_timestamp(floor(extract(epoch from v_gate_trip_timeline.txn_start_ts) / 900) * 900) AS bucket,
     round(avg(EXTRACT(epoch FROM v_gate_trip_timeline.txn_start_ts - v_gate_trip_timeline.arrival_ts)) / 60.0, 2) AS wait_min,
     count(*) AS trips
    FROM mart.v_gate_trip_timeline
   WHERE v_gate_trip_timeline.arrival_ts IS NOT NULL AND v_gate_trip_timeline.txn_start_ts IS NOT NULL AND v_gate_trip_timeline.txn_start_ts >= v_gate_trip_timeline.arrival_ts
-  GROUP BY (time_bucket('00:15:00'::interval, v_gate_trip_timeline.txn_start_ts))
-  ORDER BY (time_bucket('00:15:00'::interval, v_gate_trip_timeline.txn_start_ts)) DESC;
+  GROUP BY (to_timestamp(floor(extract(epoch from v_gate_trip_timeline.txn_start_ts) / 900) * 900))
+  ORDER BY (to_timestamp(floor(extract(epoch from v_gate_trip_timeline.txn_start_ts) / 900) * 900)) DESC;
 CREATE OR REPLACE VIEW mart.v_gate_throughput AS
- SELECT time_bucket('01:00:00'::interval, a.ts) AS bucket,
+ SELECT date_trunc('hour', a.ts) AS bucket,
     COALESCE(c.gate_id, 'CORRIDOR'::text) AS gate_id,
     count(*) AS reads,
     count(DISTINCT a.plate) AS unique_plates
    FROM core.anpr_read a
      LEFT JOIN core.camera c ON c.id = a.camera_id
   WHERE a.ts > (now() - '24:00:00'::interval)
-  GROUP BY (time_bucket('01:00:00'::interval, a.ts)), (COALESCE(c.gate_id, 'CORRIDOR'::text))
-  ORDER BY (time_bucket('01:00:00'::interval, a.ts)) DESC, (COALESCE(c.gate_id, 'CORRIDOR'::text));
+  GROUP BY (date_trunc('hour', a.ts)), (COALESCE(c.gate_id, 'CORRIDOR'::text))
+  ORDER BY (date_trunc('hour', a.ts)) DESC, (COALESCE(c.gate_id, 'CORRIDOR'::text));
 CREATE OR REPLACE VIEW mart.v_gate_txn_time AS
- SELECT time_bucket('00:15:00'::interval, v_gate_trip_timeline.gate_in_ts) AS bucket,
+ SELECT to_timestamp(floor(extract(epoch from v_gate_trip_timeline.gate_in_ts) / 900) * 900) AS bucket,
     round(avg(EXTRACT(epoch FROM v_gate_trip_timeline.gate_in_ts - v_gate_trip_timeline.txn_start_ts)) / 60.0, 2) AS txn_min,
     count(*) AS trips
    FROM mart.v_gate_trip_timeline
   WHERE v_gate_trip_timeline.txn_start_ts IS NOT NULL AND v_gate_trip_timeline.gate_in_ts IS NOT NULL AND v_gate_trip_timeline.gate_in_ts >= v_gate_trip_timeline.txn_start_ts
-  GROUP BY (time_bucket('00:15:00'::interval, v_gate_trip_timeline.gate_in_ts))
-  ORDER BY (time_bucket('00:15:00'::interval, v_gate_trip_timeline.gate_in_ts)) DESC;
+  GROUP BY (to_timestamp(floor(extract(epoch from v_gate_trip_timeline.gate_in_ts) / 900) * 900))
+  ORDER BY (to_timestamp(floor(extract(epoch from v_gate_trip_timeline.gate_in_ts) / 900) * 900)) DESC;
 CREATE OR REPLACE VIEW mart.v_provisional_open AS
  SELECT vehicle_rc.plate,
     vehicle_rc.provisional_until,
@@ -80,13 +80,13 @@ CREATE OR REPLACE VIEW mart.v_provisional_open AS
   WHERE vehicle_rc.provisional = true AND vehicle_rc.provisional_until IS NOT NULL AND vehicle_rc.provisional_until > now()
   ORDER BY vehicle_rc.provisional_until;
 CREATE OR REPLACE VIEW mart.v_tat_inside_port AS
- SELECT time_bucket('00:15:00'::interval, v_gate_trip_timeline.gate_out_ts) AS bucket,
+ SELECT to_timestamp(floor(extract(epoch from v_gate_trip_timeline.gate_out_ts) / 900) * 900) AS bucket,
     round(avg(EXTRACT(epoch FROM v_gate_trip_timeline.gate_out_ts - v_gate_trip_timeline.gate_in_ts)) / 60.0, 2) AS tat_min,
     count(*) AS trips
    FROM mart.v_gate_trip_timeline
   WHERE v_gate_trip_timeline.gate_in_ts IS NOT NULL AND v_gate_trip_timeline.gate_out_ts IS NOT NULL AND v_gate_trip_timeline.gate_out_ts >= v_gate_trip_timeline.gate_in_ts
-  GROUP BY (time_bucket('00:15:00'::interval, v_gate_trip_timeline.gate_out_ts))
-  ORDER BY (time_bucket('00:15:00'::interval, v_gate_trip_timeline.gate_out_ts)) DESC;
+  GROUP BY (to_timestamp(floor(extract(epoch from v_gate_trip_timeline.gate_out_ts) / 900) * 900))
+  ORDER BY (to_timestamp(floor(extract(epoch from v_gate_trip_timeline.gate_out_ts) / 900) * 900)) DESC;
 CREATE OR REPLACE VIEW mart.v_cfs_ecy_dwell AS
  SELECT m.container_number,
     m.facility_type,
@@ -116,9 +116,10 @@ CREATE OR REPLACE VIEW mart.v_customs_container_status AS
            FROM core.smtp_container sl
              JOIN core.smtp_permit s ON s.smtp_no = sl.smtp_no
         UNION
-         SELECT rms_scan_container.container_no,
-            rms_scan_container.igm_no
-           FROM core.rms_scan_container
+         SELECT rc.container_no,
+            r.igm_no
+           FROM core.rms_scan_container rc
+             JOIN core.rms_scan_report r ON r.report_id = rc.report_id
         )
  SELECT c.container_no,
     max(c.igm_no) AS igm_no,
@@ -146,7 +147,7 @@ CREATE OR REPLACE VIEW mart.v_shipping_line_container AS
             CASE a.load_status WHEN 'F' THEN 'FULL' WHEN 'E' THEN 'EMPTY'
                  ELSE a.load_status::text END AS freight_kind,
             a.gross_weight_kg,
-            a.weight_source_uom,
+            'KG'::text AS weight_source_uom,
             a.pol, a.pod, a.destination,
             a.bl_no AS bill_of_lading,
             a.vessel_visit, a.voyage, a.iso_code,

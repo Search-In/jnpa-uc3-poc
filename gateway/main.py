@@ -88,6 +88,8 @@ from .routers import (
     document_ocr,
     double_trip,
     ldb,
+    marine_calls,
+    marine_imports,
     nvr,
     pdp,
     performance,
@@ -233,6 +235,17 @@ async def _lifespan(app: FastAPI):
         await berthing_ext.ensure_berthing_schema(cfg.postgres_dsn or None)
     except Exception as exc:  # noqa: BLE001
         log.warning("berthing_schema_boot_failed", error=str(exc))
+
+    # UC-I Marine (vessel-call spine): core.vessel_call + core.vessel_call_event.
+    # Idempotent, additive — mirrors migration 0038 so a dev DB that never ran it still
+    # gets the objects. Lives in the `core` schema per schema.sql (the agreed source of
+    # truth); touches NOTHING in the jnpa schema, so berthing and every other module are
+    # unaffected. Read-only wrt every existing table.
+    try:
+        from . import marine_ext
+        await marine_ext.ensure_marine_schema(cfg.postgres_dsn or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("marine_schema_boot_failed", error=str(exc))
 
     # Performance & Daily Reports (module 12): the perf_* analytical tables for the
     # official JNPA Daily Status Report / monthly TEUs / NLDS-LDB Analytics feeds.
@@ -513,6 +526,8 @@ app.include_router(cfs_ecy.router)           # CFS-ECY CODECO gate movements (mo
 app.include_router(customs.router)           # Customs docs (module 5: IGM/OOC/SMTP/RMS/LEO/SB)
 app.include_router(shipping_lines.router)     # Shipping Lines (module 4: IAL/EAL/EDO, read-only + import)
 app.include_router(berthing.router)          # Berthing Reports (module 7: per-terminal vessel calls + upload)
+app.include_router(marine_calls.router)      # UC-I Marine vessel-call spine (module: marine, read-only)
+app.include_router(marine_imports.router)    # UC-I Marine Data-Upload sub-module (CSV: validate/upload/history)
 app.include_router(performance.router)       # Performance & Daily Reports (module 12, read-only, additive)
 app.include_router(performance_upload.router)  # Performance Data Upload (module 12 sub-module, admin-only, additive)
 app.include_router(bottlenecks.router)       # three-road bottleneck analytics

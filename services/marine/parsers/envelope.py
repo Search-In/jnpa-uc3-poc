@@ -18,7 +18,7 @@ import json
 import re
 from typing import Literal, Optional
 
-Format = Literal["CSV", "XML", "LOG"]
+Format = Literal["CSV", "XML", "LOG", "XLSX"]
 
 # A JSON string body for the "XML" key: text between quotes, honouring \" escapes.
 _LOG_XML_RE = re.compile(r'"XML"\s*:\s*"((?:[^"\\]|\\.)*)"')
@@ -44,6 +44,12 @@ def detect_format(filename: Optional[str], content: bytes) -> Format:
     name = (filename or "").lower()
     if name.endswith(".csv"):
         return "CSV"
+    # Spreadsheet magic bytes win over extension: xlsx/xlsm are ZIP (PK\x03\x04),
+    # legacy xls is an OLE compound file (\xD0\xCF\x11\xE0). Pilot_card_data.xlsx.
+    if content[:4] == b"PK\x03\x04" or content[:4] == b"\xd0\xcf\x11\xe0":
+        return "XLSX"
+    if name.endswith((".xlsx", ".xlsm", ".xls")):
+        return "XLSX"
     text = decode(content)
     if '"ReqBody"' in text and '"XML"' in text:
         return "LOG"

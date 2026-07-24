@@ -362,6 +362,17 @@ _DDL: list[str] = [
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_vessel_call_imo_voyage_pre_vcn "
     "ON core.vessel_call (imo_no, voyage_no) WHERE vcn IS NULL",
     "ALTER TABLE core.marine_import_files ADD COLUMN IF NOT EXISTS document_type text",
+
+    # ==================================================================
+    # Migration 0047 — pilotage import idempotency (import_file_id, row_sha256,
+    # unique index) on the existing core.pilotage. Additive; mirrors 0047.
+    # ==================================================================
+    "ALTER TABLE core.pilotage ADD COLUMN IF NOT EXISTS import_file_id bigint",
+    "ALTER TABLE core.pilotage ADD COLUMN IF NOT EXISTS row_sha256 text",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_pilotage_row ON core.pilotage (row_sha256)",
+    "CREATE INDEX IF NOT EXISTS idx_pilotage_import_file ON core.pilotage (import_file_id)",
+    "CREATE INDEX IF NOT EXISTS idx_pilotage_movement ON core.pilotage (movement_type)",
+    "CREATE INDEX IF NOT EXISTS idx_pilotage_submitted ON core.pilotage (submitted_at DESC)",
 ]
 
 

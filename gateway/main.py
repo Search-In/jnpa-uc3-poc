@@ -90,6 +90,7 @@ from .routers import (
     ldb,
     marine_calls,
     marine_imports,
+    marine_pilotage,
     nvr,
     pdp,
     performance,
@@ -528,6 +529,7 @@ app.include_router(shipping_lines.router)     # Shipping Lines (module 4: IAL/EA
 app.include_router(berthing.router)          # Berthing Reports (module 7: per-terminal vessel calls + upload)
 app.include_router(marine_calls.router)      # UC-I Marine vessel-call spine (module: marine, read-only)
 app.include_router(marine_imports.router)    # UC-I Marine Data-Upload sub-module (CSV: validate/upload/history)
+app.include_router(marine_pilotage.router)   # UC-I Marine pilotage movements (read-only; XLSX via marine_imports)
 app.include_router(performance.router)       # Performance & Daily Reports (module 12, read-only, additive)
 app.include_router(performance_upload.router)  # Performance Data Upload (module 12 sub-module, admin-only, additive)
 app.include_router(bottlenecks.router)       # three-road bottleneck analytics

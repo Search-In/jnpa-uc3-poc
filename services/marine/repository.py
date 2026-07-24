@@ -24,6 +24,7 @@ Two shapes differ from berthing, both traceable to migration 0038:
 """
 from __future__ import annotations
 
+import json
 from typing import Any, Mapping, Optional, Sequence
 
 from sqlalchemy import text
@@ -272,6 +273,18 @@ class VesselCallRepository:
         return {k: rec.get(k) for k in _CALL_COLS}
 
     @staticmethod
+    def _pilotage_params(rec: Mapping[str, Any], fid: int) -> dict:
+        p = {k: rec.get(k) for k in (
+            "movement_type", "via_no", "imo_no", "vessel_name", "pilot_code",
+            "vessel_condition", "draft_fwd_m", "draft_aft_m", "pilot_boarded_at",
+            "first_line_at", "all_fast_at", "pilot_disembarked_at", "berth_vacated_at",
+            "anchor_down_at", "anchor_up_at", "submitted_at", "row_sha256",
+            "from_berth_code", "to_berth_code")}
+        p["extras"] = json.dumps(rec.get("extras") or {}, default=str)
+        p["import_file_id"] = fid
+        return p
+
+    @staticmethod
     def _err_row(fid: int, e: Mapping[str, Any]) -> dict:
         return {"fid": fid, "rn": e.get("row_number"),
                 "msg": (f"{e.get('column_name') or ''}: "
@@ -338,8 +351,10 @@ class VesselCallRepository:
         calls_pre = [r for r in records if _target(r) == "vessel_call" and not r.get("vcn")]
         calls_vcn = [r for r in records if _target(r) == "vessel_call" and r.get("vcn")]
         events = [r for r in records if _target(r) == "vessel_call_event"]
-        unknown = [r for r in records
-                   if _target(r) not in ("vessel", "vessel_call", "vessel_call_event")]
+        pilots = [r for r in records if _target(r) == "pilot"]
+        pilotages = [r for r in records if _target(r) == "pilotage"]
+        _KNOWN = ("vessel", "vessel_call", "vessel_call_event", "pilot", "pilotage")
+        unknown = [r for r in records if _target(r) not in _KNOWN]
 
         ins = upd = dup = 0
         repo_errors: list[dict] = []
@@ -393,6 +408,23 @@ class VesselCallRepository:
                         ins += 1
                     else:
                         dup += 1  # ON CONFLICT DO NOTHING — same actual already stored
+
+                # 5. PILOT roster (upsert before pilotage so the FK resolves)
+                for p in pilots:
+                    r = (await conn.execute(text(_PILOT_UPSERT),
+                                            {"pilot_code": p.get("pilot_code"),
+                                             "name": p.get("name")})).mappings().first()
+                    if r is not None:
+                        ins += bool(r["inserted"]); upd += (not bool(r["inserted"]))
+
+                # 6. PILOTAGE movements (resolve-or-NULL berth/call; row-hash idempotent)
+                for pg in pilotages:
+                    r = (await conn.execute(text(_PILOTAGE_INSERT),
+                                            self._pilotage_params(pg, fid))).mappings().first()
+                    if r is not None:
+                        ins += 1
+                    else:
+                        dup += 1  # ON CONFLICT (row_sha256) DO NOTHING — same row already stored
 
                 for u in unknown:
                     repo_errors.append({
@@ -679,6 +711,43 @@ _RESOLVE_BY_VIA = (
     "SELECT call_id FROM core.vessel_call WHERE via_no = :via_no "
     "ORDER BY eta DESC NULLS LAST, call_id DESC LIMIT 1"
 )
+
+# --------------------------------------------------------------------------- pilotage
+# Pilot roster upsert (core.pilot). name is COALESCE-enriched, never nulled.
+_PILOT_UPSERT = """
+INSERT INTO core.pilot (pilot_code, name)
+VALUES (:pilot_code, :name)
+ON CONFLICT (pilot_code) DO UPDATE SET name = COALESCE(EXCLUDED.name, core.pilot.name)
+RETURNING (xmax = 0) AS inserted
+"""
+
+# Pilotage movement insert (core.pilotage). Resolve-or-NULL for the FK columns:
+#   pilot_code   -> core.pilot        (upserted just above)
+#   from/to_berth-> core.ref_berth    (by berth code; unresolved -> NULL, raw kept in extras)
+#   call_id      -> core.vessel_call  (best-effort by VIA; unresolved -> NULL, no stub)
+# Idempotent on the content hash: a byte-identical row collapses (uq_pilotage_row).
+_PILOTAGE_INSERT = """
+INSERT INTO core.pilotage
+    (movement_type, call_id, via_no, imo_no, vessel_name, pilot_code, vessel_condition,
+     from_berth_id, to_berth_id, draft_fwd_m, draft_aft_m,
+     pilot_boarded_at, first_line_at, all_fast_at, pilot_disembarked_at, berth_vacated_at,
+     anchor_down_at, anchor_up_at, submitted_at, extras, import_file_id, row_sha256)
+VALUES
+    (:movement_type,
+     (SELECT call_id FROM core.vessel_call WHERE via_no = :via_no
+        ORDER BY eta DESC NULLS LAST, call_id DESC LIMIT 1),
+     :via_no, :imo_no, :vessel_name,
+     (SELECT pilot_code FROM core.pilot WHERE pilot_code = :pilot_code),
+     :vessel_condition,
+     (SELECT berth_id FROM core.ref_berth WHERE code = :from_berth_code),
+     (SELECT berth_id FROM core.ref_berth WHERE code = :to_berth_code),
+     :draft_fwd_m, :draft_aft_m,
+     :pilot_boarded_at, :first_line_at, :all_fast_at, :pilot_disembarked_at, :berth_vacated_at,
+     :anchor_down_at, :anchor_up_at, :submitted_at, CAST(:extras AS jsonb),
+     :import_file_id, :row_sha256)
+ON CONFLICT (row_sha256) DO NOTHING
+RETURNING pilotage_id
+"""
 
 # VCN upsert. imo_no is resolved against core.vessel (resolve-or-NULL) so the NOT VALID
 # fk_vessel_call_imo is always satisfied; terminal_id / berth_id are left for a later

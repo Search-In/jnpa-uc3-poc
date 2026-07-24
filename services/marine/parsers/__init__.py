@@ -70,6 +70,11 @@ def parse_marine(content: bytes, filename: Optional[str] = None) -> ParseResult:
         header, rows = read_rows_from_bytes(content, filename)
         return _tag_csv(_csv_parse(header, rows, source_file=filename))
 
+    if fmt == "XLSX":
+        # The only marine XLSX source is the pilot card (INWARD/OUTWARD/SHIFTING).
+        from .pilot_card_xlsx import parse_pilot_card
+        return parse_pilot_card(content, filename)
+
     res = ParseResult()
     docs = extract_xml_documents(fmt, content)
     res.row_count = len(docs)

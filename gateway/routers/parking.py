@@ -2,7 +2,7 @@
 (Appendix C #1, parking half).
 
 Proxies the ``parking`` service (port 8370). The board is **RDS-backed only**:
-occupancy is computed from real slot state in jnpa.parking_slots /
+occupancy is computed from real slot state in core.parking_slot /
 parking_transactions — there is NO synthetic / sine-curve occupancy fallback
 (removed in the P0 production-readiness pass). If the upstream service is
 unreachable, the gateway reads the same RDS tables directly; only if the
@@ -59,8 +59,8 @@ async def _rds_facilities(dsn: Optional[str]) -> List[dict]:
             SELECT f.id AS facility_id, f.facility_name, f.location, f.capacity, f.status,
                    count(s.*) FILTER (WHERE s.availability_status = 'OCCUPIED')  AS occupied,
                    count(s.*) FILTER (WHERE s.availability_status = 'AVAILABLE') AS available
-            FROM jnpa.parking_facilities f
-            LEFT JOIN jnpa.parking_slots s ON s.facility_id = f.id
+            FROM core.parking_facility f
+            LEFT JOIN core.parking_slot s ON s.facility_id = f.id
             GROUP BY f.id, f.facility_name, f.location, f.capacity, f.status
             ORDER BY f.id
             """,
@@ -108,7 +108,7 @@ async def _rds_history(dsn: Optional[str], vehicle_id: Optional[str], limit: int
             f"""
             SELECT id, vehicle_id, driver_id, facility_id, slot_id, entry_time, exit_time,
                    EXTRACT(EPOCH FROM duration) AS duration_s, status
-            FROM jnpa.parking_transactions {where}
+            FROM core.parking_transaction {where}
             ORDER BY entry_time DESC LIMIT :limit
             """,
             params,
@@ -140,7 +140,7 @@ async def _rds_violations(dsn: Optional[str], limit: int) -> Optional[List[dict]
         rows = await fetch_all(
             """
             SELECT id, event_type, vehicle_id, facility_id, detail, created_at
-            FROM jnpa.parking_events
+            FROM core.parking_event
             WHERE event_type IN ('ILLEGAL_PARKING','NO_PARKING_VIOLATION','OVERFLOW')
             ORDER BY created_at DESC LIMIT :limit
             """,
@@ -324,7 +324,7 @@ async def violations(limit: int = Query(default=100, ge=1, le=1000),
     if data is not None:
         REQUESTS.labels("parking", "ok").inc()
         return {"decision_path": "LIVE", **data}
-    # Upstream (parking service) down → read jnpa.parking_events directly so the
+    # Upstream (parking service) down → read core.parking_event directly so the
     # Violations tab never silently shows 0 while the DB actually has rows.
     viols = await _rds_violations(state.cfg.postgres_dsn, limit)
     if viols is not None:

@@ -196,7 +196,7 @@ async def _enrich_alert(cfg: ScenarioConfig, alert_id: str, extra: Dict[str, Any
     import json
     try:
         await execute(
-            "UPDATE jnpa.alerts SET payload = coalesce(payload,'{}'::jsonb) || CAST(:extra AS jsonb) "
+            "UPDATE core.alert SET payload = coalesce(payload,'{}'::jsonb) || CAST(:extra AS jsonb) "
             "WHERE id = CAST(:id AS uuid)",
             {"extra": json.dumps(extra), "id": alert_id}, dsn=cfg.postgres_dsn,
         )
@@ -208,7 +208,7 @@ async def _resolve_scenario_alerts(cfg: ScenarioConfig, handle_id: str) -> None:
     from jnpa_shared.db import execute
     try:
         await execute(
-            "UPDATE jnpa.alerts SET ack = true WHERE payload->>'scenario' = :hid OR plate = :plate",
+            "UPDATE core.alert SET ack = true WHERE payload->>'scenario' = :hid OR plate = :plate",
             {"hid": handle_id, "plate": SYNTH_PLATE}, dsn=cfg.postgres_dsn,
         )
     except Exception as exc:  # noqa: BLE001

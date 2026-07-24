@@ -1,8 +1,8 @@
 """Driver-enrollment store + lifecycle (Identity / face-recognition, Appendix C #2).
 
 Backs the PWA submit -> admin approve/reject workflow that sits in front of the
-identity service. Records live in ``jnpa.driver_enrollments`` (+ an append-only
-``jnpa.enrollment_audit``); when Postgres is absent (the mock/test/local profile)
+identity service. Records live in ``core.driver_enrollment`` (+ an append-only
+``core.enrollment_audit``); when Postgres is absent (the mock/test/local profile)
 every operation degrades to an in-process dict so the demo still works end to end.
 
 The identity service itself is unchanged: on approval the gateway calls its
@@ -10,6 +10,8 @@ existing ``/enrol`` to mint + store the face template. This module only owns the
 *request queue*, the *approval state machine*, and the *DPDP audit*.
 """
 from __future__ import annotations
+
+import os
 
 import base64
 import json
@@ -27,7 +29,7 @@ ACTIVE = "ACTIVE"
 REJECTED = "REJECTED"
 REENROLL = "REENROLL"
 
-# Enrollment provenance (jnpa.driver_enrollments.source).
+# Enrollment provenance (core.driver_enrollment.source).
 SOURCE_PWA = "PWA"      # driver self-submitted from the mobile app
 SOURCE_ADMIN = "ADMIN"  # created by a Control-Room admin on the enrollment page
 
@@ -40,8 +42,8 @@ def normalize_vehicle_no(vehicle_no: Optional[str]) -> str:
 # --- schema (idempotent; also applied here so an existing volume gains the tables
 # without an init.sql re-run) ------------------------------------------------
 _DDL = """
-CREATE SCHEMA IF NOT EXISTS jnpa;
-CREATE TABLE IF NOT EXISTS jnpa.driver_enrollments (
+CREATE SCHEMA IF NOT EXISTS core;
+CREATE TABLE IF NOT EXISTS core.driver_enrollment (
     driver_id         text PRIMARY KEY,
     name              text NOT NULL,
     license_no        text,
@@ -66,10 +68,10 @@ CREATE TABLE IF NOT EXISTS jnpa.driver_enrollments (
     updated_at        timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_driver_enrol_status
-    ON jnpa.driver_enrollments (status, submitted_at DESC);
-ALTER TABLE jnpa.driver_enrollments ADD COLUMN IF NOT EXISTS created_by text;
-ALTER TABLE jnpa.driver_enrollments ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'PWA';
-CREATE TABLE IF NOT EXISTS jnpa.enrollment_audit (
+    ON core.driver_enrollment (status, submitted_at DESC);
+ALTER TABLE core.driver_enrollment ADD COLUMN IF NOT EXISTS created_by text;
+ALTER TABLE core.driver_enrollment ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'PWA';
+CREATE TABLE IF NOT EXISTS core.enrollment_audit (
     id        bigserial PRIMARY KEY,
     driver_id text NOT NULL,
     event     text NOT NULL,
@@ -78,8 +80,8 @@ CREATE TABLE IF NOT EXISTS jnpa.enrollment_audit (
     ts        timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_enrollment_audit_driver
-    ON jnpa.enrollment_audit (driver_id, ts DESC);
-CREATE TABLE IF NOT EXISTS jnpa.drivers (
+    ON core.enrollment_audit (driver_id, ts DESC);
+CREATE TABLE IF NOT EXISTS core.driver_identity (
     driver_id         text PRIMARY KEY,
     name              text NOT NULL,
     license_no        text,
@@ -97,14 +99,14 @@ CREATE TABLE IF NOT EXISTS jnpa.drivers (
     approved_by       text,
     updated_at        timestamptz NOT NULL DEFAULT now()
 );
-ALTER TABLE jnpa.drivers ADD COLUMN IF NOT EXISTS created_by text;
-ALTER TABLE jnpa.drivers ADD COLUMN IF NOT EXISTS vehicle_no_norm text;
-CREATE INDEX IF NOT EXISTS idx_drivers_vehicle_no ON jnpa.drivers (vehicle_no);
-CREATE INDEX IF NOT EXISTS idx_drivers_vehicle_no_norm ON jnpa.drivers (vehicle_no_norm);
+ALTER TABLE core.driver_identity ADD COLUMN IF NOT EXISTS created_by text;
+ALTER TABLE core.driver_identity ADD COLUMN IF NOT EXISTS vehicle_no_norm text;
+CREATE INDEX IF NOT EXISTS idx_drivers_vehicle_no ON core.driver_identity (vehicle_no);
+CREATE INDEX IF NOT EXISTS idx_drivers_vehicle_no_norm ON core.driver_identity (vehicle_no_norm);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_drivers_vehicle_active
-    ON jnpa.drivers (vehicle_no_norm)
+    ON core.driver_identity (vehicle_no_norm)
     WHERE status = 'ACTIVE' AND vehicle_no_norm IS NOT NULL;
-CREATE TABLE IF NOT EXISTS jnpa.driver_faces (
+CREATE TABLE IF NOT EXISTS core.driver_face (
     driver_id     text PRIMARY KEY,
     embedding     jsonb NOT NULL,
     dim           int NOT NULL,
@@ -113,7 +115,7 @@ CREATE TABLE IF NOT EXISTS jnpa.driver_faces (
     created_at    timestamptz NOT NULL DEFAULT now(),
     updated_at    timestamptz NOT NULL DEFAULT now()
 );
-CREATE TABLE IF NOT EXISTS jnpa.verification_logs (
+CREATE TABLE IF NOT EXISTS core.verification_log (
     id            bigserial PRIMARY KEY,
     driver_id     text NOT NULL,
     decision      text NOT NULL,
@@ -127,7 +129,7 @@ CREATE TABLE IF NOT EXISTS jnpa.verification_logs (
     ts            timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_verification_logs_driver
-    ON jnpa.verification_logs (driver_id, ts DESC);
+    ON core.verification_log (driver_id, ts DESC);
 """
 
 # in-memory fallback store (DEV ONLY — used when no Postgres DSN is reachable)
@@ -198,9 +200,13 @@ async def _backend(dsn: str) -> str:
     try:
         from jnpa_shared.db import execute  # lazy import
 
-        for stmt in (s.strip() for s in _DDL.split(";")):
-            if stmt:
-                await execute(stmt, dsn=dsn)
+        if os.getenv("JNPA_RUNTIME_DDL", "0") == "1":
+            for stmt in (s.strip() for s in _DDL.split(";")):
+                if stmt:
+                    await execute(stmt, dsn=dsn)
+        else:
+            # schema-v3: DDL owned by infra/postgres/v3; probe connectivity only.
+            await execute("SELECT 1", dsn=dsn)
         _BACKEND[key] = "db"
         log.info("enrollment_store_backend", backend="db")
         return "db"
@@ -232,7 +238,7 @@ async def audit(dsn: str, driver_id: str, event: str, *, actor: str,
             from jnpa_shared.db import execute
 
             await execute(
-                "INSERT INTO jnpa.enrollment_audit (driver_id, event, actor, detail) "
+                "INSERT INTO core.enrollment_audit (driver_id, event, actor, detail) "
                 "VALUES (:d, :e, :a, CAST(:det AS jsonb))",
                 {"d": driver_id, "e": event, "a": actor, "det": _dumps(detail)},
                 dsn=dsn,
@@ -272,7 +278,7 @@ async def submit(dsn: str, *, driver_id: str, name: str, license_no: str = "",
 
             await execute(
                 """
-                INSERT INTO jnpa.driver_enrollments
+                INSERT INTO core.driver_enrollment
                     (driver_id, name, license_no, mobile, vehicle_no, aadhaar_masked,
                      emergency_contact, status, consent, consent_at, face_images,
                      documents, source, created_by, submitted_at, updated_at)
@@ -345,7 +351,7 @@ async def mark_active(dsn: str, driver_id: str, *, actor: str, photo_url: Option
 
             await execute(
                 """
-                UPDATE jnpa.driver_enrollments SET
+                UPDATE core.driver_enrollment SET
                     status = 'ACTIVE',
                     photo_url = :photo_url,
                     reference_image = :ref,
@@ -391,7 +397,7 @@ async def set_status(dsn: str, driver_id: str, status: str, *, actor: str,
 
             await execute(
                 """
-                UPDATE jnpa.driver_enrollments SET
+                UPDATE core.driver_enrollment SET
                     status = :status,
                     rejection_reason = :reason,
                     reviewed_at = :now,
@@ -424,7 +430,7 @@ async def get(dsn: str, driver_id: str, *, include_faces: bool = True) -> Option
             cols = _SUMMARY_COLS + (", face_images, reference_image, documents"
                                     if include_faces else "")
             row = await fetch_one(
-                f"SELECT {cols} FROM jnpa.driver_enrollments WHERE driver_id = :d",
+                f"SELECT {cols} FROM core.driver_enrollment WHERE driver_id = :d",
                 {"d": driver_id}, dsn=dsn,
             )
             return _row(row, include_faces=include_faces) if row else None
@@ -443,7 +449,7 @@ async def list_requests(dsn: str, *, status: Optional[str] = None) -> List[dict]
             where = "WHERE status = :s" if status else ""
             rows = await fetch_all(
                 f"SELECT {_SUMMARY_COLS}, (face_images->>0) AS thumb "
-                f"FROM jnpa.driver_enrollments {where} ORDER BY submitted_at DESC",
+                f"FROM core.driver_enrollment {where} ORDER BY submitted_at DESC",
                 {"s": status} if status else {}, dsn=dsn,
             )
             return [_row(r, include_faces=False) for r in rows]
@@ -458,7 +464,7 @@ async def list_requests(dsn: str, *, status: Optional[str] = None) -> List[dict]
 async def promote_to_driver(dsn: str, rec: Mapping[str, Any], *, actor: str,
                             photo_url: Optional[str], reference_image: Optional[str],
                             template_dim: Optional[int], provider: Optional[str]) -> None:
-    """On approval, upsert the canonical master identity in jnpa.drivers. Existing
+    """On approval, upsert the canonical master identity in core.driver_identity. Existing
     embeddings are NOT clobbered blindly — the identity service guards its template;
     here we refresh the durable profile + the reference-photo pointer + metadata."""
     now = _now()
@@ -467,7 +473,7 @@ async def promote_to_driver(dsn: str, rec: Mapping[str, Any], *, actor: str,
 
         await execute(
             """
-            INSERT INTO jnpa.drivers
+            INSERT INTO core.driver_identity
                 (driver_id, name, license_no, mobile, vehicle_no, vehicle_no_norm,
                  aadhaar_masked, emergency_contact, status, photo_url, reference_image,
                  template_dim, provider, enrolled_at, approved_by, created_by, updated_at)
@@ -489,7 +495,7 @@ async def promote_to_driver(dsn: str, rec: Mapping[str, Any], *, actor: str,
                 template_dim = EXCLUDED.template_dim,
                 provider = EXCLUDED.provider,
                 approved_by = EXCLUDED.approved_by,
-                created_by = COALESCE(jnpa.drivers.created_by, EXCLUDED.created_by),
+                created_by = COALESCE(core.driver_identity.created_by, EXCLUDED.created_by),
                 updated_at = EXCLUDED.updated_at
             """,
             {"driver_id": rec.get("driver_id"), "name": rec.get("name") or rec.get("driver_id"),
@@ -526,7 +532,7 @@ async def get_driver(dsn: str, driver_id: str) -> Optional[dict]:
             "SELECT driver_id, name, license_no, mobile, vehicle_no, aadhaar_masked, "
             "emergency_contact, status, photo_url, reference_image, template_dim, "
             "provider, enrolled_at, approved_by, updated_at "
-            "FROM jnpa.drivers WHERE driver_id = :d", {"d": driver_id}, dsn=dsn)
+            "FROM core.driver_identity WHERE driver_id = :d", {"d": driver_id}, dsn=dsn)
         return _iso_row(dict(row)) if row else None
     return _MEM_DRIVERS.get(driver_id)
 
@@ -537,7 +543,7 @@ async def list_active_drivers(dsn: str) -> List[dict]:
         from jnpa_shared.db import fetch_all
 
         rows = await fetch_all(
-            "SELECT driver_id, name, license_no, photo_url FROM jnpa.drivers "
+            "SELECT driver_id, name, license_no, photo_url FROM core.driver_identity "
             "WHERE status = 'ACTIVE' ORDER BY name", dsn=dsn)
         return [dict(r) for r in rows]
     return [{"driver_id": d["driver_id"], "name": d.get("name"),
@@ -563,7 +569,7 @@ async def get_active_driver_by_vehicle(dsn: str, vehicle_no: str) -> Optional[di
 
         row = await fetch_one(
             "SELECT driver_id, name, license_no, mobile, vehicle_no, status, "
-            "photo_url, provider FROM jnpa.drivers "
+            "photo_url, provider FROM core.driver_identity "
             "WHERE vehicle_no_norm = :v AND status = 'ACTIVE' LIMIT 1",
             {"v": norm}, dsn=dsn)
         return _iso_row(dict(row)) if row else None
@@ -586,14 +592,14 @@ async def vehicle_assignment_conflict(dsn: str, vehicle_no: str, *,
         from jnpa_shared.db import fetch_one
 
         row = await fetch_one(
-            "SELECT driver_id, name, status FROM jnpa.drivers "
+            "SELECT driver_id, name, status FROM core.driver_identity "
             "WHERE vehicle_no_norm = :v AND status = 'ACTIVE' "
             "AND (CAST(:excl AS TEXT) IS NULL OR driver_id <> CAST(:excl AS TEXT)) LIMIT 1",
             {"v": norm, "excl": exclude_driver_id}, dsn=dsn)
         if row:
             return {**_iso_row(dict(row)), "kind": "driver"}
         row = await fetch_one(
-            "SELECT driver_id, name, status FROM jnpa.driver_enrollments "
+            "SELECT driver_id, name, status FROM core.driver_enrollment "
             "WHERE UPPER(TRIM(vehicle_no)) = :v AND status = ANY(:states) "
             "AND (CAST(:excl AS TEXT) IS NULL OR driver_id <> CAST(:excl AS TEXT)) LIMIT 1",
             {"v": norm, "states": list(_OPEN_ENROL_STATES), "excl": exclude_driver_id}, dsn=dsn)
@@ -623,7 +629,7 @@ async def active_driver_vehicle_map(dsn: str) -> Dict[str, dict]:
         from jnpa_shared.db import fetch_all
 
         rows = await fetch_all(
-            "SELECT driver_id, name, vehicle_no_norm FROM jnpa.drivers "
+            "SELECT driver_id, name, vehicle_no_norm FROM core.driver_identity "
             "WHERE status = 'ACTIVE' AND vehicle_no_norm IS NOT NULL", dsn=dsn)
         for r in rows:
             if r["vehicle_no_norm"]:
@@ -641,12 +647,12 @@ async def all_assignments(dsn: str) -> List[dict]:
     """Every driver row that holds a vehicle assignment (non-empty vehicle_no_norm),
     of any status, as ``{driver_id, vehicle_no_norm, vehicle_no}``. Used by the
     fleet backfill to guarantee each assigned Vehicle ID exists in the Vehicle
-    Master. Read-only — does not mutate jnpa.drivers."""
+    Master. Read-only — does not mutate core.driver_identity."""
     if await _backend(dsn) == "db":
         from jnpa_shared.db import fetch_all
 
         rows = await fetch_all(
-            "SELECT driver_id, vehicle_no_norm, vehicle_no FROM jnpa.drivers "
+            "SELECT driver_id, vehicle_no_norm, vehicle_no FROM core.driver_identity "
             "WHERE vehicle_no_norm IS NOT NULL AND TRIM(vehicle_no_norm) <> ''", dsn=dsn)
         return [dict(r) for r in rows]
     return [{"driver_id": d.get("driver_id"),
@@ -665,11 +671,11 @@ async def assigned_vehicles(dsn: str) -> set:
         from jnpa_shared.db import fetch_all
 
         rows = await fetch_all(
-            "SELECT vehicle_no_norm AS v FROM jnpa.drivers "
+            "SELECT vehicle_no_norm AS v FROM core.driver_identity "
             "WHERE status = 'ACTIVE' AND vehicle_no_norm IS NOT NULL", dsn=dsn)
         taken.update(r["v"] for r in rows if r["v"])
         rows = await fetch_all(
-            "SELECT UPPER(TRIM(vehicle_no)) AS v FROM jnpa.driver_enrollments "
+            "SELECT UPPER(TRIM(vehicle_no)) AS v FROM core.driver_enrollment "
             "WHERE status = ANY(:states) AND vehicle_no IS NOT NULL "
             "AND TRIM(vehicle_no) <> ''", {"states": list(_OPEN_ENROL_STATES)}, dsn=dsn)
         taken.update(r["v"] for r in rows if r["v"])
@@ -690,14 +696,14 @@ async def assigned_vehicles(dsn: str) -> set:
 # --------------------------------------------------------------------------- biometric templates (1:N)
 async def store_face(dsn: str, driver_id: str, embedding: List[float], *,
                      dim: int, provider: Optional[str], model_version: str = "") -> None:
-    """Upsert a driver's biometric template into jnpa.driver_faces (1:N store)."""
+    """Upsert a driver's biometric template into core.driver_face (1:N store)."""
     now = _now()
     if await _backend(dsn) == "db":
         from jnpa_shared.db import execute
 
         await execute(
             """
-            INSERT INTO jnpa.driver_faces (driver_id, embedding, dim, provider, model_version, created_at, updated_at)
+            INSERT INTO core.driver_face (driver_id, embedding, dim, provider, model_version, created_at, updated_at)
             VALUES (:d, CAST(:emb AS jsonb), :dim, :provider, :mv, :now, :now)
             ON CONFLICT (driver_id) DO UPDATE SET
                 embedding = EXCLUDED.embedding, dim = EXCLUDED.dim,
@@ -717,7 +723,7 @@ async def load_faces(dsn: str) -> List[dict]:
         from jnpa_shared.db import fetch_all
 
         rows = await fetch_all(
-            "SELECT driver_id, embedding, dim, provider FROM jnpa.driver_faces", dsn=dsn)
+            "SELECT driver_id, embedding, dim, provider FROM core.driver_face", dsn=dsn)
         return [{"driver_id": r["driver_id"], "embedding": _loads(r["embedding"]),
                  "dim": r["dim"], "provider": r["provider"]} for r in rows]
     return [dict(v) for v in _MEM_FACES.values()]
@@ -735,7 +741,7 @@ async def log_verification(dsn: str, *, driver_id: str, decision: str,
             from jnpa_shared.db import execute
 
             await execute(
-                "INSERT INTO jnpa.verification_logs "
+                "INSERT INTO core.verification_log "
                 "(driver_id, decision, score, matched, provider, decision_path, actor, purpose, reason) "
                 "VALUES (:d, :dec, :score, :matched, :provider, :path, :actor, :purpose, :reason)",
                 {"d": driver_id, "dec": decision, "score": score, "matched": matched,
@@ -759,7 +765,7 @@ async def recent_verifications(dsn: str, driver_id: Optional[str] = None,
         where = "WHERE driver_id = :d " if driver_id else ""
         rows = await fetch_all(
             f"SELECT driver_id, decision, score, matched, provider, decision_path, "
-            f"actor, purpose, reason, ts FROM jnpa.verification_logs {where}"
+            f"actor, purpose, reason, ts FROM core.verification_log {where}"
             f"ORDER BY ts DESC LIMIT :lim",
             {"d": driver_id, "lim": limit} if driver_id else {"lim": limit}, dsn=dsn)
         return [_iso_row(dict(r)) for r in rows]

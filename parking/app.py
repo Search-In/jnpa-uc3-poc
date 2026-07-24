@@ -15,7 +15,7 @@ diurnal curve bounded by capacity, with **no** wall-clock RNG — so a given
 minute always yields the same board. ``/availability`` and ``/summary`` default
 ``minute_of_day`` to the current local wall-clock minute (``hour*60+minute``)
 for a live service, but accept a ``?minute_of_day=NNN`` override so demos are
-fully reproducible. The service registers itself in ``jnpa.services`` on startup.
+fully reproducible. The service registers itself in ``core.ulip_service`` on startup.
 """
 from __future__ import annotations
 
@@ -106,7 +106,7 @@ def _service_registration() -> ServiceRegistration:
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
-    # Best-effort: register in jnpa.services + ensure schema. DB may not be up
+    # Best-effort: register in core.ulip_service + ensure schema. DB may not be up
     # yet in some local bring-up orders; don't crash the API if so.
     try:
         await ensure_schema(dsn=cfg.postgres_dsn)

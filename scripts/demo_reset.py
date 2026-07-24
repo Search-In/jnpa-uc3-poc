@@ -39,14 +39,14 @@ SCENARIOS = "http://localhost:8400"
 
 # Ephemeral tables truncated wholesale (RESTART IDENTITY for any serials).
 EPHEMERAL_TABLES = [
-    "jnpa.anpr_reads",
-    "jnpa.rfid_reads",
-    "jnpa.truck_telemetry",
-    "jnpa.traffic_snapshots",
-    "jnpa.alerts",
-    "jnpa.scenario_steps",
-    "jnpa.scenario_handles",
-    "jnpa.scenarios",
+    "core.anpr_read",
+    "core.rfid_read",
+    "core.truck_telemetry",
+    "core.traffic_snapshot",
+    "core.alert",
+    "core.scenario_step",
+    "core.scenario_handle",
+    "core.scenario",
 ]
 
 # Redis key globs we clear (ephemeral). We never FLUSHALL — that could drop a
@@ -126,7 +126,7 @@ def truncate_tables() -> None:
 
 def drop_provisional() -> None:
     print("3. Dropping provisional vehicles (keeping verified RCs + seed tables):")
-    sql = "DELETE FROM jnpa.vehicle_master WHERE provisional = true;"
+    sql = "DELETE FROM core.vehicle_rc WHERE provisional = true;"
     _run(_compose() + ["exec", "-T", "postgres", "psql", "-U", "postgres", "-d", "postgres",
                        "-c", sql], "delete provisional vehicle_master rows")
 

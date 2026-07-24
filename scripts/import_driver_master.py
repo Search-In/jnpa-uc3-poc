@@ -2,13 +2,13 @@
 """Idempotent importer for the Driver Master & PDP history (PDP Details.xlsx).
 
 Loads two sheets into the ADDITIVE tables from migration 0026:
-  * "Application Data" -> jnpa.driver_master       (key: licence_no_norm)
-  * "PDP Data"         -> jnpa.driver_pdp_history  (key: pdp_id)
+  * "Application Data" -> core.driver       (key: licence_no_norm)
+  * "PDP Data"         -> core.pdp  (key: pdp_id)
 
-Purely additive — it NEVER touches jnpa.drivers / driver_enrollments /
+Purely additive — it NEVER touches core.driver_identity / driver_enrollments /
 device_bindings / driver_faces, so both driver login flows are unaffected.
 
-driver_master rows resolve their transporter_id from jnpa.transporters by
+driver_master rows resolve their transporter_id from core.transporter by
 normalised company name (the Transport Master link). Cleaning:
   * licence_no_norm = UPPER + alnum-only
   * dob validated to a sane year range (else NULL, flagged)
@@ -129,7 +129,7 @@ def clean_driver(raw: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], List[st
 
 
 _DRIVER_UPSERT = """
-INSERT INTO jnpa.driver_master AS d
+INSERT INTO core.driver AS d
     (licence_no, licence_no_norm, source_srno, name, company_name, transporter_id,
      photo_file, licence_type, licence_valid_to, latest_pdp_number, dob)
 VALUES
@@ -172,7 +172,7 @@ def clean_pdp(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 _PDP_UPSERT = """
-INSERT INTO jnpa.driver_pdp_history
+INSERT INTO core.pdp
     (pdp_id, acceptance_time_stamp, active, appl_number, pdp_number, validity,
      remarks, pdp_cancelled_by, cancellation_time)
 VALUES
@@ -211,7 +211,7 @@ def load_sheet(xlsx: str, sheet: str, cols, limit: Optional[int]) -> List[Dict[s
 async def resolve_transporters(dsn: str) -> Dict[str, int]:
     from jnpa_shared.db import fetch_all
 
-    rows = await fetch_all("SELECT id, name FROM jnpa.transporters", {}, dsn=dsn)
+    rows = await fetch_all("SELECT id, name FROM core.transporter", {}, dsn=dsn)
     return {str(r["name"]).strip().lower(): int(r["id"]) for r in rows if r.get("name")}
 
 

@@ -5,7 +5,7 @@ The reusable Data-Upload sub-module (module 13). Mirrors
 CSV/XLS/XLSX byte payload into a validated, mapped record set plus a preview and
 user-friendly errors — WITHOUT touching the DB. The import step then hands the valid
 records to :class:`services.cfs_ecy.repository.CfsEcyRepository.persist` (the SAME
-target table jnpa.cfs_ecy_movements + its (facility_type, container_number, event_ts,
+target table core.cfs_ecy_movement + its (facility_type, container_number, event_ts,
 mode) UNIQUE key → idempotent, duplicate-safe).
 
 Column mapping is ALIAS-DRIVEN (header is normalised, then matched against an alias

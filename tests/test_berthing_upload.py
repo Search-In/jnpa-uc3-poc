@@ -47,6 +47,29 @@ def _csv(*lines: str) -> bytes:
 
 
 # ------------------------------------------------------------------ pure parser
+
+# schema-v3: the boot-time DDL is retired (JNPA_RUNTIME_DDL gate); the canonical
+# definitions live in infra/postgres/v3/. The drift test now asserts every object
+# the ext DDL would create is defined by the v3 runbook (ext subset-of v3).
+def _v3_objects() -> set[str]:
+    from pathlib import Path as _P
+    root = _P(__file__).resolve().parents[1] / "infra" / "postgres" / "v3"
+    text = "\n".join(p.read_text() for p in sorted(root.glob("*.sql")))
+    pat_t = re.compile(r"CREATE TABLE (?:IF NOT EXISTS )?((?:core|mart|staging)\.\w+)", re.I)
+    pat_v = re.compile(r"CREATE (?:OR REPLACE )?VIEW ((?:core|mart)\.\w+)", re.I)
+    pat_a = re.compile(r"ALTER TABLE ((?:core|mart)\.\w+)", re.I)
+    return ({m.lower() for m in pat_t.findall(text)}
+            | {m.lower() for m in pat_v.findall(text)}
+            | {m.lower() for m in pat_a.findall(text)})
+
+
+def _ext_objects() -> set[str]:
+    from gateway.berthing_ext import _DDL
+    pat = re.compile(r"CREATE (?:TABLE (?:IF NOT EXISTS )?|(?:OR REPLACE )?VIEW )((?:core|mart)\.\w+)", re.I)
+    src = "\n".join(_DDL) if not isinstance(_DDL, str) else _DDL
+    return {m.lower() for m in pat.findall(src)}
+
+
 def test_template_has_required_columns():
     t = P.template_csv()
     header = t.splitlines()[0].split(",")
@@ -422,7 +445,7 @@ def test_router_pdf_validate_real(client):
 
 
 # --------------------------------------------------------------- schema lock-step
-_TABLE = re.compile(r"CREATE TABLE IF NOT EXISTS\s+(jnpa\.\w+)", re.IGNORECASE)
+_TABLE = re.compile(r"CREATE TABLE IF NOT EXISTS\s+((?:core|mart)\.\w+)", re.IGNORECASE)
 
 
 def _tables(text: str) -> set:
@@ -430,20 +453,21 @@ def _tables(text: str) -> set:
 
 
 def test_migration_and_ext_define_same_objects():
-    from gateway.berthing_ext import _DDL
-    mig_dir = REPO_ROOT / "infra" / "postgres" / "migrations"
-    mig = ((mig_dir / "0036_berthing_reports.sql").read_text() + "\n"
-           + (mig_dir / "0037_berthing_report_documents.sql").read_text())
-    assert _tables(mig) == _tables("\n".join(_DDL)), (
-        "schema drift between migrations 0036+0037 and berthing_ext._DDL")
+    """v3: every object the (retired) boot DDL would create must be defined by the
+    canonical infra/postgres/v3 runbook — the ext copy can never drift ahead."""
+    v3 = _v3_objects()
+    ext_objs = _ext_objects()
+    assert ext_objs, "no CREATE TABLE/VIEW found in ext _DDL"
+    missing = sorted(ext_objs - v3)
+    assert not missing, f"objects in ext _DDL missing from infra/postgres/v3: {missing}"
 
 
 def test_expected_objects_present():
     from gateway.berthing_ext import _DDL
     objs = _tables("\n".join(_DDL))
-    for name in ("jnpa.berthing_reports", "jnpa.berthing_events",
-                 "jnpa.berthing_import_files", "jnpa.berthing_import_errors",
-                 "jnpa.berthing_report_documents", "jnpa.berthing_report_tables"):
+    for name in ("core.berthing_record", "core.berthing_record_event",
+                 "core.berthing_import_file", "core.berthing_import_error",
+                 "core.berthing_report_document", "core.berthing_report_table"):
         assert name in objs, f"missing berthing object: {name}"
 
 

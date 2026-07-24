@@ -4,7 +4,7 @@
     LIVE_FALLBACK -> vahan-sim
     CACHED        -> last good response from Redis (TTL 12 h)
     PROVISIONAL   -> admit vehicle with provisional=true + 24 h cure window,
-                     write jnpa.vehicle_master(provisional_until=now()+24h),
+                     write core.vehicle_rc(provisional_until=now()+24h),
                      emit Alert(kind=PROVISIONAL_VEHICLE).
 
 The chosen rung is recorded via ``state.record_decision(..., decision_path=...)``

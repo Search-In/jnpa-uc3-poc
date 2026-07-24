@@ -12,7 +12,7 @@
                                   live, so the dashboard's edits take effect
                                   without a redeploy.
 
-Zones are stored in ``jnpa.geofence_zones`` (see infra/postgres/init.sql). The
+Zones are stored in ``core.geofence_zone`` (see infra/postgres/init.sql). The
 route degrades gracefully if the table is missing on an older volume (returns
 the static corridor.NO_PARK_ZONES seed so the editor still has something to
 show / edit).
@@ -54,7 +54,7 @@ async def gates(state: GatewayState = Depends(get_state)) -> dict:
 
     try:
         rows = await fetch_all(
-            "SELECT id, name, lat, lon FROM jnpa.gates ORDER BY id",
+            "SELECT id, name, lat, lon FROM core.gate ORDER BY id",
             dsn=state.cfg.postgres_dsn,
         )
     except Exception as exc:  # pragma: no cover - infra-timing dependent
@@ -67,8 +67,8 @@ async def gates(state: GatewayState = Depends(get_state)) -> dict:
         tp = await fetch_all(
             """
             SELECT COALESCE(c.gate_id, 'CORRIDOR') AS gate_id, count(*) AS reads
-            FROM jnpa.anpr_reads a
-            LEFT JOIN jnpa.cameras c ON c.id = a.camera_id
+            FROM core.anpr_read a
+            LEFT JOIN core.camera c ON c.id = a.camera_id
             WHERE a.ts > now() - interval '60 minutes'
             GROUP BY 1
             """,
@@ -148,7 +148,7 @@ async def list_zones(state: GatewayState = Depends(get_state)) -> dict:
         rows = await fetch_all(
             """
             SELECT id, name, kind, polygon, escalation, enabled, updated_at
-            FROM jnpa.geofence_zones
+            FROM core.geofence_zone
             ORDER BY id
             """,
             dsn=state.cfg.postgres_dsn,
@@ -212,7 +212,7 @@ async def put_zones(
             supplied_ids.append(zid)
             await execute(
                 """
-                INSERT INTO jnpa.geofence_zones
+                INSERT INTO core.geofence_zone
                     (id, name, kind, polygon, escalation, enabled, updated_at)
                 VALUES (:id, :name, :kind, CAST(:polygon AS jsonb),
                         CAST(:escalation AS jsonb), :enabled, now())
@@ -239,7 +239,7 @@ async def put_zones(
             placeholders = ", ".join(f":id{i}" for i in range(len(supplied_ids)))
             params = {f"id{i}": zid for i, zid in enumerate(supplied_ids)}
             await execute(
-                f"DELETE FROM jnpa.geofence_zones WHERE id NOT IN ({placeholders})",
+                f"DELETE FROM core.geofence_zone WHERE id NOT IN ({placeholders})",
                 params,
                 dsn=state.cfg.postgres_dsn,
             )
@@ -257,7 +257,7 @@ async def put_zones(
 # ---------------------------------------------------------------------------
 # Geo-fence EVENTS (enter / exit / dwell violation) — durable event log.
 # Producers (the anomaly service, or any GPS consumer) POST an enter/exit event
-# here; it is persisted to jnpa.geofence_events for audit/analytics. The alerts
+# here; it is persisted to core.geofence_event for audit/analytics. The alerts
 # pump also lands geofence-family violations here automatically (gateway/audit).
 # ---------------------------------------------------------------------------
 @router.post("/api/geo/events")
@@ -321,7 +321,7 @@ async def list_geofence_events(
                                  ELSE 'ENTER' END) AS event_type,
                    entry_time, exit_time,
                    dwell_seconds, violation_type, action_taken, created_at
-            FROM jnpa.geofence_events
+            FROM core.geofence_event
             {where}
             ORDER BY created_at DESC
             LIMIT :limit
@@ -356,7 +356,7 @@ async def list_geofence_violations(
             """
             SELECT id, vehicle_id, driver_id, zone_id, event_type, dwell_seconds,
                    violation_type, action_taken, created_at
-            FROM jnpa.geofence_events
+            FROM core.geofence_event
             WHERE violation_type IS NOT NULL
             ORDER BY created_at DESC LIMIT :limit
             """,
@@ -412,8 +412,8 @@ async def vehicles_in_zones(state: GatewayState = Depends(get_state)) -> dict:
 
 @router.get("/api/geo/zones-active")
 async def zones_active(state: GatewayState = Depends(get_state)) -> dict:
-    """The zones the engine is currently enforcing (loaded from jnpa.geofence_zones)."""
+    """The zones the engine is currently enforcing (loaded from core.geofence_zone)."""
     await state.geofence.refresh_zones()
     snap = state.geofence.zones_snapshot()
     REQUESTS.labels("geofence_events", "ok").inc()
-    return {"count": len(snap), "zones": snap, "source": "jnpa.geofence_zones"}
+    return {"count": len(snap), "zones": snap, "source": "core.geofence_zone"}

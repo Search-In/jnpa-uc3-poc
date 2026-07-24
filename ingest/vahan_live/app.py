@@ -10,9 +10,9 @@ Surepass's commercial KYC API:
 Gating: if SUREPASS_API_TOKEN is missing or empty, every lookup returns
 HTTP 503 with body {"error": "live_disabled"}. This layer DOES NOT fall back
 to the simulator — that decision belongs to the fallback orchestrator
-(Prompt 4), which reads jnpa.services to choose sim vs. live.
+(Prompt 4), which reads core.ulip_service to choose sim vs. live.
 
-Successful RC lookups are still written back to jnpa.vehicle_master
+Successful RC lookups are still written back to core.vehicle_rc
 (provisional=false), exactly like the simulator, so the dashboard's "verified"
 view is identical regardless of which path served the request.
 """

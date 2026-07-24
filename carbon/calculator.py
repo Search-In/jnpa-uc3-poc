@@ -147,7 +147,7 @@ def emission_record(
     uses the published gCO2e/idle-minute factor. Fuel is back-derived from the
     total via the documented diesel factor (``DIESEL_GCO2E_PER_LITRE``) so the
     ledger's ``fuel_consumed_litre`` is consistent with its ``co2_kg``. Returns the
-    exact column-set ``jnpa.carbon_emission`` persists (minus id/created_at).
+    exact column-set ``core.carbon_emission`` persists (minus id/created_at).
     """
     vclass = (vehicle_type or factors.DEFAULT_CLASS).upper()
     payload = _nominal_payload(vclass) if payload_tonnes is None else max(0.0, float(payload_tonnes))

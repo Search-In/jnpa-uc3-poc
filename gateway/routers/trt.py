@@ -9,7 +9,7 @@ Each vehicle advances through the lifecycle via POST /api/trt/phase, which stamp
 the matching timestamp column on an OPEN trt_record (created on GATE_IN) and, on
 GATE_OUT, computes the per-phase minutes and the total TRT entirely in SQL
 (EXTRACT(EPOCH FROM (a-b))/60.0 — the same minute math kpi.py uses over
-jnpa.gate_events). RDS-backed (jnpa.trt_records — created in migration
+core.gate_event). RDS-backed (core.trt_record — created in migration
 0024_uc3_completion / bootstrapped by gateway.uc3_ext). Additive: no existing
 endpoint/table is touched.
 
@@ -102,7 +102,7 @@ async def advance_phase(body: Dict[str, Any] = Body(...),
 
     # Latest still-in-progress record for this vehicle.
     cur = await fetch_one(
-        """SELECT * FROM jnpa.trt_records
+        """SELECT * FROM core.trt_record
            WHERE vehicle_id = :vid AND status <> 'COMPLETED'
            ORDER BY created_at DESC LIMIT 1""",
         {"vid": vehicle_id}, dsn=dsn)
@@ -112,7 +112,7 @@ async def advance_phase(body: Dict[str, Any] = Body(...),
             raise HTTPException(
                 409, f"no open TRT record for {vehicle_id}; send GATE_IN first")
         row = await execute_returning(
-            """INSERT INTO jnpa.trt_records
+            """INSERT INTO core.trt_record
                  (vehicle_id, plate, trip_id, gate_in_at, status, source)
                VALUES (:vid, :plate, :trip, COALESCE(CAST(:ts AS timestamptz), now()),
                        'GATE_IN', 'COMPUTED')
@@ -128,7 +128,7 @@ async def advance_phase(body: Dict[str, Any] = Body(...),
         # Close the record: stamp gate_out and compute every phase minute + TRT in
         # SQL. Each phase minute is NULL unless both endpoints exist.
         row = await execute_returning(
-            f"""UPDATE jnpa.trt_records
+            f"""UPDATE core.trt_record
                 SET {col} = COALESCE(CAST(:ts AS timestamptz), now()),
                     plate = COALESCE(:plate, plate),
                     trip_id = COALESCE(:trip, trip_id),
@@ -151,7 +151,7 @@ async def advance_phase(body: Dict[str, Any] = Body(...),
             {"col": col, "ts": ts, "plate": plate, "trip": trip_id, "id": rid}, dsn=dsn)
     else:
         row = await execute_returning(
-            f"""UPDATE jnpa.trt_records
+            f"""UPDATE core.trt_record
                 SET {col} = COALESCE(CAST(:ts AS timestamptz), now()),
                     plate = COALESCE(:plate, plate),
                     trip_id = COALESCE(:trip, trip_id),
@@ -202,7 +202,7 @@ async def list_records(status: Optional[str] = Query(default=None),
         params["vid"] = vehicle_id
     clause = ("WHERE " + " AND ".join(where)) if where else ""
     rows = await fetch_all(
-        f"SELECT * FROM jnpa.trt_records {clause} ORDER BY created_at DESC LIMIT :limit",
+        f"SELECT * FROM core.trt_record {clause} ORDER BY created_at DESC LIMIT :limit",
         params, dsn=dsn)
     REQUESTS.labels("trt", "ok").inc()
     return {"count": len(rows), "records": [_iso(dict(r)) for r in rows]}
@@ -229,7 +229,7 @@ async def trt_summary(state: GatewayState = Depends(get_state)) -> dict:
              round(avg(gate_to_park_min) FILTER (WHERE status = 'COMPLETED')::numeric, 2) AS gate_to_park_min,
              round(avg(park_to_load_min) FILTER (WHERE status = 'COMPLETED')::numeric, 2) AS park_to_load_min,
              round(avg(load_to_out_min) FILTER (WHERE status = 'COMPLETED')::numeric, 2) AS load_to_out_min
-           FROM jnpa.trt_records""",
+           FROM core.trt_record""",
         {}, dsn=dsn)
 
     completed = int(agg["completed"]) if agg and agg["completed"] is not None else 0
@@ -266,7 +266,7 @@ async def vehicle_records(vehicle_id: str,
     from jnpa_shared.db import fetch_all
 
     rows = await fetch_all(
-        """SELECT * FROM jnpa.trt_records
+        """SELECT * FROM core.trt_record
            WHERE vehicle_id = :vid ORDER BY created_at DESC""",
         {"vid": vehicle_id}, dsn=dsn)
     REQUESTS.labels("trt", "ok").inc()

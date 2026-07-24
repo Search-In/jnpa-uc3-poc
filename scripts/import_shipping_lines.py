@@ -12,7 +12,7 @@ schema (migration 0032). The customer folder layout:
 The data is the ONLY source of truth — NOTHING is synthesised. Re-running is a
 no-op: import is idempotent on file content (sl_import_files.source_sha256) and on
 every child's natural key (ON CONFLICT DO NOTHING). Purely additive — it never
-touches cargo / customs / gate / auth tables; container_no soft-links to jnpa.cargo
+touches cargo / customs / gate / auth tables; container_no soft-links to core.cargo
 BY VALUE.
 
 === DATABASE TARGET (RDS-only) ===
@@ -119,29 +119,29 @@ async def _validate(dsn: str) -> None:
         "count(*) FILTER (WHERE import_status='SKIPPED_DUPLICATE') AS duplicate, "
         "count(*) FILTER (WHERE import_status='FAILED') AS failed, "
         "sum(record_count) AS records, sum(imported_count) AS imported "
-        "FROM jnpa.sl_import_files", dsn=dsn)
+        "FROM core.sl_import_file", dsn=dsn)
     print(f"  files: {dict(files)}")
     totals = await fetch_one(
-        "SELECT (SELECT count(*) FROM jnpa.sl_advance_containers) AS advance_containers, "
-        "(SELECT count(DISTINCT container_no) FROM jnpa.sl_advance_containers) AS distinct_containers, "
-        "(SELECT count(*) FROM jnpa.sl_delivery_orders) AS delivery_orders, "
-        "(SELECT count(*) FROM jnpa.shipping_lines) AS shipping_lines, "
-        "(SELECT count(*) FROM jnpa.sl_advance_containers WHERE bill_of_lading IS NOT NULL) AS with_bl, "
-        "(SELECT count(*) FROM jnpa.sl_import_errors) AS row_errors", dsn=dsn)
+        "SELECT (SELECT count(*) FROM core.advance_list_container) AS advance_containers, "
+        "(SELECT count(DISTINCT container_no) FROM core.advance_list_container) AS distinct_containers, "
+        "(SELECT count(*) FROM core.delivery_order_line) AS delivery_orders, "
+        "(SELECT count(*) FROM core.ref_shipping_line) AS shipping_lines, "
+        "(SELECT count(*) FROM core.advance_list_container WHERE bill_of_lading IS NOT NULL) AS with_bl, "
+        "(SELECT count(*) FROM core.sl_import_error) AS row_errors", dsn=dsn)
     print(f"  rows:  {dict(totals)}")
     terms = await fetch_all(
-        "SELECT terminal, list_type, count(*) AS n FROM jnpa.sl_advance_containers "
+        "SELECT terminal, list_type, count(*) AS n FROM core.advance_list_container "
         "GROUP BY terminal, list_type ORDER BY terminal, list_type", dsn=dsn)
     print("  terminal-wise:")
     for r in terms:
         print(f"    {r['terminal']:6} {r['list_type']:4} {r['n']:6}")
     lines = await fetch_all(
-        "SELECT shipping_line_code AS line, count(*) AS n FROM jnpa.sl_advance_containers "
+        "SELECT shipping_line_code AS line, count(*) AS n FROM core.advance_list_container "
         "WHERE shipping_line_code IS NOT NULL GROUP BY shipping_line_code "
         "ORDER BY n DESC LIMIT 10", dsn=dsn)
     print("  top shipping lines: " + ", ".join(f"{r['line']}={r['n']}" for r in lines))
     dupes = await fetch_one(
-        "SELECT count(*) AS dupe_container_no FROM (SELECT container_no FROM jnpa.sl_advance_containers "
+        "SELECT count(*) AS dupe_container_no FROM (SELECT container_no FROM core.advance_list_container "
         "GROUP BY container_no HAVING count(*) > 1) t", dsn=dsn)
     print(f"  containers appearing in >1 list row: {dupes['dupe_container_no']} "
           "(expected — a box recurs across terminals / IAL+EAL)")

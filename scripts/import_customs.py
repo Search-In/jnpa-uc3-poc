@@ -15,7 +15,7 @@ Loads EVERY customer file under $CUSTOMS_DATA_DIR into the customs schema
 The data is the ONLY source of truth — NOTHING is synthesised. Re-running is a
 no-op: import is idempotent on file content (customs_messages.source_sha256) and on
 every child's natural key. Purely additive — it never touches cargo / gate / auth
-tables; container_no soft-links to jnpa.cargo BY VALUE.
+tables; container_no soft-links to core.cargo BY VALUE.
 
 Usage:
     # dry-run: parse + validate every file, no DB writes
@@ -93,7 +93,7 @@ async def _run(data_dir: str, dsn: str, *, dry_run: bool, ensure: bool,
     if reconcile:
         rc = await svc.reconcile_cargo()
         print(f"RECONCILE: {rc['cleared']} container(s) -> CLEARED, "
-              f"{rc['under_inspection']} -> UNDER_INSPECTION (bound to jnpa.cargo)")
+              f"{rc['under_inspection']} -> UNDER_INSPECTION (bound to core.cargo)")
 
     from jnpa_shared.db import dispose_all
     await dispose_all()
@@ -107,7 +107,7 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true", help="parse + validate only, no DB")
     ap.add_argument("--no-ensure", action="store_true", help="skip ensure_customs_schema")
     ap.add_argument("--reconcile", action="store_true",
-                    help="after import, bind customs docs to jnpa.cargo.customs_status")
+                    help="after import, bind customs docs to core.cargo.customs_status")
     args = ap.parse_args()
     return asyncio.run(_run(args.data_dir, args.dsn, dry_run=args.dry_run,
                             ensure=not args.no_ensure, reconcile=args.reconcile))

@@ -2,8 +2,8 @@
 
 Replaces the simulated sine-curve occupancy with a real inventory + slot state +
 entry/exit transactions + a parking-event log, all in Postgres (single source of
-truth). Reuses the existing audit-framework TABLES (jnpa.digital_twin_events /
-jnpa.notifications) by writing to them directly — the audit framework CODE is not
+truth). Reuses the existing audit-framework TABLES (core.digital_twin_event /
+core.notification) by writing to them directly — the audit framework CODE is not
 modified.
 
 Lives inside the bind-mounted parking service and builds on the installed
@@ -11,6 +11,8 @@ Lives inside the bind-mounted parking service and builds on the installed
 (mirrors migration 0005) and applied at boot.
 """
 from __future__ import annotations
+
+import os
 
 import json
 from typing import Any, Dict, List, Optional
@@ -20,38 +22,38 @@ from jnpa_shared.logging import get_logger
 log = get_logger("parking.persistence")
 
 _DDL = """
-CREATE SCHEMA IF NOT EXISTS jnpa;
-CREATE TABLE IF NOT EXISTS jnpa.parking_facilities (
+CREATE SCHEMA IF NOT EXISTS core;
+CREATE TABLE IF NOT EXISTS core.parking_facility (
     id text PRIMARY KEY, facility_name text NOT NULL,
     location jsonb NOT NULL DEFAULT '{}'::jsonb, capacity integer NOT NULL DEFAULT 0,
     status text NOT NULL DEFAULT 'OPEN', created_at timestamptz NOT NULL DEFAULT now());
-CREATE TABLE IF NOT EXISTS jnpa.parking_slots (
+CREATE TABLE IF NOT EXISTS core.parking_slot (
     id bigserial PRIMARY KEY,
-    facility_id text NOT NULL REFERENCES jnpa.parking_facilities(id) ON DELETE CASCADE,
+    facility_id text NOT NULL REFERENCES core.parking_facility(id) ON DELETE CASCADE,
     slot_number text NOT NULL,
     availability_status text NOT NULL DEFAULT 'AVAILABLE'
         CHECK (availability_status IN ('AVAILABLE','OCCUPIED','RESERVED','OUT_OF_SERVICE')),
     vehicle_id text, updated_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (facility_id, slot_number));
-CREATE INDEX IF NOT EXISTS idx_parking_slots_facility ON jnpa.parking_slots (facility_id, availability_status);
-CREATE INDEX IF NOT EXISTS idx_parking_slots_vehicle ON jnpa.parking_slots (vehicle_id);
-CREATE TABLE IF NOT EXISTS jnpa.parking_transactions (
+CREATE INDEX IF NOT EXISTS idx_parking_slots_facility ON core.parking_slot (facility_id, availability_status);
+CREATE INDEX IF NOT EXISTS idx_parking_slots_vehicle ON core.parking_slot (vehicle_id);
+CREATE TABLE IF NOT EXISTS core.parking_transaction (
     id bigserial PRIMARY KEY, vehicle_id text, driver_id text, facility_id text,
     slot_id bigint, entry_time timestamptz NOT NULL DEFAULT now(), exit_time timestamptz,
     duration interval, status text NOT NULL DEFAULT 'ACTIVE'
         CHECK (status IN ('ACTIVE','COMPLETED','EXPIRED')),
     created_at timestamptz NOT NULL DEFAULT now());
-CREATE INDEX IF NOT EXISTS idx_parking_txn_vehicle ON jnpa.parking_transactions (vehicle_id, entry_time DESC);
-CREATE INDEX IF NOT EXISTS idx_parking_txn_status ON jnpa.parking_transactions (status, entry_time DESC);
-CREATE INDEX IF NOT EXISTS idx_parking_txn_facility ON jnpa.parking_transactions (facility_id, entry_time DESC);
-CREATE TABLE IF NOT EXISTS jnpa.parking_events (
+CREATE INDEX IF NOT EXISTS idx_parking_txn_vehicle ON core.parking_transaction (vehicle_id, entry_time DESC);
+CREATE INDEX IF NOT EXISTS idx_parking_txn_status ON core.parking_transaction (status, entry_time DESC);
+CREATE INDEX IF NOT EXISTS idx_parking_txn_facility ON core.parking_transaction (facility_id, entry_time DESC);
+CREATE TABLE IF NOT EXISTS core.parking_event (
     id bigserial PRIMARY KEY, event_type text NOT NULL
         CHECK (event_type IN ('ALLOCATION','RELEASE','OVERFLOW','ILLEGAL_PARKING','NO_PARKING_VIOLATION')),
     vehicle_id text, driver_id text, facility_id text, slot_id bigint,
     detail jsonb NOT NULL DEFAULT '{}'::jsonb, created_at timestamptz NOT NULL DEFAULT now());
-CREATE INDEX IF NOT EXISTS idx_parking_events_type ON jnpa.parking_events (event_type, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_parking_events_vehicle ON jnpa.parking_events (vehicle_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_parking_events_ts ON jnpa.parking_events (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_parking_events_type ON core.parking_event (event_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_parking_events_vehicle ON core.parking_event (vehicle_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_parking_events_ts ON core.parking_event (created_at DESC);
 """
 
 _READY: Dict[str, bool] = {}
@@ -81,6 +83,9 @@ async def _returning(sql: str, params: dict, *, dsn: str) -> Optional[dict]:
 
 
 async def ensure_parking_schema(dsn: Optional[str]) -> None:
+    if os.getenv("JNPA_RUNTIME_DDL", "0") != "1":
+        # schema-v3: DDL is owned by infra/postgres/v3 migrations, never runtime.
+        return
     if not dsn or _READY.get(dsn):
         return
     from jnpa_shared.db import execute
@@ -106,7 +111,7 @@ async def seed_inventory(facilities: List[Any], *, dsn: Optional[str]) -> int:
     for f in facilities:
         await execute(
             """
-            INSERT INTO jnpa.parking_facilities (id, facility_name, location, capacity, status)
+            INSERT INTO core.parking_facility (id, facility_name, location, capacity, status)
             VALUES (:id, :name, CAST(:loc AS jsonb), :cap, 'OPEN')
             ON CONFLICT (id) DO UPDATE SET facility_name = EXCLUDED.facility_name,
                 location = EXCLUDED.location, capacity = EXCLUDED.capacity
@@ -119,7 +124,7 @@ async def seed_inventory(facilities: List[Any], *, dsn: Optional[str]) -> int:
         # Materialise slots 1..capacity server-side; ON CONFLICT keeps it idempotent.
         await execute(
             """
-            INSERT INTO jnpa.parking_slots (facility_id, slot_number, availability_status)
+            INSERT INTO core.parking_slot (facility_id, slot_number, availability_status)
             SELECT :fid, :prefix || gs, 'AVAILABLE'
             FROM generate_series(1, :cap) AS gs
             ON CONFLICT (facility_id, slot_number) DO NOTHING
@@ -127,7 +132,7 @@ async def seed_inventory(facilities: List[Any], *, dsn: Optional[str]) -> int:
             {"fid": f.id, "prefix": f.id + "-", "cap": f.capacity},
             dsn=dsn,
         )
-    row = await fetch_one("SELECT count(*) AS n FROM jnpa.parking_slots", dsn=dsn)
+    row = await fetch_one("SELECT count(*) AS n FROM core.parking_slot", dsn=dsn)
     total = int(row["n"]) if row else 0
     log.info("parking_inventory_seeded", facilities=len(facilities), slots=total)
     return total
@@ -145,8 +150,8 @@ async def availability(*, dsn: Optional[str]) -> List[dict]:
             SELECT f.id AS facility_id, f.facility_name, f.location, f.capacity, f.status,
                    count(s.*) FILTER (WHERE s.availability_status = 'OCCUPIED') AS occupied,
                    count(s.*) FILTER (WHERE s.availability_status = 'AVAILABLE') AS available
-            FROM jnpa.parking_facilities f
-            LEFT JOIN jnpa.parking_slots s ON s.facility_id = f.id
+            FROM core.parking_facility f
+            LEFT JOIN core.parking_slot s ON s.facility_id = f.id
             GROUP BY f.id, f.facility_name, f.location, f.capacity, f.status
             ORDER BY f.id
             """,
@@ -183,7 +188,7 @@ async def facilities_inventory(*, dsn: Optional[str]) -> List[dict]:
 
     try:
         rows = await fetch_all(
-            "SELECT id, facility_name, location, capacity, status FROM jnpa.parking_facilities ORDER BY id",
+            "SELECT id, facility_name, location, capacity, status FROM core.parking_facility ORDER BY id",
             dsn=dsn,
         )
     except Exception as exc:  # noqa: BLE001 - DB unreachable/unseeded → fall back to static seed
@@ -193,13 +198,13 @@ async def facilities_inventory(*, dsn: Optional[str]) -> List[dict]:
 
 
 async def _dt_event(event_type: str, *, vehicle_id, driver_id, location, payload, dsn) -> None:
-    """Mirror a parking event into the shared jnpa.digital_twin_events timeline."""
+    """Mirror a parking event into the shared core.digital_twin_event timeline."""
     from jnpa_shared.db import execute
 
     try:
         await execute(
             """
-            INSERT INTO jnpa.digital_twin_events (event_type, vehicle_id, driver_id, location, payload)
+            INSERT INTO core.digital_twin_event (event_type, vehicle_id, driver_id, location, payload)
             VALUES (:t, :v, :d, CAST(:loc AS jsonb), CAST(:p AS jsonb))
             """,
             {"t": event_type, "v": vehicle_id, "d": driver_id, "loc": _j(location), "p": _j(payload)},
@@ -210,13 +215,13 @@ async def _dt_event(event_type: str, *, vehicle_id, driver_id, location, payload
 
 
 async def _notify(*, receiver, message, event_id, provider, dsn) -> None:
-    """Log a driver notification into the shared jnpa.notifications trail."""
+    """Log a driver notification into the shared core.notification trail."""
     from jnpa_shared.db import execute
 
     try:
         await execute(
             """
-            INSERT INTO jnpa.notifications (event_id, channel, receiver, message, delivery_status, provider_response)
+            INSERT INTO core.notification (event_id, channel, receiver, message, delivery_status, provider_response)
             VALUES (:e, 'push', :r, :m, 'SENT', CAST(:p AS jsonb))
             """,
             {"e": str(event_id) if event_id is not None else None, "r": receiver,
@@ -233,7 +238,7 @@ async def _parking_event(event_type, *, vehicle_id, driver_id, facility_id, slot
     try:
         await execute(
             """
-            INSERT INTO jnpa.parking_events (event_type, vehicle_id, driver_id, facility_id, slot_id, detail)
+            INSERT INTO core.parking_event (event_type, vehicle_id, driver_id, facility_id, slot_id, detail)
             VALUES (:t, :v, :d, :f, :s, CAST(:x AS jsonb))
             """,
             {"t": event_type, "v": vehicle_id, "d": driver_id, "f": facility_id,
@@ -257,10 +262,10 @@ async def allocate(*, facility_id: str, vehicle_id: str, driver_id: Optional[str
     # Atomic claim of one AVAILABLE slot in the facility (committed).
     row = await _returning(
         """
-        UPDATE jnpa.parking_slots SET availability_status = 'OCCUPIED',
+        UPDATE core.parking_slot SET availability_status = 'OCCUPIED',
                vehicle_id = :v, updated_at = now()
         WHERE id = (
-            SELECT id FROM jnpa.parking_slots
+            SELECT id FROM core.parking_slot
             WHERE facility_id = :f AND availability_status = 'AVAILABLE'
             ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED)
         RETURNING id, slot_number
@@ -281,7 +286,7 @@ async def allocate(*, facility_id: str, vehicle_id: str, driver_id: Optional[str
     slot_id, slot_number = row["id"], row["slot_number"]
     txn = await _returning(
         """
-        INSERT INTO jnpa.parking_transactions (vehicle_id, driver_id, facility_id, slot_id, status)
+        INSERT INTO core.parking_transaction (vehicle_id, driver_id, facility_id, slot_id, status)
         VALUES (:v, :d, :f, :s, 'ACTIVE') RETURNING id, entry_time
         """,
         {"v": vehicle_id, "d": driver_id, "f": facility_id, "s": slot_id},
@@ -310,9 +315,9 @@ async def release(*, vehicle_id: str, dsn: Optional[str]) -> dict:
 
     txn = await _returning(
         """
-        UPDATE jnpa.parking_transactions
+        UPDATE core.parking_transaction
         SET exit_time = now(), duration = now() - entry_time, status = 'COMPLETED'
-        WHERE id = (SELECT id FROM jnpa.parking_transactions
+        WHERE id = (SELECT id FROM core.parking_transaction
                     WHERE vehicle_id = :v AND status = 'ACTIVE'
                     ORDER BY entry_time DESC LIMIT 1)
         RETURNING id, facility_id, slot_id, entry_time,
@@ -324,7 +329,7 @@ async def release(*, vehicle_id: str, dsn: Optional[str]) -> dict:
     if txn is None:
         return {"released": False, "reason": "no_active_transaction", "vehicle_id": vehicle_id}
     await execute(
-        "UPDATE jnpa.parking_slots SET availability_status = 'AVAILABLE', vehicle_id = NULL, updated_at = now() WHERE id = :s",
+        "UPDATE core.parking_slot SET availability_status = 'AVAILABLE', vehicle_id = NULL, updated_at = now() WHERE id = :s",
         {"s": txn["slot_id"]}, dsn=dsn,
     )
     detail = {"transaction_id": txn["id"], "slot_id": txn["slot_id"],
@@ -365,7 +370,7 @@ async def history(*, vehicle_id: Optional[str] = None, limit: int = 100,
         f"""
         SELECT id, vehicle_id, driver_id, facility_id, slot_id, entry_time, exit_time,
                EXTRACT(EPOCH FROM duration) AS duration_s, status
-        FROM jnpa.parking_transactions {where}
+        FROM core.parking_transaction {where}
         ORDER BY entry_time DESC LIMIT :limit
         """,
         params, dsn=dsn,
@@ -390,7 +395,7 @@ async def violations(*, limit: int = 100, dsn: Optional[str] = None) -> List[dic
     rows = await fetch_all(
         """
         SELECT id, event_type, vehicle_id, facility_id, detail, created_at
-        FROM jnpa.parking_events
+        FROM core.parking_event
         WHERE event_type IN ('ILLEGAL_PARKING','NO_PARKING_VIOLATION','OVERFLOW')
         ORDER BY created_at DESC LIMIT :limit
         """,

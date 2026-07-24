@@ -39,7 +39,7 @@ _IST = timezone(timedelta(hours=5, minutes=30))
 
 @dataclass
 class HistoryRow:
-    """One 60-s aggregate for one segment (mirrors jnpa.traffic_snapshots plus
+    """One 60-s aggregate for one segment (mirrors core.traffic_snapshot plus
     the RFID/ANPR/trucking-derived counts the feature builder consumes)."""
 
     ts: datetime

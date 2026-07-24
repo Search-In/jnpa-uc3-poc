@@ -164,7 +164,7 @@ def test_real_db_validate_import_idempotent_and_rollback():
         async def clean():
             async with eng.begin() as c:
                 for t in ("perf_daily_traffic", "perf_daily_terminal_status", "perf_daily_snapshot"):
-                    await c.execute(text(f"delete from jnpa.{t} where report_date='2026-06-05'"))
+                    await c.execute(text(f"delete from core.{t} where report_date='2026-06-05'"))
 
         try:
             await clean()
@@ -182,7 +182,7 @@ def test_real_db_validate_import_idempotent_and_rollback():
 
             async with eng.connect() as c:
                 jp = (await c.execute(text(
-                    "select total_teus from jnpa.perf_daily_traffic "
+                    "select total_teus from core.perf_daily_traffic "
                     "where report_date='2026-06-05' and terminal_code='JN_PORT' and period='DAY'"))).scalar()
                 assert int(jp) == 25492                       # roll-up landed in the dashboard table
 
@@ -198,7 +198,7 @@ def test_real_db_validate_import_idempotent_and_rollback():
             assert im3["status"] == "IMPORTED" and im3["updated"] >= 1
             async with eng.connect() as c:
                 yi, src = (await c.execute(text(
-                    "select yard_import_teus, source_file from jnpa.perf_daily_terminal_status "
+                    "select yard_import_teus, source_file from core.perf_daily_terminal_status "
                     "where report_date='2026-06-05' and terminal_code='NSFT'"))).first()
                 assert int(yi) == 6000                        # corrected value won
                 assert src == "e2e-rev2.csv"                  # provenance points at the new file

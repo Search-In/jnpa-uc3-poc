@@ -6,7 +6,7 @@
                   dashboard's corridor heat-map never goes blank
 
 Also exposes ``/api/traffic/snapshots`` reading the latest per-segment
-``jnpa.traffic_snapshots`` rows for the live map overlay.
+``core.traffic_snapshot`` rows for the live map overlay.
 """
 from __future__ import annotations
 
@@ -249,7 +249,7 @@ async def snapshots(state: GatewayState = Depends(get_state)) -> dict:
             """
             SELECT DISTINCT ON (segment_id)
                    segment_id, ts, speed_kmh, jam_factor, source
-            FROM jnpa.traffic_snapshots
+            FROM core.traffic_snapshot
             ORDER BY segment_id, ts DESC
             """,
             dsn=state.cfg.postgres_dsn,

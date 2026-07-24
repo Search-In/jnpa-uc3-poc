@@ -22,7 +22,7 @@ LATENCY = Histogram(
 
 WRITEBACKS = Counter(
     "vahan_vehicle_master_writebacks_total",
-    "Total upserts into jnpa.vehicle_master from successful RC lookups.",
+    "Total upserts into core.vehicle_rc from successful RC lookups.",
     ["service", "result"],   # ok | error
 )
 

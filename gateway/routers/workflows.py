@@ -5,9 +5,9 @@ Lets an operator author IF/THEN automation rules WITHOUT code changes:
     IF   vehicle_speed > 60
     THEN create_violation, notify_officer, suggest_reroute
 
-Rules are persisted to Postgres (``jnpa.automation_rules``) with an in-memory
+Rules are persisted to Postgres (``core.automation_rule``) with an in-memory
 fallback so the composer works offline / in the mock build. Every evaluation is
-appended to an execution log (``jnpa.automation_executions``) that the UI renders
+appended to an execution log (``core.automation_execution``) that the UI renders
 as an audit trail. The engine is transparent (a single field/operator/value
 comparison + a named action list) — no black box.
 
@@ -20,6 +20,8 @@ comparison + a named action list) — no black box.
     GET    /api/workflows/executions       execution log (audit trail)
 """
 from __future__ import annotations
+
+import os
 
 import json
 import time
@@ -122,11 +124,21 @@ def _cmp(lhs: Any, op: str, rhs: Any) -> bool:
 
 # --- DB persistence (best-effort; falls back to memory) -----------------------
 async def _ensure_tables(state: GatewayState) -> bool:
+    if os.getenv("JNPA_RUNTIME_DDL", "0") != "1":
+        # schema-v3: tables are pre-provisioned by infra/postgres/v3 migrations —
+        # verify reachability instead of issuing DDL.
+        from jnpa_shared.db import fetch_one
+        try:
+            row = await fetch_one("SELECT to_regclass('core.automation_rule') AS t",
+                                  dsn=state.cfg.postgres_dsn)
+            return bool(row and row.get("t"))
+        except Exception:  # noqa: BLE001 — memory fallback, same as legacy behaviour
+            return False
     from jnpa_shared.db import execute
     try:
         await execute(
             """
-            CREATE TABLE IF NOT EXISTS jnpa.automation_rules (
+            CREATE TABLE IF NOT EXISTS core.automation_rule (
                 id text PRIMARY KEY,
                 name text NOT NULL,
                 enabled boolean NOT NULL DEFAULT true,
@@ -142,7 +154,7 @@ async def _ensure_tables(state: GatewayState) -> bool:
         )
         await execute(
             """
-            CREATE TABLE IF NOT EXISTS jnpa.automation_executions (
+            CREATE TABLE IF NOT EXISTS core.automation_execution (
                 id bigserial PRIMARY KEY,
                 ts timestamptz NOT NULL DEFAULT now(),
                 event jsonb NOT NULL,
@@ -168,7 +180,7 @@ async def _load_rules(state: GatewayState) -> None:
         if await _ensure_tables(state):
             rows = await fetch_all(
                 "SELECT id, name, enabled, field, op, value, actions, "
-                "created_at, updated_at FROM jnpa.automation_rules ORDER BY created_at",
+                "created_at, updated_at FROM core.automation_rule ORDER BY created_at",
                 {}, dsn=state.cfg.postgres_dsn,
             )
             for r in rows:
@@ -207,7 +219,7 @@ async def _db_write_rule(state: GatewayState, rule: dict) -> None:
     try:
         await execute(
             """
-            INSERT INTO jnpa.automation_rules
+            INSERT INTO core.automation_rule
                 (id, name, enabled, field, op, value, actions, created_at, updated_at)
             VALUES (:id, :name, :enabled, :field, :op, :value, CAST(:actions AS jsonb),
                     :created_at, :updated_at)
@@ -228,7 +240,7 @@ async def _db_write_rule(state: GatewayState, rule: dict) -> None:
 async def _db_delete_rule(state: GatewayState, rule_id: str) -> None:
     from jnpa_shared.db import execute
     try:
-        await execute("DELETE FROM jnpa.automation_rules WHERE id = :id",
+        await execute("DELETE FROM core.automation_rule WHERE id = :id",
                       {"id": rule_id}, dsn=state.cfg.postgres_dsn)
     except Exception as exc:  # pragma: no cover
         log.debug("workflows_db_delete_failed", error=str(exc))
@@ -238,7 +250,7 @@ async def _db_write_execution(state: GatewayState, rec: dict) -> None:
     from jnpa_shared.db import execute
     try:
         await execute(
-            "INSERT INTO jnpa.automation_executions (ts, event, results, matched_count) "
+            "INSERT INTO core.automation_execution (ts, event, results, matched_count) "
             "VALUES (:ts, CAST(:event AS jsonb), CAST(:results AS jsonb), :matched)",
             {"ts": datetime.fromisoformat(rec["ts"]), "event": json.dumps(rec["event"]),
              "results": json.dumps(rec["results"]), "matched": rec["matched_count"]},
@@ -339,7 +351,7 @@ async def executions(limit: int = Query(default=50, ge=1, le=_EXEC_CAP),
     try:
         if await _ensure_tables(state):
             db_rows = await fetch_all(
-                "SELECT ts, event, results, matched_count FROM jnpa.automation_executions "
+                "SELECT ts, event, results, matched_count FROM core.automation_execution "
                 "ORDER BY ts DESC LIMIT :lim", {"lim": limit}, dsn=state.cfg.postgres_dsn,
             )
             for r in db_rows:

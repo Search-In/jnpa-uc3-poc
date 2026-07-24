@@ -5,9 +5,9 @@ Two camera-driven checks launched from the Vehicle Intelligence RC card:
     POST /api/vehicle/{vehicle_number}/identity  -> face-match the person at the
         vehicle against the ACTIVE driver assigned to it. The driver is resolved
         SERVER-SIDE from the plate (never trusted from the client):
-            plate -> jnpa.fleet_vehicles -> vehicle_id
-                  -> jnpa.drivers (active assignment) -> driver_id
-                  -> identity face template (jnpa.driver_faces)
+            plate -> core.vehicle -> vehicle_id
+                  -> core.driver_identity (active assignment) -> driver_id
+                  -> identity face template (core.driver_face)
         The captured frame is matched against THAT driver only. A caller can never
         assert which driver they are; they only supply the plate + the frame.
 

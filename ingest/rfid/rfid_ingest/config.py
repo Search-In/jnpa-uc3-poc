@@ -38,7 +38,7 @@ MQTT_TOPIC_WILDCARD = "rfid/readers/+"      # consumer subscription
 KAFKA_RFID_TOPIC = "rfid.reads"
 KAFKA_ANPR_TOPIC = "anpr.reads"
 KAFKA_CONFIRMED_TOPIC = "vehicle.confirmed"
-RFID_TABLE = "jnpa.rfid_reads"
+RFID_TABLE = "core.rfid_read"
 
 
 @dataclass

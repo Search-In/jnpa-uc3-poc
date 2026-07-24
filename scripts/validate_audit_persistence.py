@@ -42,7 +42,7 @@ from jnpa_shared.db import fetch_one  # noqa: E402
 
 
 async def _count(table: str) -> int:
-    row = await fetch_one(f"SELECT count(*) AS n FROM jnpa.{table}", dsn=DSN)
+    row = await fetch_one(f"SELECT count(*) AS n FROM core.{table}", dsn=DSN)
     return int(row["n"]) if row else -1
 
 
@@ -128,7 +128,7 @@ async def main() -> int:
         ok = ok and passed
     for t in ("api_audit_log", "digital_twin_events", "notifications",
               "decision_audit", "geofence_events", "anpr_reads"):
-        print(f"  rows in jnpa.{t}: {await _count(t)}")
+        print(f"  rows in core.{t}: {await _count(t)}")
     print("=== RESULT:", "ALL PASS ===" if ok else "FAILURES PRESENT ===")
     return 0 if ok else 1
 

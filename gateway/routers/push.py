@@ -17,7 +17,7 @@ Two transports, added over time, both best-effort and independently degrading:
 * **Firebase FCM** — service account from ``FIREBASE_SERVICE_ACCOUNT_PATH``
   (``gateway/firebase.py``). Delivered with ``firebase-admin`` (imported lazily).
 
-Registrations are persisted to ``jnpa.push_subscriptions`` (durable across
+Registrations are persisted to ``core.push_subscription`` (durable across
 restarts — the old in-memory-only behaviour was a demo-scale shortcut). A small
 in-memory write-through cache keeps the hot path fast; a cold gateway reloads a
 device's registration from the DB on first delivery.
@@ -27,6 +27,8 @@ re-route over the WebSocket ``reroute`` frame / in-app polling fallback, so the
 demo never hard-depends on a key being present.
 """
 from __future__ import annotations
+
+import os
 
 import asyncio
 import json
@@ -44,24 +46,27 @@ log = get_logger("gateway.push")
 router = APIRouter(prefix="/api/push", tags=["push"])
 
 # In-memory write-through caches (device_id -> value). The durable copy lives in
-# jnpa.push_subscriptions; these just avoid a DB round-trip on the hot path.
+# core.push_subscription; these just avoid a DB round-trip on the hot path.
 SUBSCRIPTIONS: Dict[str, dict] = {}   # WebPush PushSubscription dicts
 FCM_TOKENS: Dict[str, str] = {}       # Firebase device tokens
 
 _DDL = (
-    """CREATE TABLE IF NOT EXISTS jnpa.push_subscriptions (
+    """CREATE TABLE IF NOT EXISTS core.push_subscription (
         device_id text PRIMARY KEY, driver_id text, vehicle_id text,
         webpush jsonb, fcm_token text, platform text NOT NULL DEFAULT 'web',
         created_at timestamptz NOT NULL DEFAULT now(),
         updated_at timestamptz NOT NULL DEFAULT now())""",
-    "CREATE INDEX IF NOT EXISTS idx_push_subs_fcm ON jnpa.push_subscriptions (fcm_token) WHERE fcm_token IS NOT NULL",
-    "CREATE INDEX IF NOT EXISTS idx_push_subs_driver ON jnpa.push_subscriptions (driver_id)",
+    "CREATE INDEX IF NOT EXISTS idx_push_subs_fcm ON core.push_subscription (fcm_token) WHERE fcm_token IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_push_subs_driver ON core.push_subscription (driver_id)",
 )
 _READY: Dict[str, bool] = {}
 
 
 async def _ensure(dsn: Optional[str]) -> None:
     """Idempotently provision the durable registration table (otp.py pattern)."""
+    if os.getenv("JNPA_RUNTIME_DDL", "0") != "1":
+        # schema-v3: DDL is owned by infra/postgres/v3 migrations, never runtime.
+        return
     if not dsn or _READY.get(dsn):
         return
     from jnpa_shared.db import execute
@@ -90,7 +95,7 @@ async def _upsert(dsn: Optional[str], device_id: str, **cols: Any) -> None:
     insert_vals = insert_vals.replace(":webpush", "CAST(:webpush AS jsonb)")
     try:
         await execute(
-            f"""INSERT INTO jnpa.push_subscriptions ({insert_cols})
+            f"""INSERT INTO core.push_subscription ({insert_cols})
                 VALUES ({insert_vals})
                 ON CONFLICT (device_id) DO UPDATE SET {updates}""",
             fields, dsn=dsn,
@@ -108,7 +113,7 @@ async def _load_webpush(state: GatewayState, device_id: str) -> Optional[dict]:
     from jnpa_shared.db import fetch_one
 
     row = await fetch_one(
-        "SELECT webpush FROM jnpa.push_subscriptions WHERE device_id = :d",
+        "SELECT webpush FROM core.push_subscription WHERE device_id = :d",
         {"d": device_id}, dsn=dsn,
     )
     sub = row["webpush"] if row and row["webpush"] else None
@@ -138,7 +143,7 @@ async def resolve_device(
     from jnpa_shared.db import fetch_one
 
     row = await fetch_one(
-        """SELECT device_id FROM jnpa.push_subscriptions
+        """SELECT device_id FROM core.push_subscription
            WHERE (:drv IS NOT NULL AND driver_id = :drv)
               OR (:veh IS NOT NULL AND vehicle_id = :veh)
            ORDER BY updated_at DESC LIMIT 1""",
@@ -163,7 +168,7 @@ async def registered_devices(state: GatewayState, *, limit: int = 500) -> list[s
 
         try:
             rows = await fetch_all(
-                """SELECT device_id FROM jnpa.push_subscriptions
+                """SELECT device_id FROM core.push_subscription
                    WHERE fcm_token IS NOT NULL OR webpush IS NOT NULL
                    ORDER BY updated_at DESC LIMIT :lim""",
                 {"lim": limit}, dsn=dsn,
@@ -183,7 +188,7 @@ async def _load_fcm(state: GatewayState, device_id: str) -> Optional[str]:
     from jnpa_shared.db import fetch_one
 
     row = await fetch_one(
-        "SELECT fcm_token FROM jnpa.push_subscriptions WHERE device_id = :d",
+        "SELECT fcm_token FROM core.push_subscription WHERE device_id = :d",
         {"d": device_id}, dsn=dsn,
     )
     tok = row["fcm_token"] if row else None
@@ -269,7 +274,7 @@ async def unsubscribe(body: Dict[str, Any] = Body(...), state: GatewayState = De
         from jnpa_shared.db import execute
 
         try:
-            await execute("DELETE FROM jnpa.push_subscriptions WHERE device_id = :d",
+            await execute("DELETE FROM core.push_subscription WHERE device_id = :d",
                           {"d": device_id}, dsn=dsn)
         except Exception as exc:  # noqa: BLE001
             log.debug("push_unsub_db_skipped", error=str(exc))

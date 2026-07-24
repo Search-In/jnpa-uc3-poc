@@ -24,7 +24,7 @@ class OptimizerConfig:
     # --- Books ---
     demand_count: int = 40
 
-    # --- Service identity (for jnpa.services registry) ---
+    # --- Service identity (for core.ulip_service registry) ---
     service_name: str = "empty-container"
     service_kind: str = "optimizer"
     base_url: str = "http://empty-container:8330"

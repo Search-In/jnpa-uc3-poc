@@ -1,8 +1,8 @@
-"""/api/alerts — operational alerts, sourced from ai/anomaly + jnpa.alerts.
+"""/api/alerts — operational alerts, sourced from ai/anomaly + core.alert.
 
 The behavioural anomaly detector (ai/anomaly) owns the alert pipeline; the
 gateway proxies its ``/alerts/recent`` so dashboards have one place to ask. If
-ai/anomaly is unreachable it degrades to reading ``jnpa.alerts`` directly
+ai/anomaly is unreachable it degrades to reading ``core.alert`` directly
 (which also carries the gateway's own PROVISIONAL_VEHICLE / ELEVATED_SCRUTINY
 alerts, so those always show up even when anomaly is down).
 """
@@ -95,7 +95,7 @@ async def recent_alerts(
     except httpx.HTTPError as exc:
         log.warning("alerts_upstream_unreachable", url=url, error=str(exc))
 
-    # --- Degrade: read jnpa.alerts directly ---
+    # --- Degrade: read core.alert directly ---
     rows = await _db_alerts(state, kind=kind, limit=limit)
     return _finish("db", rows)
 
@@ -103,11 +103,11 @@ async def recent_alerts(
 @router.post("/{alert_id}/ack")
 async def ack_alert(alert_id: str, state: GatewayState = Depends(get_state)) -> dict:
     """Mark an alert acknowledged (NOTIF-5 ack-tracking). Writes ack=true to
-    jnpa.alerts; degrades gracefully (ack recorded as best-effort) if the DB is
+    core.alert; degrades gracefully (ack recorded as best-effort) if the DB is
     unreachable so the demo never hard-fails on it."""
     from jnpa_shared.db import execute
 
-    sql = "UPDATE jnpa.alerts SET ack = true WHERE id = :id"
+    sql = "UPDATE core.alert SET ack = true WHERE id = :id"
     try:
         await execute(sql, {"id": alert_id}, dsn=state.cfg.postgres_dsn)
         REQUESTS.labels("alerts", "ok").inc()
@@ -123,7 +123,7 @@ async def _db_alerts(state: GatewayState, *, kind: str | None, limit: int) -> Li
     from jnpa_shared.db import fetch_all
     sql = """
         SELECT id, ts, kind, severity, gate_id, plate, payload, ack
-        FROM jnpa.alerts
+        FROM core.alert
         {where}
         ORDER BY ts DESC
         LIMIT :limit

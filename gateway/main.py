@@ -11,8 +11,8 @@ Mounted routers:
     /api/traffic   -> orchestrated congestion (LIVE/CACHED/SYNTHETIC)
     /api/trucks    -> trucking-app position (PRIMARY/SECONDARY/TERTIARY)
     /api/ulip      -> ULIP relay proxy (SECONDARY source; mock if no key)
-    /api/alerts    -> ai/anomaly alerts (degrades to jnpa.alerts)
-    /api/scenarios -> scenario driver (Prompt 9; degrades to jnpa.scenarios)
+    /api/alerts    -> ai/anomaly alerts (degrades to core.alert)
+    /api/scenarios -> scenario driver (Prompt 9; degrades to core.scenario)
     /api/kpi       -> materialised KPI views + System-Health + camera degradation
     /api/debug     -> last 1000 fallback decisions (demo evidence)
     /api/ws        -> WebSocket fan-out (alert / traffic / truck_position / decision)
@@ -256,7 +256,7 @@ async def _lifespan(app: FastAPI):
     # Customs module (module 5): the ICEGATE customs-document tables (IGM/OOC/SMTP/
     # RMS/LEO/Shipping Bill) sourced ONLY from official JNPA customer files. Idempotent,
     # additive — mirrors migration 0031 so a dev DB that never ran it still gets the
-    # objects. Soft-links to jnpa.cargo BY VALUE (container_no); touches no existing table.
+    # objects. Soft-links to core.cargo BY VALUE (container_no); touches no existing table.
     try:
         from . import customs_ext
         await customs_ext.ensure_customs_schema(cfg.postgres_dsn or None)
@@ -265,7 +265,7 @@ async def _lifespan(app: FastAPI):
 
     # Shipping Lines module (module 4: IAL/EAL/EDO) schema — additive; mirrors
     # migration 0032 so a DB that never ran it still gets the objects. Soft-links to
-    # jnpa.cargo BY VALUE (container_no); touches no existing table.
+    # core.cargo BY VALUE (container_no); touches no existing table.
     try:
         from . import shipping_lines_ext
         await shipping_lines_ext.ensure_shipping_lines_schema(cfg.postgres_dsn or None)
@@ -275,7 +275,7 @@ async def _lifespan(app: FastAPI):
     # Transporters & Drivers Data Upload (UC-III sub-module): the import-ledger tables
     # (td_import_files / td_import_errors) + the masters' import_file_id link.
     # Idempotent, additive — mirrors migration 0035. Upserts into the EXISTING
-    # jnpa.transporters / jnpa.driver_master; creates no business tables.
+    # core.transporter / core.driver; creates no business tables.
     try:
         from . import td_upload_ext
         await td_upload_ext.ensure_td_upload_schema(cfg.postgres_dsn or None)
@@ -301,7 +301,7 @@ async def _lifespan(app: FastAPI):
         # Reconcile the master with EXISTING driver assignments: every assigned
         # vehicle (drivers.vehicle_no_norm) must exist as a fleet vehicle_id, or the
         # assignment is orphaned (the deployment blocker). Backfills from ALL
-        # assignments — not only truck-sim — and NEVER mutates jnpa.drivers, so PWA
+        # assignments — not only truck-sim — and NEVER mutates core.driver_identity, so PWA
         # login / JWTs / assignments are untouched.
         backfilled = await fleet.sync_from_assignments(cfg.postgres_dsn)
         log.info("fleet_master_ready", devices_seen=len(devices),
@@ -315,7 +315,7 @@ async def _lifespan(app: FastAPI):
                 count=len(orphans),
                 drivers=[{"driver_id": o.get("driver_id"),
                           "vehicle_no_norm": o.get("vehicle_no_norm")} for o in orphans[:50]],
-                hint="ACTIVE drivers reference a vehicle absent from jnpa.fleet_vehicles",
+                hint="ACTIVE drivers reference a vehicle absent from core.vehicle",
             )
         else:
             log.info("fleet_assignment_integrity_ok")
@@ -335,9 +335,9 @@ async def _lifespan(app: FastAPI):
     stop = asyncio.Event()
 
     # Kafka pumps (blocking consumer threads) — best-effort. The alert pump ALSO
-    # mirrors every alert into jnpa.digital_twin_events (+ geofence_events for
+    # mirrors every alert into core.digital_twin_event (+ geofence_events for
     # zone-family kinds); a persistence-only pump lands ANPR reads in
-    # jnpa.anpr_reads (finally giving that table its writer) + the event timeline.
+    # core.anpr_read (finally giving that table its writer) + the event timeline.
     alert_pump = KafkaPump(
         state, loop, TOPIC_ALERTS, "alert", "jnpa-gateway-alerts",
         persist=audit.persist_alert_event,
@@ -469,7 +469,7 @@ app.include_router(reports.router)
 app.include_router(evidence.router)
 # Vehicle Violation Detection — orchestration-only enforcement console. Reuses
 # ANPR + vehicle_master + driver store + the reports e-Challan schedule + MinIO
-# evidence and writes incidents to jnpa.alerts (so they appear on the Reports
+# evidence and writes incidents to core.alert (so they appear on the Reports
 # page). Mounted after reports because it imports its fine schedule.
 app.include_router(violations.router)
 # FASTag ULIP surface — /api/fastag/{balance,toll-enroute,transactions}. Thin

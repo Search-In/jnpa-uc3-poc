@@ -177,7 +177,7 @@ async def _resolve_alerts(cfg: ScenarioConfig, handle_id: str) -> None:
     from jnpa_shared.db import execute
     try:
         await execute(
-            "UPDATE jnpa.alerts SET ack = true WHERE payload->>'scenario' = :hid",
+            "UPDATE core.alert SET ack = true WHERE payload->>'scenario' = :hid",
             {"hid": handle_id}, dsn=cfg.postgres_dsn,
         )
     except Exception as exc:  # noqa: BLE001

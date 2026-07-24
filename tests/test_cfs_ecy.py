@@ -342,7 +342,7 @@ def test_real_db_ingest_and_dwell():
         {"facility_type": "ECY", "container_number": cn, "iso_valid": True,
          "event_ts": t_in, "mode": "OUT", "source": "TEST", "source_file": "t"},
     ]
-    ins = ("INSERT INTO jnpa.cfs_ecy_movements "
+    ins = ("INSERT INTO core.cfs_ecy_movement "
            "(facility_type, container_number, iso_valid, event_ts, mode, source, source_file) "
            "VALUES (:facility_type,:container_number,:iso_valid,:event_ts,:mode,:source,:source_file) "
            "ON CONFLICT ON CONSTRAINT uq_cfs_ecy_movement DO NOTHING")
@@ -352,7 +352,7 @@ def test_real_db_ingest_and_dwell():
         await ensure_cfs_ecy_schema(dsn)
         eng = get_engine(dsn)
         async with eng.begin() as conn:
-            await conn.execute(text("DELETE FROM jnpa.cfs_ecy_movements WHERE container_number=:cn"),
+            await conn.execute(text("DELETE FROM core.cfs_ecy_movement WHERE container_number=:cn"),
                                {"cn": cn})
         # First insert: 3 new rows. Second insert: 0 (idempotent).
         n1 = 0
@@ -364,16 +364,16 @@ def test_real_db_ingest_and_dwell():
             for r in rows:
                 n2 += (await conn.execute(text(ins), r)).rowcount or 0
         async with eng.connect() as conn:
-            cnt = (await conn.execute(text("SELECT count(*) n FROM jnpa.cfs_ecy_movements "
+            cnt = (await conn.execute(text("SELECT count(*) n FROM core.cfs_ecy_movement "
                                            "WHERE container_number=:cn"), {"cn": cn})).scalar()
-            dwell = (await conn.execute(text("SELECT dwell_hours FROM jnpa.v_cfs_ecy_dwell "
+            dwell = (await conn.execute(text("SELECT dwell_hours FROM mart.v_cfs_ecy_dwell "
                                              "WHERE container_number=:cn AND facility_type='CFS'"),
                                         {"cn": cn})).scalar()
-            ecy_dwell = (await conn.execute(text("SELECT dwell_hours FROM jnpa.v_cfs_ecy_dwell "
+            ecy_dwell = (await conn.execute(text("SELECT dwell_hours FROM mart.v_cfs_ecy_dwell "
                                                  "WHERE container_number=:cn AND facility_type='ECY'"),
                                             {"cn": cn})).scalar()
         async with eng.begin() as conn:  # cleanup
-            await conn.execute(text("DELETE FROM jnpa.cfs_ecy_movements WHERE container_number=:cn"),
+            await conn.execute(text("DELETE FROM core.cfs_ecy_movement WHERE container_number=:cn"),
                                {"cn": cn})
         return n1, n2, cnt, dwell, ecy_dwell
 

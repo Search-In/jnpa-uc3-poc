@@ -24,6 +24,8 @@ RDS database is topped up without a re-init.
 """
 from __future__ import annotations
 
+import os
+
 import asyncio
 import json
 from datetime import datetime
@@ -35,9 +37,9 @@ log = get_logger("gateway.audit")
 
 # --- schema (idempotent; lazily applied, cached per-DSN) --------------------
 _DDL = """
-CREATE SCHEMA IF NOT EXISTS jnpa;
+CREATE SCHEMA IF NOT EXISTS core;
 
-CREATE TABLE IF NOT EXISTS jnpa.api_audit_log (
+CREATE TABLE IF NOT EXISTS core.api_audit_log (
     id               bigserial PRIMARY KEY,
     service_name     text NOT NULL,
     endpoint         text,
@@ -50,11 +52,11 @@ CREATE TABLE IF NOT EXISTS jnpa.api_audit_log (
     transaction_id   text,
     created_at       timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS idx_api_audit_service_ts ON jnpa.api_audit_log (service_name, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_api_audit_txn        ON jnpa.api_audit_log (transaction_id);
-CREATE INDEX IF NOT EXISTS idx_api_audit_ts         ON jnpa.api_audit_log (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_api_audit_service_ts ON core.api_audit_log (service_name, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_api_audit_txn        ON core.api_audit_log (transaction_id);
+CREATE INDEX IF NOT EXISTS idx_api_audit_ts         ON core.api_audit_log (created_at DESC);
 
-CREATE TABLE IF NOT EXISTS jnpa.digital_twin_events (
+CREATE TABLE IF NOT EXISTS core.digital_twin_event (
     id           bigserial PRIMARY KEY,
     event_type   text NOT NULL,
     vehicle_id   text,
@@ -63,12 +65,12 @@ CREATE TABLE IF NOT EXISTS jnpa.digital_twin_events (
     payload      jsonb NOT NULL DEFAULT '{}'::jsonb,
     created_at   timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS idx_dt_events_type_ts    ON jnpa.digital_twin_events (event_type, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_dt_events_vehicle_ts ON jnpa.digital_twin_events (vehicle_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_dt_events_driver_ts  ON jnpa.digital_twin_events (driver_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_dt_events_ts         ON jnpa.digital_twin_events (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_dt_events_type_ts    ON core.digital_twin_event (event_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_dt_events_vehicle_ts ON core.digital_twin_event (vehicle_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_dt_events_driver_ts  ON core.digital_twin_event (driver_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_dt_events_ts         ON core.digital_twin_event (created_at DESC);
 
-CREATE TABLE IF NOT EXISTS jnpa.notifications (
+CREATE TABLE IF NOT EXISTS core.notification (
     id                bigserial PRIMARY KEY,
     event_id          text,
     channel           text NOT NULL,
@@ -80,12 +82,12 @@ CREATE TABLE IF NOT EXISTS jnpa.notifications (
     provider_response jsonb NOT NULL DEFAULT '{}'::jsonb,
     created_at        timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS idx_notifications_ts       ON jnpa.notifications (created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_notifications_receiver ON jnpa.notifications (receiver, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_notifications_status   ON jnpa.notifications (delivery_status, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_notifications_event    ON jnpa.notifications (event_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_ts       ON core.notification (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_receiver ON core.notification (receiver, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_status   ON core.notification (delivery_status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_event    ON core.notification (event_id);
 
-CREATE TABLE IF NOT EXISTS jnpa.decision_audit (
+CREATE TABLE IF NOT EXISTS core.decision_audit (
     id            bigserial PRIMARY KEY,
     request_id    text,
     input_data    jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -94,11 +96,11 @@ CREATE TABLE IF NOT EXISTS jnpa.decision_audit (
     action_taken  text,
     created_at    timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS idx_decision_audit_ts      ON jnpa.decision_audit (created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_decision_audit_request ON jnpa.decision_audit (request_id);
-CREATE INDEX IF NOT EXISTS idx_decision_audit_rule    ON jnpa.decision_audit (rule_executed, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_decision_audit_ts      ON core.decision_audit (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_decision_audit_request ON core.decision_audit (request_id);
+CREATE INDEX IF NOT EXISTS idx_decision_audit_rule    ON core.decision_audit (rule_executed, created_at DESC);
 
-CREATE TABLE IF NOT EXISTS jnpa.geofence_events (
+CREATE TABLE IF NOT EXISTS core.geofence_event (
     id             bigserial PRIMARY KEY,
     vehicle_id     text,
     zone_id        text,
@@ -108,11 +110,11 @@ CREATE TABLE IF NOT EXISTS jnpa.geofence_events (
     action_taken   text,
     created_at     timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS idx_geofence_events_vehicle ON jnpa.geofence_events (vehicle_id, entry_time DESC);
-CREATE INDEX IF NOT EXISTS idx_geofence_events_zone    ON jnpa.geofence_events (zone_id, entry_time DESC);
-CREATE INDEX IF NOT EXISTS idx_geofence_events_ts      ON jnpa.geofence_events (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_geofence_events_vehicle ON core.geofence_event (vehicle_id, entry_time DESC);
+CREATE INDEX IF NOT EXISTS idx_geofence_events_zone    ON core.geofence_event (zone_id, entry_time DESC);
+CREATE INDEX IF NOT EXISTS idx_geofence_events_ts      ON core.geofence_event (created_at DESC);
 
-CREATE TABLE IF NOT EXISTS jnpa.anpr_reads (
+CREATE TABLE IF NOT EXISTS core.anpr_read (
     ts            timestamptz NOT NULL,
     camera_id     text,
     plate         text,
@@ -122,7 +124,7 @@ CREATE TABLE IF NOT EXISTS jnpa.anpr_reads (
     weather       text,
     degraded      boolean DEFAULT false
 );
-CREATE INDEX IF NOT EXISTS idx_anpr_plate_ts ON jnpa.anpr_reads (plate, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_anpr_plate_ts ON core.anpr_read (plate, ts DESC);
 """
 
 _SCHEMA_READY: Dict[str, bool] = {}
@@ -140,11 +142,14 @@ def configure(dsn: Optional[str]) -> None:
 async def ensure_audit_schema(dsn: Optional[str]) -> None:
     """Apply the idempotent audit/event DDL once per DSN (best-effort, cached).
 
-    ``jnpa.anpr_reads`` is (re)created here too so the ANPR-persistence pump has a
+    ``core.anpr_read`` is (re)created here too so the ANPR-persistence pump has a
     guaranteed writer target even on volumes predating init.sql's hypertable. The
     plain-table form is compatible with the existing hypertable (CREATE ... IF NOT
     EXISTS is a no-op when the hypertable already exists).
     """
+    if os.getenv("JNPA_RUNTIME_DDL", "0") != "1":
+        # schema-v3: DDL is owned by infra/postgres/v3 migrations, never runtime.
+        return
     configure(dsn)
     if not dsn:
         log.warning("audit_schema_skipped_no_dsn")
@@ -219,7 +224,7 @@ async def log_api_audit(
     transaction_id: Optional[str] = None,
     dsn: Optional[str] = None,
 ) -> None:
-    """Persist one external API request/response to jnpa.api_audit_log."""
+    """Persist one external API request/response to core.api_audit_log."""
     dsn = dsn or _DEFAULT_DSN
     if not dsn:
         return
@@ -228,7 +233,7 @@ async def log_api_audit(
     try:
         await execute(
             """
-            INSERT INTO jnpa.api_audit_log
+            INSERT INTO core.api_audit_log
                 (service_name, endpoint, method, request_payload, response_payload,
                  status_code, latency_ms, error, transaction_id)
             VALUES
@@ -262,7 +267,7 @@ async def record_event(
     payload: Any = None,
     dsn: Optional[str] = None,
 ) -> None:
-    """Persist one operational / AI event to jnpa.digital_twin_events."""
+    """Persist one operational / AI event to core.digital_twin_event."""
     dsn = dsn or _DEFAULT_DSN
     if not dsn:
         return
@@ -271,7 +276,7 @@ async def record_event(
     try:
         await execute(
             """
-            INSERT INTO jnpa.digital_twin_events
+            INSERT INTO core.digital_twin_event
                 (event_type, vehicle_id, driver_id, location, payload)
             VALUES
                 (:event_type, :vehicle_id, :driver_id,
@@ -300,7 +305,7 @@ async def log_notification(
     provider_response: Any = None,
     dsn: Optional[str] = None,
 ) -> None:
-    """Persist one notification dispatch to jnpa.notifications."""
+    """Persist one notification dispatch to core.notification."""
     dsn = dsn or _DEFAULT_DSN
     if not dsn:
         return
@@ -311,7 +316,7 @@ async def log_notification(
     try:
         await execute(
             """
-            INSERT INTO jnpa.notifications
+            INSERT INTO core.notification
                 (event_id, channel, receiver, message, delivery_status, provider_response)
             VALUES
                 (:event_id, :channel, :receiver, :message, :delivery_status,
@@ -340,7 +345,7 @@ async def record_decision_audit(
     action_taken: Optional[str] = None,
     dsn: Optional[str] = None,
 ) -> None:
-    """Persist one orchestrated decision to jnpa.decision_audit (durable DecisionRing)."""
+    """Persist one orchestrated decision to core.decision_audit (durable DecisionRing)."""
     dsn = dsn or _DEFAULT_DSN
     if not dsn:
         return
@@ -349,7 +354,7 @@ async def record_decision_audit(
     try:
         await execute(
             """
-            INSERT INTO jnpa.decision_audit
+            INSERT INTO core.decision_audit
                 (request_id, input_data, rule_executed, decision, action_taken)
             VALUES
                 (:request_id, CAST(:input_data AS jsonb), :rule_executed,
@@ -378,7 +383,7 @@ async def record_geofence_event(
     action_taken: Optional[str] = None,
     dsn: Optional[str] = None,
 ) -> None:
-    """Persist one geofence enter/exit/violation to jnpa.geofence_events."""
+    """Persist one geofence enter/exit/violation to core.geofence_event."""
     dsn = dsn or _DEFAULT_DSN
     if not dsn:
         return
@@ -387,7 +392,7 @@ async def record_geofence_event(
     try:
         await execute(
             """
-            INSERT INTO jnpa.geofence_events
+            INSERT INTO core.geofence_event
                 (vehicle_id, zone_id, entry_time, exit_time, violation_type, action_taken)
             VALUES
                 (:vehicle_id, :zone_id, :entry_time, :exit_time, :violation_type, :action_taken)
@@ -407,9 +412,9 @@ async def record_geofence_event(
 
 
 async def persist_anpr_read(read: Dict[str, Any], *, dsn: Optional[str] = None) -> None:
-    """Persist one ANPR read (Kafka anpr.reads message) to jnpa.anpr_reads.
+    """Persist one ANPR read (Kafka anpr.reads message) to core.anpr_read.
 
-    Gives the long-empty jnpa.anpr_reads hypertable its missing writer, and mirrors
+    Gives the long-empty core.anpr_read hypertable its missing writer, and mirrors
     the detection into the unified event timeline as an ANPR_DETECTION event.
     """
     dsn = dsn or _DEFAULT_DSN
@@ -420,7 +425,7 @@ async def persist_anpr_read(read: Dict[str, Any], *, dsn: Optional[str] = None) 
     try:
         await execute(
             """
-            INSERT INTO jnpa.anpr_reads
+            INSERT INTO core.anpr_read
                 (ts, camera_id, plate, conf, vehicle_class, image_url, weather, degraded)
             VALUES
                 (COALESCE(:ts, now()), :camera_id, :plate, :conf,
@@ -471,8 +476,8 @@ _GEOFENCE_KINDS = {"ILLEGAL_PARKING", "ABANDONED", "GEOFENCE"}
 async def persist_alert_event(alert: Dict[str, Any], *, dsn: Optional[str] = None) -> None:
     """Mirror an alert (as it flows through the gateway) into the event timeline.
 
-    Every alert becomes a jnpa.digital_twin_events row; geofence-family alerts ALSO
-    land in jnpa.geofence_events so the zone violation trail is queryable directly.
+    Every alert becomes a core.digital_twin_event row; geofence-family alerts ALSO
+    land in core.geofence_event so the zone violation trail is queryable directly.
     Best-effort; the alerts feed itself is unchanged.
     """
     dsn = dsn or _DEFAULT_DSN

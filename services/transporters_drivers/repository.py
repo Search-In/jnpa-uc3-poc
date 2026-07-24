@@ -1,11 +1,11 @@
 """Transporters & Drivers UPLOAD persistence — raw-SQL repository over the shared engine.
 
 The ONLY layer that speaks SQL for the Data-Upload sub-module. It writes the new
-import-ledger tables (jnpa.td_import_files / jnpa.td_import_errors, migration 0035)
+import-ledger tables (core.td_import_file / core.td_import_error, migration 0035)
 and UPSERTS the valid records into the EXISTING masters — it creates NO business
 tables of its own:
-  * TRANSPORTER -> jnpa.transporters      ON CONFLICT (source_company_id) DO UPDATE
-  * DRIVER      -> jnpa.driver_master      ON CONFLICT (licence_no_norm)  DO UPDATE
+  * TRANSPORTER -> core.transporter      ON CONFLICT (source_company_id) DO UPDATE
+  * DRIVER      -> core.driver      ON CONFLICT (licence_no_norm)  DO UPDATE
 
 Every file imports atomically: the ledger row, all per-row upserts and the final
 status update run in ONE transaction. Each per-row upsert runs inside a SAVEPOINT so
@@ -40,7 +40,7 @@ class TransportersDriversRepository:
             row = (await conn.execute(text(
                 "SELECT id, entity_type, source_file, import_status, record_count, "
                 "imported_count, error_count, duplicate_count, created_at "
-                "FROM jnpa.td_import_files WHERE source_sha256 = :sha"),
+                "FROM core.td_import_file WHERE source_sha256 = :sha"),
                 {"sha": sha256})).mappings().first()
         return dict(row) if row else None
 
@@ -77,7 +77,7 @@ class TransportersDriversRepository:
                 tmap: dict[str, int] = {}
                 if entity_type == "DRIVER":
                     for r in (await conn.execute(text(
-                        "SELECT id, lower(name) AS lname FROM jnpa.transporters"))).mappings().all():
+                        "SELECT id, lower(company_name) AS lname FROM core.transporter"))).mappings().all():
                         tmap.setdefault(r["lname"], r["id"])
 
                 created = updated = 0
@@ -105,7 +105,7 @@ class TransportersDriversRepository:
                 imported = created + updated
                 status = "PARTIAL" if row_errors else "SUCCESS"
                 await conn.execute(text(
-                    "UPDATE jnpa.td_import_files SET import_status = :st, "
+                    "UPDATE core.td_import_file SET import_status = :st, "
                     "imported_count = :imp, error_count = :err, updated_at = now() "
                     "WHERE id = :id"),
                     {"st": status, "imp": imported, "err": len(row_errors), "id": fid})
@@ -161,7 +161,7 @@ class TransportersDriversRepository:
             async with get_engine(self._dsn).begin() as conn:
                 fid = (await conn.execute(text(_FILE_INSERT_FAILED), row)).mappings().first()["id"]
                 await conn.execute(text(
-                    "INSERT INTO jnpa.td_import_errors (import_file_id, record_ref, "
+                    "INSERT INTO core.td_import_error (import_file_id, record_ref, "
                     "error_code, error_detail) VALUES (:fid, NULL, 'PERSIST_FAILED', :d)"),
                     {"fid": fid, "d": detail[:4000]})
             fail_id: Optional[int] = fid
@@ -210,14 +210,14 @@ class TransportersDriversRepository:
             return
         async with get_engine(self._dsn).begin() as conn:
             await conn.execute(text(
-                "INSERT INTO jnpa.td_import_errors (import_file_id, record_ref, "
+                "INSERT INTO core.td_import_error (import_file_id, record_ref, "
                 "error_code, error_detail) VALUES (:fid, :ref, :code, :detail)"), rows)
 
     async def mark_partial(self, file_id: int, *, error_count: int) -> None:
         """Flip a successful import to PARTIAL when some source rows were skipped."""
         async with get_engine(self._dsn).begin() as conn:
             await conn.execute(text(
-                "UPDATE jnpa.td_import_files SET import_status = 'PARTIAL', "
+                "UPDATE core.td_import_file SET import_status = 'PARTIAL', "
                 "error_count = :n, updated_at = now() WHERE id = :id"),
                 {"n": error_count, "id": file_id})
 
@@ -239,7 +239,7 @@ class TransportersDriversRepository:
                 "SELECT id, entity_type, physical_format, source_file, record_count, "
                 "imported_count, error_count, duplicate_count, import_status, error_detail, "
                 "uploaded_by, source, created_at, updated_at "
-                f"FROM jnpa.td_import_files{where} "
+                f"FROM core.td_import_file{where} "
                 "ORDER BY id DESC LIMIT :limit OFFSET :offset"), params)
             return [dict(r) for r in res.mappings().all()]
 
@@ -247,7 +247,7 @@ class TransportersDriversRepository:
         where, params = self._file_where(filters)
         async with get_engine(self._dsn).connect() as conn:
             return int((await conn.execute(
-                text(f"SELECT count(*) FROM jnpa.td_import_files{where}"), params)).scalar() or 0)
+                text(f"SELECT count(*) FROM core.td_import_file{where}"), params)).scalar() or 0)
 
     async def get_file(self, file_id: int) -> Optional[dict]:
         async with get_engine(self._dsn).connect() as conn:
@@ -255,14 +255,14 @@ class TransportersDriversRepository:
                 "SELECT id, entity_type, physical_format, source_file, source_sha256, "
                 "file_size_bytes, record_count, imported_count, error_count, duplicate_count, "
                 "import_status, error_detail, uploaded_by, source, created_at, updated_at "
-                "FROM jnpa.td_import_files WHERE id = :id"), {"id": file_id})).mappings().first()
+                "FROM core.td_import_file WHERE id = :id"), {"id": file_id})).mappings().first()
         return dict(row) if row else None
 
     async def list_file_errors(self, file_id: int, *, limit: int, offset: int) -> list[dict]:
         async with get_engine(self._dsn).connect() as conn:
             res = await conn.execute(text(
                 "SELECT id, record_ref, error_code, error_detail, created_at "
-                "FROM jnpa.td_import_errors WHERE import_file_id = :id "
+                "FROM core.td_import_error WHERE import_file_id = :id "
                 "ORDER BY id LIMIT :limit OFFSET :offset"),
                 {"id": file_id, "limit": limit, "offset": offset})
             return [dict(r) for r in res.mappings().all()]
@@ -270,7 +270,7 @@ class TransportersDriversRepository:
 
 # --------------------------------------------------------------------------- SQL
 _FILE_INSERT = """
-INSERT INTO jnpa.td_import_files
+INSERT INTO core.td_import_file
     (entity_type, physical_format, source_file, source_sha256, file_size_bytes,
      record_count, import_status, uploaded_by, source)
 VALUES
@@ -280,7 +280,7 @@ RETURNING id
 """
 
 _FILE_INSERT_FAILED = """
-INSERT INTO jnpa.td_import_files
+INSERT INTO core.td_import_file
     (entity_type, physical_format, source_file, source_sha256, file_size_bytes,
      record_count, import_status, error_detail, uploaded_by, source)
 VALUES
@@ -293,45 +293,47 @@ RETURNING id
 # seeded to '{}' on insert and left untouched on update; COALESCE keeps a previously
 # non-null field when the upload leaves that optional column blank.
 _TRANSPORTER_UPSERT = """
-INSERT INTO jnpa.transporters
-    (source_company_id, source_user_id, name, code, gstin, contact, status,
-     contact_person, designation, email, mobile, address, import_file_id)
+INSERT INTO core.transporter
+    (company_id, user_id, company_name, code, gstin, contact, status,
+     contact_person, designation, email, mobile_number, address, import_file_id)
 VALUES
     (:source_company_id, :source_user_id, :name, :code, :gstin, '{}'::jsonb, :status,
      :contact_person, :designation, :email, :mobile, :address, :import_file_id)
-ON CONFLICT (source_company_id) DO UPDATE SET
-    name           = EXCLUDED.name,
-    code           = COALESCE(EXCLUDED.code, jnpa.transporters.code),
-    gstin          = COALESCE(EXCLUDED.gstin, jnpa.transporters.gstin),
+ON CONFLICT (company_id) DO UPDATE SET
+    company_name   = EXCLUDED.company_name,
+    code           = COALESCE(EXCLUDED.code, core.transporter.code),
+    gstin          = COALESCE(EXCLUDED.gstin, core.transporter.gstin),
     status         = EXCLUDED.status,
-    source_user_id = COALESCE(EXCLUDED.source_user_id, jnpa.transporters.source_user_id),
-    contact_person = COALESCE(EXCLUDED.contact_person, jnpa.transporters.contact_person),
-    designation    = COALESCE(EXCLUDED.designation, jnpa.transporters.designation),
-    email          = COALESCE(EXCLUDED.email, jnpa.transporters.email),
-    mobile         = COALESCE(EXCLUDED.mobile, jnpa.transporters.mobile),
-    address        = COALESCE(EXCLUDED.address, jnpa.transporters.address),
+    user_id        = COALESCE(EXCLUDED.user_id, core.transporter.user_id),
+    contact_person = COALESCE(EXCLUDED.contact_person, core.transporter.contact_person),
+    designation    = COALESCE(EXCLUDED.designation, core.transporter.designation),
+    email          = COALESCE(EXCLUDED.email, core.transporter.email),
+    mobile_number  = COALESCE(EXCLUDED.mobile_number, core.transporter.mobile_number),
+    address        = COALESCE(EXCLUDED.address, core.transporter.address),
     import_file_id = EXCLUDED.import_file_id,
     updated_at     = now()
 RETURNING (xmax = 0) AS inserted
 """
 
 # Upsert on the EXISTING unique key (licence_no_norm).
+# licence_no_norm is a GENERATED column in core.driver — never inserted directly.
+# Arbiter: the partial unique index over managed rows (id < 100000000).
 _DRIVER_UPSERT = """
-INSERT INTO jnpa.driver_master
-    (licence_no, licence_no_norm, name, company_name, transporter_id, licence_type,
-     licence_valid_to, latest_pdp_number, dob, status, import_file_id)
+INSERT INTO core.driver
+    (licence_number, driver_name, company_name, transporter_id, licence_type,
+     licence_valid_to, latest_pdp_number, date_of_birth, status, import_file_id)
 VALUES
-    (:licence_no, :licence_no_norm, :name, :company_name, :transporter_id, :licence_type,
+    (:licence_no, :name, :company_name, :transporter_id, :licence_type,
      :licence_valid_to, :latest_pdp_number, :dob, :status, :import_file_id)
-ON CONFLICT (licence_no_norm) DO UPDATE SET
-    licence_no        = EXCLUDED.licence_no,
-    name              = EXCLUDED.name,
-    company_name      = COALESCE(EXCLUDED.company_name, jnpa.driver_master.company_name),
-    transporter_id    = COALESCE(EXCLUDED.transporter_id, jnpa.driver_master.transporter_id),
+ON CONFLICT (licence_no_norm) WHERE id < 100000000 DO UPDATE SET
+    licence_number    = EXCLUDED.licence_number,
+    driver_name       = EXCLUDED.driver_name,
+    company_name      = COALESCE(EXCLUDED.company_name, core.driver.company_name),
+    transporter_id    = COALESCE(EXCLUDED.transporter_id, core.driver.transporter_id),
     licence_type      = EXCLUDED.licence_type,
-    licence_valid_to  = COALESCE(EXCLUDED.licence_valid_to, jnpa.driver_master.licence_valid_to),
-    latest_pdp_number = COALESCE(EXCLUDED.latest_pdp_number, jnpa.driver_master.latest_pdp_number),
-    dob               = COALESCE(EXCLUDED.dob, jnpa.driver_master.dob),
+    licence_valid_to  = COALESCE(EXCLUDED.licence_valid_to, core.driver.licence_valid_to),
+    latest_pdp_number = COALESCE(EXCLUDED.latest_pdp_number, core.driver.latest_pdp_number),
+    date_of_birth     = COALESCE(EXCLUDED.date_of_birth, core.driver.date_of_birth),
     status            = EXCLUDED.status,
     import_file_id    = EXCLUDED.import_file_id,
     updated_at        = now()

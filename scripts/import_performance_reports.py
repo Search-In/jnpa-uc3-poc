@@ -5,17 +5,17 @@ Parses the OFFICIAL JNPA PDF reports (no dummy / generated data — every value
 comes from the source PDF) into the ADDITIVE tables from migration 0028:
 
   * Daily Status Report  (…/Daily Status Report *.pdf)  -> perf_daily_*
-      (A) Container TEUs + (C) Rail  -> jnpa.perf_daily_traffic
-      (B) Tonnage                    -> jnpa.perf_daily_tonnage
-      (D/E/F/G) Pendency/Yard/Gate/Reefer -> jnpa.perf_daily_terminal_status
-      (H) Vessels Under Operation    -> jnpa.perf_daily_vessels
-  * FY JN Port TEUs      (…*TEU*.pdf)  -> jnpa.perf_monthly_teu
+      (A) Container TEUs + (C) Rail  -> core.perf_daily_traffic
+      (B) Tonnage                    -> core.perf_daily_tonnage
+      (D/E/F/G) Pendency/Yard/Gate/Reefer -> core.perf_daily_terminal_status
+      (H) Vessels Under Operation    -> core.perf_daily_vessel
+  * FY JN Port TEUs      (…*TEU*.pdf)  -> core.perf_monthly_teu
   * NLDS/LDB Analytics   (…*LDB*.pdf)  -> jnpa.perf_ldb_*
       port dwell / facility dwell / congestion / route modal-share / weather
 
 Purely additive — it NEVER touches cargo / cfs_ecy / vehicle / driver /
 transporter / auth / ldb_movements tables. Terminal labels are normalised to the
-canonical codes (GTI≡APMT, BMCTPL≡BMCT, …) via the jnpa.perf_terminals dimension.
+canonical codes (GTI≡APMT, BMCTPL≡BMCT, …) via the core.perf_terminal dimension.
 
 Idempotency: every insert is ON CONFLICT DO NOTHING against the migration-0028
 UNIQUE constraints, so re-runs report 0 new rows.
@@ -78,22 +78,22 @@ def parse_ldb(path: Path):
 # DB writers (idempotent, ON CONFLICT DO NOTHING)
 # =====================================================================
 _INSERTS = {
-    "snapshot": """INSERT INTO jnpa.perf_daily_snapshot (report_date, as_of_ts, source_file)
+    "snapshot": """INSERT INTO core.perf_daily_snapshot (report_date, as_of_ts, source_file)
         VALUES (:report_date, :as_of_ts, :source_file)
         ON CONFLICT ON CONSTRAINT uq_perf_daily_snapshot DO NOTHING""",
-    "traffic": """INSERT INTO jnpa.perf_daily_traffic
+    "traffic": """INSERT INTO core.perf_daily_traffic
         (report_date, terminal_code, period, vessels, imp_teus, exp_teus, total_teus,
          rakes, rail_dis_teus, rail_ldg_teus, rail_total_teus)
         VALUES (:report_date,:terminal_code,:period,:vessels,:imp_teus,:exp_teus,:total_teus,
                 :rakes,:rail_dis_teus,:rail_ldg_teus,:rail_total_teus)
         ON CONFLICT ON CONSTRAINT uq_perf_daily_traffic DO NOTHING""",
-    "tonnage": """INSERT INTO jnpa.perf_daily_tonnage
+    "tonnage": """INSERT INTO core.perf_daily_tonnage
         (report_date, category, period, vessels, liquid_tonnes, dry_bulk_tonnes,
          break_bulk_tonnes, total_tonnes)
         VALUES (:report_date,:category,:period,:vessels,:liquid_tonnes,:dry_bulk_tonnes,
                 :break_bulk_tonnes,:total_tonnes)
         ON CONFLICT ON CONSTRAINT uq_perf_daily_tonnage DO NOTHING""",
-    "status": """INSERT INTO jnpa.perf_daily_terminal_status
+    "status": """INSERT INTO core.perf_daily_terminal_status
         (report_date, terminal_code, icd_pendency_teus, cfs_pendency_teus, yard_import_teus,
          yard_export_teus, yard_transhipment_teus, yard_total_teus, yard_usable_capacity_teus,
          yard_occupancy_pct, gate_in_teus, gate_out_teus, gate_total_teus,
@@ -103,35 +103,35 @@ _INSERTS = {
                 :yard_occupancy_pct,:gate_in_teus,:gate_out_teus,:gate_total_teus,
                 :reefer_total_slots,:reefer_occupied_slots,:reefer_available_slots)
         ON CONFLICT ON CONSTRAINT uq_perf_daily_status DO NOTHING""",
-    "vessels": """INSERT INTO jnpa.perf_daily_vessels
+    "vessels": """INSERT INTO core.perf_daily_vessel
         (report_date, terminal_code, berth_no, via_no, vessel_name, cargo_commodity,
          berthed_on, expected_completion)
         VALUES (:report_date,:terminal_code,:berth_no,:via_no,:vessel_name,:cargo_commodity,
                 :berthed_on,:expected_completion)
         ON CONFLICT ON CONSTRAINT uq_perf_daily_vessel DO NOTHING""",
-    "monthly": """INSERT INTO jnpa.perf_monthly_teu
+    "monthly": """INSERT INTO core.perf_monthly_teu
         (fiscal_year, month_date, year_label, month_label, terminal_code, vessel_calls,
          discharge_teus, load_teus, total_teus)
         VALUES (:fiscal_year,:month_date,:year_label,:month_label,:terminal_code,:vessel_calls,
                 :discharge_teus,:load_teus,:total_teus)
         ON CONFLICT ON CONSTRAINT uq_perf_monthly_teu DO NOTHING""",
-    "port_dwell": """INSERT INTO jnpa.perf_ldb_port_dwell
+    "port_dwell": """INSERT INTO core.perf_ldb_port_dwell
         (report_month, terminal_code, cycle, segment, dwell_hours, dwell_hours_prev)
         VALUES (:report_month,:terminal_code,:cycle,:segment,:dwell_hours,:dwell_hours_prev)
         ON CONFLICT ON CONSTRAINT uq_perf_ldb_port_dwell DO NOTHING""",
-    "facility": """INSERT INTO jnpa.perf_ldb_facility_dwell
+    "facility": """INSERT INTO core.perf_ldb_facility_dwell
         (report_month, facility_type, facility_name, facility_name_norm, dwell_hours, dwell_hours_prev)
         VALUES (:report_month,:facility_type,:facility_name,:facility_name_norm,:dwell_hours,:dwell_hours_prev)
         ON CONFLICT ON CONSTRAINT uq_perf_ldb_facility_dwell DO NOTHING""",
-    "congestion": """INSERT INTO jnpa.perf_ldb_congestion
+    "congestion": """INSERT INTO core.perf_ldb_congestion
         (report_month, cycle, cluster_no, cluster_name, cfs_count, pct_containers, congestion_level)
         VALUES (:report_month,:cycle,:cluster_no,:cluster_name,:cfs_count,:pct_containers,:congestion_level)
         ON CONFLICT ON CONSTRAINT uq_perf_ldb_congestion DO NOTHING""",
-    "routes": """INSERT INTO jnpa.perf_ldb_route_movement
+    "routes": """INSERT INTO core.perf_ldb_route_movement
         (report_month, cycle, transport_mode, route_name, pct_share)
         VALUES (:report_month,:cycle,:transport_mode,:route_name,:pct_share)
         ON CONFLICT ON CONSTRAINT uq_perf_ldb_route DO NOTHING""",
-    "weather": """INSERT INTO jnpa.perf_ldb_weather
+    "weather": """INSERT INTO core.perf_ldb_weather
         (report_month, terminal_code, cycle, weather, dwell_hours)
         VALUES (:report_month,:terminal_code,:cycle,:weather,:dwell_hours)
         ON CONFLICT ON CONSTRAINT uq_perf_ldb_weather DO NOTHING""",

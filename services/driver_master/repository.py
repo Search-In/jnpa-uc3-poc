@@ -1,8 +1,8 @@
 """Driver Master persistence — raw-SQL repository over the shared async engine.
 
 The ONLY layer that speaks SQL for the Driver Master module. It reads
-jnpa.driver_master + jnpa.driver_pdp_history (Phase-1 tables) and LEFT-JOINs the
-existing driver tables (jnpa.drivers / driver_enrollments / verification_logs)
+core.driver + core.pdp (Phase-1 tables) and LEFT-JOINs the
+existing driver tables (core.driver_identity / driver_enrollments / verification_logs)
 read-only to derive enrollment + verification status. No writes, no ORM, no HTTP.
 
 Reads run on a plain engine.connect() (same as services.cargo). All statements
@@ -36,7 +36,7 @@ def normalize_licence(raw: Optional[str]) -> str:
 #   licence_valid_to     -> idx_driver_master_valid
 #   licence_no_norm      -> uq_driver_master_licence
 _SORTS: Dict[str, str] = {
-    "name": "lower(dm.name)",
+    "name": "lower(dm.driver_name)",
     "licence": "dm.licence_no_norm",
     "company": "lower(dm.company_name)",
     "validity": "dm.licence_valid_to",
@@ -64,16 +64,16 @@ CASE
 END
 """
 
-# Lateral joins that resolve enrollment (jnpa.drivers), pending enrollment
-# (jnpa.driver_enrollments), latest verification (jnpa.verification_logs) and the
-# current PDP record (jnpa.driver_pdp_history) for each registry row.
+# Lateral joins that resolve enrollment (core.driver_identity), pending enrollment
+# (core.driver_enrollment), latest verification (core.verification_log) and the
+# current PDP record (core.pdp) for each registry row.
 _JOINS = """
-FROM jnpa.driver_master dm
-LEFT JOIN jnpa.transporters t ON t.id = dm.transporter_id
+FROM core.driver dm
+LEFT JOIN core.transporter t ON t.id = dm.transporter_id
 LEFT JOIN LATERAL (
     SELECT dr.driver_id, dr.status AS driver_status, dr.photo_url AS enrolled_photo_url,
            dr.vehicle_no, dr.vehicle_no_norm
-    FROM jnpa.drivers dr
+    FROM core.driver_identity dr
     WHERE coalesce(dr.license_no,'') <> ''
       AND regexp_replace(upper(dr.license_no), '[^A-Z0-9]', '', 'g') = dm.licence_no_norm
     ORDER BY (dr.status = 'ACTIVE') DESC
@@ -81,7 +81,7 @@ LEFT JOIN LATERAL (
 ) e ON true
 LEFT JOIN LATERAL (
     SELECT en2.status AS enroll_status
-    FROM jnpa.driver_enrollments en2
+    FROM core.driver_enrollment en2
     WHERE coalesce(en2.license_no,'') <> ''
       AND regexp_replace(upper(en2.license_no), '[^A-Z0-9]', '', 'g') = dm.licence_no_norm
     ORDER BY en2.submitted_at DESC
@@ -89,27 +89,27 @@ LEFT JOIN LATERAL (
 ) en ON true
 LEFT JOIN LATERAL (
     SELECT vl.decision AS verification, vl.score, vl.ts AS verified_at
-    FROM jnpa.verification_logs vl
+    FROM core.verification_log vl
     WHERE e.driver_id IS NOT NULL AND vl.driver_id = e.driver_id
     ORDER BY vl.ts DESC
     LIMIT 1
 ) v ON true
 LEFT JOIN LATERAL (
-    SELECT ph.active AS pdp_active, ph.appl_number, ph.validity AS pdp_validity,
-           ph.acceptance_time_stamp AS pdp_accepted_at
-    FROM jnpa.driver_pdp_history ph
+    SELECT ph.active AS pdp_active, ph.appl_number, ph.valid_until AS pdp_validity,
+           ph.accepted_at AS pdp_accepted_at
+    FROM core.pdp ph
     WHERE ph.pdp_number = dm.latest_pdp_number
-    ORDER BY ph.acceptance_time_stamp DESC
+    ORDER BY ph.accepted_at DESC
     LIMIT 1
 ) pdp ON true
 """
 
 _SELECT_FIELDS = f"""
-    dm.id, dm.licence_no, dm.licence_no_norm, dm.name, dm.company_name,
-    dm.transporter_id, t.name AS transporter_name, t.code AS transporter_code,
+    dm.id, dm.licence_number AS licence_no, dm.licence_no_norm, dm.driver_name AS name, dm.company_name,
+    dm.transporter_id, t.company_name AS transporter_name, t.code AS transporter_code,
     t.status AS transporter_status,
     dm.photo_file, dm.photo_url, dm.licence_type, dm.licence_valid_to,
-    dm.latest_pdp_number, dm.dob, dm.status AS master_status,
+    dm.latest_pdp_number, dm.date_of_birth AS dob, dm.status AS master_status,
     ({_STATUS_EXPR}) AS pdp_status,
     pdp.pdp_active, pdp.appl_number, pdp.pdp_validity,
     ({_ENROLL_EXPR}) AS enrollment_status,
@@ -123,9 +123,9 @@ _SELECT_FIELDS = f"""
 # so the LIST / COUNT queries filter by enrollment/verification WITHOUT the
 # per-row LATERAL joins (which made count(*) over 31k rows take ~15s).
 _ENROLLED_NORMS = ("SELECT regexp_replace(upper(license_no),'[^A-Z0-9]','','g') "
-                   "FROM jnpa.drivers WHERE coalesce(license_no,'') <> ''")
+                   "FROM core.driver_identity WHERE coalesce(license_no,'') <> ''")
 _VERIFIED_NORMS = ("SELECT regexp_replace(upper(dr.license_no),'[^A-Z0-9]','','g') "
-                   "FROM jnpa.drivers dr JOIN jnpa.verification_logs vl ON vl.driver_id = dr.driver_id "
+                   "FROM core.driver_identity dr JOIN core.verification_log vl ON vl.driver_id = dr.driver_id "
                    "WHERE vl.decision = :verification AND coalesce(dr.license_no,'') <> ''")
 
 
@@ -136,14 +136,14 @@ def _build_where(f: Mapping[str, Any]) -> Tuple[str, Dict[str, Any]]:
     p: Dict[str, Any] = {}
     if f.get("search"):
         where.append(
-            "(dm.name ILIKE :s OR dm.licence_no ILIKE :s OR dm.licence_no_norm ILIKE :s "
+            "(dm.driver_name ILIKE :s OR dm.licence_number ILIKE :s OR dm.licence_no_norm ILIKE :s "
             "OR coalesce(dm.company_name,'') ILIKE :s "
             "OR coalesce(dm.latest_pdp_number,'') ILIKE :s "
-            "OR coalesce(t.name,'') ILIKE :s)"
+            "OR coalesce(t.company_name,'') ILIKE :s)"
         )
         p["s"] = f"%{f['search']}%"
     if f.get("company"):
-        where.append("(dm.company_name ILIKE :company OR coalesce(t.name,'') ILIKE :company)")
+        where.append("(dm.company_name ILIKE :company OR coalesce(t.company_name,'') ILIKE :company)")
         p["company"] = f"%{f['company']}%"
     if f.get("transporter_id") is not None:
         where.append("dm.transporter_id = :transporter_id")
@@ -189,15 +189,15 @@ class DriverMasterRepository:
         self, f: Mapping[str, Any], *, sort: str, direction: str, limit: int, offset: int
     ) -> Tuple[List[Dict[str, Any]], int]:
         clause, p = _build_where(f)
-        sort_col = _SORTS.get(sort, "dm.name")
+        sort_col = _SORTS.get(sort, "dm.driver_name")
         dir_sql = "DESC" if str(direction).lower() == "desc" else "ASC"
-        base_from = "FROM jnpa.driver_master dm LEFT JOIN jnpa.transporters t ON t.id = dm.transporter_id"
+        base_from = "FROM core.driver dm LEFT JOIN core.transporter t ON t.id = dm.transporter_id"
         # Page + count use ONLY driver_master + transporters (index-friendly).
         rows = await self._fetch_all(
-            f"""SELECT dm.id, dm.licence_no, dm.licence_no_norm, dm.name, dm.company_name,
-                       dm.transporter_id, t.name AS transporter_name, t.code AS transporter_code,
+            f"""SELECT dm.id, dm.licence_number AS licence_no, dm.licence_no_norm, dm.driver_name AS name, dm.company_name,
+                       dm.transporter_id, t.company_name AS transporter_name, t.code AS transporter_code,
                        t.status AS transporter_status, dm.photo_file, dm.photo_url,
-                       dm.licence_type, dm.licence_valid_to, dm.latest_pdp_number, dm.dob,
+                       dm.licence_type, dm.licence_valid_to, dm.latest_pdp_number, dm.date_of_birth AS dob,
                        dm.status AS master_status, ({_STATUS_EXPR}) AS pdp_status
                 {base_from} {clause}
                 ORDER BY {sort_col} {dir_sql} NULLS LAST, dm.id ASC
@@ -240,8 +240,8 @@ class DriverMasterRepository:
         driver's current (latest) PDP; falls back to the single current permit."""
         head = await self._fetch_one(
             """SELECT dm.latest_pdp_number, ph.appl_number
-               FROM jnpa.driver_master dm
-               LEFT JOIN jnpa.driver_pdp_history ph ON ph.pdp_number = dm.latest_pdp_number
+               FROM core.driver dm
+               LEFT JOIN core.pdp ph ON ph.pdp_number = dm.latest_pdp_number
                WHERE dm.licence_no_norm = :ln LIMIT 1""",
             {"ln": licence_norm},
         )
@@ -255,16 +255,16 @@ class DriverMasterRepository:
             where, key = "ph.pdp_number = :key", {"key": latest}
         rows = await self._fetch_all(
             f"""SELECT ph.pdp_id, ph.pdp_number, ph.appl_number, ph.active,
-                       ph.acceptance_time_stamp, ph.validity, ph.remarks,
-                       ph.pdp_cancelled_by, ph.cancellation_time
-                FROM jnpa.driver_pdp_history ph
+                       ph.accepted_at AS acceptance_time_stamp, ph.valid_until AS validity, ph.remarks,
+                       ph.cancelled_by AS pdp_cancelled_by, ph.cancellation_time
+                FROM core.pdp ph
                 WHERE {where}
-                ORDER BY ph.acceptance_time_stamp DESC NULLS LAST
+                ORDER BY ph.accepted_at DESC NULLS LAST
                 LIMIT :limit OFFSET :offset""",
             {**key, "limit": limit, "offset": offset},
         )
         total_row = await self._fetch_one(
-            f"SELECT count(*) AS n FROM jnpa.driver_pdp_history ph WHERE {where}", key
+            f"SELECT count(*) AS n FROM core.pdp ph WHERE {where}", key
         )
         return rows, int(total_row["n"]) if total_row else 0, appl or latest
 
@@ -273,11 +273,11 @@ class DriverMasterRepository:
             """
             WITH enrolled_norms AS (
                 SELECT DISTINCT regexp_replace(upper(license_no),'[^A-Z0-9]','','g') AS n
-                FROM jnpa.drivers WHERE coalesce(license_no,'') <> ''
+                FROM core.driver_identity WHERE coalesce(license_no,'') <> ''
             ),
             pending_norms AS (
                 SELECT DISTINCT regexp_replace(upper(license_no),'[^A-Z0-9]','','g') AS n
-                FROM jnpa.driver_enrollments
+                FROM core.driver_enrollment
                 WHERE coalesce(license_no,'') <> '' AND status IN ('PENDING','REENROLL')
             )
             SELECT
@@ -290,7 +290,7 @@ class DriverMasterRepository:
               count(*) FILTER (WHERE dm.licence_no_norm IN (SELECT n FROM enrolled_norms)) AS enrolled,
               count(*) FILTER (WHERE dm.licence_no_norm NOT IN (SELECT n FROM enrolled_norms)
                                AND dm.licence_no_norm IN (SELECT n FROM pending_norms)) AS pending_enrollment
-            FROM jnpa.driver_master dm
+            FROM core.driver dm
             """,
             {},
         )

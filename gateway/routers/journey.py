@@ -7,7 +7,7 @@ the same container number can be searched and followed continuously:
     UC-III (traffic twin) truck assignment -> ANPR detection -> gate crossing -> ETA
 
 The journey is now backed by the LIVE shared cargo record. Every UC-II / UC-III
-stage is populated from the one ``jnpa.cargo`` row (vessel, yard block, customs
+stage is populated from the one ``core.cargo`` row (vessel, yard block, customs
 status, release flag, vehicle, gate, ETA) via the SAME ``CargoService`` that
 serves ``GET /api/cargo`` — there is no second copy of the cargo logic and no
 deterministic "mock" container generation. The UC-III gate-crossing facts remain
@@ -101,9 +101,9 @@ def _iso(value: Any) -> Optional[str]:
 async def _fetch_parking_exit(state: GatewayState, plate: Optional[str]):
     """Best-effort join of the LIVE parking + gate-exit records for a plate.
 
-    Uses the cargo's haulage plate (``jnpa.cargo.vehicle_number``) as the join key
-    into the existing ``jnpa.parking_transactions`` (vehicle_id) and
-    ``jnpa.gate_events`` (plate, event_type='GATE_OUT') — no new tables, no data
+    Uses the cargo's haulage plate (``core.cargo.vehicle_number``) as the join key
+    into the existing ``core.parking_transaction`` (vehicle_id) and
+    ``core.gate_event`` (plate, event_type='GATE_OUT') — no new tables, no data
     duplication. Returns ``(parking_row | None, exit_row | None)``; both None when
     there is no DB or no plate."""
     dsn = state.cfg.postgres_dsn
@@ -116,7 +116,7 @@ async def _fetch_parking_exit(state: GatewayState, plate: Optional[str]):
     try:
         parking = await fetch_one(
             """SELECT facility_id, slot_id, entry_time, exit_time, status
-               FROM jnpa.parking_transactions
+               FROM core.parking_transaction
                WHERE vehicle_id = :p ORDER BY entry_time DESC LIMIT 1""",
             {"p": plate}, dsn=dsn,
         )
@@ -124,7 +124,7 @@ async def _fetch_parking_exit(state: GatewayState, plate: Optional[str]):
         log.debug("journey_parking_lookup_failed", plate=plate, error=str(exc))
     try:
         exit_row = await fetch_one(
-            """SELECT ts, gate_id FROM jnpa.gate_events
+            """SELECT ts, gate_id FROM core.gate_event
                WHERE plate = :p AND event_type = 'GATE_OUT'
                ORDER BY ts DESC LIMIT 1""",
             {"p": plate}, dsn=dsn,
@@ -202,7 +202,7 @@ def _uc3_stages(cn: str, corr: str, cargo: Dict[str, Any],
     eta_min = _eta_minutes(cargo.get("eta"))
     eta_iso = _eta_iso(cargo.get("eta"))
 
-    # LIVE parking-assignment facts (jnpa.parking_transactions), joined by plate.
+    # LIVE parking-assignment facts (core.parking_transaction), joined by plate.
     parked = bool(parking_row)
     p = dict(parking_row) if parking_row else {}
     parking_facts: Dict[str, Any] = {
@@ -211,7 +211,7 @@ def _uc3_stages(cn: str, corr: str, cargo: Dict[str, Any],
         "status": p.get("status"),
         "entry_time": _iso(p.get("entry_time")),
     }
-    # LIVE gate-exit facts (jnpa.gate_events, event_type='GATE_OUT'), joined by plate.
+    # LIVE gate-exit facts (core.gate_event, event_type='GATE_OUT'), joined by plate.
     exited = bool(exit_row)
     e = dict(exit_row) if exit_row else {}
     exit_gate = e.get("gate_id") or gate
@@ -367,7 +367,7 @@ async def container_journey(
             ],
             "stages": [],
             "note": (
-                "No cargo record for this container in jnpa.cargo — create it via "
+                "No cargo record for this container in core.cargo — create it via "
                 "POST /api/cargo to follow the box. The journey is sourced live "
                 "from the shared cargo registry."
             ),
@@ -435,7 +435,7 @@ async def container_journey(
         "journey_status": journey_status,
         "stages": stages,
         "note": (
-            "Live journey backed by the shared cargo record (jnpa.cargo); every "
+            "Live journey backed by the shared cargo record (core.cargo); every "
             "UC-II / UC-III stage reflects the current cargo state. UC-III "
             "gate-crossing facts are the real Auto-LEO capture."
         ),

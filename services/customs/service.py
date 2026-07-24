@@ -198,7 +198,7 @@ class CustomsService:
 
     # --------------------------------------------------- cargo binding (workflow)
     async def reconcile_cargo(self) -> dict:
-        """Apply the customs → cargo workflow: drive jnpa.cargo.customs_status from the
+        """Apply the customs → cargo workflow: drive core.cargo.customs_status from the
         imported customs documents (Out-Of-Charge -> CLEARED; RMS scan selection ->
         UNDER_INSPECTION) for containers that exist in cargo. Emits one customs event
         per changed container and raises a scan-hold notification on the EXISTING cargo

@@ -1,7 +1,7 @@
 """Shared helpers the three scenarios build on.
 
 * HTTP helpers against the gateway / truck-sim / congestion / anomaly.
-* ``nudge_segments`` — writes high-jam ``jnpa.traffic_snapshots`` rows for a set
+* ``nudge_segments`` — writes high-jam ``core.traffic_snapshot`` rows for a set
   of corridor segments so the forecaster's feature window (and the live map
   overlay) actually reflect a build-up. Per the design decision, scenarios are
   "best-effort + nudge": they make the world reflect the scenario, poll the
@@ -109,7 +109,7 @@ async def nudge_segments(
         try:
             await execute(
                 """
-                INSERT INTO jnpa.traffic_snapshots (ts, segment_id, speed_kmh, jam_factor, source)
+                INSERT INTO core.traffic_snapshot (ts, segment_id, speed_kmh, jam_factor, source)
                 VALUES (:ts, :seg, :spd, :jam, :src)
                 """,
                 {"ts": ts, "seg": seg, "spd": speed_kmh, "jam": jam_factor, "src": src},
@@ -127,7 +127,7 @@ async def clear_nudge(cfg: ScenarioConfig, handle_id: str) -> int:
     from jnpa_shared.db import execute
     try:
         return await execute(
-            "DELETE FROM jnpa.traffic_snapshots WHERE source = :src",
+            "DELETE FROM core.traffic_snapshot WHERE source = :src",
             {"src": f"scenario:{handle_id}"}, dsn=cfg.postgres_dsn,
         )
     except Exception as exc:  # noqa: BLE001

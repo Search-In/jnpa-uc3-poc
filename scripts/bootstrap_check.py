@@ -5,10 +5,10 @@ Runs from the *host* against the docker-compose stack and exercises the full
 "hello-trace" path:
 
   1. Read .env.local (fail loudly if missing).
-  2. Connect to Postgres and verify jnpa.gates has 4 rows.
+  2. Connect to Postgres and verify core.gate has 4 rows.
   3. Publish one AnprRead JSON message to topic "anpr.reads".
   4. Consume it back with a fresh consumer group.
-  5. Write the same record into jnpa.anpr_reads and read it back.
+  5. Write the same record into core.anpr_read and read it back.
   6. Cache and read a key in Redis.
   7. Publish one MQTT message to rfid/readers/R-01 and confirm a subscriber
      receives it.
@@ -129,7 +129,7 @@ def check_env() -> None:
 
 async def check_postgres_gates() -> None:
     try:
-        rows = await db.fetch_all("SELECT count(*) AS n FROM jnpa.gates")
+        rows = await db.fetch_all("SELECT count(*) AS n FROM core.gate")
         n = int(rows[0]["n"]) if rows else -1
         R.record("2. postgres gates == 4", n == 4, f"found {n} rows")
     except Exception as exc:  # noqa: BLE001
@@ -196,7 +196,7 @@ async def check_postgres_write_read(record: AnprRead | None) -> None:
         record = _build_anpr()
     try:
         await db.insert_row(
-            "jnpa.anpr_reads",
+            "core.anpr_read",
             {
                 "ts": record.ts,
                 "camera_id": record.camera_id,
@@ -209,7 +209,7 @@ async def check_postgres_write_read(record: AnprRead | None) -> None:
             },
         )
         row = await db.fetch_one(
-            "SELECT plate, conf FROM jnpa.anpr_reads WHERE plate = :p ORDER BY ts DESC LIMIT 1",
+            "SELECT plate, conf FROM core.anpr_read WHERE plate = :p ORDER BY ts DESC LIMIT 1",
             {"p": TEST_PLATE},
         )
         ok = bool(row and row["plate"] == TEST_PLATE)

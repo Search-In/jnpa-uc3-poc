@@ -8,7 +8,7 @@ tests can pass a fake.
 
 Read-only + additive: nothing here writes to any existing table. The container
 timeline enriches CODECO events with the EXISTING Container Lifecycle status via a
-soft, best-effort read of jnpa.cargo (never required, never mutated).
+soft, best-effort read of core.cargo (never required, never mutated).
 """
 from __future__ import annotations
 

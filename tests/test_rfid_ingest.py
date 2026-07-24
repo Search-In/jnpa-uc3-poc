@@ -7,7 +7,7 @@ without infra.
 
 Tests
   1. Start emulator + consumer for ~30 s, assert >= 50 rows land in
-     jnpa.rfid_reads.
+     core.rfid_read.
   2. Inject one synthetic RFID tag + a matching ANPR plate at the same gate and
      assert a vehicle.confirmed message arrives within 6 s.
 """
@@ -100,7 +100,7 @@ def test_emulator_consumer_land_rows(monkeypatch):
     async def _count() -> int:
         conn = await asyncpg.connect(dsn=PG_DSN)
         try:
-            return await conn.fetchval("SELECT count(*) FROM jnpa.rfid_reads")
+            return await conn.fetchval("SELECT count(*) FROM core.rfid_read")
         finally:
             await conn.close()
 
@@ -158,7 +158,7 @@ def test_correlator_emits_vehicle_confirmed(monkeypatch):
     from correlator import Correlator
 
     gate = "G-NSICT"
-    camera_id = "CAM-NSICT-ENT"   # belongs to G-NSICT (jnpa.cameras seed)
+    camera_id = "CAM-NSICT-ENT"   # belongs to G-NSICT (core.camera seed)
     reader_id = "R-01"            # gate reader at G-NSICT (topology)
     plate = "MH04AB1234"
     tag = "E2801160" + uuid.uuid4().hex[:16].upper()

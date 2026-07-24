@@ -6,7 +6,7 @@ driver-facing alerts when they cross a configurable threshold:
     Traffic prediction
         -> detect_congested()          (pure: which segments are congested)
         -> raise_congestion_alerts()   (persist + dispatch)
-             -> jnpa.alerts + jnpa.notifications      (durable trail)
+             -> core.alert + core.notification      (durable trail)
              -> WebSocket + WebPush/FCM               (injected transports)
 
 Design (Clean Architecture): this module owns the detection + persistence logic
@@ -128,7 +128,7 @@ def _alert_id(segment_id: str, bucket: str) -> str:
 
 
 async def _persist_alert(dsn: str, alert_id: str, alert: CongestionAlert) -> bool:
-    """Insert one jnpa.alerts row (dedup by id). Returns True if newly inserted.
+    """Insert one core.alert row (dedup by id). Returns True if newly inserted.
 
     Uses ``execute_returning`` (a committed transaction), NOT ``fetch_one`` — the
     latter runs on a non-committing connection, so the INSERT would roll back on
@@ -138,7 +138,7 @@ async def _persist_alert(dsn: str, alert_id: str, alert: CongestionAlert) -> boo
 
     row = await execute_returning(
         """
-        INSERT INTO jnpa.alerts (id, kind, severity, gate_id, plate, payload)
+        INSERT INTO core.alert (id, kind, severity, gate_id, plate, payload)
         VALUES (CAST(:id AS uuid), :kind, :sev, :gate, NULL, CAST(:p AS jsonb))
         ON CONFLICT (id) DO NOTHING
         RETURNING id
@@ -156,7 +156,7 @@ async def _persist_notification(dsn: str, alert_id: str, alert: CongestionAlert,
 
     await execute(
         """
-        INSERT INTO jnpa.notifications (event_id, channel, receiver, message, delivery_status, provider_response)
+        INSERT INTO core.notification (event_id, channel, receiver, message, delivery_status, provider_response)
         VALUES (:e, 'push', :r, :m, :st, CAST(:p AS jsonb))
         """,
         {"e": alert_id, "r": receiver, "m": alert.recommended_action, "st": status,
@@ -180,11 +180,11 @@ async def raise_congestion_alerts(
     """Detect congestion and, for each newly-congested segment, create an alert.
 
     For each segment above ``threshold`` (and not already alerted this bucket):
-      1. write a ``jnpa.alerts`` row (dedup by deterministic id),
+      1. write a ``core.alert`` row (dedup by deterministic id),
       2. broadcast a ``type=alert`` WS frame (dashboard + foregrounded PWAs),
       3. push a per-driver advisory over ``dispatch`` to each ``device_targets``
          entry (WebPush/FCM), if provided, and
-      4. record a ``jnpa.notifications`` delivery row with a real status.
+      4. record a ``core.notification`` delivery row with a real status.
 
     Returns the list of alerts newly created this call (empty if none crossed the
     threshold, or all were already alerted this bucket). Every step is best-effort;

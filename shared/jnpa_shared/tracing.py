@@ -5,7 +5,7 @@ see the full causal chain a what-if scenario fires:
 
     ingest (truck.telemetry / cargo.dpd_release)
       -> AI (congestion /predict, anomaly engine)
-        -> alert (jnpa.alerts + Kafka "alerts")
+        -> alert (core.alert + Kafka "alerts")
           -> action (gate close, reroute, e-Challan, TAS reschedule)
 
 Design

@@ -12,13 +12,13 @@ redesign:
     GATE_WEIGHBRIDGE_MODE=live  GATE_WEIGHBRIDGE_URL=http://weighbridge-plc/api
 
 In LIVE mode a configured source is fetched over HTTP and the full
-request/response is logged to ``jnpa.api_audit_log`` (the deepest hop the gateway
+request/response is logged to ``core.api_audit_log`` (the deepest hop the gateway
 cannot see). If a source is set LIVE but its URL is absent, it degrades to SIM
 for that source (logged), so the service always serves.
 
 The seam is intentionally thin: `capture_source()` returns a normalized
 ``CaptureRecord`` regardless of provider, and the app persists it to
-``jnpa.gate_captures`` tagged with the actual ``source_mode`` used.
+``core.gate_capture`` tagged with the actual ``source_mode`` used.
 """
 from __future__ import annotations
 

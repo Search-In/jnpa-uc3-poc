@@ -3,12 +3,12 @@
 A single sink every AI output funnels through (ANPR, vehicle detection, illegal
 parking, wrong direction, queue detection, traffic density). Each event is:
 
-  1. persisted to jnpa.digital_twin_events   (via audit.record_event — reused)
-  2. raised as an alert in jnpa.alerts        (when severity warrants)
+  1. persisted to core.digital_twin_event   (via audit.record_event — reused)
+  2. raised as an alert in core.alert        (when severity warrants)
   3. logged as a driver notification          (via audit.log_notification — reused)
 
 Reuses the audit-framework helpers by CALLING them (the framework code is not
-modified). ANPR reads additionally persist to jnpa.anpr_reads via the gateway's
+modified). ANPR reads additionally persist to core.anpr_read via the gateway's
 ANPR pump (already wired) — this endpoint is the operational-action funnel.
 """
 from __future__ import annotations
@@ -102,7 +102,7 @@ async def ingest_ai_event(
         try:
             await execute(
                 """
-                INSERT INTO jnpa.alerts (id, kind, severity, plate, payload)
+                INSERT INTO core.alert (id, kind, severity, plate, payload)
                 VALUES (CAST(:id AS uuid), :kind, :sev, :plate, CAST(:p AS jsonb))
                 ON CONFLICT (id) DO NOTHING
                 """,
@@ -177,7 +177,7 @@ async def list_ai_events(
     limit: int = 100,
     state: GatewayState = Depends(get_state),
 ) -> dict:
-    """Recent AI events from jnpa.digital_twin_events (RDS)."""
+    """Recent AI events from core.digital_twin_event (RDS)."""
     from jnpa_shared.db import fetch_all
 
     where = ""
@@ -189,7 +189,7 @@ async def list_ai_events(
         rows = await fetch_all(
             f"""
             SELECT id, event_type, vehicle_id, driver_id, location, payload, created_at
-            FROM jnpa.digital_twin_events {where}
+            FROM core.digital_twin_event {where}
             ORDER BY created_at DESC LIMIT :limit
             """,
             params, dsn=state.cfg.postgres_dsn,

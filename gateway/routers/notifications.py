@@ -6,12 +6,12 @@ dispatcher (``gateway/notifications.py``) or the push registration/delivery surf
 "add a notification health endpoint" and "verify the delivery trail" items:
 
     GET /api/notifications/health   -> {websocket, webpush, fcm, sms} + detail
-    GET /api/notifications/recent   -> recent jnpa.notifications rows (delivery trail)
+    GET /api/notifications/recent   -> recent core.notification rows (delivery trail)
 
 The three device/WS transports and SMS each report whether they are actually
 usable right now (keys present, library importable, provider configured), so the
 demo can show the real posture instead of an assumed one. No delivery is faked:
-statuses come straight from the durable jnpa.notifications rows the dispatcher
+statuses come straight from the durable core.notification rows the dispatcher
 writes (PENDING / SENT / DELIVERED / FAILED / SKIPPED / NO_SUBSCRIPTION).
 """
 from __future__ import annotations
@@ -76,7 +76,7 @@ async def recent(
     receiver: str | None = Query(default=None),
     state: GatewayState = Depends(get_state),
 ) -> dict:
-    """Recent rows from the durable jnpa.notifications delivery trail.
+    """Recent rows from the durable core.notification delivery trail.
 
     Powers the notification-pipeline verification (and a demo evidence view): every
     dispatch — geofence violation, no-parking, restricted zone, reroute, customs,
@@ -92,7 +92,7 @@ async def recent(
             rows = await fetch_all(
                 """SELECT id, event_id, channel, receiver, message, delivery_status,
                           provider_response, created_at
-                   FROM jnpa.notifications WHERE receiver = :r
+                   FROM core.notification WHERE receiver = :r
                    ORDER BY created_at DESC LIMIT :n""",
                 {"r": receiver, "n": limit}, dsn=dsn,
             )
@@ -100,7 +100,7 @@ async def recent(
             rows = await fetch_all(
                 """SELECT id, event_id, channel, receiver, message, delivery_status,
                           provider_response, created_at
-                   FROM jnpa.notifications ORDER BY created_at DESC LIMIT :n""",
+                   FROM core.notification ORDER BY created_at DESC LIMIT :n""",
                 {"n": limit}, dsn=dsn,
             )
     except Exception as exc:  # noqa: BLE001

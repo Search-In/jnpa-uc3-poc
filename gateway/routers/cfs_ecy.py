@@ -2,9 +2,9 @@
 
 A thin router over :class:`services.cfs_ecy.CfsEcyService` (CfsEcyService →
 raw-SQL CfsEcyRepository), in the same mould as gateway/routers/drivers_master.py.
-It reads the off-dock gate-movement feed (jnpa.cfs_ecy_movements + the derived
-jnpa.v_cfs_ecy_dwell view) and enriches a container timeline with the EXISTING
-Container Lifecycle status via a soft, best-effort read of jnpa.cargo. It writes
+It reads the off-dock gate-movement feed (core.cfs_ecy_movement + the derived
+mart.v_cfs_ecy_dwell view) and enriches a container timeline with the EXISTING
+Container Lifecycle status via a soft, best-effort read of core.cargo. It writes
 nothing and touches no existing table — auth / JWT / RBAC / cargo / vehicle /
 driver / transporter are all untouched.
 
@@ -261,7 +261,7 @@ async def container_timeline(container_number: str,
 
 # ============================================================ Data Upload sub-module
 # Reusable upload workflow (module 13): template → validate (dry-run preview) → confirm
-# import. Reuses the SAME jnpa.cfs_ecy_movements table + its (facility_type,
+# import. Reuses the SAME core.cfs_ecy_movement table + its (facility_type,
 # container_number, event_ts, mode) UNIQUE key (idempotent). Write-gated to
 # CONTROL_ROOM + CUSTOMS (+ admin ⊂ control room). Facility (CFS/ECY) comes from the
 # selector — it is not a column in the JNPA CODECO files.

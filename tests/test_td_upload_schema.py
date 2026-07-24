@@ -16,38 +16,59 @@ for p in (str(REPO_ROOT / "shared"), str(REPO_ROOT)):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-_TABLE = re.compile(r"CREATE TABLE IF NOT EXISTS\s+(jnpa\.\w+)", re.IGNORECASE)
-_VIEW = re.compile(r"CREATE OR REPLACE VIEW\s+(jnpa\.\w+)", re.IGNORECASE)
+_TABLE = re.compile(r"CREATE TABLE IF NOT EXISTS\s+((?:core|mart)\.\w+)", re.IGNORECASE)
+_VIEW = re.compile(r"CREATE OR REPLACE VIEW\s+((?:core|mart)\.\w+)", re.IGNORECASE)
 
 
 def _objects(text: str) -> set[str]:
     return {m.lower() for m in _TABLE.findall(text)} | {m.lower() for m in _VIEW.findall(text)}
 
 
-def test_migration_and_ext_define_same_objects():
+
+# schema-v3: the boot-time DDL is retired (JNPA_RUNTIME_DDL gate); the canonical
+# definitions live in infra/postgres/v3/. The drift test now asserts every object
+# the ext DDL would create is defined by the v3 runbook (ext subset-of v3).
+def _v3_objects() -> set[str]:
+    from pathlib import Path as _P
+    root = _P(__file__).resolve().parents[1] / "infra" / "postgres" / "v3"
+    text = "\n".join(p.read_text() for p in sorted(root.glob("*.sql")))
+    pat_t = re.compile(r"CREATE TABLE (?:IF NOT EXISTS )?((?:core|mart|staging)\.\w+)", re.I)
+    pat_v = re.compile(r"CREATE (?:OR REPLACE )?VIEW ((?:core|mart)\.\w+)", re.I)
+    pat_a = re.compile(r"ALTER TABLE ((?:core|mart)\.\w+)", re.I)
+    return ({m.lower() for m in pat_t.findall(text)}
+            | {m.lower() for m in pat_v.findall(text)}
+            | {m.lower() for m in pat_a.findall(text)})
+
+
+def _ext_objects() -> set[str]:
     from gateway.td_upload_ext import _DDL
-    mig = (REPO_ROOT / "infra" / "postgres" / "migrations"
-           / "0035_transporters_drivers_upload.sql").read_text()
-    migration_objs = _objects(mig)
-    ext_objs = _objects("\n".join(_DDL))
-    assert migration_objs == ext_objs, (
-        f"schema drift between migration 0035 and td_upload_ext._DDL:\n"
-        f"  only in migration: {sorted(migration_objs - ext_objs)}\n"
-        f"  only in _DDL:      {sorted(ext_objs - migration_objs)}")
+    pat = re.compile(r"CREATE (?:TABLE (?:IF NOT EXISTS )?|(?:OR REPLACE )?VIEW )((?:core|mart)\.\w+)", re.I)
+    src = "\n".join(_DDL) if not isinstance(_DDL, str) else _DDL
+    return {m.lower() for m in pat.findall(src)}
+
+
+def test_migration_and_ext_define_same_objects():
+    """v3: every object the (retired) boot DDL would create must be defined by the
+    canonical infra/postgres/v3 runbook — the ext copy can never drift ahead."""
+    v3 = _v3_objects()
+    ext_objs = _ext_objects()
+    assert ext_objs, "no CREATE TABLE/VIEW found in ext _DDL"
+    missing = sorted(ext_objs - v3)
+    assert not missing, f"objects in ext _DDL missing from infra/postgres/v3: {missing}"
 
 
 def test_expected_upload_objects_present():
     from gateway.td_upload_ext import _DDL
     objs = _objects("\n".join(_DDL))
-    for name in ("jnpa.td_import_files", "jnpa.td_import_errors"):
+    for name in ("core.td_import_file", "core.td_import_error"):
         assert name in objs, f"missing Transporter/Driver upload object: {name}"
 
 
 def test_ext_adds_import_file_id_to_both_masters():
     from gateway.td_upload_ext import _DDL
     ddl = "\n".join(_DDL).lower()
-    assert "alter table jnpa.transporters" in ddl and "import_file_id" in ddl
-    assert "alter table jnpa.driver_master" in ddl
+    assert "alter table core.transporter" in ddl and "import_file_id" in ddl
+    assert "alter table core.driver" in ddl
 
 
 def test_status_vocabulary_is_the_reusable_set():

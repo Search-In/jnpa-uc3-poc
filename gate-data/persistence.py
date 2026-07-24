@@ -2,7 +2,7 @@
 
 Makes e-Seal / Form-13 / Weighbridge / ICEGATE captures and Auto-LEO
 reconciliations durable in Postgres (the single source of truth), and writes
-customs flags to ``jnpa.alerts`` so the customs feed survives a restart and is
+customs flags to ``core.alert`` so the customs feed survives a restart and is
 queryable for audit / reporting.
 
 Deliberately lives INSIDE the gate-data service (not the shared package) so it
@@ -14,6 +14,8 @@ Every writer is best-effort: a DB blip must never break capture/serve. The DDL
 is idempotent (mirrors migration 0004) and applied at service boot.
 """
 from __future__ import annotations
+
+import os
 
 import json
 import uuid
@@ -29,8 +31,8 @@ log = get_logger("gate_data.persistence")
 _ALERT_NS = uuid.UUID("6f1b2c3d-4e5a-6b7c-8d9e-0a1b2c3d4e5f")
 
 _DDL = """
-CREATE SCHEMA IF NOT EXISTS jnpa;
-CREATE TABLE IF NOT EXISTS jnpa.gate_captures (
+CREATE SCHEMA IF NOT EXISTS core;
+CREATE TABLE IF NOT EXISTS core.gate_capture (
     id            bigserial PRIMARY KEY,
     capture_type  text NOT NULL
                   CHECK (capture_type IN ('ESEAL','FORM13','WEIGHBRIDGE','ICEGATE')),
@@ -44,11 +46,11 @@ CREATE TABLE IF NOT EXISTS jnpa.gate_captures (
     created_at    timestamptz NOT NULL DEFAULT now(),
     UNIQUE (container_no, capture_type, captured_at)
 );
-CREATE INDEX IF NOT EXISTS idx_gate_captures_container ON jnpa.gate_captures (container_no);
-CREATE INDEX IF NOT EXISTS idx_gate_captures_plate     ON jnpa.gate_captures (vehicle_plate);
-CREATE INDEX IF NOT EXISTS idx_gate_captures_type_ts   ON jnpa.gate_captures (capture_type, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_gate_captures_ts        ON jnpa.gate_captures (created_at DESC);
-CREATE TABLE IF NOT EXISTS jnpa.leo_reconciliation (
+CREATE INDEX IF NOT EXISTS idx_gate_captures_container ON core.gate_capture (container_no);
+CREATE INDEX IF NOT EXISTS idx_gate_captures_plate     ON core.gate_capture (vehicle_plate);
+CREATE INDEX IF NOT EXISTS idx_gate_captures_type_ts   ON core.gate_capture (capture_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_gate_captures_ts        ON core.gate_capture (created_at DESC);
+CREATE TABLE IF NOT EXISTS core.leo_reconciliation (
     id             bigserial PRIMARY KEY,
     container_no   text,
     vehicle_plate  text,
@@ -58,9 +60,9 @@ CREATE TABLE IF NOT EXISTS jnpa.leo_reconciliation (
     source_mode    text NOT NULL DEFAULT 'sim',
     reconciled_at  timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS idx_leo_recon_container ON jnpa.leo_reconciliation (container_no, reconciled_at DESC);
-CREATE INDEX IF NOT EXISTS idx_leo_recon_ready     ON jnpa.leo_reconciliation (leo_ready, reconciled_at DESC);
-CREATE INDEX IF NOT EXISTS idx_leo_recon_ts        ON jnpa.leo_reconciliation (reconciled_at DESC);
+CREATE INDEX IF NOT EXISTS idx_leo_recon_container ON core.leo_reconciliation (container_no, reconciled_at DESC);
+CREATE INDEX IF NOT EXISTS idx_leo_recon_ready     ON core.leo_reconciliation (leo_ready, reconciled_at DESC);
+CREATE INDEX IF NOT EXISTS idx_leo_recon_ts        ON core.leo_reconciliation (reconciled_at DESC);
 """
 
 _SCHEMA_READY: Dict[str, bool] = {}
@@ -88,6 +90,9 @@ def _parse_ts(value: Any) -> Optional[datetime]:
 
 async def ensure_gate_schema(dsn: Optional[str]) -> None:
     """Apply the idempotent gate/customs DDL once per DSN (best-effort, cached)."""
+    if os.getenv("JNPA_RUNTIME_DDL", "0") != "1":
+        # schema-v3: DDL is owned by infra/postgres/v3 migrations, never runtime.
+        return
     if not dsn or _SCHEMA_READY.get(dsn):
         return
     from jnpa_shared.db import execute
@@ -123,7 +128,7 @@ async def upsert_capture(
     try:
         await execute(
             """
-            INSERT INTO jnpa.gate_captures
+            INSERT INTO core.gate_capture
                 (capture_type, container_no, vehicle_plate, gate_id, source_mode,
                  status, captured_at, payload)
             VALUES
@@ -168,7 +173,7 @@ async def record_reconciliation(
     try:
         await execute(
             """
-            INSERT INTO jnpa.leo_reconciliation
+            INSERT INTO core.leo_reconciliation
                 (container_no, vehicle_plate, leo_ready, customs_flags, checks, source_mode)
             VALUES
                 (:container_no, :vehicle_plate, :leo_ready,
@@ -197,11 +202,11 @@ async def raise_customs_alert(
     payload: Dict[str, Any],
     dsn: Optional[str] = None,
 ) -> None:
-    """Write a durable CUSTOMS_FLAG row to jnpa.alerts (idempotent per container+flag).
+    """Write a durable CUSTOMS_FLAG row to core.alert (idempotent per container+flag).
 
     Uses a deterministic uuid5(container|flag) as the alert id so re-reconciling
     the same corpus on restart does not duplicate the customs feed. The gateway
-    alert pump mirrors this into jnpa.digital_twin_events automatically.
+    alert pump mirrors this into core.digital_twin_event automatically.
     """
     if not dsn:
         return
@@ -211,10 +216,10 @@ async def raise_customs_alert(
     body = {"source": "gate-data", "container_no": container_no,
             "vehicle_plate": vehicle_plate, "flag": flag, **payload}
     try:
-        # Durable customs feed (reports/police read jnpa.alerts). Idempotent.
+        # Durable customs feed (reports/police read core.alert). Idempotent.
         rc = await execute(
             """
-            INSERT INTO jnpa.alerts (id, kind, severity, plate, payload)
+            INSERT INTO core.alert (id, kind, severity, plate, payload)
             VALUES (CAST(:id AS uuid), 'CUSTOMS_FLAG', :severity, :plate,
                     CAST(:payload AS jsonb))
             ON CONFLICT (id) DO NOTHING
@@ -231,11 +236,11 @@ async def raise_customs_alert(
     try:
         await execute(
             """
-            INSERT INTO jnpa.digital_twin_events
+            INSERT INTO core.digital_twin_event
                 (event_type, vehicle_id, location, payload)
             SELECT 'CUSTOMS_ALERT', :plate, CAST(:loc AS jsonb), CAST(:payload AS jsonb)
             WHERE NOT EXISTS (
-                SELECT 1 FROM jnpa.digital_twin_events
+                SELECT 1 FROM core.digital_twin_event
                 WHERE event_type = 'CUSTOMS_ALERT'
                   AND payload->>'alert_id' = :alert_id
             )
@@ -263,7 +268,7 @@ async def log_api_audit(
     transaction_id: Optional[str] = None,
     dsn: Optional[str] = None,
 ) -> None:
-    """Log a deepest-hop external call (LIVE provider) to jnpa.api_audit_log.
+    """Log a deepest-hop external call (LIVE provider) to core.api_audit_log.
 
     Same table/shape the gateway middleware uses; this captures the gate-data ->
     vendor hop that the gateway cannot see. No-op until a LIVE endpoint is set.
@@ -275,7 +280,7 @@ async def log_api_audit(
     try:
         await execute(
             """
-            INSERT INTO jnpa.api_audit_log
+            INSERT INTO core.api_audit_log
                 (service_name, endpoint, method, request_payload, response_payload,
                  status_code, latency_ms, error, transaction_id)
             VALUES
@@ -315,7 +320,7 @@ async def recent_captures(
             f"""
             SELECT id, capture_type, container_no, vehicle_plate, gate_id,
                    source_mode, status, captured_at, payload, created_at
-            FROM jnpa.gate_captures
+            FROM core.gate_capture
             {clause}
             ORDER BY created_at DESC
             LIMIT :limit
@@ -345,7 +350,7 @@ async def recent_reconciliations(
             f"""
             SELECT id, container_no, vehicle_plate, leo_ready, customs_flags,
                    checks, source_mode, reconciled_at
-            FROM jnpa.leo_reconciliation
+            FROM core.leo_reconciliation
             {where}
             ORDER BY reconciled_at DESC
             LIMIT :limit
@@ -359,7 +364,7 @@ async def recent_reconciliations(
 
 
 async def customs_flag_history(*, limit: int = 200, dsn: Optional[str] = None) -> List[dict]:
-    """Durable customs feed from jnpa.alerts (survives restart)."""
+    """Durable customs feed from core.alert (survives restart)."""
     if not dsn:
         return []
     from jnpa_shared.db import fetch_all
@@ -368,7 +373,7 @@ async def customs_flag_history(*, limit: int = 200, dsn: Optional[str] = None) -
         rows = await fetch_all(
             """
             SELECT id, ts, kind, severity, plate, payload, ack
-            FROM jnpa.alerts
+            FROM core.alert
             WHERE kind = 'CUSTOMS_FLAG'
             ORDER BY ts DESC
             LIMIT :limit

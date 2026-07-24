@@ -191,7 +191,7 @@ def test_live_returns_503_without_token(monkeypatch):
 @pytest.mark.skipif(_pg_host_dsn() is None,
                     reason="Postgres not reachable on localhost:5433; run `make up` first.")
 def test_vehicle_master_grows_after_batch(monkeypatch):
-    """A batch of RC lookups increases jnpa.vehicle_master's row count."""
+    """A batch of RC lookups increases core.vehicle_rc's row count."""
     import asyncio
 
     dsn = _pg_host_dsn()

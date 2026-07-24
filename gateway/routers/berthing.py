@@ -297,7 +297,7 @@ async def upload_detail(file_id: int, request: Request,
 
 # ============================================================ Full-extract sub-module (module 7)
 # Verbatim capture of EVERY table on a terminal berthing PDF (docs/BERTHING_PDF_DATA_AUDIT.md),
-# stored additively in jnpa.berthing_report_documents / berthing_report_tables. Runs alongside —
+# stored additively in core.berthing_report_document / berthing_report_tables. Runs alongside —
 # never touching — the normalised vessel-call store. Write-gated to CONTROL_ROOM + CUSTOMS.
 def _extract_or_400(content: bytes, filename: str) -> Dict[str, Any]:
     try:
@@ -362,7 +362,7 @@ async def document_tables(document_id: int, request: Request,
 async def document_full_view(document_id: int, request: Request,
                              repo: BerthingDocumentRepository = Depends(get_doc_repo)) -> Dict[str, Any]:
     """The Report-Details view surface: returns the document header + EVERY row of EVERY
-    table stored in jnpa.berthing_report_tables, exactly as extracted. No filtering, no
+    table stored in core.berthing_report_table, exactly as extracted. No filtering, no
     column dropping, no value transformation — the frontend renders columns dynamically
     from ``columns`` so every terminal (APMT/BMCT/NSFT/NSICT/NSIGT) works unchanged."""
     require_uploader(request)

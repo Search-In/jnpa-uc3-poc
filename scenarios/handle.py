@@ -4,8 +4,8 @@ A handle is created at the start of ``run()``; each downstream action a scenario
 causes calls ``handle.step(...)`` which:
 
   1. appends the step to the in-memory timeline,
-  2. persists it to ``jnpa.scenario_steps`` (replay survives a reload),
-  3. mirrors the trigger source + detail into ``jnpa.scenarios.params.steps[]``
+  2. persists it to ``core.scenario_step`` (replay survives a reload),
+  3. mirrors the trigger source + detail into ``core.scenario.params.steps[]``
      (the reactive-workflow audit the spec requires),
   4. fans it out to dashboard WS clients via the gateway
      ``POST /api/scenario_step`` (``type=scenario_step``).
@@ -96,7 +96,7 @@ class ScenarioHandle:
         try:
             await execute(
                 """
-                INSERT INTO jnpa.scenario_steps
+                INSERT INTO core.scenario_step
                     (handle_id, step_no, ts, title, status, trigger, detail)
                 VALUES (:hid, :no, :ts, :title, :status, :trigger, CAST(:detail AS jsonb))
                 """,
@@ -110,7 +110,7 @@ class ScenarioHandle:
             # Mirror into scenarios.params.steps[] (audit).
             await execute(
                 """
-                UPDATE jnpa.scenarios
+                UPDATE core.scenario
                 SET params = jsonb_set(
                     coalesce(params, '{}'::jsonb), '{steps}',
                     coalesce(params->'steps', '[]'::jsonb) || CAST(:step AS jsonb), true)
@@ -156,7 +156,7 @@ class ScenarioHandle:
         try:
             await execute(
                 """
-                INSERT INTO jnpa.scenarios (id, name, started_at, params)
+                INSERT INTO core.scenario (id, name, started_at, params)
                 VALUES (:id, :name, now(), CAST(:params AS jsonb))
                 ON CONFLICT (id) DO UPDATE SET started_at = now(), params = EXCLUDED.params
                 """,
@@ -166,7 +166,7 @@ class ScenarioHandle:
             )
             await execute(
                 """
-                INSERT INTO jnpa.scenario_handles
+                INSERT INTO core.scenario_handle
                     (handle_id, name, status, params, trace_id, started_at)
                 VALUES (:hid, :name, 'RUNNING', CAST(:params AS jsonb), :trace, now())
                 ON CONFLICT (handle_id) DO NOTHING
@@ -184,12 +184,12 @@ class ScenarioHandle:
         from jnpa_shared.db import execute
         try:
             await execute(
-                "UPDATE jnpa.scenario_handles SET status = :s, ended_at = now() WHERE handle_id = :hid",
+                "UPDATE core.scenario_handle SET status = :s, ended_at = now() WHERE handle_id = :hid",
                 {"s": status, "hid": self.handle_id}, dsn=self.cfg.postgres_dsn,
             )
             if status in ("DONE", "RESET"):
                 await execute(
-                    "UPDATE jnpa.scenarios SET ended_at = now() WHERE id = :hid",
+                    "UPDATE core.scenario SET ended_at = now() WHERE id = :hid",
                     {"hid": self.handle_id}, dsn=self.cfg.postgres_dsn,
                 )
         except Exception as exc:  # noqa: BLE001

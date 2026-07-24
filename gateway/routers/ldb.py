@@ -3,8 +3,8 @@
 Container tracking + movement history over the Logistics Data Bank (LDB). Every
 external lookup goes through the shared integration seam
 (:mod:`gateway.integrations`) so the LIVE-vs-MOCK posture is explicit and each
-call is audited to jnpa.integration_lookups. Movement history is additionally
-persisted to jnpa.ldb_movements (migration 0024) so it survives and can be
+call is audited to core.integration_lookup. Movement history is additionally
+persisted to core.ldb_movement (migration 0024) so it survives and can be
 augmented with manually recorded events.
 
     GET  /api/ldb/container/{container_number}            -> current tracking
@@ -116,7 +116,7 @@ async def ldb_movements(container_number: str,
                         state: GatewayState = Depends(get_state)) -> dict:
     """Movement history for a container.
 
-    Reads persisted rows from jnpa.ldb_movements first (newest first); if none
+    Reads persisted rows from core.ldb_movement first (newest first); if none
     exist, fetches the chain from the LDB adapter and persists each returned
     movement (INSERT with its source) before returning.
     """
@@ -127,7 +127,7 @@ async def ldb_movements(container_number: str,
         from jnpa_shared.db import fetch_all
         rows = await fetch_all(
             """SELECT ts, container_number, event, location, terminal, mode, source, detail
-                 FROM jnpa.ldb_movements
+                 FROM core.ldb_movement
                 WHERE container_number = :cn
                 ORDER BY ts DESC""",
             {"cn": container_number}, dsn=dsn)
@@ -152,7 +152,7 @@ async def ldb_movements(container_number: str,
         for m in movements:
             try:
                 await execute(
-                    """INSERT INTO jnpa.ldb_movements
+                    """INSERT INTO core.ldb_movement
                          (ts, container_number, event, location, terminal, mode, source, detail)
                        VALUES (COALESCE(CAST(:ts AS timestamptz), now()), :cn, :event,
                                :location, :terminal, :mode, :source, CAST(:detail AS jsonb))""",
@@ -178,7 +178,7 @@ async def ldb_movements(container_number: str,
 @router.post("/movements")
 async def record_movement(body: Dict[str, Any] = Body(...),
                           state: GatewayState = Depends(get_state)) -> dict:
-    """Manually record a container movement into jnpa.ldb_movements.
+    """Manually record a container movement into core.ldb_movement.
 
     Body: {container_number, event, location, terminal, mode, detail?}.
     """
@@ -192,7 +192,7 @@ async def record_movement(body: Dict[str, Any] = Body(...),
 
     from jnpa_shared.db import execute_returning
     row = await execute_returning(
-        """INSERT INTO jnpa.ldb_movements
+        """INSERT INTO core.ldb_movement
              (container_number, event, location, terminal, mode, source, detail)
            VALUES (:cn, :event, :location, :terminal, :mode, 'MANUAL', CAST(:detail AS jsonb))
            RETURNING ts, container_number, event, location, terminal, mode, source, detail""",

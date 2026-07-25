@@ -60,11 +60,19 @@ def random_origin(rng: random.Random, gate_id: str, radius_km: float) -> Tuple[f
     bearing into the inland (eastward / north-east / south-east) half so origins
     don't fall in the Arabian Sea. Distance is sqrt-weighted for a roughly
     uniform area distribution within the disc.
+
+    The sector stops at 170°, not 210°: the Konkan coast falls away to the
+    south-west, so from JNPA a bearing past ~180° leaves land well inside the
+    100 km radius. OpenStreetMap probes (nearest highway within 3 km) confirm
+    land at 30/90/150/170° out to 100 km, but open water at 180° @ 100 km,
+    190° @ 60 and 100 km, and 200° @ 60 km — which is where trucks were being
+    spawned mid-sea and then dead-reckoned across it.
     """
     glat, glon = GATE_COORDS[gate_id]
-    # Inland half-plane: bearings roughly E (45°..225° clockwise from north),
-    # i.e. avoid the western sea. Keep a 10 km minimum so trips aren't trivial.
-    bearing_deg = rng.uniform(30.0, 210.0)
+    # Inland sector: NNE..SSE (30°..170° clockwise from north). Avoids both the
+    # western sea and the south-western Arabian Sea. 10 km minimum so trips
+    # aren't trivial.
+    bearing_deg = rng.uniform(30.0, 170.0)
     dist_km = max(10.0, radius_km * math.sqrt(rng.random()))
     return _project(glat, glon, bearing_deg, dist_km)
 

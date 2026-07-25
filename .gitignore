@@ -63,3 +63,4 @@ node_modules/
 web/dist/
 mobile-pwa/dist/
 web/_attic/
+.env.migration-test

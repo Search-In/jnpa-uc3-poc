@@ -9,7 +9,7 @@ ship infra/, so the DDL is embedded here rather than read from the .sql file).
 Every statement is CREATE ... IF NOT EXISTS / CREATE OR REPLACE VIEW: running it
 against a DB that already has the objects (because the migration ran) is a no-op.
 It DROPS/ALTERS nothing existing and touches no cargo / gate / auth tables — the
-customs rows soft-link to jnpa.cargo BY VALUE (container_no), never by FK.
+customs rows soft-link to core.cargo BY VALUE (container_no), never by FK.
 
 Called once from gateway/main.py::_lifespan (best-effort; a DB blip only logs).
 Also reused by scripts/import_customs.py so the importer is self-contained.
@@ -18,6 +18,8 @@ The _DDL list below MUST stay in lock-step with migration 0031; the test
 tests/test_customs_schema.py asserts both define the same table/view set.
 """
 from __future__ import annotations
+
+import os
 
 from typing import Optional
 
@@ -28,9 +30,9 @@ log = get_logger("gateway.customs_ext")
 # One idempotent statement per list item (SQLAlchemy text() runs a single
 # statement per execute()). Mirrors migration 0031 exactly.
 _DDL: list[str] = [
-    "CREATE SCHEMA IF NOT EXISTS jnpa",
+    "CREATE SCHEMA IF NOT EXISTS core",
     # -------------------------------------------------- import ledger / envelope
-    """CREATE TABLE IF NOT EXISTS jnpa.customs_messages (
+    """CREATE TABLE IF NOT EXISTS core.customs_message (
         id               bigserial PRIMARY KEY,
         message_type     text NOT NULL
                          CHECK (message_type IN ('CHPOI03','CHPOI10','CHPOI13','RMS','LEO','SHIPPING_BILL')),
@@ -54,22 +56,22 @@ _DDL: list[str] = [
         created_at       timestamptz NOT NULL DEFAULT now(),
         updated_at       timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_customs_message_sha UNIQUE (source_sha256))""",
-    "CREATE INDEX IF NOT EXISTS idx_customs_msg_module ON jnpa.customs_messages (module, id DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_customs_msg_type   ON jnpa.customs_messages (message_type, id DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_customs_msg_ref    ON jnpa.customs_messages (primary_ref)",
-    "CREATE INDEX IF NOT EXISTS idx_customs_msg_status ON jnpa.customs_messages (import_status, id DESC)",
-    """CREATE TABLE IF NOT EXISTS jnpa.customs_import_errors (
+    "CREATE INDEX IF NOT EXISTS idx_customs_msg_module ON core.customs_message (module, id DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_customs_msg_type   ON core.customs_message (message_type, id DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_customs_msg_ref    ON core.customs_message (primary_ref)",
+    "CREATE INDEX IF NOT EXISTS idx_customs_msg_status ON core.customs_message (import_status, id DESC)",
+    """CREATE TABLE IF NOT EXISTS core.customs_import_error (
         id           bigserial PRIMARY KEY,
-        message_id   bigint NOT NULL REFERENCES jnpa.customs_messages(id) ON DELETE CASCADE,
+        message_id   bigint NOT NULL REFERENCES core.customs_message(id) ON DELETE CASCADE,
         record_ref   text,
         error_code   text NOT NULL,
         error_detail text,
         created_at   timestamptz NOT NULL DEFAULT now())""",
-    "CREATE INDEX IF NOT EXISTS idx_customs_import_err_msg ON jnpa.customs_import_errors (message_id, id)",
+    "CREATE INDEX IF NOT EXISTS idx_customs_import_err_msg ON core.customs_import_error (message_id, id)",
     # -------------------------------------------------------------------- IGM
-    """CREATE TABLE IF NOT EXISTS jnpa.customs_igm_vessel (
+    """CREATE TABLE IF NOT EXISTS core.igm (
         id                     bigserial PRIMARY KEY,
-        message_id             bigint NOT NULL REFERENCES jnpa.customs_messages(id) ON DELETE CASCADE,
+        message_id             bigint NOT NULL REFERENCES core.customs_message(id) ON DELETE CASCADE,
         customs_house_code     text,
         igm_no                 text NOT NULL,
         igm_date               date,
@@ -88,11 +90,11 @@ _DDL: list[str] = [
         terminal_operator_code text,
         created_at             timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_igm_vessel UNIQUE (igm_no, igm_date))""",
-    "CREATE INDEX IF NOT EXISTS idx_igm_vessel_msg ON jnpa.customs_igm_vessel (message_id)",
-    "CREATE INDEX IF NOT EXISTS idx_igm_vessel_igm ON jnpa.customs_igm_vessel (igm_no)",
-    """CREATE TABLE IF NOT EXISTS jnpa.customs_igm_cargo_line (
+    "CREATE INDEX IF NOT EXISTS idx_igm_vessel_msg ON core.igm (message_id)",
+    "CREATE INDEX IF NOT EXISTS idx_igm_vessel_igm ON core.igm (igm_no)",
+    """CREATE TABLE IF NOT EXISTS core.igm_line (
         id                  bigserial PRIMARY KEY,
-        vessel_id           bigint NOT NULL REFERENCES jnpa.customs_igm_vessel(id) ON DELETE CASCADE,
+        vessel_id           bigint NOT NULL REFERENCES core.igm(id) ON DELETE CASCADE,
         igm_no              text NOT NULL,
         igm_date            date,
         line_no             integer NOT NULL,
@@ -120,12 +122,12 @@ _DDL: list[str] = [
         be_regularised      text,
         created_at          timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_igm_line UNIQUE (vessel_id, line_no, subline_no))""",
-    "CREATE INDEX IF NOT EXISTS idx_igm_line_vessel ON jnpa.customs_igm_cargo_line (vessel_id)",
-    "CREATE INDEX IF NOT EXISTS idx_igm_line_igm    ON jnpa.customs_igm_cargo_line (igm_no, line_no, subline_no)",
-    "CREATE INDEX IF NOT EXISTS idx_igm_line_bl     ON jnpa.customs_igm_cargo_line (bl_no)",
-    """CREATE TABLE IF NOT EXISTS jnpa.customs_igm_container (
+    "CREATE INDEX IF NOT EXISTS idx_igm_line_vessel ON core.igm_line (vessel_id)",
+    "CREATE INDEX IF NOT EXISTS idx_igm_line_igm    ON core.igm_line (igm_no, line_no, subline_no)",
+    "CREATE INDEX IF NOT EXISTS idx_igm_line_bl     ON core.igm_line (bl_no)",
+    """CREATE TABLE IF NOT EXISTS core.igm_line_container (
         id                   bigserial PRIMARY KEY,
-        cargo_line_id        bigint NOT NULL REFERENCES jnpa.customs_igm_cargo_line(id) ON DELETE CASCADE,
+        cargo_line_id        bigint NOT NULL REFERENCES core.igm_line(id) ON DELETE CASCADE,
         igm_no               text NOT NULL,
         line_no              integer NOT NULL,
         subline_no           integer NOT NULL DEFAULT 0,
@@ -140,13 +142,13 @@ _DDL: list[str] = [
         soc_flag             text,
         created_at           timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_igm_container UNIQUE (cargo_line_id, container_no))""",
-    "CREATE INDEX IF NOT EXISTS idx_igm_cont_line ON jnpa.customs_igm_container (cargo_line_id)",
-    "CREATE INDEX IF NOT EXISTS idx_igm_cont_no   ON jnpa.customs_igm_container (container_no)",
-    "CREATE INDEX IF NOT EXISTS idx_igm_cont_igm  ON jnpa.customs_igm_container (igm_no, line_no)",
+    "CREATE INDEX IF NOT EXISTS idx_igm_cont_line ON core.igm_line_container (cargo_line_id)",
+    "CREATE INDEX IF NOT EXISTS idx_igm_cont_no   ON core.igm_line_container (container_no)",
+    "CREATE INDEX IF NOT EXISTS idx_igm_cont_igm  ON core.igm_line_container (igm_no, line_no)",
     # -------------------------------------------------------------------- OOC
-    """CREATE TABLE IF NOT EXISTS jnpa.customs_ooc (
+    """CREATE TABLE IF NOT EXISTS core.bill_of_entry_ooc (
         id                      bigserial PRIMARY KEY,
-        message_id              bigint NOT NULL REFERENCES jnpa.customs_messages(id) ON DELETE CASCADE,
+        message_id              bigint NOT NULL REFERENCES core.customs_message(id) ON DELETE CASCADE,
         customs_house_code      text,
         igm_no                  text,
         igm_date                date,
@@ -174,23 +176,23 @@ _DDL: list[str] = [
         total_customs_duty      numeric,
         created_at              timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_ooc_boe UNIQUE (bill_of_entry_no, line_no, subline_no))""",
-    "CREATE INDEX IF NOT EXISTS idx_ooc_msg ON jnpa.customs_ooc (message_id)",
-    "CREATE INDEX IF NOT EXISTS idx_ooc_igm ON jnpa.customs_ooc (igm_no, line_no)",
-    "CREATE INDEX IF NOT EXISTS idx_ooc_boe ON jnpa.customs_ooc (bill_of_entry_no)",
-    "CREATE INDEX IF NOT EXISTS idx_ooc_ooc ON jnpa.customs_ooc (out_of_charge_no)",
-    """CREATE TABLE IF NOT EXISTS jnpa.customs_ooc_container (
+    "CREATE INDEX IF NOT EXISTS idx_ooc_msg ON core.bill_of_entry_ooc (message_id)",
+    "CREATE INDEX IF NOT EXISTS idx_ooc_igm ON core.bill_of_entry_ooc (igm_no, line_no)",
+    "CREATE INDEX IF NOT EXISTS idx_ooc_boe ON core.bill_of_entry_ooc (bill_of_entry_no)",
+    "CREATE INDEX IF NOT EXISTS idx_ooc_ooc ON core.bill_of_entry_ooc (out_of_charge_no)",
+    """CREATE TABLE IF NOT EXISTS core.ooc_item (
         id               bigserial PRIMARY KEY,
-        ooc_id           bigint NOT NULL REFERENCES jnpa.customs_ooc(id) ON DELETE CASCADE,
+        ooc_id           bigint NOT NULL REFERENCES core.bill_of_entry_ooc(id) ON DELETE CASCADE,
         bill_of_entry_no text NOT NULL,
         container_no     text NOT NULL,
         iso_valid        boolean NOT NULL DEFAULT true,
         created_at       timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_ooc_container UNIQUE (ooc_id, container_no))""",
-    "CREATE INDEX IF NOT EXISTS idx_ooc_cont_ooc ON jnpa.customs_ooc_container (ooc_id)",
-    "CREATE INDEX IF NOT EXISTS idx_ooc_cont_no  ON jnpa.customs_ooc_container (container_no)",
-    """CREATE TABLE IF NOT EXISTS jnpa.customs_ooc_item (
+    "CREATE INDEX IF NOT EXISTS idx_ooc_cont_ooc ON core.ooc_item (ooc_id)",
+    "CREATE INDEX IF NOT EXISTS idx_ooc_cont_no  ON core.ooc_item (container_no)",
+    """CREATE TABLE IF NOT EXISTS core.ooc_item (
         id               bigserial PRIMARY KEY,
-        ooc_container_id bigint NOT NULL REFERENCES jnpa.customs_ooc_container(id) ON DELETE CASCADE,
+        ooc_container_id bigint NOT NULL REFERENCES core.ooc_item(id) ON DELETE CASCADE,
         invoice_number   text,
         item_sr_no       integer,
         item_description  text,
@@ -199,12 +201,12 @@ _DDL: list[str] = [
         assessable_value numeric,
         created_at       timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_ooc_item UNIQUE (ooc_container_id, invoice_number, item_sr_no))""",
-    "CREATE INDEX IF NOT EXISTS idx_ooc_item_cont ON jnpa.customs_ooc_item (ooc_container_id)",
-    "CREATE INDEX IF NOT EXISTS idx_ooc_item_hs   ON jnpa.customs_ooc_item (hs_classification)",
+    "CREATE INDEX IF NOT EXISTS idx_ooc_item_cont ON core.ooc_item (ooc_container_id)",
+    "CREATE INDEX IF NOT EXISTS idx_ooc_item_hs   ON core.ooc_item (hs_classification)",
     # -------------------------------------------------------------------- SMTP
-    """CREATE TABLE IF NOT EXISTS jnpa.customs_smtp (
+    """CREATE TABLE IF NOT EXISTS core.smtp_permit (
         id                     bigserial PRIMARY KEY,
-        message_id             bigint NOT NULL REFERENCES jnpa.customs_messages(id) ON DELETE CASCADE,
+        message_id             bigint NOT NULL REFERENCES core.customs_message(id) ON DELETE CASCADE,
         customs_house_code     text,
         smtp_no                text NOT NULL,
         smtp_date              date,
@@ -216,12 +218,12 @@ _DDL: list[str] = [
         terminal_operator_code text,
         created_at             timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_smtp UNIQUE (smtp_no))""",
-    "CREATE INDEX IF NOT EXISTS idx_smtp_msg  ON jnpa.customs_smtp (message_id)",
-    "CREATE INDEX IF NOT EXISTS idx_smtp_igm  ON jnpa.customs_smtp (igm_no)",
-    "CREATE INDEX IF NOT EXISTS idx_smtp_bond ON jnpa.customs_smtp (bond_no)",
-    """CREATE TABLE IF NOT EXISTS jnpa.customs_smtp_line (
+    "CREATE INDEX IF NOT EXISTS idx_smtp_msg  ON core.smtp_permit (message_id)",
+    "CREATE INDEX IF NOT EXISTS idx_smtp_igm  ON core.smtp_permit (igm_no)",
+    "CREATE INDEX IF NOT EXISTS idx_smtp_bond ON core.smtp_permit (bond_no)",
+    """CREATE TABLE IF NOT EXISTS core.smtp_container (
         id               bigserial PRIMARY KEY,
-        smtp_id          bigint NOT NULL REFERENCES jnpa.customs_smtp(id) ON DELETE CASCADE,
+        smtp_id          bigint NOT NULL REFERENCES core.smtp_permit(id) ON DELETE CASCADE,
         smtp_no          text NOT NULL,
         line_no          integer NOT NULL,
         subline_no       integer NOT NULL DEFAULT 0,
@@ -237,12 +239,12 @@ _DDL: list[str] = [
         unit_of_qty      text,
         created_at       timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_smtp_line UNIQUE (smtp_id, line_no, container_no))""",
-    "CREATE INDEX IF NOT EXISTS idx_smtp_line_smtp ON jnpa.customs_smtp_line (smtp_id)",
-    "CREATE INDEX IF NOT EXISTS idx_smtp_line_cont ON jnpa.customs_smtp_line (container_no)",
+    "CREATE INDEX IF NOT EXISTS idx_smtp_line_smtp ON core.smtp_container (smtp_id)",
+    "CREATE INDEX IF NOT EXISTS idx_smtp_line_cont ON core.smtp_container (container_no)",
     # -------------------------------------------------------------------- RMS
-    """CREATE TABLE IF NOT EXISTS jnpa.customs_rms_scanlist (
+    """CREATE TABLE IF NOT EXISTS core.rms_scan_report (
         id                  bigserial PRIMARY KEY,
-        message_id          bigint NOT NULL REFERENCES jnpa.customs_messages(id) ON DELETE CASCADE,
+        message_id          bigint NOT NULL REFERENCES core.customs_message(id) ON DELETE CASCADE,
         customs_house       text,
         shipping_line       text,
         shipping_agent      text,
@@ -256,10 +258,10 @@ _DDL: list[str] = [
         selected_count      integer NOT NULL DEFAULT 0,
         created_at          timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_rms_scanlist UNIQUE (igm_no))""",
-    "CREATE INDEX IF NOT EXISTS idx_rms_scan_msg ON jnpa.customs_rms_scanlist (message_id)",
-    """CREATE TABLE IF NOT EXISTS jnpa.customs_rms_container (
+    "CREATE INDEX IF NOT EXISTS idx_rms_scan_msg ON core.rms_scan_report (message_id)",
+    """CREATE TABLE IF NOT EXISTS core.rms_scan_container (
         id            bigserial PRIMARY KEY,
-        scanlist_id   bigint NOT NULL REFERENCES jnpa.customs_rms_scanlist(id) ON DELETE CASCADE,
+        scanlist_id   bigint NOT NULL REFERENCES core.rms_scan_report(id) ON DELETE CASCADE,
         igm_no        text NOT NULL,
         sl_no         integer,
         container_no  text NOT NULL,
@@ -270,24 +272,24 @@ _DDL: list[str] = [
         goods_desc    text,
         created_at    timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_rms_container UNIQUE (scanlist_id, container_no))""",
-    "CREATE INDEX IF NOT EXISTS idx_rms_cont_scan ON jnpa.customs_rms_container (scanlist_id)",
-    "CREATE INDEX IF NOT EXISTS idx_rms_cont_no   ON jnpa.customs_rms_container (container_no)",
+    "CREATE INDEX IF NOT EXISTS idx_rms_cont_scan ON core.rms_scan_container (scanlist_id)",
+    "CREATE INDEX IF NOT EXISTS idx_rms_cont_no   ON core.rms_scan_container (container_no)",
     # ---------------------------------------------------------- Shipping Bill
-    """CREATE TABLE IF NOT EXISTS jnpa.customs_shipping_bill (
+    """CREATE TABLE IF NOT EXISTS core.shipping_bill (
         id         bigserial PRIMARY KEY,
-        message_id bigint NOT NULL REFERENCES jnpa.customs_messages(id) ON DELETE CASCADE,
+        message_id bigint NOT NULL REFERENCES core.customs_message(id) ON DELETE CASCADE,
         sb_no      text NOT NULL,
         sb_date    date,
         site_id    text,
         action     text,
         created_at timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_shipping_bill UNIQUE (sb_no))""",
-    "CREATE INDEX IF NOT EXISTS idx_sb_msg  ON jnpa.customs_shipping_bill (message_id)",
-    "CREATE INDEX IF NOT EXISTS idx_sb_date ON jnpa.customs_shipping_bill (sb_date)",
+    "CREATE INDEX IF NOT EXISTS idx_sb_msg  ON core.shipping_bill (message_id)",
+    "CREATE INDEX IF NOT EXISTS idx_sb_date ON core.shipping_bill (sb_date)",
     # -------------------------------------------------------------------- LEO
-    """CREATE TABLE IF NOT EXISTS jnpa.customs_leo (
+    """CREATE TABLE IF NOT EXISTS core.leo (
         id          bigserial PRIMARY KEY,
-        message_id  bigint NOT NULL REFERENCES jnpa.customs_messages(id) ON DELETE CASCADE,
+        message_id  bigint NOT NULL REFERENCES core.customs_message(id) ON DELETE CASCADE,
         sb_no       text NOT NULL,
         sb_date     date,
         site_id     text,
@@ -296,10 +298,10 @@ _DDL: list[str] = [
         action      text,
         created_at  timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_leo UNIQUE (sb_no, leo_date))""",
-    "CREATE INDEX IF NOT EXISTS idx_leo_msg ON jnpa.customs_leo (message_id)",
-    "CREATE INDEX IF NOT EXISTS idx_leo_sb  ON jnpa.customs_leo (sb_no)",
+    "CREATE INDEX IF NOT EXISTS idx_leo_msg ON core.leo (message_id)",
+    "CREATE INDEX IF NOT EXISTS idx_leo_sb  ON core.leo (sb_no)",
     # ---------------------------------------------------------- event log
-    """CREATE TABLE IF NOT EXISTS jnpa.customs_events (
+    """CREATE TABLE IF NOT EXISTS core.customs_event (
         id           bigserial PRIMARY KEY,
         event        text NOT NULL,
         module       text,
@@ -307,27 +309,27 @@ _DDL: list[str] = [
         container_no text,
         payload      jsonb NOT NULL DEFAULT '{}'::jsonb,
         created_at   timestamptz NOT NULL DEFAULT now())""",
-    "CREATE INDEX IF NOT EXISTS idx_customs_events_id     ON jnpa.customs_events (id DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_customs_events_cont   ON jnpa.customs_events (container_no, id DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_customs_events_event  ON jnpa.customs_events (event, id DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_customs_events_module ON jnpa.customs_events (module, id DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_customs_events_id     ON core.customs_event (id DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_customs_events_cont   ON core.customs_event (container_no, id DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_customs_events_event  ON core.customs_event (event, id DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_customs_events_module ON core.customs_event (module, id DESC)",
     # ---------------------------------------------- derived per-container status
-    """CREATE OR REPLACE VIEW jnpa.v_customs_container_status AS
+    """CREATE OR REPLACE VIEW mart.v_customs_container_status AS
         WITH cont AS (
-            SELECT container_no, igm_no FROM jnpa.customs_igm_container
-            UNION SELECT container_no, igm_no FROM jnpa.customs_ooc_container oc
-                  JOIN jnpa.customs_ooc o ON o.id = oc.ooc_id
-            UNION SELECT container_no, igm_no FROM jnpa.customs_smtp_line sl
-                  JOIN jnpa.customs_smtp s ON s.id = sl.smtp_id
-            UNION SELECT container_no, igm_no FROM jnpa.customs_rms_container
+            SELECT container_no, igm_no FROM core.igm_line_container
+            UNION SELECT container_no, igm_no FROM core.ooc_item oc
+                  JOIN core.bill_of_entry_ooc o ON o.id = oc.ooc_id
+            UNION SELECT container_no, igm_no FROM core.smtp_container sl
+                  JOIN core.smtp_permit s ON s.id = sl.smtp_id
+            UNION SELECT container_no, igm_no FROM core.rms_scan_container
         )
         SELECT
             c.container_no,
             max(c.igm_no) AS igm_no,
-            EXISTS (SELECT 1 FROM jnpa.customs_igm_container ic WHERE ic.container_no = c.container_no) AS declared_igm,
-            EXISTS (SELECT 1 FROM jnpa.customs_rms_container rc WHERE rc.container_no = c.container_no) AS rms_selected,
-            EXISTS (SELECT 1 FROM jnpa.customs_ooc_container oc WHERE oc.container_no = c.container_no) AS ooc_cleared,
-            EXISTS (SELECT 1 FROM jnpa.customs_smtp_line     sl WHERE sl.container_no = c.container_no) AS smtp_bonded
+            EXISTS (SELECT 1 FROM core.igm_line_container ic WHERE ic.container_no = c.container_no) AS declared_igm,
+            EXISTS (SELECT 1 FROM core.rms_scan_container rc WHERE rc.container_no = c.container_no) AS rms_selected,
+            EXISTS (SELECT 1 FROM core.ooc_item oc WHERE oc.container_no = c.container_no) AS ooc_cleared,
+            EXISTS (SELECT 1 FROM core.smtp_container     sl WHERE sl.container_no = c.container_no) AS smtp_bonded
         FROM cont c
         GROUP BY c.container_no""",
 ]
@@ -335,6 +337,9 @@ _DDL: list[str] = [
 
 async def ensure_customs_schema(dsn: Optional[str] = None) -> None:
     """Create the customs tables + view if absent. Idempotent; safe to call every boot."""
+    if os.getenv("JNPA_RUNTIME_DDL", "0") != "1":
+        # schema-v3: DDL is owned by infra/postgres/v3 migrations, never runtime.
+        return
     from sqlalchemy import text
 
     from jnpa_shared.db import get_engine

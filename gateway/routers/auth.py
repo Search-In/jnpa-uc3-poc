@@ -116,7 +116,7 @@ async def device_token(body: DeviceTokenBody,
 
     Driver-profile eligibility gate: when ``REQUIRE_DRIVER_PROFILE`` is enabled the
     entered Vehicle ID (== ``device_id``) MUST be assigned to an ACTIVE driver in
-    jnpa.drivers, otherwise the pairing is refused with 403. This closes the gap
+    core.driver_identity, otherwise the pairing is refused with 403. This closes the gap
     where any well-formed ``TRK-######`` could pair; the assignment is created by a
     Control-Room admin and confirmed on approval. Default-off for migration safety.
 

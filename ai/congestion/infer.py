@@ -16,7 +16,7 @@ topic ``traffic.predictions`` once per minute.
 The live feature window is assembled from:
   * the SourceManager (google -> here -> tomtom -> stale cache) for current
     speed / jam_factor per segment, and
-  * recent ``jnpa.traffic_snapshots`` rows (best-effort) for the earlier part of
+  * recent ``core.traffic_snapshot`` rows (best-effort) for the earlier part of
     the 30-step window. With neither available it falls back to the synthetic
     generator so /predict always returns a full segment map.
 """
@@ -296,7 +296,7 @@ async def backfill(req: BackfillRequest = BackfillRequest()) -> dict:
 
 
 async def _store_snapshots(rows: List[HistoryRow]) -> int:
-    """Best-effort persist of the live readings into jnpa.traffic_snapshots."""
+    """Best-effort persist of the live readings into core.traffic_snapshot."""
     try:
         import psycopg  # type: ignore
     except Exception:  # noqa: BLE001
@@ -308,7 +308,7 @@ async def _store_snapshots(rows: List[HistoryRow]) -> int:
         with psycopg.connect(cfg.postgres_dsn_libpq, connect_timeout=3) as conn:
             with conn.cursor() as cur:
                 cur.executemany(
-                    "INSERT INTO jnpa.traffic_snapshots (ts, segment_id, speed_kmh, jam_factor, source)"
+                    "INSERT INTO core.traffic_snapshot (ts, segment_id, speed_kmh, jam_factor, source)"
                     " VALUES (%s, %s, %s, %s, %s)",
                     [(r.ts, r.segment_id, r.speed_kmh, r.jam_factor, r.source) for r in recent],
                 )

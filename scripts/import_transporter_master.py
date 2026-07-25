@@ -2,12 +2,12 @@
 """Idempotent importer for the official Transport Master dataset.
 
 Loads ``TransporterDetails.xlsx`` (JNPA source system) into the EXISTING
-``jnpa.transporters`` entity. This is additive: it only touches the Transport
+``core.transporter`` entity. This is additive: it only touches the Transport
 Master columns added by migration 0025 and NEVER touches the blacklist,
 vehicle-mapping or validation tables. Existing operator-entered rows (which have
 no ``source_company_id``) are left alone.
 
-Idempotency key: the source ``company_id`` -> ``jnpa.transporters.source_company_id``
+Idempotency key: the source ``company_id`` -> ``core.transporter.source_company_id``
 (a UNIQUE index). Re-running upserts by that key, so:
   * a brand-new company_id      -> INSERTED
   * a known company_id, changed -> UPDATED
@@ -217,7 +217,7 @@ def load_rows(xlsx_path: str, limit: Optional[int]) -> List[Dict[str, Any]]:
 
 # --- upsert ------------------------------------------------------------------
 _UPSERT = """
-INSERT INTO jnpa.transporters AS t
+INSERT INTO core.transporter AS t
     (source_company_id, source_user_id, name, contact_person, designation,
      email, mobile, address, doc_type, doc_file, contact, status)
 VALUES

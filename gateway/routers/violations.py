@@ -8,12 +8,12 @@ police-visible incident the existing Reports page + PDF export render unchanged.
 Reused, never rebuilt:
   * ANPR plate read        -> ai/anpr (the same upstream /api/anpr/infer proxies),
                               degrading to the gateway's synthetic read.
-  * Vehicle registry       -> jnpa.vehicle_master (owner / class / RTO / FASTag).
-  * Driver mapping         -> jnpa.drivers / jnpa.driver_enrollments (vehicle_no).
+  * Vehicle registry       -> core.vehicle_rc (owner / class / RTO / FASTag).
+  * Driver mapping         -> core.driver_identity / core.driver_enrollment (vehicle_no).
   * Fine schedule          -> reports._CHALLAN (single source of truth for the
                               MVA section + ₹ fine per kind).
   * Evidence store         -> MinIO `evidence` bucket (same bucket ai/anomaly uses).
-  * Incident store         -> jnpa.alerts (so /api/reports/police picks them up
+  * Incident store         -> core.alert (so /api/reports/police picks them up
                               automatically — no schema change, no new table).
 
     POST /api/violations/detect  (multipart image)  -> run ANPR + vehicle/driver
@@ -22,7 +22,7 @@ Reused, never rebuilt:
         violation(s) before issuing a challan.
 
     POST /api/violations/commit  (json)             -> persist the confirmed
-        violation(s) as jnpa.alerts rows (one per kind, each carrying its own
+        violation(s) as core.alert rows (one per kind, each carrying its own
         e-Challan fine) that share one case_id + evidence_url, and return the
         aggregated incident (vehicle, driver, violations[], fine_total, ...).
 
@@ -147,7 +147,7 @@ async def _run_anpr(
 
 
 async def _lookup_vehicle(state: GatewayState, plate: Optional[str]) -> Optional[dict]:
-    """Owner / class / RTO / FASTag from jnpa.vehicle_master (best-effort)."""
+    """Owner / class / RTO / FASTag from core.vehicle_rc (best-effort)."""
     if not plate:
         return None
     from jnpa_shared.db import fetch_one
@@ -157,7 +157,7 @@ async def _lookup_vehicle(state: GatewayState, plate: Optional[str]) -> Optional
             """
             SELECT plate, owner_name_masked, vehicle_class, state, rto_code,
                    fastag_status, blacklist_status
-            FROM jnpa.vehicle_master
+            FROM core.vehicle_rc
             WHERE plate = :plate
             """,
             {"plate": plate}, dsn=state.cfg.postgres_dsn,
@@ -183,7 +183,7 @@ async def _lookup_driver(state: GatewayState, plate: Optional[str]) -> Optional[
         row = await fetch_one(
             """
             SELECT driver_id, name, status, vehicle_no
-            FROM jnpa.drivers
+            FROM core.driver_identity
             WHERE upper(replace(vehicle_no, ' ', '')) = :norm
             ORDER BY enrolled_at DESC
             LIMIT 1
@@ -194,7 +194,7 @@ async def _lookup_driver(state: GatewayState, plate: Optional[str]) -> Optional[
             row = await fetch_one(
                 """
                 SELECT driver_id, name, status, vehicle_no
-                FROM jnpa.driver_enrollments
+                FROM core.driver_enrollment
                 WHERE upper(replace(vehicle_no, ' ', '')) = :norm
                 ORDER BY submitted_at DESC
                 LIMIT 1
@@ -314,7 +314,7 @@ async def _zone_kind(state: GatewayState, zone_id: Optional[str]) -> Optional[st
 
     try:
         row = await fetch_one(
-            "SELECT kind FROM jnpa.geofence_zones WHERE id = :z",
+            "SELECT kind FROM core.geofence_zone WHERE id = :z",
             {"z": zone_id}, dsn=state.cfg.postgres_dsn,
         )
     except Exception as exc:  # pragma: no cover - infra-timing dependent
@@ -331,7 +331,7 @@ async def commit(
 ) -> dict:
     """Persist the operator-confirmed violation(s) as an enforcement CASE.
 
-    Flow (all idempotent): open/get the case → attach one jnpa.alerts row per kind
+    Flow (all idempotent): open/get the case → attach one core.alert row per kind
     (deduped on case_id+kind, so a re-submit is a no-op) → advance the lifecycle
     DETECTED→REVIEWED→CONFIRMED → (default) issue the immutable challan and advance
     to CHALLAN_ISSUED. Alert rows keep their existing shape so the Reports page +
@@ -457,7 +457,7 @@ async def _commit_case(
     """Shared enforcement core used by BOTH /commit (manual) and /enforce (auto).
 
     Idempotent throughout: ensure schema → open/get case → dedup-insert one
-    jnpa.alerts row per kind → walk lifecycle to CONFIRMED → (if issue) mint the
+    core.alert row per kind → walk lifecycle to CONFIRMED → (if issue) mint the
     immutable challan and advance to CHALLAN_ISSUED. Raises on DB failure; the
     calling endpoint maps that to a 503 (never a fabricated enforcement record).
     """

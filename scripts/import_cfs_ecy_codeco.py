@@ -2,13 +2,13 @@
 """Idempotent importer for the CFS-ECY CODECO gate-movement feeds (module 13).
 
 Loads the two JNPA CODECO workbooks into the ADDITIVE table from migration 0027:
-  * CFS-CODECO.xlsx -> jnpa.cfs_ecy_movements (facility_type='CFS')
-  * ECY-CODECO.xlsx -> jnpa.cfs_ecy_movements (facility_type='ECY')
+  * CFS-CODECO.xlsx -> core.cfs_ecy_movement (facility_type='CFS')
+  * ECY-CODECO.xlsx -> core.cfs_ecy_movement (facility_type='ECY')
 
 Each file has three columns: "Container Number", "Timestamp", "Mode".
 Purely additive — it NEVER touches cargo / empty_container / vehicle / driver /
 transporter / auth tables. It only appends raw gate events; the container_number
-soft-links to jnpa.cargo BY VALUE (no FK).
+soft-links to core.cargo BY VALUE (no FK).
 
 Per row:
   * container_number : trimmed, validated with jnpa_shared.iso6346 (iso_valid flag)
@@ -137,7 +137,7 @@ def load_sheet(xlsx: str, cols, limit: Optional[int]) -> List[Dict[str, Any]]:
 
 
 _INSERT = """
-INSERT INTO jnpa.cfs_ecy_movements
+INSERT INTO core.cfs_ecy_movement
     (facility_type, container_number, iso_valid, event_ts, mode, source, source_file)
 VALUES
     (:facility_type, :container_number, :iso_valid, :event_ts, :mode, :source, :source_file)

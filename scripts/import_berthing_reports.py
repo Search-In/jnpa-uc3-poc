@@ -9,7 +9,7 @@ migration 0036 via services.berthing.repository.BerthingRepository.persist:
     APM Terminals   -> APMT      BMCT_PSA -> BMCT      NSFT -> NSFT
     NSICT_DP World  -> NSICT     NSIGT_DP World -> NSIGT
 
-Each PDF is ledgered as one jnpa.berthing_import_files row (physical_format='PDF',
+Each PDF is ledgered as one core.berthing_import_file row (physical_format='PDF',
 source='DIRECTORY'); its bytes are sha256-deduped so re-running is a safe no-op
 (SKIPPED_DUPLICATE). Vessel calls upsert on (terminal, voyage_number, vessel_name):
 consecutive daily snapshots advance the lifecycle status and fill timestamps, and

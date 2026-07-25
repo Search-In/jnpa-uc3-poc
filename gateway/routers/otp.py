@@ -5,8 +5,8 @@ Replaces the static PWA pairing with an OTP-based login:
     POST /api/auth/otp/request  {mobile, device_id?}     -> issue OTP (SMS-ready)
     POST /api/auth/otp/verify   {mobile, otp, device_id} -> verify -> session token
 
-Every OTP + delivery is persisted (jnpa.otp_requests + jnpa.notifications); a
-successful verify binds the device (jnpa.device_bindings), promotes/links a
+Every OTP + delivery is persisted (core.otp_request + core.notification); a
+successful verify binds the device (core.device_binding), promotes/links a
 driver, and mints a DRIVER session JWT via the existing auth token seam
 (encode_token) — real session management, no redesign for a live SMS provider.
 
@@ -37,17 +37,17 @@ _OTP_TTL_S = 300  # 5 minutes
 _MAX_ATTEMPTS = 5
 
 _DDL = (
-    """CREATE TABLE IF NOT EXISTS jnpa.otp_requests (
+    """CREATE TABLE IF NOT EXISTS core.otp_request (
         id bigserial PRIMARY KEY, mobile text NOT NULL, device_id text,
         code_hash text NOT NULL, expires_at timestamptz NOT NULL,
         verified boolean NOT NULL DEFAULT false, attempts integer NOT NULL DEFAULT 0,
         created_at timestamptz NOT NULL DEFAULT now())""",
-    "CREATE INDEX IF NOT EXISTS idx_otp_mobile ON jnpa.otp_requests (mobile, created_at DESC)",
-    """CREATE TABLE IF NOT EXISTS jnpa.device_bindings (
+    "CREATE INDEX IF NOT EXISTS idx_otp_mobile ON core.otp_request (mobile, created_at DESC)",
+    """CREATE TABLE IF NOT EXISTS core.device_binding (
         device_id text PRIMARY KEY, mobile text NOT NULL, driver_id text,
         bound_at timestamptz NOT NULL DEFAULT now(),
         last_seen timestamptz NOT NULL DEFAULT now(), active boolean NOT NULL DEFAULT true)""",
-    "CREATE INDEX IF NOT EXISTS idx_device_bindings_mobile ON jnpa.device_bindings (mobile)",
+    "CREATE INDEX IF NOT EXISTS idx_device_bindings_mobile ON core.device_binding (mobile)",
 )
 _READY: dict = {}
 
@@ -67,6 +67,9 @@ def _gen_otp(mobile: str) -> str:
 
 
 async def _ensure(dsn: Optional[str]) -> None:
+    if os.getenv("JNPA_RUNTIME_DDL", "0") != "1":
+        # schema-v3: DDL is owned by infra/postgres/v3 migrations, never runtime.
+        return
     if not dsn or _READY.get(dsn):
         return
     from jnpa_shared.db import execute
@@ -103,7 +106,7 @@ async def request_otp(body: dict = Body(...), state: GatewayState = Depends(get_
     try:
         await execute(
             """
-            INSERT INTO jnpa.otp_requests (mobile, device_id, code_hash, expires_at)
+            INSERT INTO core.otp_request (mobile, device_id, code_hash, expires_at)
             VALUES (:m, :d, :h, :e)
             """,
             {"m": mobile, "d": device_id, "h": _hash(otp, mobile), "e": expires},
@@ -143,7 +146,7 @@ async def verify_otp(body: dict = Body(...), state: GatewayState = Depends(get_s
     row = await fetch_one(
         """
         SELECT id, code_hash, expires_at, verified, attempts
-        FROM jnpa.otp_requests
+        FROM core.otp_request
         WHERE mobile = :m AND verified = false
         ORDER BY created_at DESC LIMIT 1
         """,
@@ -158,7 +161,7 @@ async def verify_otp(body: dict = Body(...), state: GatewayState = Depends(get_s
         raise HTTPException(status_code=410, detail={"error": "otp_expired"})
     ok = hmac.compare_digest(row["code_hash"], _hash(otp, mobile))
     # Record the attempt (committed) regardless of outcome.
-    await execute("UPDATE jnpa.otp_requests SET attempts = attempts + 1, verified = :v WHERE id = :id",
+    await execute("UPDATE core.otp_request SET attempts = attempts + 1, verified = :v WHERE id = :id",
                   {"v": ok, "id": row["id"]}, dsn=dsn)
     if not ok:
         await audit.record_decision_audit(request_id=mobile, rule_executed="otp-verify",
@@ -171,7 +174,7 @@ async def verify_otp(body: dict = Body(...), state: GatewayState = Depends(get_s
     try:
         await execute(
             """
-            INSERT INTO jnpa.device_bindings (device_id, mobile, driver_id, last_seen, active)
+            INSERT INTO core.device_binding (device_id, mobile, driver_id, last_seen, active)
             VALUES (:d, :m, :drv, now(), true)
             ON CONFLICT (device_id) DO UPDATE SET mobile = EXCLUDED.mobile,
                 driver_id = EXCLUDED.driver_id, last_seen = now(), active = true
@@ -180,7 +183,7 @@ async def verify_otp(body: dict = Body(...), state: GatewayState = Depends(get_s
         )
         await execute(
             """
-            INSERT INTO jnpa.drivers (driver_id, name, mobile, status, provider, updated_at)
+            INSERT INTO core.driver_identity (driver_id, name, mobile, status, provider, updated_at)
             VALUES (:id, :name, :m, 'ACTIVE', 'otp', now())
             ON CONFLICT (driver_id) DO UPDATE SET mobile = EXCLUDED.mobile, updated_at = now()
             """,
@@ -214,7 +217,7 @@ async def _bind_and_mint(dsn, *, mobile: str, device_id: str, provider: str) -> 
     try:
         await execute(
             """
-            INSERT INTO jnpa.device_bindings (device_id, mobile, driver_id, last_seen, active)
+            INSERT INTO core.device_binding (device_id, mobile, driver_id, last_seen, active)
             VALUES (:d, :m, :drv, now(), true)
             ON CONFLICT (device_id) DO UPDATE SET mobile = EXCLUDED.mobile,
                 driver_id = EXCLUDED.driver_id, last_seen = now(), active = true
@@ -223,7 +226,7 @@ async def _bind_and_mint(dsn, *, mobile: str, device_id: str, provider: str) -> 
         )
         await execute(
             """
-            INSERT INTO jnpa.drivers (driver_id, name, mobile, status, provider, updated_at)
+            INSERT INTO core.driver_identity (driver_id, name, mobile, status, provider, updated_at)
             VALUES (:id, :name, :m, 'ACTIVE', :prov, now())
             ON CONFLICT (driver_id) DO UPDATE SET mobile = EXCLUDED.mobile, updated_at = now()
             """,
@@ -290,12 +293,12 @@ async def refresh_token(body: dict = Body(...), state: GatewayState = Depends(ge
     from jnpa_shared.db import execute, fetch_one
 
     row = await fetch_one(
-        "SELECT mobile, driver_id, active FROM jnpa.device_bindings WHERE device_id = :d",
+        "SELECT mobile, driver_id, active FROM core.device_binding WHERE device_id = :d",
         {"d": device_id}, dsn=dsn,
     )
     if row is None or not row["active"]:
         raise HTTPException(status_code=401, detail={"error": "device_not_bound_or_revoked"})
-    await execute("UPDATE jnpa.device_bindings SET last_seen = now() WHERE device_id = :d",
+    await execute("UPDATE core.device_binding SET last_seen = now() WHERE device_id = :d",
                   {"d": device_id}, dsn=dsn)
     token = encode_token(sub=row["driver_id"] or f"MOB:{row['mobile']}", role="DRIVER",
                          device_id=device_id)
@@ -316,7 +319,7 @@ async def logout(body: dict = Body(...), state: GatewayState = Depends(get_state
     await _ensure(dsn)
     from jnpa_shared.db import execute
 
-    await execute("UPDATE jnpa.device_bindings SET active = false WHERE device_id = :d",
+    await execute("UPDATE core.device_binding SET active = false WHERE device_id = :d",
                   {"d": device_id}, dsn=dsn)
     await audit.record_decision_audit(request_id=device_id, rule_executed="device-logout",
                                       decision="REVOKED", action_taken="UNBIND",
@@ -334,7 +337,7 @@ async def session_status(device_id: str, state: GatewayState = Depends(get_state
     from jnpa_shared.db import fetch_one
 
     row = await fetch_one(
-        "SELECT mobile, driver_id, active, bound_at, last_seen FROM jnpa.device_bindings WHERE device_id = :d",
+        "SELECT mobile, driver_id, active, bound_at, last_seen FROM core.device_binding WHERE device_id = :d",
         {"d": device_id}, dsn=state.cfg.postgres_dsn,
     )
     if row is None:

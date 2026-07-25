@@ -538,7 +538,7 @@ class CargoService:
 
     async def optimize_yard(self) -> dict:
         """Compute a yard congestion score + move recommendations from the live
-        jnpa.cargo yard occupancy. Deterministic: groups containers by block
+        core.cargo yard occupancy. Deterministic: groups containers by block
         letter-zone; recommends relieving the busiest zone (keep one, move the rest)."""
         rows = await self._repo.list_yarded_containers()
         zones: dict[str, list[str]] = {}

@@ -1061,7 +1061,7 @@ def test_real_db_roundtrip():
             ya = c.put(f"/api/cargo/{cn}/yard-assignment", json={"yard_block": "D-04"})
             assert ya.status_code == 200 and ya.json()["status"] == "ASSIGNED"
             assert c.get(f"/api/cargo/{cn}").json()["yard_block"] == "D-04"
-            # Lifecycle events were recorded in jnpa.cargo_events for this container.
+            # Lifecycle events were recorded in core.cargo_event for this container.
             evs = c.get("/api/cargo/events", params={"container_number": cn}).json()
             kinds = {e["event"] for e in evs}
             assert {"cargo.created", "cargo.released", "cargo.yard_assigned"} <= kinds

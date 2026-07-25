@@ -2,7 +2,7 @@
 
 Pure tests for the feature flag; a DB+data-gated integration test that imports the
 real customer files, runs the adapter, and asserts real ICEGATE captures land in
-jnpa.gate_captures in the UNCHANGED GateCapture shape — with the ICEGATE provider
+core.gate_capture in the UNCHANGED GateCapture shape — with the ICEGATE provider
 badge flipping to LIVE while e-Seal / Form-13 / Weighbridge stay SIM and untouched.
 """
 from __future__ import annotations
@@ -92,11 +92,11 @@ def test_adapter_produces_real_icegate_captures():
         await persistence.ensure_gate_schema(_DSN)
         # Clean slate for both the customs docs and the ICEGATE gate captures.
         async with get_engine(_DSN).begin() as conn:
-            await conn.execute(text("TRUNCATE jnpa.customs_messages RESTART IDENTITY CASCADE"))
-            await conn.execute(text("DELETE FROM jnpa.gate_captures WHERE capture_type='ICEGATE'"))
+            await conn.execute(text("TRUNCATE core.customs_message RESTART IDENTITY CASCADE"))
+            await conn.execute(text("DELETE FROM core.gate_capture WHERE capture_type='ICEGATE'"))
             # Seed one synthetic ESEAL row to prove the adapter never touches it.
             await conn.execute(text(
-                "INSERT INTO jnpa.gate_captures (capture_type, container_no, source_mode, "
+                "INSERT INTO core.gate_capture (capture_type, container_no, source_mode, "
                 "status, captured_at) VALUES ('ESEAL','TESTESEAL0','sim','ARMED', now()) "
                 "ON CONFLICT DO NOTHING"))
 
@@ -131,14 +131,14 @@ def test_adapter_produces_real_icegate_captures():
         # The adapter touched ONLY ICEGATE — the ESEAL row is intact.
         async with get_engine(_DSN).connect() as conn:
             eseal = (await conn.execute(text(
-                "SELECT count(*) FROM jnpa.gate_captures WHERE capture_type='ESEAL'"))).scalar()
+                "SELECT count(*) FROM core.gate_capture WHERE capture_type='ESEAL'"))).scalar()
         assert int(eseal) >= 1
 
         # --- Symmetric rollback: purge_live removes ALL live ICEGATE rows -------------
         async def live_count() -> int:
             async with get_engine(_DSN).connect() as conn:
                 return int((await conn.execute(text(
-                    "SELECT count(*) FROM jnpa.gate_captures "
+                    "SELECT count(*) FROM core.gate_capture "
                     "WHERE capture_type='ICEGATE' AND source_mode='live'"))).scalar())
 
         assert await live_count() > 0
@@ -148,7 +148,7 @@ def test_adapter_produces_real_icegate_captures():
         # ESEAL still intact after rollback (rollback touches only ICEGATE/live).
         async with get_engine(_DSN).connect() as conn:
             eseal2 = (await conn.execute(text(
-                "SELECT count(*) FROM jnpa.gate_captures WHERE capture_type='ESEAL'"))).scalar()
+                "SELECT count(*) FROM core.gate_capture WHERE capture_type='ESEAL'"))).scalar()
         assert int(eseal2) == int(eseal)
 
     from jnpa_shared.db import dispose_all

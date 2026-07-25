@@ -111,7 +111,7 @@ class VahanRecord(_Base):
 
     Field set mirrors the Parivahan RC schema (see ``ingest/vahan_sim``). The
     legacy fields (``rc_type``, ``owner_hash`` …) are kept for backward
-    compatibility with the ``jnpa.vehicle_master`` writeback path; new code
+    compatibility with the ``core.vehicle_rc`` writeback path; new code
     should prefer the canonical fields below.
     """
 
@@ -133,7 +133,7 @@ class VahanRecord(_Base):
     rto_code: Optional[str] = None
     blacklist_status: BlacklistStatus = BlacklistStatus.CLEAR
 
-    # --- Legacy / writeback compatibility fields (jnpa.vehicle_master) ---
+    # --- Legacy / writeback compatibility fields (core.vehicle_rc) ---
     plate: Optional[str] = None
     rc_type: Optional[str] = None
     owner_hash: Optional[str] = None
@@ -190,7 +190,7 @@ class FastagPing(_Base):
 
 
 class ServiceRegistration(_Base):
-    """A row in ``jnpa.services`` — how a service advertises itself for the
+    """A row in ``core.ulip_service`` — how a service advertises itself for the
     fallback orchestrator (Prompt 4) to discover sim vs. live endpoints."""
 
     name: str                       # logical service e.g. "vahan"

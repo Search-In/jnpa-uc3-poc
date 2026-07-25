@@ -3,7 +3,7 @@
 Three console entrypoints share this package (and one Docker image):
 
   * ``rfid-emulator``   — 25 logical UHF readers publishing reads over MQTT.
-  * ``rfid-consumer``   — MQTT subscriber -> Timescale (jnpa.rfid_reads) + Kafka.
+  * ``rfid-consumer``   — MQTT subscriber -> Timescale (core.rfid_read) + Kafka.
   * ``rfid-correlator`` — joins rfid.reads with anpr.reads -> vehicle.confirmed.
 """
 

@@ -5,7 +5,7 @@ raw-SQL ShippingLinesRepository), in the same mould as gateway/routers/customs.p
 It exposes the Import/Export Advance Lists and Electronic Delivery Orders imported
 from the OFFICIAL JNPA customer files (migration 0032) plus an admin import trigger,
 and cross-links a container to its shipping-line facts via the
-jnpa.v_shipping_line_container view — a soft, by-value join to jnpa.cargo. It
+mart.v_shipping_line_container view — a soft, by-value join to core.cargo. It
 touches no existing table.
 
     GET  /api/shipping-lines/summary                     -> dashboard counts

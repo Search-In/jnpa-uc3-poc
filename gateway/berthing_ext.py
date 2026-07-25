@@ -15,6 +15,8 @@ the two define the identical object set).
 """
 from __future__ import annotations
 
+import os
+
 from typing import Optional
 
 from .logging import get_logger
@@ -24,8 +26,8 @@ log = get_logger("gateway.berthing_ext")
 # One idempotent statement per list item (SQLAlchemy text() runs a single statement
 # per execute()). Mirrors migration 0036 exactly.
 _DDL: list[str] = [
-    "CREATE SCHEMA IF NOT EXISTS jnpa",
-    """CREATE TABLE IF NOT EXISTS jnpa.berthing_reports (
+    "CREATE SCHEMA IF NOT EXISTS core",
+    """CREATE TABLE IF NOT EXISTS core.berthing_record (
         id                    bigserial PRIMARY KEY,
         terminal              text NOT NULL,
         vessel_name           text NOT NULL,
@@ -48,21 +50,21 @@ _DDL: list[str] = [
         created_at            timestamptz NOT NULL DEFAULT now(),
         updated_at            timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_berthing_call UNIQUE (terminal, voyage_number, vessel_name))""",
-    "CREATE INDEX IF NOT EXISTS idx_berthing_terminal_status ON jnpa.berthing_reports (terminal, status)",
-    "CREATE INDEX IF NOT EXISTS idx_berthing_voyage ON jnpa.berthing_reports (voyage_number)",
-    "CREATE INDEX IF NOT EXISTS idx_berthing_vessel ON jnpa.berthing_reports (vessel_name)",
-    "CREATE INDEX IF NOT EXISTS idx_berthing_eta ON jnpa.berthing_reports (eta DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_berthing_import_file ON jnpa.berthing_reports (import_file_id)",
-    """CREATE TABLE IF NOT EXISTS jnpa.berthing_events (
+    "CREATE INDEX IF NOT EXISTS idx_berthing_terminal_status ON core.berthing_record (terminal, status)",
+    "CREATE INDEX IF NOT EXISTS idx_berthing_voyage ON core.berthing_record (voyage_number)",
+    "CREATE INDEX IF NOT EXISTS idx_berthing_vessel ON core.berthing_record (vessel_name)",
+    "CREATE INDEX IF NOT EXISTS idx_berthing_eta ON core.berthing_record (eta DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_berthing_import_file ON core.berthing_record (import_file_id)",
+    """CREATE TABLE IF NOT EXISTS core.berthing_record_event (
         id           bigserial PRIMARY KEY,
-        berthing_id  bigint NOT NULL REFERENCES jnpa.berthing_reports (id) ON DELETE CASCADE,
+        berthing_id  bigint NOT NULL REFERENCES core.berthing_record (id) ON DELETE CASCADE,
         event_type   text NOT NULL,
         event_time   timestamptz,
         created_by   text,
         created_at   timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_berthing_event UNIQUE (berthing_id, event_type))""",
-    "CREATE INDEX IF NOT EXISTS idx_berthing_event_call ON jnpa.berthing_events (berthing_id, id)",
-    """CREATE TABLE IF NOT EXISTS jnpa.berthing_import_files (
+    "CREATE INDEX IF NOT EXISTS idx_berthing_event_call ON core.berthing_record_event (berthing_id, id)",
+    """CREATE TABLE IF NOT EXISTS core.berthing_import_file (
         id               bigserial PRIMARY KEY,
         filename         text,
         file_hash        text,
@@ -81,22 +83,22 @@ _DDL: list[str] = [
         created_at       timestamptz NOT NULL DEFAULT now(),
         updated_at       timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_berthing_import_file_hash UNIQUE (file_hash))""",
-    "CREATE INDEX IF NOT EXISTS idx_berthing_file_status ON jnpa.berthing_import_files (status, id DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_berthing_file_terminal ON jnpa.berthing_import_files (terminal, id DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_berthing_file_source ON jnpa.berthing_import_files (source, id DESC)",
-    """CREATE TABLE IF NOT EXISTS jnpa.berthing_import_errors (
+    "CREATE INDEX IF NOT EXISTS idx_berthing_file_status ON core.berthing_import_file (status, id DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_berthing_file_terminal ON core.berthing_import_file (terminal, id DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_berthing_file_source ON core.berthing_import_file (source, id DESC)",
+    """CREATE TABLE IF NOT EXISTS core.berthing_import_error (
         id              bigserial PRIMARY KEY,
         import_file_id  bigint NOT NULL
-                        REFERENCES jnpa.berthing_import_files (id) ON DELETE CASCADE,
+                        REFERENCES core.berthing_import_file (id) ON DELETE CASCADE,
         row_number      integer,
         error_message   text,
         raw_data        text,
         created_at      timestamptz NOT NULL DEFAULT now())""",
-    "CREATE INDEX IF NOT EXISTS idx_berthing_err_file ON jnpa.berthing_import_errors (import_file_id, id)",
+    "CREATE INDEX IF NOT EXISTS idx_berthing_err_file ON core.berthing_import_error (import_file_id, id)",
     # --- Full-fidelity PDF capture (migration 0037) — additive verbatim table store ----------
     # Mirrors migration 0037 exactly so a dev/mock DB that never ran it still gets the objects.
     # Never touches the 0036 normalised tables above.
-    """CREATE TABLE IF NOT EXISTS jnpa.berthing_report_documents (
+    """CREATE TABLE IF NOT EXISTS core.berthing_report_document (
         id            bigserial PRIMARY KEY,
         file_name     text NOT NULL,
         terminal      text,
@@ -108,12 +110,12 @@ _DDL: list[str] = [
         uploaded_by   text,
         created_at    timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_berthing_document_hash UNIQUE (pdf_hash))""",
-    "CREATE INDEX IF NOT EXISTS idx_brdoc_terminal ON jnpa.berthing_report_documents (terminal, id DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_brdoc_created ON jnpa.berthing_report_documents (id DESC)",
-    """CREATE TABLE IF NOT EXISTS jnpa.berthing_report_tables (
+    "CREATE INDEX IF NOT EXISTS idx_brdoc_terminal ON core.berthing_report_document (terminal, id DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_brdoc_created ON core.berthing_report_document (id DESC)",
+    """CREATE TABLE IF NOT EXISTS core.berthing_report_table (
         id                bigserial PRIMARY KEY,
         document_id       bigint NOT NULL
-                          REFERENCES jnpa.berthing_report_documents (id) ON DELETE CASCADE,
+                          REFERENCES core.berthing_report_document (id) ON DELETE CASCADE,
         terminal          text,
         table_name        text NOT NULL,
         panel_index       integer NOT NULL DEFAULT 0,
@@ -123,13 +125,16 @@ _DDL: list[str] = [
         row_count         integer NOT NULL DEFAULT 0,
         extraction_note   text,
         created_at        timestamptz NOT NULL DEFAULT now())""",
-    "CREATE INDEX IF NOT EXISTS idx_brt_doc ON jnpa.berthing_report_tables (document_id, panel_index)",
-    "CREATE INDEX IF NOT EXISTS idx_brt_name ON jnpa.berthing_report_tables (terminal, table_name)",
+    "CREATE INDEX IF NOT EXISTS idx_brt_doc ON core.berthing_report_table (document_id, panel_index)",
+    "CREATE INDEX IF NOT EXISTS idx_brt_name ON core.berthing_report_table (terminal, table_name)",
 ]
 
 
 async def ensure_berthing_schema(dsn: Optional[str] = None) -> None:
     """Create the berthing_* tables if absent. Idempotent."""
+    if os.getenv("JNPA_RUNTIME_DDL", "0") != "1":
+        # schema-v3: DDL is owned by infra/postgres/v3 migrations, never runtime.
+        return
     from sqlalchemy import text
 
     from jnpa_shared.db import get_engine

@@ -2,7 +2,7 @@
 
 Turns an uploaded document (LR / invoice / e-way bill / permit) into a stored,
 searchable record with extracted key-value fields. RDS-backed
-(jnpa.document_ocr). Additive — no existing endpoint/table is touched.
+(core.document_ocr). Additive — no existing endpoint/table is touched.
 
 The OCR engine is optional and degrades gracefully. ``_extract`` first TRIES a
 real read (pytesseract + PIL over the uploaded image bytes); if the optional
@@ -177,7 +177,7 @@ async def upload_document(
     """Upload a document, run OCR, persist the extracted record.
 
     Flow: store bytes (best-effort) -> ``_extract`` (real OCR, else MOCK) ->
-    INSERT jnpa.document_ocr with status EXTRACTED (FAILED on error). Returns the
+    INSERT core.document_ocr with status EXTRACTED (FAILED on error). Returns the
     row id + extracted fields.
     """
     dsn = state.cfg.postgres_dsn
@@ -210,7 +210,7 @@ async def upload_document(
         source = "MOCK"
 
     row = await execute_returning(
-        """INSERT INTO jnpa.document_ocr
+        """INSERT INTO core.document_ocr
              (doc_type, source_ref, storage_url, raw_text, fields, confidence, status, source)
            VALUES (:dtype, :sref, :surl, :raw, CAST(:fields AS jsonb), :conf, :status, :source)
            RETURNING id, doc_type, fields, confidence, source, storage_url, status""",
@@ -247,7 +247,7 @@ async def list_documents(
         params["dtype"] = doc_type.strip().upper()
     rows = await fetch_all(
         f"""SELECT id, ts, doc_type, source_ref, confidence, status, fields
-            FROM jnpa.document_ocr {clause} ORDER BY ts DESC LIMIT :limit""",
+            FROM core.document_ocr {clause} ORDER BY ts DESC LIMIT :limit""",
         params, dsn=dsn,
     )
     REQUESTS.labels("document_ocr", "ok").inc()
@@ -263,7 +263,7 @@ async def get_document(doc_id: int, state: GatewayState = Depends(get_state)) ->
     from jnpa_shared.db import fetch_one
 
     row = await fetch_one(
-        "SELECT * FROM jnpa.document_ocr WHERE id = :id", {"id": doc_id}, dsn=dsn)
+        "SELECT * FROM core.document_ocr WHERE id = :id", {"id": doc_id}, dsn=dsn)
     if not row:
         raise HTTPException(404, "document_not_found")
     REQUESTS.labels("document_ocr", "ok").inc()
@@ -284,7 +284,7 @@ async def verify_document(
     from jnpa_shared.db import execute, fetch_one
 
     row = await fetch_one(
-        "SELECT * FROM jnpa.document_ocr WHERE id = :id", {"id": doc_id}, dsn=dsn)
+        "SELECT * FROM core.document_ocr WHERE id = :id", {"id": doc_id}, dsn=dsn)
     if not row:
         raise HTTPException(404, "document_not_found")
 
@@ -292,7 +292,7 @@ async def verify_document(
     if isinstance(corrections, dict) and corrections:
         # Merge operator corrections into the existing fields jsonb (right wins).
         await execute(
-            """UPDATE jnpa.document_ocr
+            """UPDATE core.document_ocr
                SET fields = COALESCE(fields, '{}'::jsonb) || CAST(:patch AS jsonb),
                    status = 'VERIFIED'
                WHERE id = :id""",
@@ -300,12 +300,12 @@ async def verify_document(
         )
     else:
         await execute(
-            "UPDATE jnpa.document_ocr SET status = 'VERIFIED' WHERE id = :id",
+            "UPDATE core.document_ocr SET status = 'VERIFIED' WHERE id = :id",
             {"id": doc_id}, dsn=dsn,
         )
 
     updated = await fetch_one(
-        "SELECT * FROM jnpa.document_ocr WHERE id = :id", {"id": doc_id}, dsn=dsn)
+        "SELECT * FROM core.document_ocr WHERE id = :id", {"id": doc_id}, dsn=dsn)
     REQUESTS.labels("document_ocr", "ok").inc()
     return {"document": _iso(dict(updated)) if updated else None}
 

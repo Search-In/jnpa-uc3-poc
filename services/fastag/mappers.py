@@ -146,7 +146,7 @@ def _unwrap(raw: Any) -> Mapping[str, Any]:
 # A) Toll Enroute
 # ---------------------------------------------------------------------------
 def map_toll_enroute(raw: Any, *, client_id: Optional[str] = None) -> dict[str, Any]:
-    """ULIP JSON -> TollEnrouteResponse + DB-ready dict for ``jnpa.toll_enroute``.
+    """ULIP JSON -> TollEnrouteResponse + DB-ready dict for ``core.toll_enroute``.
 
     Preserves the full ``toll_plaza_details`` array (no flattening); ``cost``/
     ``distance`` are Decimal; plaza ``lat``/``lng`` are parsed floats.
@@ -189,7 +189,7 @@ def map_toll_enroute(raw: Any, *, client_id: Optional[str] = None) -> dict[str, 
 # B) RC -> FASTag Balance
 # ---------------------------------------------------------------------------
 def map_fastag_balance(raw: Any, *, client_id: Optional[str] = None) -> dict[str, Any]:
-    """ULIP JSON -> FastagBalanceResponse + DB-ready dict for ``jnpa.fastag_balance``.
+    """ULIP JSON -> FastagBalanceResponse + DB-ready dict for ``core.fastag_balance``.
 
     Money fields are Decimal; ``tag_status`` is normalised (ACTIVE->Activated,
     LOW_BALANCE->LowBalance, BLACKLISTED->Blocked); ``provider_code`` string-safe.

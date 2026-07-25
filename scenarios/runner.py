@@ -125,11 +125,11 @@ async def timeline(handle_id: str) -> dict:
     from jnpa_shared.db import fetch_all, fetch_one
     head = await fetch_one(
         "SELECT handle_id, name, status, trace_id, started_at, ended_at, params "
-        "FROM jnpa.scenario_handles WHERE handle_id = :hid",
+        "FROM core.scenario_handle WHERE handle_id = :hid",
         {"hid": handle_id}, dsn=cfg.postgres_dsn,
     )
     rows = await fetch_all(
-        "SELECT step_no, ts, title, status, trigger, detail FROM jnpa.scenario_steps "
+        "SELECT step_no, ts, title, status, trigger, detail FROM core.scenario_step "
         "WHERE handle_id = :hid ORDER BY step_no",
         {"hid": handle_id}, dsn=cfg.postgres_dsn,
     )

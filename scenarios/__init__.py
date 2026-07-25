@@ -8,7 +8,7 @@ Each scenario is a module exposing::
 and is registered here in ``REGISTRY`` (the scenarios-runner discovers scenarios
 through this map — the in-package equivalent of setuptools entry-points, kept
 import-light so the runner has no plugin-discovery cost at startup). The
-``[project.entry-points."jnpa.scenarios"]`` table in pyproject.toml mirrors this
+``[project.entry-points."core.scenario"]`` table in pyproject.toml mirrors this
 for external discovery.
 """
 from __future__ import annotations

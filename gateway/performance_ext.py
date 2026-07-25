@@ -17,6 +17,8 @@ self-contained (Module 12).
 """
 from __future__ import annotations
 
+import os
+
 from typing import Optional
 
 from .logging import get_logger
@@ -26,8 +28,8 @@ log = get_logger("gateway.performance_ext")
 # One idempotent statement per list item (SQLAlchemy text() runs a single
 # statement per execute()). Mirrors migration 0028 exactly.
 _DDL: list[str] = [
-    "CREATE SCHEMA IF NOT EXISTS jnpa",
-    """CREATE TABLE IF NOT EXISTS jnpa.perf_terminals (
+    "CREATE SCHEMA IF NOT EXISTS core",
+    """CREATE TABLE IF NOT EXISTS core.perf_terminal (
         id            bigserial PRIMARY KEY,
         code          text NOT NULL,
         full_name     text,
@@ -39,7 +41,7 @@ _DDL: list[str] = [
         sort_order    int     NOT NULL DEFAULT 100,
         created_at    timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_perf_terminals_code UNIQUE (code))""",
-    """INSERT INTO jnpa.perf_terminals (code, full_name, operator, terminal_type, is_container, aliases, sort_order) VALUES
+    """INSERT INTO core.perf_terminal (code, full_name, operator, terminal_type, is_container, aliases, sort_order) VALUES
         ('NSFT',   'Nhava Sheva Freeport Terminal',              'NSFT',          'CONTAINER',    true,  ARRAY['NSFT']::text[],                       10),
         ('NSICT',  'Nhava Sheva International Container Terminal','DP World',      'CONTAINER',    true,  ARRAY['NSICT']::text[],                      20),
         ('NSIGT',  'Nhava Sheva India Gateway Terminal',         'NSIGT',         'CONTAINER',    true,  ARRAY['NSIGT']::text[],                      30),
@@ -49,14 +51,14 @@ _DDL: list[str] = [
         ('JNPCT',  'Jawaharlal Nehru Port Container Terminal',   'JNPA',          'CONTAINER',    true,  ARRAY['JNPCT']::text[],                       70),
         ('JN_PORT','JN Port (all terminals)',                    'JNPA',          'TOTAL',        true,  ARRAY['JN PORT','JNPORT','JN_PORT']::text[], 90)
         ON CONFLICT ON CONSTRAINT uq_perf_terminals_code DO NOTHING""",
-    """CREATE TABLE IF NOT EXISTS jnpa.perf_daily_snapshot (
+    """CREATE TABLE IF NOT EXISTS core.perf_daily_snapshot (
         id          bigserial PRIMARY KEY,
         report_date date NOT NULL,
         as_of_ts    timestamptz,
         source_file text,
         created_at  timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_perf_daily_snapshot UNIQUE (report_date))""",
-    """CREATE TABLE IF NOT EXISTS jnpa.perf_daily_traffic (
+    """CREATE TABLE IF NOT EXISTS core.perf_daily_traffic (
         id              bigserial PRIMARY KEY,
         report_date     date NOT NULL,
         terminal_code   text NOT NULL,
@@ -71,9 +73,9 @@ _DDL: list[str] = [
         rail_total_teus numeric,
         created_at      timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_perf_daily_traffic UNIQUE (report_date, terminal_code, period))""",
-    "CREATE INDEX IF NOT EXISTS idx_perf_traffic_date_term ON jnpa.perf_daily_traffic (report_date, terminal_code)",
-    "CREATE INDEX IF NOT EXISTS idx_perf_traffic_term_period ON jnpa.perf_daily_traffic (terminal_code, period)",
-    """CREATE TABLE IF NOT EXISTS jnpa.perf_daily_tonnage (
+    "CREATE INDEX IF NOT EXISTS idx_perf_traffic_date_term ON core.perf_daily_traffic (report_date, terminal_code)",
+    "CREATE INDEX IF NOT EXISTS idx_perf_traffic_term_period ON core.perf_daily_traffic (terminal_code, period)",
+    """CREATE TABLE IF NOT EXISTS core.perf_daily_tonnage (
         id                bigserial PRIMARY KEY,
         report_date       date NOT NULL,
         category          text NOT NULL CHECK (category IN
@@ -86,8 +88,8 @@ _DDL: list[str] = [
         total_tonnes      numeric,
         created_at        timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_perf_daily_tonnage UNIQUE (report_date, category, period))""",
-    "CREATE INDEX IF NOT EXISTS idx_perf_tonnage_date ON jnpa.perf_daily_tonnage (report_date)",
-    """CREATE TABLE IF NOT EXISTS jnpa.perf_daily_terminal_status (
+    "CREATE INDEX IF NOT EXISTS idx_perf_tonnage_date ON core.perf_daily_tonnage (report_date)",
+    """CREATE TABLE IF NOT EXISTS core.perf_daily_terminal_status (
         id                        bigserial PRIMARY KEY,
         report_date               date NOT NULL,
         terminal_code             text NOT NULL,
@@ -107,8 +109,8 @@ _DDL: list[str] = [
         reefer_available_slots    int,
         created_at                timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_perf_daily_status UNIQUE (report_date, terminal_code))""",
-    "CREATE INDEX IF NOT EXISTS idx_perf_status_date ON jnpa.perf_daily_terminal_status (report_date)",
-    """CREATE TABLE IF NOT EXISTS jnpa.perf_daily_vessels (
+    "CREATE INDEX IF NOT EXISTS idx_perf_status_date ON core.perf_daily_terminal_status (report_date)",
+    """CREATE TABLE IF NOT EXISTS core.perf_daily_vessel (
         id                  bigserial PRIMARY KEY,
         report_date         date NOT NULL,
         terminal_code       text NOT NULL,
@@ -120,8 +122,8 @@ _DDL: list[str] = [
         expected_completion timestamptz,
         created_at          timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_perf_daily_vessel UNIQUE (report_date, terminal_code, berth_no, via_no))""",
-    "CREATE INDEX IF NOT EXISTS idx_perf_vessels_date ON jnpa.perf_daily_vessels (report_date)",
-    """CREATE TABLE IF NOT EXISTS jnpa.perf_monthly_teu (
+    "CREATE INDEX IF NOT EXISTS idx_perf_vessels_date ON core.perf_daily_vessel (report_date)",
+    """CREATE TABLE IF NOT EXISTS core.perf_monthly_teu (
         id             bigserial PRIMARY KEY,
         fiscal_year    text NOT NULL,
         month_date     date NOT NULL,
@@ -134,8 +136,8 @@ _DDL: list[str] = [
         total_teus     numeric,
         created_at     timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_perf_monthly_teu UNIQUE (month_date, terminal_code))""",
-    "CREATE INDEX IF NOT EXISTS idx_perf_monthly_term ON jnpa.perf_monthly_teu (terminal_code, month_date)",
-    """CREATE TABLE IF NOT EXISTS jnpa.perf_ldb_port_dwell (
+    "CREATE INDEX IF NOT EXISTS idx_perf_monthly_term ON core.perf_monthly_teu (terminal_code, month_date)",
+    """CREATE TABLE IF NOT EXISTS core.perf_ldb_port_dwell (
         id               bigserial PRIMARY KEY,
         report_month     date NOT NULL,
         terminal_code    text NOT NULL,
@@ -145,8 +147,8 @@ _DDL: list[str] = [
         dwell_hours_prev numeric,
         created_at       timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_perf_ldb_port_dwell UNIQUE (report_month, terminal_code, cycle, segment))""",
-    "CREATE INDEX IF NOT EXISTS idx_perf_ldb_dwell_month ON jnpa.perf_ldb_port_dwell (report_month, cycle)",
-    """CREATE TABLE IF NOT EXISTS jnpa.perf_ldb_facility_dwell (
+    "CREATE INDEX IF NOT EXISTS idx_perf_ldb_dwell_month ON core.perf_ldb_port_dwell (report_month, cycle)",
+    """CREATE TABLE IF NOT EXISTS core.perf_ldb_facility_dwell (
         id                bigserial PRIMARY KEY,
         report_month      date NOT NULL,
         facility_type     text NOT NULL CHECK (facility_type IN ('CFS','ICD')),
@@ -156,8 +158,8 @@ _DDL: list[str] = [
         dwell_hours_prev  numeric,
         created_at        timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_perf_ldb_facility_dwell UNIQUE (report_month, facility_type, facility_name_norm))""",
-    "CREATE INDEX IF NOT EXISTS idx_perf_ldb_facility_month ON jnpa.perf_ldb_facility_dwell (report_month, facility_type)",
-    """CREATE TABLE IF NOT EXISTS jnpa.perf_ldb_congestion (
+    "CREATE INDEX IF NOT EXISTS idx_perf_ldb_facility_month ON core.perf_ldb_facility_dwell (report_month, facility_type)",
+    """CREATE TABLE IF NOT EXISTS core.perf_ldb_congestion (
         id                bigserial PRIMARY KEY,
         report_month      date NOT NULL,
         cycle             text NOT NULL CHECK (cycle IN ('IMPORT','EXPORT')),
@@ -168,7 +170,7 @@ _DDL: list[str] = [
         congestion_level  text CHECK (congestion_level IN ('HIGH','MEDIUM','LOW')),
         created_at        timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_perf_ldb_congestion UNIQUE (report_month, cycle, cluster_no))""",
-    """CREATE TABLE IF NOT EXISTS jnpa.perf_ldb_route_movement (
+    """CREATE TABLE IF NOT EXISTS core.perf_ldb_route_movement (
         id             bigserial PRIMARY KEY,
         report_month   date NOT NULL,
         cycle          text NOT NULL CHECK (cycle IN ('IMPORT','EXPORT')),
@@ -177,7 +179,7 @@ _DDL: list[str] = [
         pct_share      numeric,
         created_at     timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_perf_ldb_route UNIQUE (report_month, cycle, transport_mode, route_name))""",
-    """CREATE TABLE IF NOT EXISTS jnpa.perf_ldb_weather (
+    """CREATE TABLE IF NOT EXISTS core.perf_ldb_weather (
         id            bigserial PRIMARY KEY,
         report_month  date NOT NULL,
         terminal_code text NOT NULL,
@@ -194,19 +196,19 @@ _DDL: list[str] = [
     """DO $$
     DECLARE v_cols text;
     BEGIN
-        IF to_regclass('jnpa.perf_daily_vessels') IS NULL THEN RETURN; END IF;
+        IF to_regclass('core.perf_daily_vessel') IS NULL THEN RETURN; END IF;
         SELECT string_agg(a.attname, ',' ORDER BY k.ord) INTO v_cols
         FROM pg_constraint c
         JOIN LATERAL unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord) ON true
         JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
         WHERE c.conname = 'uq_perf_daily_vessel'
-          AND c.conrelid = 'jnpa.perf_daily_vessels'::regclass AND c.contype = 'u';
+          AND c.conrelid = 'core.perf_daily_vessel'::regclass AND c.contype = 'u';
         IF v_cols = 'report_date,terminal_code,berth_no' THEN
-            ALTER TABLE jnpa.perf_daily_vessels DROP CONSTRAINT uq_perf_daily_vessel;
-            ALTER TABLE jnpa.perf_daily_vessels ADD CONSTRAINT uq_perf_daily_vessel
+            ALTER TABLE core.perf_daily_vessel DROP CONSTRAINT uq_perf_daily_vessel;
+            ALTER TABLE core.perf_daily_vessel ADD CONSTRAINT uq_perf_daily_vessel
                 UNIQUE (report_date, terminal_code, berth_no, via_no);
         ELSIF v_cols IS NULL THEN
-            ALTER TABLE jnpa.perf_daily_vessels ADD CONSTRAINT uq_perf_daily_vessel
+            ALTER TABLE core.perf_daily_vessel ADD CONSTRAINT uq_perf_daily_vessel
                 UNIQUE (report_date, terminal_code, berth_no, via_no);
         END IF;
     END $$""",
@@ -259,33 +261,36 @@ _DDL: list[str] = [
         t text;
     BEGIN
         FOR i IN 1 .. array_length(targets, 1) LOOP
-            IF to_regclass('jnpa.' || targets[i][1]) IS NULL THEN CONTINUE; END IF;
+            IF to_regclass('core.' || targets[i][1]) IS NULL THEN CONTINUE; END IF;
             SELECT numeric_scale INTO v_scale FROM information_schema.columns
-            WHERE table_schema='jnpa' AND table_name=targets[i][1]
+            WHERE table_schema='core' AND table_name=targets[i][1]
               AND column_name=targets[i][2];
             IF v_scale IS NULL AND EXISTS (SELECT 1 FROM information_schema.columns
-                    WHERE table_schema='jnpa' AND table_name=targets[i][1]
+                    WHERE table_schema='core' AND table_name=targets[i][1]
                       AND column_name=targets[i][2]) THEN
-                EXECUTE format('ALTER TABLE jnpa.%I ALTER COLUMN %I TYPE numeric(%s,%s)',
+                EXECUTE format('ALTER TABLE core.%I ALTER COLUMN %I TYPE numeric(%s,%s)',
                                targets[i][1], targets[i][2], targets[i][3], targets[i][4]);
             END IF;
         END LOOP;
         FOREACH t IN ARRAY prov LOOP
-            IF to_regclass('jnpa.' || t) IS NULL THEN CONTINUE; END IF;
-            EXECUTE format('ALTER TABLE jnpa.%I ADD COLUMN IF NOT EXISTS source_file text', t);
-            EXECUTE format('ALTER TABLE jnpa.%I ADD COLUMN IF NOT EXISTS upload_id uuid', t);
-            EXECUTE format('ALTER TABLE jnpa.%I ADD COLUMN IF NOT EXISTS uploaded_at timestamptz', t);
+            IF to_regclass('core.' || t) IS NULL THEN CONTINUE; END IF;
+            EXECUTE format('ALTER TABLE core.%I ADD COLUMN IF NOT EXISTS source_file text', t);
+            EXECUTE format('ALTER TABLE core.%I ADD COLUMN IF NOT EXISTS upload_id uuid', t);
+            EXECUTE format('ALTER TABLE core.%I ADD COLUMN IF NOT EXISTS uploaded_at timestamptz', t);
             EXECUTE format('CREATE INDEX IF NOT EXISTS ix_%s_upload ON jnpa.%I (upload_id)', t, t);
         END LOOP;
     END $$""",
-    "ALTER TABLE jnpa.perf_daily_snapshot ADD COLUMN IF NOT EXISTS upload_id uuid",
-    "ALTER TABLE jnpa.perf_daily_snapshot ADD COLUMN IF NOT EXISTS uploaded_at timestamptz",
+    "ALTER TABLE core.perf_daily_snapshot ADD COLUMN IF NOT EXISTS upload_id uuid",
+    "ALTER TABLE core.perf_daily_snapshot ADD COLUMN IF NOT EXISTS uploaded_at timestamptz",
 ]
 
 
 async def ensure_performance_schema(dsn: Optional[str] = None) -> None:
     """Create the Performance & Daily Reports tables + terminal seed if absent.
     Idempotent, additive. Mirrors migration 0028."""
+    if os.getenv("JNPA_RUNTIME_DDL", "0") != "1":
+        # schema-v3: DDL is owned by infra/postgres/v3 migrations, never runtime.
+        return
     from sqlalchemy import text
 
     from jnpa_shared.db import get_engine

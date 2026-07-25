@@ -79,7 +79,7 @@ def test_calculate_persists_via_committing_helper(client, monkeypatch):
     async def fake_execute_returning(sql, params=None, *, dsn=None):
         seen["sql"] = sql
         seen["co2"] = params["co2_kg"]
-        assert "INSERT INTO jnpa.carbon_emission" in sql
+        assert "INSERT INTO core.carbon_emission" in sql
         assert "RETURNING id" in sql
         return {"id": 4242}  # a committed INSERT ... RETURNING yields the new id
 

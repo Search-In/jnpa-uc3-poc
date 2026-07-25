@@ -1,6 +1,6 @@
 """Shipping-line persistence — raw-SQL repository over the shared async engine.
 
-The ONLY layer that speaks SQL to the ``jnpa.sl_*`` / ``jnpa.shipping_lines``
+The ONLY layer that speaks SQL to the ``jnpa.sl_*`` / ``core.ref_shipping_line``
 tables. Mirrors :mod:`services.customs.repository`: reads on a plain ``connect()``,
 writes inside a single ``engine.begin()`` transaction (auto-commit / auto-rollback),
 no ORM.
@@ -33,6 +33,37 @@ from .parsers.common import ParsedList
 log = get_logger("services.shipping_lines.repository")
 
 # Canonical container columns (parser dict keys that map 1:1 to table columns).
+
+# Legacy-shaped relations over the v3 core model. Every read goes through these
+# projections so response payloads stay byte-identical with the jnpa era.
+_ADV_REL = """(
+    SELECT a.id, a.import_file_id,
+           CASE a.direction WHEN 'E' THEN 'EAL' ELSE 'IAL' END AS list_type,
+           t.code AS terminal, a.container_no, a.iso_code, a.container_valid_iso,
+           CASE a.load_status WHEN 'F' THEN 'FULL' WHEN 'E' THEN 'EMPTY'
+                ELSE a.load_status::text END AS freight_kind,
+           a.category, a.gross_weight_kg, a.weight_source_uom, a.pol, a.pod,
+           a.destination, a.line_code AS shipping_line_code, a.vessel_visit,
+           a.voyage, a.bl_no AS bill_of_lading, a.seal1 AS seal_no,
+           a.reefer_status, a.reefer_temp, dg.imdg_class AS imdg_code,
+           dg.un_number, a.group_code, a.client_code,
+           a.departure_mode::text AS departure_mode, a.nominated_cfs, a.iec_code,
+           a.gst_no, a.commodity_code, a.created_at
+    FROM core.advance_list_container a
+    LEFT JOIN core.ref_terminal t ON t.terminal_id = a.terminal_id
+    LEFT JOIN core.advance_list_dg dg ON dg.al_id = a.al_id AND dg.slot = 1
+) adv"""
+
+_DO_REL = """(
+    SELECT l.id, l.common_ref_number, l.container_no, l.iso_code,
+           l.container_valid_iso, l.equipment_status, l.shipping_agent_code,
+           l.vcn, l.imo_number, l.pol AS loading_port, l.pod AS dest_port,
+           l.final_pod, l.arrival_ts, l.receipt_date, l.delivery_mode,
+           l.gate_pass_no, l.gate_pass_ts, l.vehicle_no,
+           l.gate_number, l.issued_ts, l.created_at
+    FROM core.delivery_order_line l
+) sdo"""
+
 _CONTAINER_COLS: tuple[str, ...] = (
     "list_type", "terminal", "container_no", "iso_code", "container_valid_iso",
     "freight_kind", "category", "gross_weight_kg", "weight_source_uom", "pol", "pod",
@@ -82,11 +113,11 @@ class ShippingLinesRepository:
                            reference: Optional[str] = None,
                            container_no: Optional[str] = None,
                            payload: Optional[Mapping[str, Any]] = None) -> None:
-        """Append one row to the append-only jnpa.sl_events log (same pattern as
-        jnpa.customs_events). Generated ONLY from real shipping-line processing."""
+        """Append one row to the append-only core.sl_event log (same pattern as
+        core.customs_event). Generated ONLY from real shipping-line processing."""
         async with get_engine(self._dsn).begin() as conn:
             await conn.execute(
-                text("INSERT INTO jnpa.sl_events (event, module, reference, container_no, "
+                text("INSERT INTO core.sl_event (event, module, reference, container_no, "
                      "payload) VALUES (:e, :m, :r, :c, CAST(:p AS jsonb))"),
                 {"e": event, "m": module, "r": reference, "c": container_no,
                  "p": json.dumps(dict(payload or {}))})
@@ -108,12 +139,12 @@ class ShippingLinesRepository:
         clause = (" WHERE " + " AND ".join(where)) if where else ""
         return await self._rows(
             "SELECT id, event, module, reference, container_no, payload, created_at "
-            f"FROM jnpa.sl_events{clause} ORDER BY id DESC LIMIT :limit OFFSET :offset", params)
+            f"FROM core.sl_event{clause} ORDER BY id DESC LIMIT :limit OFFSET :offset", params)
 
     async def find_file_by_sha(self, sha256: str) -> Optional[dict]:
         return await self._one(
             "SELECT id, list_type, terminal, source_file, import_status, record_count, "
-            "imported_count, error_count, created_at FROM jnpa.sl_import_files "
+            "imported_count, error_count, created_at FROM core.sl_import_file "
             "WHERE source_sha256 = :sha", {"sha": sha256})
 
     # ------------------------------------------------------------------ persist
@@ -151,7 +182,7 @@ class ShippingLinesRepository:
                 else:
                     imported = await self._persist_containers(conn, file_id, parsed.containers)
                 await conn.execute(
-                    text("UPDATE jnpa.sl_import_files SET import_status = 'SUCCESS', "
+                    text("UPDATE core.sl_import_file SET import_status = 'SUCCESS', "
                          "imported_count = :imp, error_count = 0, updated_at = now() "
                          "WHERE id = :id"), {"imp": imported, "id": file_id})
             return {"file_id": file_id, "list_type": h["list_type"], "terminal": h["terminal"],
@@ -177,7 +208,7 @@ class ShippingLinesRepository:
         rows = [{"lc": c} for c in sorted(codes) if c]
         if rows:
             await conn.execute(
-                text("INSERT INTO jnpa.shipping_lines (line_code) VALUES (:lc) "
+                text("INSERT INTO core.ref_shipping_line (line_code) VALUES (:lc) "
                      "ON CONFLICT (line_code) DO UPDATE SET last_seen = now()"), rows)
 
     async def _persist_containers(self, conn: Any, file_id: int, containers: Sequence[dict]) -> int:
@@ -198,11 +229,16 @@ class ShippingLinesRepository:
             row["row_sha256"] = hashlib.sha256(raw.encode("utf-8")).hexdigest()
             rows.append(row)
         before = await self._scalar(
-            conn, "SELECT count(*) FROM jnpa.sl_advance_containers WHERE import_file_id = :id",
+            conn, "SELECT count(*) FROM core.advance_list_container WHERE import_file_id = :id",
             {"id": file_id})
         await conn.execute(text(_CONTAINER_INSERT), rows)
+        dg_rows = [{"imdg_code": r.get("imdg_code"), "un_number": r.get("un_number"),
+                    "row_sha256": r["row_sha256"]}
+                   for r in rows if (r.get("imdg_code") or r.get("un_number"))]
+        if dg_rows:
+            await conn.execute(text(_CONTAINER_DG_INSERT), dg_rows)
         after = await self._scalar(
-            conn, "SELECT count(*) FROM jnpa.sl_advance_containers WHERE import_file_id = :id",
+            conn, "SELECT count(*) FROM core.advance_list_container WHERE import_file_id = :id",
             {"id": file_id})
         return after - before
 
@@ -215,11 +251,12 @@ class ShippingLinesRepository:
             row["import_file_id"] = file_id
             rows.append(row)
         before = await self._scalar(
-            conn, "SELECT count(*) FROM jnpa.sl_delivery_orders WHERE import_file_id = :id",
+            conn, "SELECT count(*) FROM core.delivery_order_line WHERE import_file_id = :id",
             {"id": file_id})
+        await conn.execute(text(_DO_HEADER_INSERT), rows)
         await conn.execute(text(_DO_INSERT), rows)
         after = await self._scalar(
-            conn, "SELECT count(*) FROM jnpa.sl_delivery_orders WHERE import_file_id = :id",
+            conn, "SELECT count(*) FROM core.delivery_order_line WHERE import_file_id = :id",
             {"id": file_id})
         return after - before
 
@@ -231,7 +268,7 @@ class ShippingLinesRepository:
                 res = await conn.execute(text(_FILE_INSERT_FAILED), row)
                 fid = res.mappings().first()["id"]
                 await conn.execute(
-                    text("INSERT INTO jnpa.sl_import_errors (import_file_id, record_ref, "
+                    text("INSERT INTO core.sl_import_error (import_file_id, record_ref, "
                          "error_code, error_detail) VALUES (:fid, NULL, 'PERSIST_FAILED', :d)"),
                     {"fid": fid, "d": detail[:4000]})
             fail_id: Optional[int] = fid
@@ -247,29 +284,29 @@ class ShippingLinesRepository:
     async def summary(self) -> dict:
         files = await self._rows(
             "SELECT list_type, terminal, import_status, count(*) AS n, "
-            "sum(imported_count) AS imported FROM jnpa.sl_import_files "
+            "sum(imported_count) AS imported FROM core.sl_import_file "
             "GROUP BY list_type, terminal, import_status ORDER BY list_type, terminal", {})
         by_list = await self._rows(
-            "SELECT list_type, count(*) AS containers, count(DISTINCT container_no) AS distinct_containers "
-            "FROM jnpa.sl_advance_containers GROUP BY list_type ORDER BY list_type", {})
+            f"SELECT list_type, count(*) AS containers, count(DISTINCT container_no) AS distinct_containers "
+            f"FROM {_ADV_REL} GROUP BY list_type ORDER BY list_type", {})
         by_terminal = await self._rows(
-            "SELECT terminal, list_type, count(*) AS containers FROM jnpa.sl_advance_containers "
-            "GROUP BY terminal, list_type ORDER BY terminal, list_type", {})
+            f"SELECT terminal, list_type, count(*) AS containers FROM {_ADV_REL} "
+            f"GROUP BY terminal, list_type ORDER BY terminal, list_type", {})
         by_category = await self._rows(
-            "SELECT category, count(*) AS n FROM jnpa.sl_advance_containers "
-            "GROUP BY category ORDER BY n DESC", {})
+            f"SELECT category, count(*) AS n FROM {_ADV_REL} "
+            f"GROUP BY category ORDER BY n DESC", {})
         top_lines = await self._rows(
-            "SELECT shipping_line_code AS line_code, count(*) AS containers "
-            "FROM jnpa.sl_advance_containers WHERE shipping_line_code IS NOT NULL "
-            "GROUP BY shipping_line_code ORDER BY containers DESC LIMIT 15", {})
+            f"SELECT shipping_line_code AS line_code, count(*) AS containers "
+            f"FROM {_ADV_REL} WHERE shipping_line_code IS NOT NULL "
+            f"GROUP BY shipping_line_code ORDER BY containers DESC LIMIT 15", {})
         totals = await self._one(
-            "SELECT (SELECT count(*) FROM jnpa.sl_import_files) AS files, "
-            "(SELECT count(*) FROM jnpa.sl_advance_containers) AS advance_containers, "
-            "(SELECT count(DISTINCT container_no) FROM jnpa.sl_advance_containers) AS distinct_containers, "
-            "(SELECT count(*) FROM jnpa.sl_delivery_orders) AS delivery_orders, "
-            "(SELECT count(*) FROM jnpa.shipping_lines) AS shipping_lines, "
-            "(SELECT count(*) FROM jnpa.sl_advance_containers WHERE bill_of_lading IS NOT NULL) AS with_bl, "
-            "(SELECT count(*) FROM jnpa.sl_import_files WHERE import_status = 'FAILED') AS failed_files", {})
+            "SELECT (SELECT count(*) FROM core.sl_import_file) AS files, "
+            "(SELECT count(*) FROM core.advance_list_container) AS advance_containers, "
+            "(SELECT count(DISTINCT container_no) FROM core.advance_list_container) AS distinct_containers, "
+            "(SELECT count(*) FROM core.delivery_order_line) AS delivery_orders, "
+            "(SELECT count(*) FROM core.ref_shipping_line) AS shipping_lines, "
+            "(SELECT count(*) FROM core.advance_list_container WHERE bl_no IS NOT NULL) AS with_bl, "
+            "(SELECT count(*) FROM core.sl_import_file WHERE import_status = 'FAILED') AS failed_files", {})
         return {"totals": totals or {}, "files": files, "by_list_type": by_list,
                 "by_terminal": by_terminal, "by_category": by_category, "top_lines": top_lines}
 
@@ -296,13 +333,7 @@ class ShippingLinesRepository:
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         return where, params
 
-    _ADV_SELECT = (
-        "SELECT id, import_file_id, list_type, terminal, container_no, iso_code, "
-        "container_valid_iso, freight_kind, category, gross_weight_kg, weight_source_uom, "
-        "pol, pod, destination, shipping_line_code, vessel_visit, voyage, bill_of_lading, "
-        "seal_no, reefer_status, reefer_temp, imdg_code, un_number, group_code, client_code, "
-        "departure_mode, nominated_cfs, iec_code, gst_no, commodity_code, created_at "
-        "FROM jnpa.sl_advance_containers")
+    _ADV_SELECT = f"SELECT * FROM {_ADV_REL}"
 
     async def list_containers(self, *, filters: Mapping[str, Any], limit: int, offset: int) -> list[dict]:
         where, params = self._adv_where(filters)
@@ -312,19 +343,16 @@ class ShippingLinesRepository:
 
     async def count_containers(self, *, filters: Mapping[str, Any]) -> int:
         where, params = self._adv_where(filters)
-        return await self._count(f"SELECT count(*) FROM jnpa.sl_advance_containers{where}", params)
+        return await self._count(f"SELECT count(*) FROM {_ADV_REL}{where}", params)
 
     async def container_view(self, container_no: str) -> dict:
         summary = await self._one(
-            "SELECT * FROM jnpa.v_shipping_line_container WHERE container_no = :cn",
+            "SELECT * FROM mart.v_shipping_line_container WHERE container_no = :cn",
             {"cn": container_no})
         advance = await self._rows(
             f"{self._ADV_SELECT} WHERE container_no = :cn ORDER BY id DESC", {"cn": container_no})
         delivery = await self._rows(
-            "SELECT id, common_ref_number, container_no, iso_code, equipment_status, "
-            "shipping_agent_code, vcn, imo_number, loading_port, dest_port, final_pod, "
-            "arrival_ts, receipt_date, delivery_mode, gate_pass_no, gate_pass_ts, vehicle_no, "
-            "gate_number, issued_ts, created_at FROM jnpa.sl_delivery_orders "
+            f"SELECT * FROM {_DO_REL} "
             "WHERE container_no = :cn ORDER BY id DESC", {"cn": container_no})
         return {"container_no": container_no, "summary": summary,
                 "advance_lists": advance, "delivery_orders": delivery}
@@ -337,26 +365,26 @@ class ShippingLinesRepository:
 
     async def count_by_bl(self, bill_of_lading: str) -> int:
         return await self._count(
-            "SELECT count(*) FROM jnpa.sl_advance_containers WHERE bill_of_lading = :bl",
+            f"SELECT count(*) FROM {_ADV_REL} WHERE bill_of_lading = :bl",
             {"bl": bill_of_lading})
 
     async def get_line(self, line_code: str) -> Optional[dict]:
         return await self._one(
-            "SELECT line_code, line_name, source, first_seen, last_seen, "
-            "(SELECT count(*) FROM jnpa.sl_advance_containers a WHERE a.shipping_line_code = s.line_code) "
-            "AS container_count FROM jnpa.shipping_lines s WHERE s.line_code = :lc",
+            "SELECT line_code, name AS line_name, source, first_seen, last_seen, "
+            "(SELECT count(*) FROM core.advance_list_container a WHERE a.line_code = s.line_code) "
+            "AS container_count FROM core.ref_shipping_line s WHERE s.line_code = :lc",
             {"lc": line_code})
 
     async def list_lines(self, *, limit: int, offset: int) -> list[dict]:
         return await self._rows(
-            "SELECT s.line_code, s.line_name, s.source, s.first_seen, s.last_seen, "
-            "(SELECT count(*) FROM jnpa.sl_advance_containers a WHERE a.shipping_line_code = s.line_code) "
-            "AS container_count FROM jnpa.shipping_lines s "
+            "SELECT s.line_code, s.name AS line_name, s.source, s.first_seen, s.last_seen, "
+            "(SELECT count(*) FROM core.advance_list_container a WHERE a.line_code = s.line_code) "
+            "AS container_count FROM core.ref_shipping_line s "
             "ORDER BY container_count DESC, s.line_code LIMIT :limit OFFSET :offset",
             {"limit": limit, "offset": offset})
 
     async def count_lines(self) -> int:
-        return await self._count("SELECT count(*) FROM jnpa.shipping_lines", {})
+        return await self._count("SELECT count(*) FROM core.ref_shipping_line", {})
 
     async def list_delivery_orders(self, *, filters: Mapping[str, Any], limit: int, offset: int) -> list[dict]:
         clauses, params = [], {"limit": limit, "offset": offset}
@@ -368,10 +396,7 @@ class ShippingLinesRepository:
             params["vehicle"] = filters["vehicle"]
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         return await self._rows(
-            "SELECT id, common_ref_number, container_no, iso_code, equipment_status, "
-            "shipping_agent_code, vcn, imo_number, loading_port, dest_port, final_pod, "
-            "arrival_ts, receipt_date, delivery_mode, gate_pass_no, gate_pass_ts, vehicle_no, "
-            f"gate_number, issued_ts, created_at FROM jnpa.sl_delivery_orders{where} "
+            f"SELECT * FROM {_DO_REL}{where} "
             "ORDER BY id DESC LIMIT :limit OFFSET :offset", params)
 
     async def count_delivery_orders(self, *, filters: Mapping[str, Any]) -> int:
@@ -383,7 +408,7 @@ class ShippingLinesRepository:
             clauses.append("vehicle_no = :vehicle")
             params["vehicle"] = filters["vehicle"]
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-        return await self._count(f"SELECT count(*) FROM jnpa.sl_delivery_orders{where}", params)
+        return await self._count(f"SELECT count(*) FROM {_DO_REL}{where}", params)
 
     # ----------------------------------------------------------------- ledger reads
     @staticmethod
@@ -402,31 +427,31 @@ class ShippingLinesRepository:
             "SELECT id, list_type, terminal, physical_format, source_file, vessel_visit, "
             "voyage, line_code, direction, record_count, imported_count, error_count, "
             "import_status, error_detail, uploaded_by, source, created_at, updated_at "
-            f"FROM jnpa.sl_import_files{where} "
+            f"FROM core.sl_import_file{where} "
             "ORDER BY id DESC LIMIT :limit OFFSET :offset", params)
 
     async def count_files(self, *, filters: Mapping[str, Any]) -> int:
         where, params = self._file_where(filters)
-        return await self._count(f"SELECT count(*) FROM jnpa.sl_import_files{where}", params)
+        return await self._count(f"SELECT count(*) FROM core.sl_import_file{where}", params)
 
     async def get_file(self, file_id: int) -> Optional[dict]:
         return await self._one(
             "SELECT id, list_type, terminal, physical_format, source_file, source_sha256, "
             "file_size_bytes, vessel_visit, voyage, line_code, direction, record_count, "
             "imported_count, error_count, import_status, error_detail, uploaded_by, source, "
-            "created_at, updated_at FROM jnpa.sl_import_files WHERE id = :id", {"id": file_id})
+            "created_at, updated_at FROM core.sl_import_file WHERE id = :id", {"id": file_id})
 
     async def list_file_errors(self, file_id: int, *, limit: int, offset: int) -> list[dict]:
         return await self._rows(
             "SELECT id, record_ref, error_code, error_detail, created_at "
-            "FROM jnpa.sl_import_errors WHERE import_file_id = :id "
+            "FROM core.sl_import_error WHERE import_file_id = :id "
             "ORDER BY id LIMIT :limit OFFSET :offset",
             {"id": file_id, "limit": limit, "offset": offset})
 
     # --------------------------------------------------------------- upload helpers
     async def add_row_errors(self, file_id: int, errors: Sequence[Mapping[str, Any]]) -> None:
         """Bulk-insert per-row validation errors for one upload into the EXISTING
-        jnpa.sl_import_errors table (reused — no new table). Best-effort."""
+        core.sl_import_error table (reused — no new table). Best-effort."""
         rows = [{"fid": file_id,
                  "ref": (f"row {e.get('row_number')}" if e.get("row_number") is not None else e.get("column_name")),
                  "code": e.get("error_code") or "INVALID",
@@ -436,7 +461,7 @@ class ShippingLinesRepository:
             return
         async with get_engine(self._dsn).begin() as conn:
             await conn.execute(
-                text("INSERT INTO jnpa.sl_import_errors (import_file_id, record_ref, "
+                text("INSERT INTO core.sl_import_error (import_file_id, record_ref, "
                      "error_code, error_detail) VALUES (:fid, :ref, :code, :detail)"), rows)
 
     async def mark_partial(self, file_id: int, *, error_count: int) -> None:
@@ -444,7 +469,7 @@ class ShippingLinesRepository:
         invalid (records the honest outcome; the valid rows are already persisted)."""
         async with get_engine(self._dsn).begin() as conn:
             await conn.execute(
-                text("UPDATE jnpa.sl_import_files SET import_status = 'PARTIAL', "
+                text("UPDATE core.sl_import_file SET import_status = 'PARTIAL', "
                      "error_count = :n, updated_at = now() WHERE id = :id"),
                 {"n": error_count, "id": file_id})
 
@@ -486,7 +511,7 @@ def _values(cols: Sequence[str], *, raw: bool = False) -> str:
 
 
 _FILE_INSERT = """
-INSERT INTO jnpa.sl_import_files
+INSERT INTO core.sl_import_file
     (list_type, terminal, physical_format, source_file, source_sha256, file_size_bytes,
      vessel_visit, voyage, line_code, direction, record_count, import_status,
      uploaded_by, source)
@@ -498,7 +523,7 @@ RETURNING id
 """
 
 _FILE_INSERT_FAILED = """
-INSERT INTO jnpa.sl_import_files
+INSERT INTO core.sl_import_file
     (list_type, terminal, physical_format, source_file, source_sha256, file_size_bytes,
      vessel_visit, voyage, line_code, direction, record_count, import_status, error_detail,
      uploaded_by, source)
@@ -509,16 +534,75 @@ VALUES
 RETURNING id
 """
 
-_CONTAINER_INSERT = (
-    "INSERT INTO jnpa.sl_advance_containers (import_file_id, "
-    + ", ".join(_CONTAINER_COLS) + ", raw, row_sha256) VALUES (:import_file_id, "
-    + _values(_CONTAINER_COLS, raw=True) + ", :row_sha256) "
-    "ON CONFLICT (import_file_id, row_sha256) DO NOTHING"
-)
+# v3: legacy upload params map onto core.advance_list_container; terminal resolves
+# through ref_terminal(+alias) and DG codes split into core.advance_list_dg.
+_CONTAINER_INSERT = """
+INSERT INTO core.advance_list_container
+    (import_file_id, direction, terminal_id, container_no, iso_code,
+     container_valid_iso, load_status, category, gross_weight_kg,
+     weight_source_uom, pol, pod, destination, line_code, vessel_visit, voyage,
+     bl_no, seal1, reefer_status, reefer_temp, reefer_temp_unit, group_code,
+     client_code, departure_mode, nominated_cfs, iec_code, gst_no,
+     commodity_code, extras, row_sha256)
+VALUES
+    (:import_file_id,
+     CASE :list_type WHEN 'EAL' THEN 'E' ELSE 'I' END,
+     coalesce((SELECT t.terminal_id FROM core.ref_terminal t
+               WHERE t.code = upper(:terminal)),
+              (SELECT ta.terminal_id FROM core.ref_terminal_alias ta
+               WHERE ta.alias = upper(:terminal))),
+     :container_no, :iso_code, :container_valid_iso,
+     CASE :freight_kind WHEN 'FULL' THEN 'F' WHEN 'EMPTY' THEN 'E'
+          ELSE left(:freight_kind, 1) END,
+     :category, :gross_weight_kg, :weight_source_uom, :pol, :pod, :destination,
+     :shipping_line_code, :vessel_visit, :voyage, :bill_of_lading, :seal_no,
+     :reefer_status, :reefer_temp, left(:reefer_uom, 1), :group_code,
+     :client_code, left(:departure_mode, 1), :nominated_cfs, :iec_code,
+     :gst_no, :commodity_code, CAST(:raw AS jsonb), :row_sha256)
+ON CONFLICT (import_file_id, row_sha256) DO NOTHING
+"""
 
-_DO_INSERT = (
-    "INSERT INTO jnpa.sl_delivery_orders (import_file_id, "
-    + ", ".join(_DO_COLS) + ") VALUES (:import_file_id, "
-    + _values(_DO_COLS) + ") "
-    "ON CONFLICT (COALESCE(common_ref_number, ''), container_no, COALESCE(gate_pass_no, '')) DO NOTHING"
-)
+# DG codes ride along after the container row exists (keyed by row_sha256).
+_CONTAINER_DG_INSERT = """
+INSERT INTO core.advance_list_dg (al_id, slot, imdg_class, un_number)
+SELECT a.al_id, 1, :imdg_code, :un_number
+FROM core.advance_list_container a WHERE a.row_sha256 = :row_sha256
+ON CONFLICT (al_id, slot) DO NOTHING
+"""
+
+# v3: one legacy AGDORD row = delivery-order header (dedup on do_number) + line.
+_DO_HEADER_INSERT = """
+INSERT INTO core.delivery_order
+    (do_number, do_date, vcn, imo_no, agency_name, custodian_code, delivery_type,
+     payload, import_file_id, message_type, sender_id, receiving_party, call_sign,
+     stuff_destuff_flag, shipping_agent_code, vessel_country, total_containers,
+     raw_xml)
+VALUES
+    (coalesce(:document_number, :common_ref_number), CAST(:issued_ts AS date),
+     :vcn, :imo_number, :shipping_agent_code, :ca_code, :delivery_mode,
+     jsonb_build_object('common_ref_number', :common_ref_number),
+     :import_file_id, :message_type, :sender_id, :receiving_party, :call_sign,
+     :stuff_destuff_flag, :shipping_agent_code, :vessel_country,
+     :total_containers, :raw_xml)
+ON CONFLICT (do_number) DO NOTHING
+"""
+
+_DO_INSERT = """
+INSERT INTO core.delivery_order_line
+    (do_number, line_no, container_no, iso_code, cargo_desc, pol, pod,
+     import_file_id, common_ref_number, vcn, imo_number, shipping_agent_code,
+     final_pod, container_valid_iso, equipment_status, cargo_type, arrival_ts,
+     receipt_date, delivery_mode, gate_pass_no, gate_pass_ts, vehicle_no,
+     gate_number, ca_code, con_seal_status, issued_ts)
+VALUES
+    (coalesce(:document_number, :common_ref_number),
+     (SELECT coalesce(max(l2.line_no), 0) + 1 FROM core.delivery_order_line l2
+       WHERE l2.do_number = coalesce(:document_number, :common_ref_number)),
+     :container_no, :iso_code, :cargo_type, :loading_port, :dest_port,
+     :import_file_id, :common_ref_number, :vcn, :imo_number,
+     :shipping_agent_code, :final_pod, :container_valid_iso, :equipment_status,
+     :cargo_type, :arrival_ts, :receipt_date, :delivery_mode, :gate_pass_no,
+     :gate_pass_ts, :vehicle_no, :gate_number, :ca_code, :con_seal_status,
+     :issued_ts)
+ON CONFLICT (COALESCE(common_ref_number, ''), container_no, COALESCE(gate_pass_no, '')) DO NOTHING
+"""

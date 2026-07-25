@@ -136,7 +136,7 @@ async def customs_history(
     limit: int = Query(default=200, ge=1, le=1000),
     state: GatewayState = Depends(get_state),
 ) -> dict:
-    """Durable customs feed from jnpa.alerts (survives restart)."""
+    """Durable customs feed from core.alert (survives restart)."""
     data = await _upstream(state, "GET", "/customs/history?" + urlencode({"limit": limit}))
     REQUESTS.labels("gate-data", "ok").inc()
     return data if data is not None else {"count": 0, "alerts": [], "decision_path": "UNAVAILABLE"}

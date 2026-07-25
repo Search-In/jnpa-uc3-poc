@@ -85,7 +85,7 @@ async def _truncate(dsn: str) -> None:
 
     from jnpa_shared.db import get_engine
     async with get_engine(dsn).begin() as conn:
-        await conn.execute(text("TRUNCATE jnpa.customs_messages RESTART IDENTITY CASCADE"))
+        await conn.execute(text("TRUNCATE core.customs_message RESTART IDENTITY CASCADE"))
 
 
 async def _table_count(dsn: str, table: str) -> int:
@@ -93,7 +93,7 @@ async def _table_count(dsn: str, table: str) -> int:
 
     from jnpa_shared.db import get_engine
     async with get_engine(dsn).connect() as conn:
-        return int((await conn.execute(text(f"SELECT count(*) FROM jnpa.{table}"))).scalar() or 0)
+        return int((await conn.execute(text(f"SELECT count(*) FROM core.{table}"))).scalar() or 0)
 
 
 def test_import_all_files_idempotent_and_accurate():
@@ -144,7 +144,7 @@ def test_import_all_files_idempotent_and_accurate():
 
 
 def test_reconcile_binds_customs_docs_to_cargo():
-    """After importing the real files, an OOC container present in jnpa.cargo becomes
+    """After importing the real files, an OOC container present in core.cargo becomes
     CLEARED and an RMS-selected container becomes UNDER_INSPECTION; a scan-hold
     notification lands on the existing cargo feed; re-running changes nothing."""
     from sqlalchemy import text
@@ -166,7 +166,7 @@ def test_reconcile_binds_customs_docs_to_cargo():
         async with get_engine(_DSN).begin() as conn:
             for cn in (OOC_CN, RMS_CN):
                 await conn.execute(text(
-                    "INSERT INTO jnpa.cargo (container_number, customs_status) VALUES (:cn,'PENDING') "
+                    "INSERT INTO core.cargo (container_number, customs_status) VALUES (:cn,'PENDING') "
                     "ON CONFLICT (container_number) DO UPDATE SET customs_status='PENDING'"), {"cn": cn})
         try:
             svc = CustomsService(_DSN)
@@ -175,12 +175,12 @@ def test_reconcile_binds_customs_docs_to_cargo():
             async with get_engine(_DSN).connect() as conn:
                 async def stat(cn: str) -> str:
                     return (await conn.execute(text(
-                        "SELECT customs_status FROM jnpa.cargo WHERE container_number=:cn"),
+                        "SELECT customs_status FROM core.cargo WHERE container_number=:cn"),
                         {"cn": cn})).scalar()
                 assert await stat(OOC_CN) == "CLEARED"
                 assert await stat(RMS_CN) == "UNDER_INSPECTION"
                 notif = (await conn.execute(text(
-                    "SELECT count(*) FROM jnpa.cargo_notifications WHERE container_number=:cn "
+                    "SELECT count(*) FROM core.cargo_notification WHERE container_number=:cn "
                     "AND notification_type='CUSTOMS_SCAN_REQUIRED'"), {"cn": RMS_CN})).scalar()
                 assert int(notif) >= 1
             # Idempotent: a second reconcile moves nothing.
@@ -188,10 +188,10 @@ def test_reconcile_binds_customs_docs_to_cargo():
             assert r2["cleared"] == 0 and r2["under_inspection"] == 0
         finally:
             async with get_engine(_DSN).begin() as conn:
-                await conn.execute(text("DELETE FROM jnpa.cargo WHERE container_number = ANY(:ids)"),
+                await conn.execute(text("DELETE FROM core.cargo WHERE container_number = ANY(:ids)"),
                                    {"ids": [OOC_CN, RMS_CN]})
                 await conn.execute(text(
-                    "DELETE FROM jnpa.cargo_notifications WHERE container_number = ANY(:ids)"),
+                    "DELETE FROM core.cargo_notification WHERE container_number = ANY(:ids)"),
                     {"ids": [OOC_CN, RMS_CN]})
 
     _run_isolated(run)

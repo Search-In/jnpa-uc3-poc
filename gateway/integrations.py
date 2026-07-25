@@ -9,7 +9,7 @@ FASTag/ULIP pattern (real client, demo fallback, health flag):
   * Otherwise it returns a deterministic MOCK payload, clearly tagged
     ``source="MOCK"``, and a health endpoint reports ``configured=false`` so the
     external dependency is visible, not pretended-away.
-  * Every call (live or mock) is logged to jnpa.integration_lookups with its
+  * Every call (live or mock) is logged to core.integration_lookup with its
     source + latency for evidence.
 
 Config env vars (all optional; unset => MOCK):
@@ -70,7 +70,7 @@ async def _audit(dsn: Optional[str], *, system: str, op: str, ref: Optional[str]
     try:
         from jnpa_shared.db import execute
         await execute(
-            """INSERT INTO jnpa.integration_lookups
+            """INSERT INTO core.integration_lookup
                  (system, op, ref, request, response, source, latency_ms)
                VALUES (:sys, :op, :ref, CAST(:req AS jsonb), CAST(:resp AS jsonb), :src, :lat)""",
             {"sys": system, "op": op, "ref": ref,

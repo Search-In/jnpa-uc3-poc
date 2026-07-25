@@ -202,7 +202,7 @@ async def verify(request: Request, body: Dict[str, Any] = Body(...),
     REQUESTS.labels("identity", "ok").inc()
     audit_identity_access(actor=actor, driver_id=driver_id, purpose=purpose,
                           is_synthetic=is_synthetic, decision=str(result.get("decision", "?")))
-    # Persistent verification audit trail (jnpa.verification_logs).
+    # Persistent verification audit trail (core.verification_log).
     await enrollment.log_verification(
         state.cfg.postgres_dsn, driver_id=driver_id,
         decision=str(result.get("decision", "?")), score=result.get("score"),
@@ -220,7 +220,7 @@ async def identify(request: Request, body: Dict[str, Any] = Body(...),
     """1:N identification — captured face -> embedding -> nearest enrolled driver.
 
     Pipeline: quality + liveness gate (identity /embed) -> ArcFace embedding ->
-    cosine nearest-neighbour over jnpa.driver_faces -> top-1 if >= threshold else
+    cosine nearest-neighbour over core.driver_face -> top-1 if >= threshold else
     UNKNOWN. No manual driver selection. Every attempt is audited.
     """
     from identity.embeddings import cosine  # type: ignore
@@ -329,7 +329,7 @@ async def enrol(request: Request, body: Dict[str, Any] = Body(...),
 
 
 async def _merge_enrolled(state: GatewayState, drivers: list) -> list:
-    """Append ACTIVE master drivers (jnpa.drivers — promoted on approval) to the
+    """Append ACTIVE master drivers (core.driver_identity — promoted on approval) to the
     synthetic gallery so the verification dropdown offers real enrolled drivers too.
     Synthetic ids are kept; enrolled ids are de-duplicated against them."""
     try:
@@ -438,7 +438,7 @@ async def enrollment_detail(driver_id: str,
 
 @router.get("/drivers")
 async def list_drivers(state: GatewayState = Depends(get_state)) -> dict:
-    """Active master drivers (jnpa.drivers) — the canonical enrolled identities."""
+    """Active master drivers (core.driver_identity) — the canonical enrolled identities."""
     items = await enrollment.list_active_drivers(state.cfg.postgres_dsn)
     REQUESTS.labels("identity", "ok").inc()
     return {"drivers": items, "count": len(items)}
@@ -448,7 +448,7 @@ async def list_drivers(state: GatewayState = Depends(get_state)) -> dict:
 # A Control-Room admin (CUSTOMS / DTCCC_ADMIN — enforced by the /api/identity RBAC
 # policy) can create a driver profile directly and assign it a Vehicle ID. This
 # produces a PENDING enrollment (source=ADMIN) that flows through the SAME approval
-# workflow; on approval the driver is promoted to jnpa.drivers and the assigned
+# workflow; on approval the driver is promoted to core.driver_identity and the assigned
 # Vehicle ID becomes eligible for PWA login. The vehicle list is the truck fleet;
 # already-assigned vehicles are excluded so an admin can only pick an available one.
 
@@ -467,7 +467,7 @@ class CreateDriverBody(BaseModel):
 async def _vehicle_exists(state: GatewayState, vehicle_id: str) -> bool:
     """True if the Vehicle ID is an ACTIVE vehicle in the Vehicle Master. Assignment
     no longer reads from the truck-sim: a vehicle must be registered (and ACTIVE) in
-    jnpa.fleet_vehicles before a driver can be assigned to it."""
+    core.vehicle before a driver can be assigned to it."""
     return await fleet.vehicle_exists(
         state.cfg.postgres_dsn, vehicle_id, active_only=True)
 
@@ -538,7 +538,7 @@ async def create_driver_profile(request: Request, body: CreateDriverBody,
 async def verification_log(driver_id: Optional[str] = Query(default=None),
                            limit: int = Query(default=50),
                            state: GatewayState = Depends(get_state)) -> dict:
-    """Verification audit trail (jnpa.verification_logs) — who/decision/score/when."""
+    """Verification audit trail (core.verification_log) — who/decision/score/when."""
     items = await enrollment.recent_verifications(
         state.cfg.postgres_dsn, driver_id=driver_id, limit=min(limit, 500))
     REQUESTS.labels("identity", "ok").inc()
@@ -565,7 +565,7 @@ async def approve_enrollment(driver_id: str, request: Request,
         if str(rec.get("source") or "").upper() != enrollment.SOURCE_ADMIN:
             raise HTTPException(status_code=400, detail="no reference frame to enroll")
         actor = _actor(request)
-        # Promote FIRST: the jnpa.drivers insert is what enforces one-active-driver-
+        # Promote FIRST: the core.driver_identity insert is what enforces one-active-driver-
         # per-vehicle (uq_drivers_vehicle_active). If it conflicts we abort before
         # flipping the enrollment to ACTIVE, so the record never lands in an
         # inconsistent "ACTIVE enrollment, no driver row" state.
@@ -631,11 +631,11 @@ async def approve_enrollment(driver_id: str, request: Request,
     updated = await enrollment.mark_active(
         state.cfg.postgres_dsn, driver_id, actor=actor, photo_url=photo_url,
         reference_image=stored_ref, template_dim=dim, provider=provider)
-    # Promote into the canonical master identity table (jnpa.drivers).
+    # Promote into the canonical master identity table (core.driver_identity).
     await enrollment.promote_to_driver(
         state.cfg.postgres_dsn, {**rec, "photo_url": photo_url}, actor=actor,
         photo_url=photo_url, reference_image=stored_ref, template_dim=dim, provider=provider)
-    # Persist the biometric template for 1:N identification (jnpa.driver_faces).
+    # Persist the biometric template for 1:N identification (core.driver_face).
     emb = (data or {}).get("embedding")
     if emb:
         await enrollment.store_face(state.cfg.postgres_dsn, driver_id, emb,

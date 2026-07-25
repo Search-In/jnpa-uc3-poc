@@ -1,7 +1,7 @@
 """Static camera metadata for image→ground projection.
 
 The corridor/gate cameras and their ground coordinates mirror the
-``jnpa.cameras`` seed rows in ``infra/postgres/init.sql``. For the PoC we use a
+``core.camera`` seed rows in ``infra/postgres/init.sql``. For the PoC we use a
 deliberately simple pinhole-free projection: a detection's image-space centre is
 mapped to a small (lat, lon) offset around the camera's mounted location, scaled
 by how far the bbox sits from the frame's horizontal/vertical centre and the
@@ -31,7 +31,7 @@ class CameraGeo:
     bearing_deg: float = 135.0
 
 
-# Mirrors the jnpa.cameras seed (corridor + the two NSICT gate lanes used here).
+# Mirrors the core.camera seed (corridor + the two NSICT gate lanes used here).
 CAMERAS: Dict[str, CameraGeo] = {
     "CAM-COR-01": CameraGeo("CAM-COR-01", 18.9100, 72.9700, 80.0, 135.0),
     "CAM-COR-02": CameraGeo("CAM-COR-02", 18.8850, 72.9900, 80.0, 135.0),

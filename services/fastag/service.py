@@ -44,7 +44,7 @@ _TOPIC_ENROUTE = "fastag.enroute"
 
 # B) Balance — UPSERT on rc_number (latest snapshot always wins).
 _UPSERT_BALANCE = """
-INSERT INTO jnpa.fastag_balance
+INSERT INTO core.fastag_balance
     (rc_number, tag_id, provider_name, provider_code, customer_name,
      available_recharge_limit, available_balance, tag_status, vehicle_class,
      vehicle_class_desc, model_name, updated_at)
@@ -68,7 +68,7 @@ ON CONFLICT (rc_number) DO UPDATE SET
 
 # C) Toll Enroute — plain INSERT (historical; no dedup). Array preserved as jsonb.
 _INSERT_ENROUTE = """
-INSERT INTO jnpa.toll_enroute
+INSERT INTO core.toll_enroute
     (id, client_id, source_state, source_name, destination_state, destination_name,
      vehicle_type, duration, distance, toll_plaza_details)
 VALUES
@@ -262,7 +262,7 @@ class FastagService:
                 f":ld_{i}, :pn_{i}, :gc_{i}, :vt_{i}, :bn_{i}, :st_{i})"
             )
         sql = (
-            "INSERT INTO jnpa.fastag_transactions "
+            "INSERT INTO core.fastag_transaction "
             "(id, tag_id, rc_number, seq_no, transaction_date_time, lane_direction, "
             " toll_plaza_name, toll_plaza_geocode, vehicle_type, bank_name, status) VALUES "
             + ", ".join(values)

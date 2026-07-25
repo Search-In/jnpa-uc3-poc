@@ -2,7 +2,7 @@
 
 Module 13 (UC-III). The single common backend for the off-dock container
 gate-movement feeds (CFS-CODECO / ECY-CODECO). Additive + read-only wrt every
-existing table; it owns only jnpa.cfs_ecy_movements (+ the v_cfs_ecy_dwell view).
+existing table; it owns only core.cfs_ecy_movement (+ the v_cfs_ecy_dwell view).
 
 Layering mirrors :mod:`services.cargo` / :mod:`services.driver_master`:
 

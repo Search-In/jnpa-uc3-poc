@@ -9,7 +9,7 @@ not ship infra/, so the DDL is embedded here rather than read from the .sql file
 Every statement is CREATE ... IF NOT EXISTS / CREATE OR REPLACE VIEW: running it
 against a DB that already has the objects (because the migration ran) is a no-op.
 It DROPS/ALTERS nothing existing and touches no cargo / customs / gate / auth
-tables — the shipping-line rows soft-link to jnpa.cargo BY VALUE (container_no),
+tables — the shipping-line rows soft-link to core.cargo BY VALUE (container_no),
 never by FK.
 
 Called once from gateway/main.py::_lifespan (best-effort; a DB blip only logs).
@@ -20,6 +20,8 @@ tests/test_shipping_lines_schema.py asserts both define the same table/view set.
 """
 from __future__ import annotations
 
+import os
+
 from typing import Optional
 
 from .logging import get_logger
@@ -29,16 +31,16 @@ log = get_logger("gateway.shipping_lines_ext")
 # One idempotent statement per list item (SQLAlchemy text() runs a single
 # statement per execute()). Mirrors migration 0032 exactly.
 _DDL: list[str] = [
-    "CREATE SCHEMA IF NOT EXISTS jnpa",
+    "CREATE SCHEMA IF NOT EXISTS core",
     # ------------------------------------------------ shipping-line master registry
-    """CREATE TABLE IF NOT EXISTS jnpa.shipping_lines (
+    """CREATE TABLE IF NOT EXISTS core.ref_shipping_line (
         line_code   text PRIMARY KEY,
         line_name   text,
         source      text NOT NULL DEFAULT 'ADVANCE_LIST',
         first_seen  timestamptz NOT NULL DEFAULT now(),
         last_seen   timestamptz NOT NULL DEFAULT now())""",
     # ------------------------------------------------ import ledger / file envelope
-    """CREATE TABLE IF NOT EXISTS jnpa.sl_import_files (
+    """CREATE TABLE IF NOT EXISTS core.sl_import_file (
         id               bigserial PRIMARY KEY,
         list_type        text NOT NULL CHECK (list_type IN ('IAL','EAL','EDO')),
         terminal         text NOT NULL
@@ -61,22 +63,22 @@ _DDL: list[str] = [
         created_at       timestamptz NOT NULL DEFAULT now(),
         updated_at       timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT uq_sl_import_file_sha UNIQUE (source_sha256))""",
-    "CREATE INDEX IF NOT EXISTS idx_sl_file_list ON jnpa.sl_import_files (list_type, id DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_sl_file_term ON jnpa.sl_import_files (terminal, id DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_sl_file_stat ON jnpa.sl_import_files (import_status, id DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_sl_file_list ON core.sl_import_file (list_type, id DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_sl_file_term ON core.sl_import_file (terminal, id DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_sl_file_stat ON core.sl_import_file (import_status, id DESC)",
     # ------------------------------------------------ import row-level errors
-    """CREATE TABLE IF NOT EXISTS jnpa.sl_import_errors (
+    """CREATE TABLE IF NOT EXISTS core.sl_import_error (
         id             bigserial PRIMARY KEY,
-        import_file_id bigint NOT NULL REFERENCES jnpa.sl_import_files(id) ON DELETE CASCADE,
+        import_file_id bigint NOT NULL REFERENCES core.sl_import_file(id) ON DELETE CASCADE,
         record_ref     text,
         error_code     text NOT NULL,
         error_detail   text,
         created_at     timestamptz NOT NULL DEFAULT now())""",
-    "CREATE INDEX IF NOT EXISTS idx_sl_err_file ON jnpa.sl_import_errors (import_file_id, id)",
+    "CREATE INDEX IF NOT EXISTS idx_sl_err_file ON core.sl_import_error (import_file_id, id)",
     # ------------------------------------------------ IAL/EAL canonical line items
-    """CREATE TABLE IF NOT EXISTS jnpa.sl_advance_containers (
+    """CREATE TABLE IF NOT EXISTS core.advance_list_container (
         id                  bigserial PRIMARY KEY,
-        import_file_id      bigint NOT NULL REFERENCES jnpa.sl_import_files(id) ON DELETE CASCADE,
+        import_file_id      bigint NOT NULL REFERENCES core.sl_import_file(id) ON DELETE CASCADE,
         list_type           text NOT NULL CHECK (list_type IN ('IAL','EAL')),
         terminal            text NOT NULL,
         container_no        text NOT NULL,
@@ -91,7 +93,7 @@ _DDL: list[str] = [
         pol                 text,
         pod                 text,
         destination         text,
-        shipping_line_code  text REFERENCES jnpa.shipping_lines(line_code),
+        shipping_line_code  text REFERENCES core.ref_shipping_line(line_code),
         vessel_visit        text,
         voyage              text,
         bill_of_lading      text,
@@ -114,16 +116,16 @@ _DDL: list[str] = [
     # Content-hash uniqueness: byte-identical rows collapse (idempotent), but any row
     # that differs in ANY source field persists — normalization never drops a distinct
     # source row (e.g. one container under two operator codes in the same list).
-    "CREATE UNIQUE INDEX IF NOT EXISTS uq_sl_adv_container ON jnpa.sl_advance_containers "
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_sl_adv_container ON core.advance_list_container "
     "(import_file_id, row_sha256)",
-    "CREATE INDEX IF NOT EXISTS idx_sl_adv_container_no ON jnpa.sl_advance_containers (container_no)",
-    "CREATE INDEX IF NOT EXISTS idx_sl_adv_bl   ON jnpa.sl_advance_containers (bill_of_lading)",
-    "CREATE INDEX IF NOT EXISTS idx_sl_adv_line ON jnpa.sl_advance_containers (shipping_line_code)",
-    "CREATE INDEX IF NOT EXISTS idx_sl_adv_term ON jnpa.sl_advance_containers (terminal, list_type)",
+    "CREATE INDEX IF NOT EXISTS idx_sl_adv_container_no ON core.advance_list_container (container_no)",
+    "CREATE INDEX IF NOT EXISTS idx_sl_adv_bl   ON core.advance_list_container (bill_of_lading)",
+    "CREATE INDEX IF NOT EXISTS idx_sl_adv_line ON core.advance_list_container (shipping_line_code)",
+    "CREATE INDEX IF NOT EXISTS idx_sl_adv_term ON core.advance_list_container (terminal, list_type)",
     # ------------------------------------------------ EDO / CODECO delivery orders
-    """CREATE TABLE IF NOT EXISTS jnpa.sl_delivery_orders (
+    """CREATE TABLE IF NOT EXISTS core.delivery_order_line (
         id                  bigserial PRIMARY KEY,
-        import_file_id      bigint NOT NULL REFERENCES jnpa.sl_import_files(id) ON DELETE CASCADE,
+        import_file_id      bigint NOT NULL REFERENCES core.sl_import_file(id) ON DELETE CASCADE,
         document_number     text,
         common_ref_number   text,
         message_type        text,
@@ -156,13 +158,13 @@ _DDL: list[str] = [
         issued_ts           timestamptz,
         raw_xml             text,
         created_at          timestamptz NOT NULL DEFAULT now())""",
-    "CREATE UNIQUE INDEX IF NOT EXISTS uq_sl_delivery_order ON jnpa.sl_delivery_orders "
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_sl_delivery_order ON core.delivery_order_line "
     "(COALESCE(common_ref_number, ''), container_no, COALESCE(gate_pass_no, ''))",
-    "CREATE INDEX IF NOT EXISTS idx_sl_do_container ON jnpa.sl_delivery_orders (container_no)",
-    "CREATE INDEX IF NOT EXISTS idx_sl_do_gatepass  ON jnpa.sl_delivery_orders (gate_pass_no)",
-    "CREATE INDEX IF NOT EXISTS idx_sl_do_vehicle   ON jnpa.sl_delivery_orders (vehicle_no)",
+    "CREATE INDEX IF NOT EXISTS idx_sl_do_container ON core.delivery_order_line (container_no)",
+    "CREATE INDEX IF NOT EXISTS idx_sl_do_gatepass  ON core.delivery_order_line (gate_pass_no)",
+    "CREATE INDEX IF NOT EXISTS idx_sl_do_vehicle   ON core.delivery_order_line (vehicle_no)",
     # ------------------------------------------------ append-only event log
-    """CREATE TABLE IF NOT EXISTS jnpa.sl_events (
+    """CREATE TABLE IF NOT EXISTS core.sl_event (
         id           bigserial PRIMARY KEY,
         event        text NOT NULL,
         module       text,
@@ -170,26 +172,26 @@ _DDL: list[str] = [
         container_no text,
         payload      jsonb,
         created_at   timestamptz NOT NULL DEFAULT now())""",
-    "CREATE INDEX IF NOT EXISTS idx_sl_events_mod  ON jnpa.sl_events (module, id DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_sl_events_cont ON jnpa.sl_events (container_no)",
+    "CREATE INDEX IF NOT EXISTS idx_sl_events_mod  ON core.sl_event (module, id DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_sl_events_cont ON core.sl_event (container_no)",
     # ------------------------------------------------ per-container rollup view
     #   One row per container: the most-recent advance-list fact FULL-joined to its
-    #   most-recent delivery order. Soft, by-value link to jnpa.cargo (container_no).
-    """CREATE OR REPLACE VIEW jnpa.v_shipping_line_container AS
+    #   most-recent delivery order. Soft, by-value link to core.cargo (container_no).
+    """CREATE OR REPLACE VIEW mart.v_shipping_line_container AS
         WITH ac AS (
             SELECT DISTINCT ON (container_no)
                 container_no, list_type, terminal, shipping_line_code, category,
                 freight_kind, gross_weight_kg, weight_source_uom, pol, pod, destination,
                 bill_of_lading, vessel_visit, voyage, iso_code, seal_no, reefer_status,
                 reefer_temp, id
-            FROM jnpa.sl_advance_containers
+            FROM core.advance_list_container
             ORDER BY container_no, id DESC
         ),
         edo AS (
             SELECT DISTINCT ON (container_no)
                 container_no, gate_pass_no, gate_pass_ts, vehicle_no, delivery_mode,
                 shipping_agent_code, equipment_status, loading_port, dest_port, final_pod, id
-            FROM jnpa.sl_delivery_orders
+            FROM core.delivery_order_line
             ORDER BY container_no, id DESC
         )
         SELECT
@@ -207,17 +209,20 @@ _DDL: list[str] = [
     # ---------------------------------------- Data Upload sub-module (migration 0033)
     # Additive columns on the existing ledger so UI uploads are attributable. Both are
     # nullable/defaulted — the directory importer and pre-existing rows are unaffected.
-    "ALTER TABLE jnpa.sl_import_files ADD COLUMN IF NOT EXISTS uploaded_by text",
-    "ALTER TABLE jnpa.sl_import_files ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'DIRECTORY'",
+    "ALTER TABLE core.sl_import_file ADD COLUMN IF NOT EXISTS uploaded_by text",
+    "ALTER TABLE core.sl_import_file ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'DIRECTORY'",
     "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = "
-    "'chk_sl_import_files_source') THEN ALTER TABLE jnpa.sl_import_files ADD CONSTRAINT "
+    "'chk_sl_import_files_source') THEN ALTER TABLE core.sl_import_file ADD CONSTRAINT "
     "chk_sl_import_files_source CHECK (source IN ('DIRECTORY', 'UPLOAD')); END IF; END$$",
-    "CREATE INDEX IF NOT EXISTS idx_sl_file_source ON jnpa.sl_import_files (source, id DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_sl_file_source ON core.sl_import_file (source, id DESC)",
 ]
 
 
 async def ensure_shipping_lines_schema(dsn: Optional[str] = None) -> None:
     """Create the shipping-line tables + view if absent. Idempotent; safe to call every boot."""
+    if os.getenv("JNPA_RUNTIME_DDL", "0") != "1":
+        # schema-v3: DDL is owned by infra/postgres/v3 migrations, never runtime.
+        return
     from sqlalchemy import text
 
     from jnpa_shared.db import get_engine

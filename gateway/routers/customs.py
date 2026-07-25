@@ -4,8 +4,8 @@ A thin router over :class:`services.customs.CustomsService` (service → raw-SQL
 CustomsRepository), in the same mould as gateway/routers/cfs_ecy.py. It exposes the
 customs documents imported from the OFFICIAL JNPA customer files (migration 0031)
 plus an admin import trigger, and cross-links a container to every customs document
-that references it via the jnpa.v_customs_container_status view — a soft, by-value
-join to jnpa.cargo. It touches no existing table.
+that references it via the mart.v_customs_container_status view — a soft, by-value
+join to core.cargo. It touches no existing table.
 
     GET  /api/customs/summary                       -> dashboard counts
     GET  /api/customs/messages[/{id}]               -> import ledger (+ row errors)
@@ -256,6 +256,6 @@ async def import_customs(svc: CustomsService = Depends(get_service)) -> ImportRe
 @router.post("/reconcile", summary="Bind customs docs to cargo lifecycle (customs_status)")
 async def reconcile(svc: CustomsService = Depends(get_service)) -> Dict[str, Any]:
     """Apply the customs -> cargo workflow: Out-Of-Charge marks the box CLEARED, an RMS
-    scan selection marks it UNDER_INSPECTION — only for containers already in jnpa.cargo.
+    scan selection marks it UNDER_INSPECTION — only for containers already in core.cargo.
     Idempotent; emits customs events + raises scan-hold notifications on the existing feed."""
     return await svc.reconcile_cargo()

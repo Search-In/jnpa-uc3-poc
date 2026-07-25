@@ -3,7 +3,7 @@
 A thin, auditable read surface over the Port Data Platform (PDP). Every lookup
 goes through the shared integration seam (:mod:`gateway.integrations`) so the
 LIVE-vs-MOCK posture is explicit and each call is logged to
-jnpa.integration_lookups with its source + latency — never a silent hardcode.
+core.integration_lookup with its source + latency — never a silent hardcode.
 
   * If ``PDP_BASE_URL`` is configured the adapter performs a REAL HTTP call.
   * Otherwise a deterministic MOCK payload (built by the module-level

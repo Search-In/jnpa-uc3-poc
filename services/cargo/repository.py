@@ -1,6 +1,6 @@
 """Cargo persistence — raw-SQL repository over the shared async engine.
 
-The ONLY layer that speaks SQL to ``jnpa.cargo``. It performs no business logic
+The ONLY layer that speaks SQL to ``core.cargo``. It performs no business logic
 and no HTTP; it just runs parameterised statements through the cached
 SQLAlchemy async engine (``jnpa_shared.db.get_engine``) exactly like
 :mod:`services.fastag.service` — reads on a plain ``connect()``, writes inside a
@@ -55,7 +55,7 @@ _WRITABLE = (
 )
 
 _INSERT = f"""
-INSERT INTO jnpa.cargo
+INSERT INTO core.cargo
     (container_number, vessel_name, customs_status, yard_block, is_released,
      vehicle_number, gate, camera_id, eta,
      eseal_status, eseal_number, pre_document_status, origin_stream)
@@ -66,21 +66,21 @@ VALUES
 RETURNING {_SELECT_COLS}
 """
 
-_SELECT_ONE = f"SELECT {_SELECT_COLS} FROM jnpa.cargo WHERE container_number = :container_number"
+_SELECT_ONE = f"SELECT {_SELECT_COLS} FROM core.cargo WHERE container_number = :container_number"
 
-_DELETE = "DELETE FROM jnpa.cargo WHERE container_number = :container_number"
+_DELETE = "DELETE FROM core.cargo WHERE container_number = :container_number"
 
 # Cargo lifecycle event log (notifications contract, migration 0015).
 _EVENT_COLS = ("id", "event", "container_number", "payload", "created_at")
 _EVENT_SELECT = ", ".join(_EVENT_COLS)
 _EVENT_INSERT = f"""
-INSERT INTO jnpa.cargo_events (event, container_number, payload)
+INSERT INTO core.cargo_event (event, container_number, payload)
 VALUES (:event, :container_number, CAST(:payload AS jsonb))
 RETURNING {_EVENT_SELECT}
 """
 
 # Cargo workflow transition log (migration 0016). Append-only; the CURRENT status
-# lives on jnpa.cargo.workflow_status.
+# lives on core.cargo.workflow_status.
 _WORKFLOW_COLS = ("id", "container_number", "action", "old_status", "new_status",
                   "comment", "created_at")
 _WORKFLOW_SELECT = ", ".join(_WORKFLOW_COLS)
@@ -144,7 +144,7 @@ def _infer_lifecycle(row: Mapping[str, Any]) -> str:
 
 
 class CargoRepository:
-    """Raw-SQL CRUD for ``jnpa.cargo``. Stateless apart from the DSN, so a single
+    """Raw-SQL CRUD for ``core.cargo``. Stateless apart from the DSN, so a single
     instance is safe to share across requests (the engine + pool are cached)."""
 
     def __init__(self, dsn: Optional[str] = None) -> None:
@@ -215,7 +215,7 @@ class CargoRepository:
         clause, params = self._where(locals())
         params.update({"limit": limit, "offset": offset})
         sql = (
-            f"SELECT {_SELECT_COLS} FROM jnpa.cargo {clause} "
+            f"SELECT {_SELECT_COLS} FROM core.cargo {clause} "
             "ORDER BY eta DESC NULLS LAST, created_at DESC "
             "LIMIT :limit OFFSET :offset"
         )
@@ -239,7 +239,7 @@ class CargoRepository:
         """Total rows matching the same filters as list() (ignores limit/offset).
         Powers the X-Total-Count header so a paginated UI knows the full size."""
         clause, params = self._where(locals())
-        sql = f"SELECT count(*) AS n FROM jnpa.cargo {clause}"
+        sql = f"SELECT count(*) AS n FROM core.cargo {clause}"
         async with get_engine(self._dsn).connect() as conn:
             result = await conn.execute(text(sql), params)
             row = result.mappings().first()
@@ -259,7 +259,7 @@ class CargoRepository:
         set_clause = ", ".join(f"{k} = :{k}" for k in patch)
         params = {**patch, "container_number": container_number}
         sql = (
-            f"UPDATE jnpa.cargo SET {set_clause} "
+            f"UPDATE core.cargo SET {set_clause} "
             f"WHERE container_number = :container_number RETURNING {_SELECT_COLS}"
         )
         async with get_engine(self._dsn).begin() as conn:
@@ -280,7 +280,7 @@ class CargoRepository:
     # --------------------------------------------------------------- events (log)
     async def record_event(self, event: str, container_number: str,
                            payload: Mapping[str, Any]) -> dict:
-        """Append one cargo lifecycle event to ``jnpa.cargo_events`` and return the
+        """Append one cargo lifecycle event to ``core.cargo_event`` and return the
         stored row (with its monotonic id + server timestamp). Backs the UC-2
         notifications contract (GET /api/cargo/events)."""
         import json as _json
@@ -316,7 +316,7 @@ class CargoRepository:
         clause = ("WHERE " + " AND ".join(conds)) if conds else ""
         params.update({"limit": limit, "offset": offset})
         sql = (
-            f"SELECT {_EVENT_SELECT} FROM jnpa.cargo_events {clause} "
+            f"SELECT {_EVENT_SELECT} FROM core.cargo_event {clause} "
             "ORDER BY id DESC LIMIT :limit OFFSET :offset"
         )
         async with get_engine(self._dsn).connect() as conn:
@@ -338,7 +338,7 @@ class CargoRepository:
             "stakeholders": _json.dumps(list(stakeholders or [])),
         }
         sql = (
-            "INSERT INTO jnpa.cargo_notifications "
+            "INSERT INTO core.cargo_notification "
             "(container_number, notification_type, severity, message, stakeholders) "
             "VALUES (:container_number, :notification_type, :severity, :message, "
             "CAST(:stakeholders AS jsonb)) "
@@ -371,7 +371,7 @@ class CargoRepository:
         clause = ("WHERE " + " AND ".join(conds)) if conds else ""
         params.update({"limit": limit, "offset": offset})
         sql = (
-            f"SELECT {_NOTIF_SELECT} FROM jnpa.cargo_notifications {clause} "
+            f"SELECT {_NOTIF_SELECT} FROM core.cargo_notification {clause} "
             "ORDER BY id DESC LIMIT :limit OFFSET :offset"
         )
         async with get_engine(self._dsn).connect() as conn:
@@ -382,12 +382,12 @@ class CargoRepository:
     async def record_workflow(self, container_number: str, action: str,
                               new_status: str, comment: Optional[str]) -> Optional[dict]:
         """Apply a workflow transition atomically: read the current status (locking
-        the cargo row), set ``jnpa.cargo.workflow_status`` to ``new_status``, and
+        the cargo row), set ``core.cargo.workflow_status`` to ``new_status``, and
         append the transition to the log. Returns the stored workflow-event row, or
         ``None`` if the container does not exist (so the service maps it to 404)."""
         async with get_engine(self._dsn).begin() as conn:
             cur = await conn.execute(
-                text("SELECT workflow_status FROM jnpa.cargo "
+                text("SELECT workflow_status FROM core.cargo "
                      "WHERE container_number = :cn FOR UPDATE"),
                 {"cn": container_number})
             existing = cur.mappings().first()
@@ -395,11 +395,11 @@ class CargoRepository:
                 return None
             old_status = existing["workflow_status"]
             await conn.execute(
-                text("UPDATE jnpa.cargo SET workflow_status = :ns "
+                text("UPDATE core.cargo SET workflow_status = :ns "
                      "WHERE container_number = :cn"),
                 {"ns": new_status, "cn": container_number})
             ev = await conn.execute(
-                text("INSERT INTO jnpa.cargo_workflow_events "
+                text("INSERT INTO core.cargo_workflow_event "
                      "(container_number, action, old_status, new_status, comment) "
                      "VALUES (:cn, :action, :old_status, :new_status, :comment) "
                      f"RETURNING {_WORKFLOW_SELECT}"),
@@ -412,7 +412,7 @@ class CargoRepository:
                                     limit: int = 100, offset: int = 0) -> list[dict]:
         """Append-only workflow transitions for one container, newest-first."""
         sql = (
-            f"SELECT {_WORKFLOW_SELECT} FROM jnpa.cargo_workflow_events "
+            f"SELECT {_WORKFLOW_SELECT} FROM core.cargo_workflow_event "
             "WHERE container_number = :cn ORDER BY id DESC LIMIT :limit OFFSET :offset"
         )
         async with get_engine(self._dsn).connect() as conn:
@@ -423,12 +423,12 @@ class CargoRepository:
     # ------------------------------------------------------- planning (0018)
     async def next_yard_slot(self, block: str) -> int:
         """Next free slot number in a yard block, derived from BOTH live cargo
-        occupancy (jnpa.cargo.yard_block LIKE 'B-%') and prior plans for the block —
+        occupancy (core.cargo.yard_block LIKE 'B-%') and prior plans for the block —
         so repeated planning does not collide."""
         like = f"{block}-%"
         sql = (
-            "SELECT (SELECT count(*) FROM jnpa.cargo WHERE yard_block LIKE :like) + "
-            "(SELECT count(*) FROM jnpa.cargo_yard_plans WHERE assigned_block LIKE :like) AS n"
+            "SELECT (SELECT count(*) FROM core.cargo WHERE yard_block LIKE :like) + "
+            "(SELECT count(*) FROM core.cargo_yard_plan WHERE assigned_block LIKE :like) AS n"
         )
         async with get_engine(self._dsn).connect() as conn:
             result = await conn.execute(text(sql), {"like": like})
@@ -440,7 +440,7 @@ class CargoRepository:
         params = {"container_number": container_number, "preferred_block": preferred_block,
                   "assigned_block": assigned_block, "priority": priority}
         sql = (
-            "INSERT INTO jnpa.cargo_yard_plans "
+            "INSERT INTO core.cargo_yard_plan "
             "(container_number, preferred_block, assigned_block, priority) "
             "VALUES (:container_number, :preferred_block, :assigned_block, :priority) "
             f"RETURNING {_YARD_PLAN_SELECT}"
@@ -452,7 +452,7 @@ class CargoRepository:
 
     async def list_yarded_containers(self) -> list[dict]:
         """Every container with a live yard_block — the input to yard-optimization."""
-        sql = ("SELECT container_number, yard_block FROM jnpa.cargo "
+        sql = ("SELECT container_number, yard_block FROM core.cargo "
                "WHERE yard_block IS NOT NULL ORDER BY yard_block")
         async with get_engine(self._dsn).connect() as conn:
             result = await conn.execute(text(sql))
@@ -464,7 +464,7 @@ class CargoRepository:
         params = {"rake_id": rake_id, "containers": _json.dumps(items),
                   "planned_containers": len(items)}
         sql = (
-            "INSERT INTO jnpa.cargo_rake_plans (rake_id, containers, planned_containers) "
+            "INSERT INTO core.cargo_rake_plan (rake_id, containers, planned_containers) "
             "VALUES (:rake_id, CAST(:containers AS jsonb), :planned_containers) "
             f"RETURNING {_RAKE_PLAN_SELECT}"
         )
@@ -485,7 +485,7 @@ class CargoRepository:
         note: Optional[str] = None,
         strict: bool = True,
     ) -> Optional[dict]:
-        """Atomically advance ``jnpa.cargo.lifecycle_status`` to ``target``.
+        """Atomically advance ``core.cargo.lifecycle_status`` to ``target``.
 
         Locks the cargo row (``FOR UPDATE``), resolves the current status (falling
         back to :func:`_infer_lifecycle` when the column is NULL), and:
@@ -504,7 +504,7 @@ class CargoRepository:
         supplied by the service (the single source of the state machine)."""
         async with get_engine(self._dsn).begin() as conn:
             cur = await conn.execute(
-                text(f"SELECT {_SELECT_COLS} FROM jnpa.cargo "
+                text(f"SELECT {_SELECT_COLS} FROM core.cargo "
                      "WHERE container_number = :cn FOR UPDATE"),
                 {"cn": container_number})
             existing = cur.mappings().first()
@@ -518,12 +518,12 @@ class CargoRepository:
                     raise CargoTransitionError(container_number, current, target)
                 return None
             upd = await conn.execute(
-                text("UPDATE jnpa.cargo SET lifecycle_status = :ns "
+                text("UPDATE core.cargo SET lifecycle_status = :ns "
                      f"WHERE container_number = :cn RETURNING {_SELECT_COLS}"),
                 {"ns": target, "cn": container_number})
             row = upd.mappings().first()
             await conn.execute(
-                text("INSERT INTO jnpa.cargo_lifecycle_events "
+                text("INSERT INTO core.cargo_lifecycle_event "
                      "(container_number, action, old_status, new_status, actor_role, note) "
                      "VALUES (:cn, :action, :old, :new, :actor, :note)"),
                 {"cn": container_number, "action": action, "old": current,
@@ -537,7 +537,7 @@ class CargoRepository:
                                     limit: int = 100, offset: int = 0) -> list[dict]:
         """Append-only lifecycle transition history for one container, newest-first."""
         sql = (
-            f"SELECT {_LIFECYCLE_SELECT} FROM jnpa.cargo_lifecycle_events "
+            f"SELECT {_LIFECYCLE_SELECT} FROM core.cargo_lifecycle_event "
             "WHERE container_number = :cn ORDER BY id DESC LIMIT :limit OFFSET :offset"
         )
         async with get_engine(self._dsn).connect() as conn:
@@ -551,7 +551,7 @@ class CargoRepository:
         live ``yard_block`` or a lifecycle at/after YARD_ASSIGNED, so both the new
         lifecycle path and legacy yarded rows appear. Oldest-first (queue order)."""
         sql = (
-            f"SELECT {_SELECT_COLS} FROM jnpa.cargo "
+            f"SELECT {_SELECT_COLS} FROM core.cargo "
             "WHERE is_released = false "
             "AND (yard_block IS NOT NULL OR lifecycle_status IN "
             "     ('YARD_ASSIGNED','YARD_POSITION_ALLOCATED','REEFER_PLANNED',"
@@ -571,7 +571,7 @@ class CargoRepository:
         params = {"container_number": container_number, "verified": verified,
                   "remarks": remarks, "actor_role": actor_role}
         sql = (
-            "INSERT INTO jnpa.cargo_scan_verifications "
+            "INSERT INTO core.cargo_scan_verification "
             "(container_number, verified, remarks, actor_role) "
             "VALUES (:container_number, :verified, :remarks, :actor_role) "
             f"RETURNING {_SCAN_VERIF_SELECT}"
@@ -592,7 +592,7 @@ class CargoRepository:
                   "yard_row": yard_row, "yard_slot": yard_slot,
                   "yard_position": yard_position}
         sql = (
-            "INSERT INTO jnpa.cargo_yard_plans "
+            "INSERT INTO core.cargo_yard_plan "
             "(container_number, preferred_block, assigned_block, priority, "
             " yard_row, yard_slot, yard_position) "
             "VALUES (:container_number, :preferred_block, :assigned_block, :priority, "
@@ -614,7 +614,7 @@ class CargoRepository:
         clause = ("WHERE " + " AND ".join(conds)) if conds else ""
         params.update({"limit": limit, "offset": offset})
         sql = (
-            f"SELECT {_RAKE_PLAN_SELECT} FROM jnpa.cargo_rake_plans {clause} "
+            f"SELECT {_RAKE_PLAN_SELECT} FROM core.cargo_rake_plan {clause} "
             "ORDER BY id DESC LIMIT :limit OFFSET :offset"
         )
         async with get_engine(self._dsn).connect() as conn:
@@ -625,7 +625,7 @@ class CargoRepository:
         """Next reefer slot number, derived from prior reefer allocations."""
         async with get_engine(self._dsn).connect() as conn:
             result = await conn.execute(
-                text("SELECT count(*) AS n FROM jnpa.cargo_reefer_plans"))
+                text("SELECT count(*) AS n FROM core.cargo_reefer_plan"))
             row = result.mappings().first()
         return (int(row["n"]) if row else 0) + 1
 
@@ -634,7 +634,7 @@ class CargoRepository:
         params = {"container_number": container_number, "temperature": temperature,
                   "power_required": power_required, "slot": slot}
         sql = (
-            "INSERT INTO jnpa.cargo_reefer_plans "
+            "INSERT INTO core.cargo_reefer_plan "
             "(container_number, temperature, power_required, slot) "
             "VALUES (:container_number, :temperature, :power_required, :slot) "
             f"RETURNING {_REEFER_PLAN_SELECT}"

@@ -83,7 +83,7 @@ class BerthingRepository:
         order_col = _SORTS.get(sort, "b.updated_at")
         order_dir = "ASC" if str(direction).lower() == "asc" else "DESC"
         params.update({"limit": limit, "offset": offset})
-        sql = (f"SELECT {_SELECT_COLS} FROM jnpa.berthing_reports b {clause} "
+        sql = (f"SELECT {_SELECT_COLS} FROM core.berthing_record b {clause} "
                f"ORDER BY {order_col} {order_dir} NULLS LAST, b.id DESC "
                "LIMIT :limit OFFSET :offset")
         async with get_engine(self._dsn).connect() as conn:
@@ -94,12 +94,12 @@ class BerthingRepository:
         clause, params = self._where(filters)
         async with get_engine(self._dsn).connect() as conn:
             return int((await conn.execute(
-                text(f"SELECT count(*) FROM jnpa.berthing_reports b {clause}"), params)).scalar() or 0)
+                text(f"SELECT count(*) FROM core.berthing_record b {clause}"), params)).scalar() or 0)
 
     async def get(self, report_id: int) -> Optional[dict]:
         async with get_engine(self._dsn).connect() as conn:
             row = (await conn.execute(text(
-                f"SELECT {_SELECT_COLS} FROM jnpa.berthing_reports b WHERE b.id = :id"),
+                f"SELECT {_SELECT_COLS} FROM core.berthing_record b WHERE b.id = :id"),
                 {"id": report_id})).mappings().first()
         return dict(row) if row else None
 
@@ -110,7 +110,7 @@ class BerthingRepository:
         async with get_engine(self._dsn).connect() as conn:
             events = (await conn.execute(text(
                 "SELECT id, event_type, event_time, created_by, created_at "
-                "FROM jnpa.berthing_events WHERE berthing_id = :id "
+                "FROM core.berthing_record_event WHERE berthing_id = :id "
                 f"ORDER BY array_position({_RANK}, event_type), event_time NULLS LAST, id"),
                 {"id": report_id})).mappings().all()
         report["events"] = [dict(e) for e in events]
@@ -130,7 +130,7 @@ class BerthingRepository:
             "  round((avg(extract(epoch FROM (b.departure_time - b.ata)) / 3600.0) "
             "         FILTER (WHERE b.ata IS NOT NULL AND b.departure_time IS NOT NULL "
             "                 AND b.departure_time >= b.ata))::numeric, 1) AS avg_berth_hours "
-            f"FROM jnpa.berthing_reports b {clause}"
+            f"FROM core.berthing_record b {clause}"
         )
         p = dict(params); p["berthed"] = list(_BERTHED)
         async with get_engine(self._dsn).connect() as conn:
@@ -138,7 +138,7 @@ class BerthingRepository:
             by_term = (await conn.execute(text(
                 "SELECT b.terminal, count(*) AS n, "
                 "  count(*) FILTER (WHERE b.status = ANY(:berthed)) AS berthed "
-                f"FROM jnpa.berthing_reports b {clause} "
+                f"FROM core.berthing_record b {clause} "
                 "GROUP BY b.terminal ORDER BY b.terminal"), p)).mappings().all()
         r = dict(row) if row else {}
         return {
@@ -160,7 +160,7 @@ class BerthingRepository:
             row = (await conn.execute(text(
                 "SELECT id, terminal, filename, status, total_rows, success_rows, "
                 "failed_rows, duplicate_rows, created_at "
-                "FROM jnpa.berthing_import_files WHERE file_hash = :h"),
+                "FROM core.berthing_import_file WHERE file_hash = :h"),
                 {"h": file_hash})).mappings().first()
         return dict(row) if row else None
 
@@ -221,7 +221,7 @@ class BerthingRepository:
                         await conn.execute(text(_EVENT_UPSERT), events)
                 success = inserted + updated
                 await conn.execute(text(
-                    "UPDATE jnpa.berthing_import_files SET status='SUCCESS', "
+                    "UPDATE core.berthing_import_file SET status='SUCCESS', "
                     "success_rows=:s, failed_rows=0, updated_at=now() WHERE id=:id"),
                     {"s": success, "id": fid})
             return {"file_id": fid, "status": "SUCCESS", "inserted": inserted,
@@ -242,7 +242,7 @@ class BerthingRepository:
             async with get_engine(self._dsn).begin() as conn:
                 fid = (await conn.execute(text(_FILE_INSERT_FAILED), row)).mappings().first()["id"]
                 await conn.execute(text(
-                    "INSERT INTO jnpa.berthing_import_errors (import_file_id, row_number, "
+                    "INSERT INTO core.berthing_import_error (import_file_id, row_number, "
                     "error_message, raw_data) VALUES (:fid, NULL, :d, NULL)"),
                     {"fid": fid, "d": detail[:4000]})
             fail_id: Optional[int] = fid
@@ -279,20 +279,20 @@ class BerthingRepository:
             return
         async with get_engine(self._dsn).begin() as conn:
             await conn.execute(text(
-                "INSERT INTO jnpa.berthing_import_errors (import_file_id, row_number, "
+                "INSERT INTO core.berthing_import_error (import_file_id, row_number, "
                 "error_message, raw_data) VALUES (:fid, :rn, :msg, :raw)"), rows)
 
     async def mark_partial(self, file_id: int, *, failed_rows: int, duplicate_rows: int = 0) -> None:
         async with get_engine(self._dsn).begin() as conn:
             await conn.execute(text(
-                "UPDATE jnpa.berthing_import_files SET status='PARTIAL', failed_rows=:f, "
+                "UPDATE core.berthing_import_file SET status='PARTIAL', failed_rows=:f, "
                 "duplicate_rows=:d, updated_at=now() WHERE id=:id"),
                 {"f": failed_rows, "d": duplicate_rows, "id": file_id})
 
     async def set_duplicates(self, file_id: int, *, duplicate_rows: int) -> None:
         async with get_engine(self._dsn).begin() as conn:
             await conn.execute(text(
-                "UPDATE jnpa.berthing_import_files SET duplicate_rows=:d, updated_at=now() "
+                "UPDATE core.berthing_import_file SET duplicate_rows=:d, updated_at=now() "
                 "WHERE id=:id"), {"d": duplicate_rows, "id": file_id})
 
     # ------------------------------------------------------------- ledger reads
@@ -313,7 +313,7 @@ class BerthingRepository:
                 "SELECT id, filename, file_hash, terminal, physical_format, uploaded_by, "
                 "status, total_rows, success_rows, failed_rows, duplicate_rows, source, "
                 "error_detail, created_at, updated_at "
-                f"FROM jnpa.berthing_import_files{where} "
+                f"FROM core.berthing_import_file{where} "
                 "ORDER BY id DESC LIMIT :limit OFFSET :offset"), params)
             return [dict(r) for r in res.mappings().all()]
 
@@ -321,7 +321,7 @@ class BerthingRepository:
         where, params = self._file_where(filters)
         async with get_engine(self._dsn).connect() as conn:
             return int((await conn.execute(
-                text(f"SELECT count(*) FROM jnpa.berthing_import_files{where}"), params)).scalar() or 0)
+                text(f"SELECT count(*) FROM core.berthing_import_file{where}"), params)).scalar() or 0)
 
     async def get_file(self, file_id: int) -> Optional[dict]:
         async with get_engine(self._dsn).connect() as conn:
@@ -329,14 +329,14 @@ class BerthingRepository:
                 "SELECT id, filename, file_hash, terminal, physical_format, uploaded_by, "
                 "status, total_rows, success_rows, failed_rows, duplicate_rows, source, "
                 "error_detail, created_at, updated_at "
-                "FROM jnpa.berthing_import_files WHERE id = :id"), {"id": file_id})).mappings().first()
+                "FROM core.berthing_import_file WHERE id = :id"), {"id": file_id})).mappings().first()
         return dict(row) if row else None
 
     async def list_file_errors(self, file_id: int, *, limit: int, offset: int) -> list[dict]:
         async with get_engine(self._dsn).connect() as conn:
             res = await conn.execute(text(
                 "SELECT id, row_number, error_message, raw_data, created_at "
-                "FROM jnpa.berthing_import_errors WHERE import_file_id = :id "
+                "FROM core.berthing_import_error WHERE import_file_id = :id "
                 "ORDER BY id LIMIT :limit OFFSET :offset"),
                 {"id": file_id, "limit": limit, "offset": offset})
             return [dict(r) for r in res.mappings().all()]
@@ -344,7 +344,7 @@ class BerthingRepository:
 
 # --------------------------------------------------------------------------- SQL
 _FILE_INSERT = """
-INSERT INTO jnpa.berthing_import_files
+INSERT INTO core.berthing_import_file
     (filename, file_hash, terminal, physical_format, uploaded_by, total_rows, status, source)
 VALUES
     (:filename, :file_hash, :terminal, :physical_format, :uploaded_by, :total_rows,
@@ -353,7 +353,7 @@ RETURNING id
 """
 
 _FILE_INSERT_FAILED = """
-INSERT INTO jnpa.berthing_import_files
+INSERT INTO core.berthing_import_file
     (filename, file_hash, terminal, physical_format, uploaded_by, total_rows, status,
      error_detail, source)
 VALUES
@@ -363,7 +363,7 @@ RETURNING id
 """
 
 _REPORT_UPSERT = f"""
-INSERT INTO jnpa.berthing_reports
+INSERT INTO core.berthing_record
     (terminal, vessel_name, imo_number, voyage_number, shipping_line, berth_number,
      eta, ata, berthing_time, departure_time, cargo_operation_start, cargo_operation_end,
      status, source_file, import_file_id)
@@ -373,17 +373,17 @@ VALUES
      :cargo_operation_end, :status, :source_file, :import_file_id)
 ON CONFLICT ON CONSTRAINT uq_berthing_call DO UPDATE SET
     status = CASE WHEN array_position({_RANK}, EXCLUDED.status)
-                   >= array_position({_RANK}, jnpa.berthing_reports.status)
-                  THEN EXCLUDED.status ELSE jnpa.berthing_reports.status END,
-    imo_number            = COALESCE(EXCLUDED.imo_number, jnpa.berthing_reports.imo_number),
-    shipping_line         = COALESCE(EXCLUDED.shipping_line, jnpa.berthing_reports.shipping_line),
-    berth_number          = COALESCE(EXCLUDED.berth_number, jnpa.berthing_reports.berth_number),
-    eta                   = COALESCE(EXCLUDED.eta, jnpa.berthing_reports.eta),
-    ata                   = COALESCE(EXCLUDED.ata, jnpa.berthing_reports.ata),
-    berthing_time         = COALESCE(EXCLUDED.berthing_time, jnpa.berthing_reports.berthing_time),
-    departure_time        = COALESCE(EXCLUDED.departure_time, jnpa.berthing_reports.departure_time),
-    cargo_operation_start = COALESCE(EXCLUDED.cargo_operation_start, jnpa.berthing_reports.cargo_operation_start),
-    cargo_operation_end   = COALESCE(EXCLUDED.cargo_operation_end, jnpa.berthing_reports.cargo_operation_end),
+                   >= array_position({_RANK}, core.berthing_record.status)
+                  THEN EXCLUDED.status ELSE core.berthing_record.status END,
+    imo_number            = COALESCE(EXCLUDED.imo_number, core.berthing_record.imo_number),
+    shipping_line         = COALESCE(EXCLUDED.shipping_line, core.berthing_record.shipping_line),
+    berth_number          = COALESCE(EXCLUDED.berth_number, core.berthing_record.berth_number),
+    eta                   = COALESCE(EXCLUDED.eta, core.berthing_record.eta),
+    ata                   = COALESCE(EXCLUDED.ata, core.berthing_record.ata),
+    berthing_time         = COALESCE(EXCLUDED.berthing_time, core.berthing_record.berthing_time),
+    departure_time        = COALESCE(EXCLUDED.departure_time, core.berthing_record.departure_time),
+    cargo_operation_start = COALESCE(EXCLUDED.cargo_operation_start, core.berthing_record.cargo_operation_start),
+    cargo_operation_end   = COALESCE(EXCLUDED.cargo_operation_end, core.berthing_record.cargo_operation_end),
     source_file           = EXCLUDED.source_file,
     import_file_id        = EXCLUDED.import_file_id,
     updated_at            = now()
@@ -391,8 +391,8 @@ RETURNING id, (xmax = 0) AS inserted
 """
 
 _EVENT_UPSERT = """
-INSERT INTO jnpa.berthing_events (berthing_id, event_type, event_time, created_by)
+INSERT INTO core.berthing_record_event (berthing_id, event_type, event_time, created_by)
 VALUES (:berthing_id, :event_type, :event_time, :created_by)
 ON CONFLICT ON CONSTRAINT uq_berthing_event DO UPDATE SET
-    event_time = COALESCE(jnpa.berthing_events.event_time, EXCLUDED.event_time)
+    event_time = COALESCE(core.berthing_record_event.event_time, EXCLUDED.event_time)
 """

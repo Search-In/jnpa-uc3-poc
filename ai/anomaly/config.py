@@ -213,7 +213,7 @@ class AnomalyConfig:
 
 
 # Corridor + gate cameras whose frame streams the detector consumes by default
-# (mirrors the jnpa.cameras seed in infra/postgres/init.sql).
+# (mirrors the core.camera seed in infra/postgres/init.sql).
 DEFAULT_CAMERAS = (
     "CAM-COR-01", "CAM-COR-02", "CAM-COR-03",
     "CAM-COR-04", "CAM-COR-05", "CAM-COR-06",

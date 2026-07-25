@@ -11,6 +11,8 @@ Best-effort writers; idempotent DDL applied at boot.
 """
 from __future__ import annotations
 
+import os
+
 import asyncio
 import json
 from datetime import date, datetime
@@ -23,27 +25,27 @@ log = get_logger("gateway.vehicle_intel")
 _DDL = (
     # Ensure the canonical drivers table exists (init.sql defines it with the same
     # IF NOT EXISTS; older DB volumes predate it). Additive + idempotent.
-    """CREATE TABLE IF NOT EXISTS jnpa.drivers (
+    """CREATE TABLE IF NOT EXISTS core.driver_identity (
         driver_id text PRIMARY KEY, name text NOT NULL, license_no text, mobile text,
         vehicle_no text, aadhaar_masked text, emergency_contact text,
         status text NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','SUSPENDED')),
         photo_url text, reference_image text, template_dim int, provider text,
         enrolled_at timestamptz NOT NULL DEFAULT now(), approved_by text,
         updated_at timestamptz NOT NULL DEFAULT now())""",
-    """CREATE TABLE IF NOT EXISTS jnpa.vehicle_verification_history (
+    """CREATE TABLE IF NOT EXISTS core.vehicle_verification_history (
         id bigserial PRIMARY KEY, vehicle_number text,
         request_payload jsonb NOT NULL DEFAULT '{}'::jsonb,
         response_payload jsonb NOT NULL DEFAULT '{}'::jsonb,
         verification_status text, source text,
         created_at timestamptz NOT NULL DEFAULT now())""",
-    "CREATE INDEX IF NOT EXISTS idx_veh_verif_number ON jnpa.vehicle_verification_history (vehicle_number, created_at DESC)",
-    """CREATE TABLE IF NOT EXISTS jnpa.driver_license_lookup_history (
+    "CREATE INDEX IF NOT EXISTS idx_veh_verif_number ON core.vehicle_verification_history (vehicle_number, created_at DESC)",
+    """CREATE TABLE IF NOT EXISTS core.driver_license_lookup_history (
         id bigserial PRIMARY KEY, dl_number text,
         request_payload jsonb NOT NULL DEFAULT '{}'::jsonb,
         response_payload jsonb NOT NULL DEFAULT '{}'::jsonb,
         status text, source text,
         created_at timestamptz NOT NULL DEFAULT now())""",
-    "CREATE INDEX IF NOT EXISTS idx_dl_lookup_number ON jnpa.driver_license_lookup_history (dl_number, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_dl_lookup_number ON core.driver_license_lookup_history (dl_number, created_at DESC)",
 )
 _READY: Dict[str, bool] = {}
 
@@ -64,6 +66,9 @@ def _row(r: Any) -> dict:
 
 
 async def ensure_intel_schema(dsn: Optional[str]) -> None:
+    if os.getenv("JNPA_RUNTIME_DDL", "0") != "1":
+        # schema-v3: DDL is owned by infra/postgres/v3 migrations, never runtime.
+        return
     if not dsn or _READY.get(dsn):
         return
     from jnpa_shared.db import execute
@@ -86,7 +91,7 @@ async def record_vehicle_verification(*, vehicle_number, request, response,
     try:
         await execute(
             """
-            INSERT INTO jnpa.vehicle_verification_history
+            INSERT INTO core.vehicle_verification_history
                 (vehicle_number, request_payload, response_payload, verification_status, source)
             VALUES (:v, CAST(:req AS jsonb), CAST(:resp AS jsonb), :st, :src)
             """,
@@ -105,7 +110,7 @@ async def record_dl_lookup(*, dl_number, request, response, status, source, dsn)
     try:
         await execute(
             """
-            INSERT INTO jnpa.driver_license_lookup_history
+            INSERT INTO core.driver_license_lookup_history
                 (dl_number, request_payload, response_payload, status, source)
             VALUES (:d, CAST(:req AS jsonb), CAST(:resp AS jsonb), :st, :src)
             """,
@@ -117,7 +122,7 @@ async def record_dl_lookup(*, dl_number, request, response, status, source, dsn)
 
 
 async def upsert_driver_from_dl(*, dl_number, record: Dict[str, Any], dsn) -> None:
-    """Promote a Sarathi DL result into the canonical jnpa.drivers record."""
+    """Promote a Sarathi DL result into the canonical core.driver_identity record."""
     if not dsn or not isinstance(record, dict):
         return
     from jnpa_shared.db import execute
@@ -128,7 +133,7 @@ async def upsert_driver_from_dl(*, dl_number, record: Dict[str, Any], dsn) -> No
     try:
         await execute(
             """
-            INSERT INTO jnpa.drivers (driver_id, name, license_no, status, provider, updated_at)
+            INSERT INTO core.driver_identity (driver_id, name, license_no, status, provider, updated_at)
             VALUES (:id, :name, :dl, 'ACTIVE', 'sarathi', now())
             ON CONFLICT (driver_id) DO UPDATE SET
                 name = EXCLUDED.name, license_no = EXCLUDED.license_no, updated_at = now()
@@ -170,36 +175,36 @@ async def vehicle_intel(plate: str, *, dsn: Optional[str]) -> dict:
     from jnpa_shared.db import fetch_all, fetch_one
 
     async def _rc():
-        r = await fetch_one("SELECT * FROM jnpa.vehicle_master WHERE plate = :p", {"p": plate}, dsn=dsn)
+        r = await fetch_one("SELECT * FROM core.vehicle_rc WHERE plate = :p", {"p": plate}, dsn=dsn)
         return _row(r) if r else None
 
     async def _tracking():
         rows = await fetch_all(
-            "SELECT ts, lat, lon, speed_kmh FROM jnpa.truck_telemetry WHERE plate = :p ORDER BY ts DESC LIMIT 20",
+            "SELECT ts, lat, lon, speed_kmh FROM core.truck_telemetry WHERE plate = :p ORDER BY ts DESC LIMIT 20",
             {"p": plate}, dsn=dsn)
         return [_row(r) for r in rows]
 
     async def _violations():
         rows = await fetch_all(
-            "SELECT case_id, status, total_fine, first_detected_at FROM jnpa.violation_cases WHERE vehicle_number = :p ORDER BY first_detected_at DESC LIMIT 20",
+            "SELECT case_id, status, total_fine, first_detected_at FROM core.violation_case WHERE vehicle_number = :p ORDER BY first_detected_at DESC LIMIT 20",
             {"p": plate}, dsn=dsn)
         return [_row(r) for r in rows]
 
     async def _challans():
         rows = await fetch_all(
-            "SELECT challan_no, total_fine, status, issued_at FROM jnpa.challans WHERE vehicle_number = :p ORDER BY issued_at DESC LIMIT 20",
+            "SELECT challan_no, total_fine, status, issued_at FROM core.challan WHERE vehicle_number = :p ORDER BY issued_at DESC LIMIT 20",
             {"p": plate}, dsn=dsn)
         return [_row(r) for r in rows]
 
     async def _alerts():
         rows = await fetch_all(
-            "SELECT id, kind, severity, ts, payload FROM jnpa.alerts WHERE plate = :p ORDER BY ts DESC LIMIT 20",
+            "SELECT id, kind, severity, ts, payload FROM core.alert WHERE plate = :p ORDER BY ts DESC LIMIT 20",
             {"p": plate}, dsn=dsn)
         return [_row(r) for r in rows]
 
     async def _history():
         rows = await fetch_all(
-            "SELECT verification_status, source, created_at FROM jnpa.vehicle_verification_history WHERE vehicle_number = :p ORDER BY created_at DESC LIMIT 10",
+            "SELECT verification_status, source, created_at FROM core.vehicle_verification_history WHERE vehicle_number = :p ORDER BY created_at DESC LIMIT 10",
             {"p": plate}, dsn=dsn)
         return [_row(r) for r in rows]
 
@@ -235,7 +240,7 @@ async def driver_intel(driver_key: str, *, dsn: Optional[str]) -> dict:
     out: Dict[str, Any] = {"driver_key": driver_key}
     try:
         drv = await fetch_one(
-            "SELECT * FROM jnpa.drivers WHERE driver_id = :k OR license_no = :k",
+            "SELECT * FROM core.driver_identity WHERE driver_id = :k OR license_no = :k",
             {"k": driver_key}, dsn=dsn)
         out["driver"] = _row(drv) if drv else None
     except Exception:  # noqa: BLE001
@@ -251,13 +256,13 @@ async def driver_intel(driver_key: str, *, dsn: Optional[str]) -> dict:
 
     async def _dl_history():
         rows = await fetch_all(
-            "SELECT status, source, response_payload, created_at FROM jnpa.driver_license_lookup_history WHERE dl_number = :d ORDER BY created_at DESC LIMIT 10",
+            "SELECT status, source, response_payload, created_at FROM core.driver_license_lookup_history WHERE dl_number = :d ORDER BY created_at DESC LIMIT 10",
             {"d": dl_no}, dsn=dsn)
         return [_row(r) for r in rows]
 
     async def _activity():
         rows = await fetch_all(
-            "SELECT decision, score, ts FROM jnpa.verification_logs WHERE driver_id = :k ORDER BY ts DESC LIMIT 20",
+            "SELECT decision, score, ts FROM core.verification_log WHERE driver_id = :k ORDER BY ts DESC LIMIT 20",
             {"k": driver_id}, dsn=dsn)
         return [_row(r) for r in rows]
 
@@ -265,7 +270,7 @@ async def driver_intel(driver_key: str, *, dsn: Optional[str]) -> dict:
         if not vehicle_no:
             return []
         rows = await fetch_all(
-            "SELECT case_id, status, total_fine FROM jnpa.violation_cases WHERE vehicle_number = :p ORDER BY first_detected_at DESC LIMIT 20",
+            "SELECT case_id, status, total_fine FROM core.violation_case WHERE vehicle_number = :p ORDER BY first_detected_at DESC LIMIT 20",
             {"p": vehicle_no}, dsn=dsn)
         return [_row(r) for r in rows]
 
@@ -284,7 +289,7 @@ async def verification_history(*, limit: int, dsn: Optional[str]) -> List[dict]:
     from jnpa_shared.db import fetch_all
 
     rows = await fetch_all(
-        "SELECT id, vehicle_number, verification_status, source, created_at FROM jnpa.vehicle_verification_history ORDER BY created_at DESC LIMIT :l",
+        "SELECT id, vehicle_number, verification_status, source, created_at FROM core.vehicle_verification_history ORDER BY created_at DESC LIMIT :l",
         {"l": max(1, min(int(limit), 1000))}, dsn=dsn)
     return [_row(r) for r in rows]
 
@@ -295,7 +300,7 @@ async def dl_history(*, limit: int, dsn: Optional[str]) -> List[dict]:
     from jnpa_shared.db import fetch_all
 
     rows = await fetch_all(
-        "SELECT id, dl_number, status, source, created_at FROM jnpa.driver_license_lookup_history ORDER BY created_at DESC LIMIT :l",
+        "SELECT id, dl_number, status, source, created_at FROM core.driver_license_lookup_history ORDER BY created_at DESC LIMIT :l",
         {"l": max(1, min(int(limit), 1000))}, dsn=dsn)
     return [_row(r) for r in rows]
 

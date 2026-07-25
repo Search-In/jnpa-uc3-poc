@@ -1,15 +1,15 @@
 """Production geo-fence enforcement engine — DB-driven (Phase 2 · Track 3).
 
 Fixes the audit's headline geo-fence gap: detection now reads the LIVE
-``jnpa.geofence_zones`` the dashboard editor writes (NOT the hardcoded
+``core.geofence_zone`` the dashboard editor writes (NOT the hardcoded
 ``jnpa_shared.corridor.NO_PARK_ZONES``). For every vehicle position it runs
 point-in-zone, tracks per-vehicle enter/exit state, measures dwell, and persists:
 
     ENTER / EXIT / DWELL / NO_PARKING_VIOLATION / RESTRICTED_ENTRY
-        -> jnpa.geofence_events          (durable event log, this engine writes it)
-        -> jnpa.alerts                    (violations, reusing the alerts framework)
-        -> jnpa.digital_twin_events       (unified timeline, reused)
-        -> jnpa.notifications             (driver warning, reused)
+        -> core.geofence_event          (durable event log, this engine writes it)
+        -> core.alert                    (violations, reusing the alerts framework)
+        -> core.digital_twin_event       (unified timeline, reused)
+        -> core.notification             (driver warning, reused)
 
 Reuses the framework TABLES directly via jnpa_shared.db — the audit framework
 CODE (gateway/audit.py) is untouched. Every write is best-effort: a DB blip must
@@ -19,6 +19,8 @@ DB polygons are stored GeoJSON-order ``[[lon,lat], ...]``; point_in_polygon want
 a ``(lat,lon)`` ring, so rings are converted on load.
 """
 from __future__ import annotations
+
+import os
 
 import json
 import time
@@ -36,9 +38,9 @@ _ALERT_NS = uuid.UUID("7c2d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f")
 _ZONE_TTL_S = 30.0  # refresh the zone cache at most every 30s
 
 _DDL_EXT = (
-    "ALTER TABLE jnpa.geofence_events ADD COLUMN IF NOT EXISTS driver_id text",
-    "ALTER TABLE jnpa.geofence_events ADD COLUMN IF NOT EXISTS event_type text",
-    "ALTER TABLE jnpa.geofence_events ADD COLUMN IF NOT EXISTS dwell_seconds integer",
+    "ALTER TABLE core.geofence_event ADD COLUMN IF NOT EXISTS driver_id text",
+    "ALTER TABLE core.geofence_event ADD COLUMN IF NOT EXISTS event_type text",
+    "ALTER TABLE core.geofence_event ADD COLUMN IF NOT EXISTS dwell_seconds integer",
 )
 
 
@@ -101,6 +103,9 @@ class GeofenceEngine:
         self._driver_notifier = notifier
 
     async def ensure_schema(self) -> None:
+        if os.getenv("JNPA_RUNTIME_DDL", "0") != "1":
+            # schema-v3: DDL is owned by infra/postgres/v3 migrations, never runtime.
+            return
         if self._schema_ready or not self.dsn:
             return
         from jnpa_shared.db import execute
@@ -122,7 +127,7 @@ class GeofenceEngine:
 
         try:
             rows = await fetch_all(
-                "SELECT id, name, kind, polygon, escalation FROM jnpa.geofence_zones WHERE enabled = true",
+                "SELECT id, name, kind, polygon, escalation FROM core.geofence_zone WHERE enabled = true",
                 dsn=self.dsn,
             )
             self._zones = [_Zone(dict(r)) for r in rows]
@@ -214,7 +219,7 @@ class GeofenceEngine:
         try:
             await execute(
                 """
-                INSERT INTO jnpa.geofence_events
+                INSERT INTO core.geofence_event
                     (vehicle_id, driver_id, zone_id, event_type, entry_time, exit_time,
                      dwell_seconds, violation_type, action_taken)
                 VALUES (:v, :d, :z, :et, :entry, :exit, :dw, :vt, :act)
@@ -243,7 +248,7 @@ class GeofenceEngine:
         try:
             await execute(
                 """
-                INSERT INTO jnpa.alerts (id, kind, severity, plate, payload)
+                INSERT INTO core.alert (id, kind, severity, plate, payload)
                 VALUES (CAST(:id AS uuid), :kind, :sev, :plate, CAST(:p AS jsonb))
                 ON CONFLICT (id) DO NOTHING
                 """,
@@ -257,7 +262,7 @@ class GeofenceEngine:
         try:
             await execute(
                 """
-                INSERT INTO jnpa.digital_twin_events (event_type, vehicle_id, driver_id, location, payload)
+                INSERT INTO core.digital_twin_event (event_type, vehicle_id, driver_id, location, payload)
                 VALUES ('GEOFENCE_VIOLATION', :v, :d, CAST(:loc AS jsonb), CAST(:p AS jsonb))
                 """,
                 {"v": vehicle_id, "d": driver_id,
@@ -273,7 +278,7 @@ class GeofenceEngine:
                    f"alert: {zone.name or zone.id}")
             await execute(
                 """
-                INSERT INTO jnpa.notifications (event_id, channel, receiver, message, delivery_status, provider_response)
+                INSERT INTO core.notification (event_id, channel, receiver, message, delivery_status, provider_response)
                 VALUES (:e, 'push', :r, :m, 'SENT', CAST(:p AS jsonb))
                 """,
                 {"e": alert_id, "r": driver_id or vehicle_id, "m": msg,

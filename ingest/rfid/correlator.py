@@ -11,7 +11,7 @@ This confirmed event is what feeds the boom-barrier decision and the
 gate-throughput KPI on the dashboard.
 
 Gate resolution:
-  * ANPR camera_id -> gate_id is loaded from ``jnpa.cameras`` (falls back to a
+  * ANPR camera_id -> gate_id is loaded from ``core.camera`` (falls back to a
     static map if the DB is unavailable).
   * RFID reader_id -> gate_id comes from the emulator topology (only the gate
     readers participate; corridor reads have no gate and are ignored for the
@@ -54,7 +54,7 @@ def _utcnow() -> datetime:
     return datetime.now(tz=timezone.utc)
 
 
-# Static camera->gate fallback (mirrors jnpa.cameras seed rows). Used if the DB
+# Static camera->gate fallback (mirrors core.camera seed rows). Used if the DB
 # lookup fails so the correlator still works without Postgres.
 _STATIC_CAMERA_GATE = {
     "CAM-NSICT-ENT": "G-NSICT", "CAM-NSICT-EXT": "G-NSICT", "CAM-NSICT-OVW": "G-NSICT",
@@ -103,7 +103,7 @@ class Correlator:
                 conn = await asyncpg.connect(dsn=self.cfg.postgres_dsn)
                 try:
                     rows = await conn.fetch(
-                        "SELECT id, gate_id FROM jnpa.cameras WHERE gate_id IS NOT NULL"
+                        "SELECT id, gate_id FROM core.camera WHERE gate_id IS NOT NULL"
                     )
                     return {r["id"]: r["gate_id"] for r in rows}
                 finally:

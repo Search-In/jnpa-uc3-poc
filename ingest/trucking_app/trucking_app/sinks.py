@@ -9,7 +9,7 @@ Three independent, fault-tolerant sinks fed by the simulator:
   * ``KafkaSink`` — wraps the shared confluent-kafka producer; non-blocking
     ``produce`` + periodic ``poll`` so delivery callbacks fire. JSON+snappy.
   * ``DbSink`` — buffers ``TruckTelemetry`` rows and flushes them to
-    ``jnpa.truck_telemetry`` with asyncpg ``copy_records_to_table`` (binary COPY)
+    ``core.truck_telemetry`` with asyncpg ``copy_records_to_table`` (binary COPY)
     every ``db_flush_interval_s`` — the high-throughput write path the spec asks
     for. Postgres connect is retried; failed flushes are retried, never silently
     dropped beyond a bounded buffer.
@@ -299,7 +299,7 @@ class DbSink:
         try:
             async with self._pool.acquire() as conn:
                 await conn.executemany(
-                    "INSERT INTO jnpa.gate_events "
+                    "INSERT INTO core.gate_event "
                     "(ts, device_id, plate, gate_id, trip_id, event_type, lat, lon) "
                     "VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
                     rows,
@@ -319,7 +319,7 @@ class DbSink:
                 async with self._pool.acquire() as conn:
                     await conn.copy_records_to_table(
                         "truck_telemetry",
-                        schema_name="jnpa",
+                        schema_name="core",
                         columns=_COPY_COLUMNS,
                         records=rows,
                     )

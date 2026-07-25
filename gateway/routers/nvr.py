@@ -8,9 +8,9 @@ persistence or operational surface. Adds:
   * per-channel camera mapping with derived stream metadata (URL/codec/res/fps),
   * a stream-metadata catalogue every viewer/AI pipeline can enumerate,
   * a channel->event generator that resolves the camera and funnels into the
-    shared timeline (jnpa.digital_twin_events) + control-room WS.
+    shared timeline (core.digital_twin_event) + control-room WS.
 
-RDS-backed (jnpa.nvr_devices / jnpa.nvr_camera_map). LIVE-vs-MOCK posture goes
+RDS-backed (core.nvr_device / core.nvr_camera_map). LIVE-vs-MOCK posture goes
 through the same integrations seam as PDP/LDB/RMS-TAS: NVR is LIVE when
 NVR_BASE_URL is configured, otherwise MOCK — never a silent hardcode. Stream URLs
 are DERIVED METADATA only; this router never opens a real RTSP/ONVIF stream.
@@ -78,7 +78,7 @@ async def register_device(body: Dict[str, Any] = Body(...),
         raise HTTPException(400, f"protocol must be one of {sorted(_PROTOCOLS)}")
     source = "LIVE" if system_config("NVR").configured else "CONFIG"
     row = await execute_returning(
-        """INSERT INTO jnpa.nvr_devices
+        """INSERT INTO core.nvr_device
                (id, name, vendor, host, port, protocol, channels, location, source)
            VALUES (:id, :name, :vendor, :host, COALESCE(:port, 554), :protocol,
                    COALESCE(:channels, 0), CAST(:location AS jsonb), :source)
@@ -105,9 +105,9 @@ async def list_devices(state: GatewayState = Depends(get_state)) -> dict:
     from jnpa_shared.db import fetch_all
     rows = await fetch_all(
         """SELECT d.*,
-              (SELECT count(*) FROM jnpa.nvr_camera_map m WHERE m.nvr_id = d.id)
+              (SELECT count(*) FROM core.nvr_camera_map m WHERE m.nvr_id = d.id)
                 AS channel_count
-           FROM jnpa.nvr_devices d
+           FROM core.nvr_device d
            ORDER BY d.created_at DESC""",
         {}, dsn=dsn)
     REQUESTS.labels("nvr", "ok").inc()
@@ -125,8 +125,8 @@ async def list_streams(state: GatewayState = Depends(get_state)) -> dict:
     rows = await fetch_all(
         """SELECT m.id, m.nvr_id, d.name AS nvr_name, m.channel, m.camera_id,
                   m.stream_url, m.codec, m.resolution, m.fps, m.status
-           FROM jnpa.nvr_camera_map m
-           JOIN jnpa.nvr_devices d ON d.id = m.nvr_id
+           FROM core.nvr_camera_map m
+           JOIN core.nvr_device d ON d.id = m.nvr_id
            ORDER BY m.nvr_id, m.channel""",
         {}, dsn=dsn)
     REQUESTS.labels("nvr", "ok").inc()
@@ -143,7 +143,7 @@ async def nvr_health(state: GatewayState = Depends(get_state)) -> dict:
     if dsn:
         from jnpa_shared.db import fetch_all
         rows = await fetch_all(
-            "SELECT status, count(*) AS n FROM jnpa.nvr_devices GROUP BY status",
+            "SELECT status, count(*) AS n FROM core.nvr_device GROUP BY status",
             {}, dsn=dsn)
         for r in rows:
             n = int(r["n"])
@@ -161,12 +161,12 @@ async def get_device(device_id: str = Path(...),
     if not dsn:
         return {"device": None, "channels": []}
     from jnpa_shared.db import fetch_all, fetch_one
-    row = await fetch_one("SELECT * FROM jnpa.nvr_devices WHERE id = :id",
+    row = await fetch_one("SELECT * FROM core.nvr_device WHERE id = :id",
                           {"id": device_id}, dsn=dsn)
     if not row:
         raise HTTPException(404, "nvr_not_found")
     channels = await fetch_all(
-        "SELECT * FROM jnpa.nvr_camera_map WHERE nvr_id = :id ORDER BY channel",
+        "SELECT * FROM core.nvr_camera_map WHERE nvr_id = :id ORDER BY channel",
         {"id": device_id}, dsn=dsn)
     REQUESTS.labels("nvr", "ok").inc()
     return {"device": _iso(dict(row)),
@@ -183,7 +183,7 @@ async def map_channel(device_id: str = Path(...), body: Dict[str, Any] = Body(..
         raise HTTPException(503, "database_unavailable")
     from jnpa_shared.db import execute_returning, fetch_one
     dev = await fetch_one(
-        "SELECT id, protocol, host, port FROM jnpa.nvr_devices WHERE id = :id",
+        "SELECT id, protocol, host, port FROM core.nvr_device WHERE id = :id",
         {"id": device_id}, dsn=dsn)
     if not dev:
         raise HTTPException(404, "nvr_not_found")
@@ -197,7 +197,7 @@ async def map_channel(device_id: str = Path(...), body: Dict[str, Any] = Body(..
     stream_url = (f"{str(dev['protocol']).lower()}://"
                   f"{dev['host']}:{dev['port']}/ch{channel}")
     row = await execute_returning(
-        """INSERT INTO jnpa.nvr_camera_map
+        """INSERT INTO core.nvr_camera_map
                (nvr_id, channel, camera_id, stream_url, codec, resolution, fps)
            VALUES (:nvr_id, :channel, :camera_id, :stream_url,
                    COALESCE(:codec, 'H264'), COALESCE(:resolution, '1920x1080'),
@@ -219,7 +219,7 @@ async def map_channel(device_id: str = Path(...), body: Dict[str, Any] = Body(..
 async def generate_event(device_id: str = Path(...), body: Dict[str, Any] = Body(...),
                          state: GatewayState = Depends(get_state)) -> dict:
     """Generate a camera event from an NVR channel. Resolves the mapped camera_id,
-    broadcasts a control-room WS 'alert', and persists to jnpa.digital_twin_events
+    broadcasts a control-room WS 'alert', and persists to core.digital_twin_event
     (source='NVR') so the event lands on the shared operational timeline."""
     dsn = state.cfg.postgres_dsn
     if not dsn:
@@ -235,12 +235,12 @@ async def generate_event(device_id: str = Path(...), body: Dict[str, Any] = Body
     event_type = (body.get("event_type") or "").strip().upper()
     if not event_type:
         raise HTTPException(400, "event_type required")
-    dev = await fetch_one("SELECT id, name FROM jnpa.nvr_devices WHERE id = :id",
+    dev = await fetch_one("SELECT id, name FROM core.nvr_device WHERE id = :id",
                           {"id": device_id}, dsn=dsn)
     if not dev:
         raise HTTPException(404, "nvr_not_found")
     mapping = await fetch_one(
-        "SELECT camera_id, stream_url FROM jnpa.nvr_camera_map WHERE nvr_id = :id AND channel = :ch",
+        "SELECT camera_id, stream_url FROM core.nvr_camera_map WHERE nvr_id = :id AND channel = :ch",
         {"id": device_id, "ch": channel}, dsn=dsn)
     if not mapping:
         raise HTTPException(404, "channel_not_mapped")
@@ -264,7 +264,7 @@ async def generate_event(device_id: str = Path(...), body: Dict[str, Any] = Body
     # source column; matches audit.record_event / parking mirrors).
     try:
         await execute(
-            """INSERT INTO jnpa.digital_twin_events
+            """INSERT INTO core.digital_twin_event
                    (event_type, vehicle_id, driver_id, location, payload)
                VALUES (:event_type, :vehicle_id, NULL,
                        CAST(:location AS jsonb), CAST(:payload AS jsonb))""",

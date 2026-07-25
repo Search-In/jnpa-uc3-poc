@@ -212,7 +212,7 @@ class TransactionsResult(BaseModel):
     correlation_id: str
     transactions: list[TransactionRow] = Field(default_factory=list)
     # Which store the returned `transactions` came from: always "RDS" now (the UI
-    # displays the persisted jnpa.fastag_transactions history, not just the raw
+    # displays the persisted core.fastag_transaction history, not just the raw
     # fetch batch). `fetch_source` records where the underlying refresh came from
     # (LIVE = real ULIP vendor, SIM = ULIP simulator). Surfaced as a UI badge.
     source: str = "RDS"
@@ -391,7 +391,7 @@ async def transactions(
         persist=lambda m, cid: service.process_transactions(m, client_id=cid),
     )
     # Data-consistency fix: after the fetch has been persisted (dedup) into
-    # jnpa.fastag_transactions, READ BACK the stored history for this RC and
+    # core.fastag_transaction, READ BACK the stored history for this RC and
     # surface THAT — so the UI shows the durable RDS record (all transactions
     # ever fetched for the RC), not just the transient current fetch batch.
     rc = _clean_rc(body.rc_number)
@@ -435,7 +435,7 @@ async def transactions_history(
     rc_number: str,
     limit: int = 100,
 ) -> dict:
-    """Read-only view of the persisted jnpa.fastag_transactions for an RC. Makes
+    """Read-only view of the persisted core.fastag_transaction for an RC. Makes
     no vendor call (no cost) — pure RDS. Used by the UI to re-display stored
     history on refresh. Always tagged source="RDS"."""
     rc = _clean_rc(rc_number)
@@ -449,7 +449,7 @@ def _fetch_source(client: "UlipFastagClient") -> str:
 
 
 async def _read_transactions_history(request: Request, rc: str, *, limit: int = 100) -> list[dict]:
-    """Fetch persisted transactions for an RC from jnpa.fastag_transactions."""
+    """Fetch persisted transactions for an RC from core.fastag_transaction."""
     dsn = getattr(getattr(getattr(request.app.state, "gw", None), "cfg", None),
                   "postgres_dsn", None)
     if not dsn:
@@ -461,7 +461,7 @@ async def _read_transactions_history(request: Request, rc: str, *, limit: int = 
             """
             SELECT seq_no, transaction_date_time, toll_plaza_name, toll_plaza_geocode,
                    vehicle_type, lane_direction, bank_name, status
-            FROM jnpa.fastag_transactions
+            FROM core.fastag_transaction
             WHERE rc_number = :rc
             ORDER BY transaction_date_time DESC NULLS LAST, created_at DESC
             LIMIT :limit
@@ -502,7 +502,7 @@ async def health(
 
         async with get_engine(getattr(service, "_dsn", None)).connect() as conn:
             for t in ("fastag_balance", "fastag_transactions", "toll_enroute"):
-                r = await conn.execute(text("SELECT to_regclass(:t)"), {"t": f"jnpa.{t}"})
+                r = await conn.execute(text("SELECT to_regclass(:t)"), {"t": f"core.{t}"})
                 tables[t] = r.scalar() is not None
     except Exception as exc:  # noqa: BLE001 — health must never raise
         db_status = "unreachable"

@@ -1,12 +1,12 @@
 """/api/bottlenecks — Road-bottleneck analytics (UC-III completion, Feature 9).
 
 Ranks the corridor's most congested segments from the latest per-segment
-``jnpa.traffic_snapshots`` (jam_factor + speed), enriches each with corridor
+``core.traffic_snapshot`` (jam_factor + speed), enriches each with corridor
 metadata (name + midpoint lat/lon + length) and an estimated ``avg_delay_min``
 (travel-time penalty vs. free flow), and can persist the ranking as a
-timestamped snapshot into ``jnpa.bottleneck_snapshots`` (migration 0024).
+timestamped snapshot into ``core.bottleneck_snapshot`` (migration 0024).
 
-Robust by design: when ``jnpa.traffic_snapshots`` is empty (or postgres is
+Robust by design: when ``core.traffic_snapshot`` is empty (or postgres is
 unconfigured) the ranking falls back to a deterministic, corridor-metadata
 derived estimate so the dashboard card never renders blank; the ``source`` field
 says which path produced the numbers. Additive — no existing endpoint/table is
@@ -148,7 +148,7 @@ def _metadata_candidates(meta: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]
 
 async def _compute_ranking(dsn: Optional[str], top: int) -> Dict[str, Any]:
     """Shared ranking logic for GET and POST. Prefers the latest per-segment
-    ``jnpa.traffic_snapshots`` rows; falls back to a deterministic corridor
+    ``core.traffic_snapshot`` rows; falls back to a deterministic corridor
     estimate when there is no live data (or no database). ``source`` tags the
     path: ``traffic_snapshots`` | ``metadata``."""
     meta = _segment_meta()
@@ -160,7 +160,7 @@ async def _compute_ranking(dsn: Optional[str], top: int) -> Dict[str, Any]:
                 """
                 SELECT DISTINCT ON (segment_id)
                        segment_id, ts, speed_kmh, jam_factor, source
-                FROM jnpa.traffic_snapshots
+                FROM core.traffic_snapshot
                 ORDER BY segment_id, ts DESC
                 """,
                 dsn=dsn,
@@ -220,7 +220,7 @@ async def get_bottlenecks(top: int = Query(default=3, ge=1, le=50),
 async def snapshot_bottlenecks(body: Dict[str, Any] = Body(default_factory=dict),
                                state: GatewayState = Depends(get_state)) -> dict:
     """Compute the current ranking and persist each ranked row into
-    ``jnpa.bottleneck_snapshots`` under a shared ``ts`` (now()). Optional body:
+    ``core.bottleneck_snapshot`` under a shared ``ts`` (now()). Optional body:
     ``{"top": N}``. Requires a database — 503 otherwise."""
     dsn = state.cfg.postgres_dsn
     if not dsn:
@@ -234,7 +234,7 @@ async def snapshot_bottlenecks(body: Dict[str, Any] = Body(default_factory=dict)
     for b in bottlenecks:
         detail = {"generated_at": result["generated_at"], "source": result["source"]}
         await execute(
-            """INSERT INTO jnpa.bottleneck_snapshots
+            """INSERT INTO core.bottleneck_snapshot
                  (ts, rank, segment_id, name, jam_factor, speed_kmh, free_flow_kmh,
                   avg_delay_min, lat, lon, detail)
                VALUES (now(), :rank, :sid, :name, :jam, :speed, :free, :delay,
@@ -253,7 +253,7 @@ async def snapshot_bottlenecks(body: Dict[str, Any] = Body(default_factory=dict)
     # --- Realtime + alert fan-out (reuses the existing WS hub + audit/alert
     # helpers; additive — no new infra). One WS "bottleneck" frame refreshes the
     # dashboard/Geo Analytics; the worst-ranked segment also raises a control-room
-    # alert (WS "alert" + jnpa.alerts row + digital-twin event) so it surfaces on
+    # alert (WS "alert" + core.alert row + digital-twin event) so it surfaces on
     # the Alerts Center exactly like other alert kinds. Best-effort throughout. ---
     top = bottlenecks[0] if bottlenecks else None
     board_frame = {"type": "bottleneck", "count": len(bottlenecks),
@@ -282,10 +282,10 @@ async def snapshot_bottlenecks(body: Dict[str, Any] = Body(default_factory=dict)
             await state.ws.broadcast("alert", alert_payload)
         except Exception as exc:  # noqa: BLE001
             log.debug("bottleneck_alert_ws_failed", error=str(exc))
-        # Durable control-room alert row (Alerts Center reads jnpa.alerts).
+        # Durable control-room alert row (Alerts Center reads core.alert).
         try:
             await execute(
-                """INSERT INTO jnpa.alerts (kind, severity, gate_id, payload)
+                """INSERT INTO core.alert (kind, severity, gate_id, payload)
                    VALUES ('bottleneck', :sev, NULL, CAST(:payload AS jsonb))""",
                 {"sev": severity, "payload": json.dumps(alert_payload)}, dsn=dsn)
         except Exception as exc:  # noqa: BLE001
@@ -317,7 +317,7 @@ async def bottlenecks_history(limit: int = Query(default=50, ge=1, le=1000),
         rows = await fetch_all(
             """SELECT ts, rank, segment_id, name, jam_factor, speed_kmh,
                       free_flow_kmh, avg_delay_min, lat, lon, detail
-               FROM jnpa.bottleneck_snapshots
+               FROM core.bottleneck_snapshot
                ORDER BY ts DESC, rank ASC
                LIMIT :limit""",
             {"limit": limit}, dsn=dsn)

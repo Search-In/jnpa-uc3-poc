@@ -2,9 +2,9 @@
 
 A thin router over :class:`services.driver_master.DriverMasterService`
 (DriverMasterService → raw-SQL DriverMasterRepository), in the same mould as
-gateway/routers/cargo.py. It reads the Phase-1 registry (jnpa.driver_master +
-jnpa.driver_pdp_history) and derives enrollment/verification status by READING
-the existing login tables — it never writes to jnpa.drivers / driver_enrollments /
+gateway/routers/cargo.py. It reads the Phase-1 registry (core.driver +
+core.pdp) and derives enrollment/verification status by READING
+the existing login tables — it never writes to core.driver_identity / driver_enrollments /
 driver_faces / verification_logs / device_bindings, so login, enrollment and
 identity are untouched.
 

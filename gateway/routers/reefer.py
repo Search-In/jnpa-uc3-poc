@@ -2,7 +2,7 @@
 
 Powered reefer slots inside a facility (default the CPP reefer yard, ``PK-CPP``):
 occupancy tracking, a per-facility availability rollup, and allocate/release of a
-powered slot to a container. RDS-backed (jnpa.reefer_slots, migration 0024) —
+powered slot to a container. RDS-backed (core.reefer_slot, migration 0024) —
 occupancy is computed from real slot state, never synthesised. Additive: no
 existing endpoint/table is touched.
 
@@ -62,7 +62,7 @@ async def list_slots(facility_id: Optional[str] = Query(default=None),
         params["status"] = status.upper()
     clause = ("WHERE " + " AND ".join(where)) if where else ""
     rows = await fetch_all(
-        f"SELECT * FROM jnpa.reefer_slots {clause} ORDER BY facility_id, slot_code",
+        f"SELECT * FROM core.reefer_slot {clause} ORDER BY facility_id, slot_code",
         params, dsn=dsn)
     REQUESTS.labels("reefer", "ok").inc()
     return {"count": len(rows), "slots": [_iso(dict(r)) for r in rows]}
@@ -87,7 +87,7 @@ async def availability(state: GatewayState = Depends(get_state)) -> dict:
                count(*) FILTER (WHERE status = 'RESERVED')                     AS reserved,
                count(*) FILTER (WHERE status = 'FAULT')                        AS fault,
                count(*) FILTER (WHERE status = 'AVAILABLE' AND powered)        AS powered_available
-        FROM jnpa.reefer_slots
+        FROM core.reefer_slot
         GROUP BY facility_id
         ORDER BY facility_id
         """,
@@ -137,13 +137,13 @@ async def allocate(body: Dict[str, Any] = Body(...),
 
     row = await execute_returning(
         """
-        UPDATE jnpa.reefer_slots
+        UPDATE core.reefer_slot
            SET status = 'OCCUPIED',
                container_number = :cn,
                set_temperature = :st,
                updated_at = now()
          WHERE id = (
-               SELECT id FROM jnpa.reefer_slots
+               SELECT id FROM core.reefer_slot
                 WHERE facility_id = :fid AND status = 'AVAILABLE' AND powered
                 ORDER BY slot_code
                 LIMIT 1
@@ -190,7 +190,7 @@ async def release(body: Dict[str, Any] = Body(...),
 
     row = await execute_returning(
         f"""
-        UPDATE jnpa.reefer_slots
+        UPDATE core.reefer_slot
            SET status = 'AVAILABLE',
                container_number = NULL,
                set_temperature = NULL,
@@ -226,7 +226,7 @@ async def seed(body: Dict[str, Any] = Body(default={}),
     for i in range(1, count + 1):
         slot_code = f"REEFER-A{i:02d}"
         await execute(
-            """INSERT INTO jnpa.reefer_slots (facility_id, slot_code, powered, status)
+            """INSERT INTO core.reefer_slot (facility_id, slot_code, powered, status)
                VALUES (:fid, :sc, :pw, 'AVAILABLE')
                ON CONFLICT (facility_id, slot_code) DO NOTHING""",
             {"fid": facility_id, "sc": slot_code, "pw": i <= powered_n},

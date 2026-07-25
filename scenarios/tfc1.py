@@ -3,7 +3,7 @@
 Params: {gate_id: "G-NSICT", duration_minutes: 120}
 
 Reactive chain (each step idempotent, recorded with its trigger source):
-  1. Mark the gate closed in jnpa.gates (closed_at = now()).
+  1. Mark the gate closed in core.gate (closed_at = now()).
   2. Inject a synthetic high volume of AT_GATE_QUEUE trucks at the gate
      (tagged for reset) + nudge the near-port corridor segments so the build-up
      is real in the data.
@@ -136,9 +136,9 @@ async def _set_gate_closed(cfg: ScenarioConfig, gate_id: str, *, closed: bool) -
     """Mark a gate closed (closed_at = now()) or reopen it (closed_at = NULL)."""
     from jnpa_shared.db import execute
     sql = (
-        "UPDATE jnpa.gates SET closed_at = now() WHERE id = :id"
+        "UPDATE core.gate SET closed_at = now() WHERE id = :id"
         if closed else
-        "UPDATE jnpa.gates SET closed_at = NULL WHERE id = :id"
+        "UPDATE core.gate SET closed_at = NULL WHERE id = :id"
     )
     try:
         await execute(sql, {"id": gate_id}, dsn=cfg.postgres_dsn)
@@ -173,7 +173,7 @@ async def _resolve_alerts(cfg: ScenarioConfig, handle_id: str) -> None:
     from jnpa_shared.db import execute
     try:
         await execute(
-            "UPDATE jnpa.alerts SET ack = true WHERE payload->>'scenario' = :hid",
+            "UPDATE core.alert SET ack = true WHERE payload->>'scenario' = :hid",
             {"hid": handle_id}, dsn=cfg.postgres_dsn,
         )
     except Exception as exc:  # noqa: BLE001

@@ -36,7 +36,7 @@ class SimConfig:
     latency_mean_ms: float = 100.0
     latency_jitter_ms: float = 50.0
 
-    # --- Service identity (for jnpa.services registry) ---
+    # --- Service identity (for core.ulip_service registry) ---
     service_name: str = "vahan"
     service_kind: str = "sim"
     base_url: str = "http://vahan-sim:8201"

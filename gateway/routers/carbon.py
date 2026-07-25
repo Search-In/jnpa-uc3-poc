@@ -7,16 +7,18 @@ never blanks. Emission factors are published GHG-Protocol/IPCC-style constants
 
     GET  /api/carbon/rollup            -> AoI CO2e total + by-class + moving/idle split
     POST /api/carbon/estimate          -> per-vehicle estimate (compute-only, unchanged)
-    POST /api/carbon/calculate         -> per-vehicle estimate PERSISTED to jnpa.carbon_emission
+    POST /api/carbon/calculate         -> per-vehicle estimate PERSISTED to core.carbon_emission
     GET  /api/carbon/history/{vehicle} -> that vehicle's persisted emission ledger
     GET  /api/carbon/history           -> recent emission ledger across vehicles (UI)
 
 The ``/calculate`` + ``/history`` pair (UC-3 audit R6) gives the previously
 compute-only calculator a durable ledger. Persistence is DB-backed
-(``jnpa.carbon_emission``, migration 0020) and self-provisioned lazily here so it
+(``core.carbon_emission``, migration 0020) and self-provisioned lazily here so it
 works on both a fresh init.sql volume and an existing RDS.
 """
 from __future__ import annotations
+
+import os
 
 import time
 from datetime import datetime
@@ -32,11 +34,11 @@ log = get_logger("gateway.carbon")
 
 router = APIRouter(prefix="/api/carbon", tags=["carbon"])
 
-# --- durable emission ledger (jnpa.carbon_emission) --------------------------
+# --- durable emission ledger (core.carbon_emission) --------------------------
 # Self-provisioning DDL (mirrors the push.py/audit.py pattern) so /calculate and
 # /history work even on a volume that predates migration 0020.
 _DDL = (
-    """CREATE TABLE IF NOT EXISTS jnpa.carbon_emission (
+    """CREATE TABLE IF NOT EXISTS core.carbon_emission (
         id                  bigserial PRIMARY KEY,
         vehicle_id          text NOT NULL,
         vehicle_type        text,
@@ -47,8 +49,8 @@ _DDL = (
         source              text,
         calculation_method  text,
         created_at          timestamptz NOT NULL DEFAULT now())""",
-    "CREATE INDEX IF NOT EXISTS idx_carbon_emission_vehicle ON jnpa.carbon_emission (vehicle_id, created_at DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_carbon_emission_created ON jnpa.carbon_emission (created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_carbon_emission_vehicle ON core.carbon_emission (vehicle_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_carbon_emission_created ON core.carbon_emission (created_at DESC)",
 )
 _READY: Dict[str, bool] = {}
 
@@ -70,6 +72,9 @@ def _dsn_target(dsn: Optional[str]) -> str:
 
 
 async def _ensure(dsn: Optional[str]) -> None:
+    if os.getenv("JNPA_RUNTIME_DDL", "0") != "1":
+        # schema-v3: DDL is owned by infra/postgres/v3 migrations, never runtime.
+        return
     if not dsn or _READY.get(dsn):
         return
     from jnpa_shared.db import execute
@@ -155,7 +160,7 @@ async def calculate(body: Dict[str, Any] = Body(...),
 
     Body: ``{vehicle_id, distance_km, idle_time_minutes, vehicle_type, payload_tonnes?}``.
     The figure is computed in-process by the same pure calculator the rollup uses
-    (published IPCC/DEFRA/GLEC factors), then written to ``jnpa.carbon_emission``.
+    (published IPCC/DEFRA/GLEC factors), then written to ``core.carbon_emission``.
     Returns ``{emission_id, co2_kg, fuel_consumed_litre, source, ...}``. The
     ``emission_id`` is null when no DB is configured (the figure is still returned).
     """
@@ -189,7 +194,7 @@ async def calculate(body: Dict[str, Any] = Body(...),
         try:
             inserted = await execute_returning(
                 """
-                INSERT INTO jnpa.carbon_emission
+                INSERT INTO core.carbon_emission
                     (vehicle_id, vehicle_type, distance_km, fuel_consumed_litre,
                      idle_time_minutes, co2_kg, source, calculation_method)
                 VALUES
@@ -253,7 +258,7 @@ async def _history(dsn: Optional[str], *, vehicle_id: Optional[str], limit: int)
             rows = await fetch_all(
                 """SELECT id, vehicle_id, vehicle_type, distance_km, fuel_consumed_litre,
                           idle_time_minutes, co2_kg, source, calculation_method, created_at
-                   FROM jnpa.carbon_emission WHERE vehicle_id = :v
+                   FROM core.carbon_emission WHERE vehicle_id = :v
                    ORDER BY created_at DESC LIMIT :n""",
                 {"v": vehicle_id, "n": limit}, dsn=dsn,
             )
@@ -261,7 +266,7 @@ async def _history(dsn: Optional[str], *, vehicle_id: Optional[str], limit: int)
             rows = await fetch_all(
                 """SELECT id, vehicle_id, vehicle_type, distance_km, fuel_consumed_litre,
                           idle_time_minutes, co2_kg, source, calculation_method, created_at
-                   FROM jnpa.carbon_emission ORDER BY created_at DESC LIMIT :n""",
+                   FROM core.carbon_emission ORDER BY created_at DESC LIMIT :n""",
                 {"n": limit}, dsn=dsn,
             )
     except Exception as exc:  # noqa: BLE001

@@ -103,7 +103,7 @@ async def _police_alerts(
     where = " AND ".join(clauses)
     sql = f"""
         SELECT id, ts, kind, severity, gate_id, plate, payload, ack
-        FROM jnpa.alerts
+        FROM core.alert
         WHERE {where}
         ORDER BY ts DESC
         LIMIT :limit
@@ -134,7 +134,7 @@ async def _enrich_rc(state: GatewayState, plates: List[str]) -> Dict[str, dict]:
             """
             SELECT plate, owner_name_masked, vehicle_class, state, rto_code,
                    fastag_status, blacklist_status
-            FROM jnpa.vehicle_master
+            FROM core.vehicle_rc
             WHERE plate = ANY(:plates)
             """,
             {"plates": plates},

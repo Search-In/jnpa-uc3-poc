@@ -49,7 +49,7 @@ class IdentityConfig:
     embedder: str = "synthetic"
     arcface_model_path: str = ""
 
-    # --- Service identity (for jnpa.services registry parity) ---
+    # --- Service identity (for core.ulip_service registry parity) ---
     service_name: str = "identity"
     service_kind: str = "sim"
     base_url: str = "http://identity:8360"

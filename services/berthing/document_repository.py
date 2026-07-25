@@ -1,7 +1,7 @@
 """Berthing full-extract persistence — raw-SQL repository for the verbatim PDF store.
 
-Writes ONLY the additive migration-0037 tables (jnpa.berthing_report_documents /
-jnpa.berthing_report_tables). It NEVER touches the normalised 0036 tables
+Writes ONLY the additive migration-0037 tables (core.berthing_report_document /
+core.berthing_report_table). It NEVER touches the normalised 0036 tables
 (berthing_reports / berthing_events / berthing_import_files / berthing_import_errors)
 or any other table. Raw ``text()`` over the shared async engine, mirroring
 :mod:`services.berthing.repository`. JSONB columns are bound as ``json.dumps`` strings
@@ -33,7 +33,7 @@ class BerthingDocumentRepository:
             row = (await conn.execute(text(
                 "SELECT id, file_name, terminal, report_date, page_count, table_count, "
                 "row_count, uploaded_by, created_at "
-                "FROM jnpa.berthing_report_documents WHERE pdf_hash = :h"),
+                "FROM core.berthing_report_document WHERE pdf_hash = :h"),
                 {"h": pdf_hash})).mappings().first()
         return dict(row) if row else None
 
@@ -84,10 +84,10 @@ class BerthingDocumentRepository:
             items = (await conn.execute(text(
                 "SELECT id, file_name, terminal, report_date, page_count, table_count, "
                 "row_count, uploaded_by, created_at "
-                f"FROM jnpa.berthing_report_documents{where} "
+                f"FROM core.berthing_report_document{where} "
                 "ORDER BY id DESC LIMIT :limit OFFSET :offset"), params)).mappings().all()
             total = int((await conn.execute(text(
-                f"SELECT count(*) FROM jnpa.berthing_report_documents{where}"),
+                f"SELECT count(*) FROM core.berthing_report_document{where}"),
                 {k: v for k, v in params.items() if k == "terminal"})).scalar() or 0)
         return {"items": [dict(r) for r in items], "total": total, "limit": limit, "offset": offset}
 
@@ -96,7 +96,7 @@ class BerthingDocumentRepository:
             row = (await conn.execute(text(
                 "SELECT id, file_name, terminal, report_date, page_count, table_count, "
                 "row_count, uploaded_by, created_at "
-                "FROM jnpa.berthing_report_documents WHERE id = :id"),
+                "FROM core.berthing_report_document WHERE id = :id"),
                 {"id": document_id})).mappings().first()
         return dict(row) if row else None
 
@@ -105,13 +105,13 @@ class BerthingDocumentRepository:
             rows = (await conn.execute(text(
                 "SELECT id, table_name, panel_index, page_number, original_columns, rows, "
                 "row_count, extraction_note "
-                "FROM jnpa.berthing_report_tables WHERE document_id = :id "
+                "FROM core.berthing_report_table WHERE document_id = :id "
                 "ORDER BY panel_index"), {"id": document_id})).mappings().all()
         return [dict(r) for r in rows]
 
 
 _DOC_INSERT = """
-INSERT INTO jnpa.berthing_report_documents
+INSERT INTO core.berthing_report_document
     (file_name, terminal, report_date, pdf_hash, page_count, table_count, row_count, uploaded_by)
 VALUES
     (:file_name, :terminal, :report_date, :pdf_hash, :page_count, :table_count,
@@ -120,7 +120,7 @@ RETURNING id
 """
 
 _TABLE_INSERT = """
-INSERT INTO jnpa.berthing_report_tables
+INSERT INTO core.berthing_report_table
     (document_id, terminal, table_name, panel_index, page_number, original_columns, rows,
      row_count, extraction_note)
 VALUES

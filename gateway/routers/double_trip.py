@@ -4,7 +4,7 @@ Models a vehicle doing two loaded trips in one shift as a *cycle*: Trip-1 ->
 Return -> Trip-2, grouped by ``cycle_id``. A "double trip" is a cycle whose two
 legs both complete. Provides per-cycle grouping and fleet statistics, plus a
 WebSocket ``double_trip`` broadcast when a cycle completes its 2nd leg.
-RDS-backed (jnpa.tt_trips, migration 0024). Additive — no existing endpoint/table
+RDS-backed (core.tt_trip, migration 0024). Additive — no existing endpoint/table
 is touched.
 
     POST   /api/double-trip/start            -> start a trip leg (mints/continues a cycle)
@@ -89,7 +89,7 @@ async def start_trip(body: Dict[str, Any] = Body(...),
         # open cycle (fewer than 2 trips), else mint a new cycle id.
         open_cycle = await fetch_one(
             """SELECT cycle_id
-                 FROM jnpa.tt_trips
+                 FROM core.tt_trip
                 WHERE vehicle_id = :vid
                 GROUP BY cycle_id
                HAVING count(*) < 2
@@ -104,12 +104,12 @@ async def start_trip(body: Dict[str, Any] = Body(...),
 
     # trip_seq = (trips already in this cycle) + 1.
     existing = await fetch_one(
-        "SELECT count(*) AS n FROM jnpa.tt_trips WHERE cycle_id = :cid",
+        "SELECT count(*) AS n FROM core.tt_trip WHERE cycle_id = :cid",
         {"cid": cycle_id}, dsn=dsn)
     trip_seq = (int(existing["n"]) if existing else 0) + 1
 
     row = await execute_returning(
-        """INSERT INTO jnpa.tt_trips
+        """INSERT INTO core.tt_trip
              (cycle_id, vehicle_id, driver_id, trip_seq, direction, origin,
               destination, started_at, laden, status, detail)
            VALUES (:cid, :vid, :did, :seq, :dir, :origin, :dest, now(),
@@ -143,14 +143,14 @@ async def complete_trip(trip_id: int, body: Dict[str, Any] = Body(default={}),
         raise HTTPException(503, "database_unavailable")
     from jnpa_shared.db import execute_returning, fetch_one
 
-    cur = await fetch_one("SELECT * FROM jnpa.tt_trips WHERE id = :id",
+    cur = await fetch_one("SELECT * FROM core.tt_trip WHERE id = :id",
                           {"id": trip_id}, dsn=dsn)
     if not cur:
         raise HTTPException(404, "trip_not_found")
 
     # execute_returning (not fetch_one) so the UPDATE actually commits.
     row = await execute_returning(
-        """UPDATE jnpa.tt_trips
+        """UPDATE core.tt_trip
               SET ended_at = COALESCE(CAST(:ended AS timestamptz), now()),
                   status = 'COMPLETED',
                   updated_at = now()
@@ -162,7 +162,7 @@ async def complete_trip(trip_id: int, body: Dict[str, Any] = Body(default={}),
     counts = await fetch_one(
         """SELECT count(*) AS n,
                   count(*) FILTER (WHERE status = 'COMPLETED') AS done
-             FROM jnpa.tt_trips WHERE cycle_id = :cid""",
+             FROM core.tt_trip WHERE cycle_id = :cid""",
         {"cid": cycle_id}, dsn=dsn)
     completed_count = int(counts["done"]) if counts else 0
     trip_count = int(counts["n"]) if counts else 0
@@ -207,12 +207,12 @@ async def list_cycles(vehicle_id: Optional[str] = Query(default=None),
     rows = await fetch_all(
         f"""WITH ranked AS (
                 SELECT cycle_id, max(created_at) AS last_created
-                  FROM jnpa.tt_trips {clause}
+                  FROM core.tt_trip {clause}
                  GROUP BY cycle_id
                  ORDER BY last_created DESC
                  LIMIT :limit)
             SELECT t.*
-              FROM jnpa.tt_trips t
+              FROM core.tt_trip t
               JOIN ranked r ON r.cycle_id = t.cycle_id
              ORDER BY r.last_created DESC, t.cycle_id, t.trip_seq""",
         params, dsn=dsn)
@@ -272,7 +272,7 @@ async def list_trips(vehicle_id: Optional[str] = Query(default=None),
         params["status"] = status.upper()
     clause = ("WHERE " + " AND ".join(where)) if where else ""
     rows = await fetch_all(
-        f"SELECT * FROM jnpa.tt_trips {clause} ORDER BY created_at DESC LIMIT :limit",
+        f"SELECT * FROM core.tt_trip {clause} ORDER BY created_at DESC LIMIT :limit",
         params, dsn=dsn)
     REQUESTS.labels("double_trip", "ok").inc()
     return {"count": len(rows), "trips": [_iso(dict(r)) for r in rows]}
@@ -297,7 +297,7 @@ async def statistics(state: GatewayState = Depends(get_state)) -> dict:
                       count(*) FILTER (WHERE status = 'COMPLETED') AS completed,
                       min(started_at) AS first_start,
                       max(ended_at) AS last_end
-                 FROM jnpa.tt_trips
+                 FROM core.tt_trip
                 GROUP BY cycle_id)
            SELECT
                count(*) AS total_cycles,
@@ -323,7 +323,7 @@ async def statistics(state: GatewayState = Depends(get_state)) -> dict:
     ratio = round(double_cycles / total_cycles, 3) if total_cycles else 0.0
 
     today = await fetch_one(
-        """SELECT count(*) AS n FROM jnpa.tt_trips
+        """SELECT count(*) AS n FROM core.tt_trip
             WHERE started_at >= date_trunc('day', now())""",
         {}, dsn=dsn)
     trips_today = int(today["n"]) if today else 0
@@ -331,7 +331,7 @@ async def statistics(state: GatewayState = Depends(get_state)) -> dict:
     by_vehicle_rows = await fetch_all(
         """WITH per_cycle AS (
                SELECT vehicle_id, cycle_id, count(*) AS trips
-                 FROM jnpa.tt_trips
+                 FROM core.tt_trip
                 GROUP BY vehicle_id, cycle_id)
            SELECT vehicle_id,
                   count(*) AS cycles,

@@ -210,6 +210,76 @@ _DDL: list[str] = [
                 UNIQUE (report_date, terminal_code, berth_no, via_no);
         END IF;
     END $$""",
+    # Upgrade path (mirrors migration 0038): declared NUMERIC SCALE + row-level
+    # provenance. Without a scale, a float measure is stored as its full binary
+    # expansion (84.8700000000000045…) and served verbatim to the API and CSV export.
+    # Setting the scale rounds existing rows too. Idempotent: the guard skips any
+    # column that already has a scale.
+    """DO $$
+    DECLARE
+        v_scale int;
+        targets text[][] := ARRAY[
+            ['perf_daily_traffic','imp_teus','16','2'],
+            ['perf_daily_traffic','exp_teus','16','2'],
+            ['perf_daily_traffic','total_teus','16','2'],
+            ['perf_daily_traffic','rail_dis_teus','16','2'],
+            ['perf_daily_traffic','rail_ldg_teus','16','2'],
+            ['perf_daily_traffic','rail_total_teus','16','2'],
+            ['perf_daily_tonnage','liquid_tonnes','16','2'],
+            ['perf_daily_tonnage','dry_bulk_tonnes','16','2'],
+            ['perf_daily_tonnage','break_bulk_tonnes','16','2'],
+            ['perf_daily_tonnage','total_tonnes','16','2'],
+            ['perf_daily_terminal_status','icd_pendency_teus','16','2'],
+            ['perf_daily_terminal_status','cfs_pendency_teus','16','2'],
+            ['perf_daily_terminal_status','yard_import_teus','16','2'],
+            ['perf_daily_terminal_status','yard_export_teus','16','2'],
+            ['perf_daily_terminal_status','yard_transhipment_teus','16','2'],
+            ['perf_daily_terminal_status','yard_total_teus','16','2'],
+            ['perf_daily_terminal_status','yard_usable_capacity_teus','16','2'],
+            ['perf_daily_terminal_status','yard_occupancy_pct','6','2'],
+            ['perf_daily_terminal_status','gate_in_teus','16','2'],
+            ['perf_daily_terminal_status','gate_out_teus','16','2'],
+            ['perf_daily_terminal_status','gate_total_teus','16','2'],
+            ['perf_monthly_teu','discharge_teus','16','2'],
+            ['perf_monthly_teu','load_teus','16','2'],
+            ['perf_monthly_teu','total_teus','16','2'],
+            ['perf_ldb_port_dwell','dwell_hours','8','2'],
+            ['perf_ldb_port_dwell','dwell_hours_prev','8','2'],
+            ['perf_ldb_facility_dwell','dwell_hours','8','2'],
+            ['perf_ldb_facility_dwell','dwell_hours_prev','8','2'],
+            ['perf_ldb_weather','dwell_hours','8','2'],
+            ['perf_ldb_congestion','pct_containers','6','2'],
+            ['perf_ldb_route_movement','pct_share','6','2']
+        ];
+        prov text[] := ARRAY[
+            'perf_daily_traffic','perf_daily_tonnage','perf_daily_terminal_status',
+            'perf_daily_vessels','perf_monthly_teu','perf_ldb_port_dwell',
+            'perf_ldb_facility_dwell','perf_ldb_congestion','perf_ldb_route_movement',
+            'perf_ldb_weather'];
+        t text;
+    BEGIN
+        FOR i IN 1 .. array_length(targets, 1) LOOP
+            IF to_regclass('jnpa.' || targets[i][1]) IS NULL THEN CONTINUE; END IF;
+            SELECT numeric_scale INTO v_scale FROM information_schema.columns
+            WHERE table_schema='jnpa' AND table_name=targets[i][1]
+              AND column_name=targets[i][2];
+            IF v_scale IS NULL AND EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_schema='jnpa' AND table_name=targets[i][1]
+                      AND column_name=targets[i][2]) THEN
+                EXECUTE format('ALTER TABLE jnpa.%I ALTER COLUMN %I TYPE numeric(%s,%s)',
+                               targets[i][1], targets[i][2], targets[i][3], targets[i][4]);
+            END IF;
+        END LOOP;
+        FOREACH t IN ARRAY prov LOOP
+            IF to_regclass('jnpa.' || t) IS NULL THEN CONTINUE; END IF;
+            EXECUTE format('ALTER TABLE jnpa.%I ADD COLUMN IF NOT EXISTS source_file text', t);
+            EXECUTE format('ALTER TABLE jnpa.%I ADD COLUMN IF NOT EXISTS upload_id uuid', t);
+            EXECUTE format('ALTER TABLE jnpa.%I ADD COLUMN IF NOT EXISTS uploaded_at timestamptz', t);
+            EXECUTE format('CREATE INDEX IF NOT EXISTS ix_%s_upload ON jnpa.%I (upload_id)', t, t);
+        END LOOP;
+    END $$""",
+    "ALTER TABLE jnpa.perf_daily_snapshot ADD COLUMN IF NOT EXISTS upload_id uuid",
+    "ALTER TABLE jnpa.perf_daily_snapshot ADD COLUMN IF NOT EXISTS uploaded_at timestamptz",
 ]
 
 

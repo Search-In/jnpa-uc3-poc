@@ -57,6 +57,11 @@ _DDL: list[str] = [
         raw_value    text,
         created_at   timestamptz NOT NULL DEFAULT now())""",
     "CREATE INDEX IF NOT EXISTS idx_perf_upload_errors_upload ON jnpa.perf_upload_errors (upload_id)",
+    # Upgrade path (mirrors migration 0038): the ledger records the physical format the
+    # client uploaded (PDF | XLSX | CSV) and how many existing rows a re-uploaded
+    # corrected report REPLACED (the importer now upserts instead of skipping).
+    "ALTER TABLE jnpa.perf_uploads ADD COLUMN IF NOT EXISTS file_format text",
+    "ALTER TABLE jnpa.perf_uploads ADD COLUMN IF NOT EXISTS updated_count integer NOT NULL DEFAULT 0",
 ]
 
 

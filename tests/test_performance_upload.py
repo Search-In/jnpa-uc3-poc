@@ -186,9 +186,22 @@ def test_real_db_validate_import_idempotent_and_rollback():
                     "where report_date='2026-06-05' and terminal_code='JN_PORT' and period='DAY'"))).scalar()
                 assert int(jp) == 25492                       # roll-up landed in the dashboard table
 
-            # idempotent re-import — nothing new
+            # re-import of the SAME file — no duplicate rows, all refreshed in place
             im2 = await svc.import_file("daily_status", csv, "e2e.csv", "pytest")
-            assert im2["inserted"] == 0 and im2["skipped"] == 9
+            assert im2["inserted"] == 0 and im2["updated"] == 9
+
+            # re-import of a CORRECTED report must actually correct the stored figures
+            # (the previous ON CONFLICT DO NOTHING silently discarded the correction).
+            corrected = csv.replace(b"5859,6729", b"6000,6729")
+            assert corrected != csv
+            im3 = await svc.import_file("daily_status", corrected, "e2e-rev2.csv", "pytest")
+            assert im3["status"] == "IMPORTED" and im3["updated"] >= 1
+            async with eng.connect() as c:
+                yi, src = (await c.execute(text(
+                    "select yard_import_teus, source_file from jnpa.perf_daily_terminal_status "
+                    "where report_date='2026-06-05' and terminal_code='NSFT'"))).first()
+                assert int(yi) == 6000                        # corrected value won
+                assert src == "e2e-rev2.csv"                  # provenance points at the new file
 
             # invalid file — rejected, NOTHING written (rollback/refuse)
             bad = _daily_csv(["2026-13-40,ZZZ,x,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17"])

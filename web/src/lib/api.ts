@@ -682,6 +682,23 @@ export const api = {
   },
   berthingDocumentTables: (documentId: number) =>
     http<any>(`/api/berthing/documents/${documentId}/tables`),
+  berthingDocumentFullView: (documentId: number) =>
+    http<{
+      document_id: number;
+      file_name: string;
+      terminal: string;
+      report_date: string | null;
+      page_count: number;
+      table_count: number;
+      row_count: number;
+      tables: {
+        table_name: string;
+        columns: string[];
+        rows: Record<string, any>[];
+        row_count: number;
+        extraction_note: string | null;
+      }[];
+    }>(`/api/berthing/documents/${documentId}/full-view`),
 
   // --- Transporters & Drivers Data Upload (UC-III sub-module) — mirrors the cfs-ecy helpers ---
   tdUploadDownloadTemplate: (entity: string) =>

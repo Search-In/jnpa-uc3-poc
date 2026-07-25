@@ -43,14 +43,18 @@ function statusTone(s?: string): Tone {
 }
 
 // One extracted table with an expandable verbatim preview.
+// Columns are {name,x_start,x_end}; rows are positional {values:[...]} (empty cells preserved).
 export function TablePanel({ t }: { t: any }) {
   const [open, setOpen] = useState(false);
-  const cols: string[] = t.original_columns ?? [];
-  const rows: any[] = (t.rows ?? []).map((r: any, i: number) => ({ _k: i, ...r }));
-  const previewCols: Column<any>[] = (cols.length ? cols : ["_raw"]).slice(0, 12).map((c) => ({
-    key: c,
-    header: c,
-    render: (r) => <span className="whitespace-nowrap">{String(r[c] ?? "")}</span>,
+  const cols: any[] = Array.isArray(t.columns) && t.columns.length ? t.columns : [{ name: "_raw" }];
+  const rows: any[] = (t.rows ?? []).map((r: any, i: number) => ({
+    _k: i,
+    values: r.values ?? [],
+  }));
+  const previewCols: Column<any>[] = cols.slice(0, 14).map((c: any, ci: number) => ({
+    key: String(ci),
+    header: c.name,
+    render: (r) => <span className="whitespace-nowrap">{String(r.values?.[ci] ?? "")}</span>,
   }));
   const isRaw = t.table_name === "UNCAPTURED_TEXT";
   return (

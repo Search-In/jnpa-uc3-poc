@@ -21,6 +21,7 @@ import {
   LayoutDashboard,
   LayoutList,
   UploadCloud,
+  Table2,
 } from "lucide-react";
 
 import {
@@ -38,11 +39,12 @@ import { LoadingState, ErrorState } from "@/components/ui/misc";
 import { api } from "@/lib/api";
 import { authEnabled, getRole } from "@/lib/auth";
 import BerthingReportUpload from "@/screens/berthing/ReportUpload";
+import BerthingReportDetails from "@/screens/berthing/ReportDetails";
 import BerthingTimelineDialog, { statusTone } from "@/screens/berthing/Timeline";
 
 const UPLOAD_ROLES = ["JNPA_TRAFFIC", "DTCCC_ADMIN", "TERMINAL_OPS", "CUSTOMS"];
 const CAN_UPLOAD = !authEnabled() || UPLOAD_ROLES.includes(getRole() ?? "");
-type TopTab = "dashboard" | "list" | "upload";
+type TopTab = "dashboard" | "list" | "upload" | "details";
 
 const TERMINALS = ["APMT", "BMCT", "NSFT", "NSICT", "NSIGT"];
 const STATUSES = [
@@ -90,6 +92,7 @@ const terminalTone = (t: string): Tone =>
 
 export default function Berthing() {
   const [topTab, setTopTab] = useState<TopTab>("dashboard");
+  const [detailDocId, setDetailDocId] = useState<number | null>(null);
   const [terminal, setTerminal] = useState<string>("");
   const [statusF, setStatusF] = useState<string>("");
   const [searchInput, setSearchInput] = useState("");
@@ -159,7 +162,10 @@ export default function Berthing() {
             { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
             { key: "list", label: "Vessel List", icon: LayoutList },
             ...(CAN_UPLOAD
-              ? [{ key: "upload" as TopTab, label: "Report Upload", icon: UploadCloud }]
+              ? [
+                  { key: "upload" as TopTab, label: "Report Upload", icon: UploadCloud },
+                  { key: "details" as TopTab, label: "Report Details", icon: Table2 },
+                ]
               : []),
           ]}
           value={topTab}
@@ -413,7 +419,21 @@ export default function Berthing() {
       {/* Report Upload — one flow for PDF (full extract) + CSV/XLS/XLSX (structured) */}
       {topTab === "upload" && CAN_UPLOAD && (
         <div className="p-4">
-          <BerthingReportUpload />
+          <BerthingReportUpload
+            onImported={(documentId, kind) => {
+              if (kind === "pdf" && documentId) {
+                setDetailDocId(documentId);
+                setTopTab("details");
+              }
+            }}
+          />
+        </div>
+      )}
+
+      {/* Report Details — every extracted table, verbatim, dynamic columns */}
+      {topTab === "details" && CAN_UPLOAD && (
+        <div className="p-4">
+          <BerthingReportDetails docId={detailDocId} />
         </div>
       )}
 

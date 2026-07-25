@@ -21,6 +21,15 @@ log = get_logger("services.performance.upload_service")
 REPORT_TYPES = ("daily_status", "monthly_teu", "ldb_report")
 
 
+def _fmt(content: bytes, filename: str) -> str:
+    """Physical format for the audit ledger. Never raises — an unreadable file still
+    has to be recorded in the upload history."""
+    try:
+        return P.sniff_format(content, filename)
+    except ValueError:
+        return "UNKNOWN"
+
+
 class UploadService:
     def __init__(self, dsn: Optional[str] = None,
                  repository: Optional[UploadRepository] = None) -> None:
@@ -29,15 +38,46 @@ class UploadService:
     def template(self, report_type: str) -> str:
         return P.template_csv(report_type)
 
+    @staticmethod
+    def _parse_only(report_type: str, content: bytes, filename: str) -> P.ParseResult:
+        """Pure parse (no DB). Route by CONTENT: an official JNPA PDF goes to the
+        validated PDF extraction engine, the normalised template to the CSV/XLSX
+        reader. Both yield the same ParseResult, so everything downstream is unchanged.
+
+        Any parser failure — corrupt PDF, scanned PDF, wrong report, malformed CSV —
+        becomes a REJECTED ParseResult, never an exception the API turns into a 500.
+        """
+        try:
+            if P.sniff_format(content, filename) == "PDF":
+                return P.parse_pdf(report_type, content, filename)
+            header, rows = P.read_rows(content, filename)
+            return P.parse(report_type, header, rows)
+        except ValueError as exc:
+            code = str(exc).split(":", 1)[0].strip() or "unreadable_file"
+            res = P.ParseResult(); res.rejected = True
+            res.err(None, None, code, f"could not read file: {exc}")
+            return res
+        except Exception as exc:  # noqa: BLE001 — an unexpected parser fault is still
+            # the client's file being unreadable, not a server outage: reject cleanly
+            # and record the reason instead of returning 500.
+            log.warning("upload.parse_failed", extra={"report_type": report_type,
+                        "filename": filename, "error": f"{type(exc).__name__}: {exc}"})
+            res = P.ParseResult(); res.rejected = True
+            res.err(None, None, "parse_failed",
+                    f"the file could not be parsed as a {report_type} report "
+                    f"({type(exc).__name__}: {exc})")
+            return res
+
     async def _parse(self, report_type: str, content: bytes, filename: str) -> P.ParseResult:
-        header, rows = P.read_rows(content, filename)
-        res = P.parse(report_type, header, rows)
-        # duplicate-report detection (warning, non-blocking)
+        res = self._parse_only(report_type, content, filename)
+        # duplicate-report detection (warning, non-blocking — re-uploading a corrected
+        # report is supported and refreshes the existing rows in place)
         if res.report_keys and not res.rejected:
             existing = await self._repo.existing_report_keys(report_type, list(res.report_keys))
             for k in sorted(existing):
                 res.warn(None, None, "duplicate_report",
-                         f"data for {k} already exists — existing rows will be skipped on import")
+                         f"data for {k} already exists — importing will REPLACE those "
+                         f"values with the ones in this file")
         return res
 
     @staticmethod
@@ -61,7 +101,8 @@ class UploadService:
         upload_id = await self._repo.create_upload(
             report_type=report_type, filename=filename, size=len(content),
             uploaded_by=uploaded_by, status=status, row_count=res.row_count,
-            error_count=len(res.errors), notes="validation only (no import)")
+            error_count=len(res.errors), notes="validation only (no import)",
+            file_format=_fmt(content, filename))
         await self._repo.add_errors(upload_id, res.errors)
         await self._repo.add_log(upload_id, "VALIDATE",
                                  "ERROR" if not summary["valid"] else "INFO",
@@ -86,7 +127,8 @@ class UploadService:
         upload_id = await self._repo.create_upload(
             report_type=report_type, filename=filename, size=len(content),
             uploaded_by=uploaded_by, status="VALIDATED", row_count=res.row_count,
-            error_count=len(res.errors), notes="import requested")
+            error_count=len(res.errors), notes="import requested",
+            file_format=_fmt(content, filename))
         await self._repo.add_errors(upload_id, res.errors)
 
         if not summary["valid"]:
@@ -97,23 +139,28 @@ class UploadService:
             return {"upload_id": upload_id, "status": "REJECTED", "inserted": 0, "skipped": 0,
                     "summary": summary, "errors": res.errors[:200]}
         try:
-            inserted, skipped, per_table = await self._repo.import_records(res.records)
+            # source_file + upload_id are stamped on every imported row for traceability
+            inserted, updated, per_table = await self._repo.import_records(
+                res.records, upload_id=upload_id, source_file=filename)
         except Exception as exc:  # noqa: BLE001 — any DB error rolls back the whole tx
             await self._repo.finalize_upload(upload_id, status="FAILED", inserted=0, skipped=0,
                                              notes=f"import failed and rolled back: {exc}")
             await self._repo.add_log(upload_id, "IMPORT", "ERROR", f"import failed, rolled back: {exc}")
             log.warning("upload.import_failed", extra={"upload_id": upload_id, "error": str(exc)})
             return {"upload_id": upload_id, "status": "FAILED", "inserted": 0, "skipped": 0,
-                    "error": str(exc)}
-        for tbl, n, ins in per_table:
+                    "updated": 0, "error": str(exc)}
+        for tbl, n, ins, upd in per_table:
             await self._repo.add_log(upload_id, "IMPORT", "INFO",
-                                     f"{tbl}: {ins} inserted / {n} rows", tbl, ins)
+                                     f"{tbl}: {ins} inserted / {upd} updated / {n} rows",
+                                     tbl, ins + upd)
         await self._repo.finalize_upload(upload_id, status="IMPORTED", inserted=inserted,
-                                         skipped=skipped, notes="import complete")
+                                         skipped=0, updated=updated,
+                                         notes=(f"import complete — {inserted} new, "
+                                                f"{updated} refreshed from this file"))
         log.info("upload.import", extra={"upload_id": upload_id, "inserted": inserted,
-                 "skipped": skipped, "ms": round((perf_counter() - t0) * 1000, 1)})
+                 "updated": updated, "ms": round((perf_counter() - t0) * 1000, 1)})
         return {"upload_id": upload_id, "status": "IMPORTED", "inserted": inserted,
-                "skipped": skipped, "summary": summary, "per_table": per_table,
+                "updated": updated, "skipped": 0, "summary": summary, "per_table": per_table,
                 "warnings": res.warnings[:200]}
 
     # ------------------------------------------------------------ history

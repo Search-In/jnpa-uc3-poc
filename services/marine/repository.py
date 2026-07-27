@@ -362,7 +362,14 @@ class VesselCallRepository:
                     "uploaded_by": uploaded_by, "total_rows": len(records), "source": source}
 
         def _target(r: Mapping[str, Any]) -> str:
-            return r.get("_target") or "vessel_call"
+            """The record's routing target, or "" when absent.
+
+            Deliberately NOT defaulted to "vessel_call": that fallback silently filed an
+            untagged record into the vessel-call spine, and because the unknown-target
+            check runs on this value, a MISSING tag could never be reported. An empty
+            string matches no partition, so it falls into `unknown` and becomes a typed
+            validation error — a parser that forgets to tag its records now fails loudly."""
+            return r.get("_target") or ""
 
         vessels = [r for r in records if _target(r) == "vessel"]
         calls_pre = [r for r in records if _target(r) == "vessel_call" and not r.get("vcn")]
@@ -463,10 +470,12 @@ class VesselCallRepository:
                         dup += 1  # ON CONFLICT (row_sha256) DO NOTHING
 
                 for u in unknown:
+                    raw = u.get("_target")
+                    detail = (f"unknown record target: {raw}" if raw
+                              else "record has no _target: cannot route to a table")
                     repo_errors.append({
                         "row_number": None, "column_name": "_target", "error_code": "unknown_target",
-                        "error_detail": f"unknown record target: {u.get('_target')}",
-                        "raw_value": u.get("_target")})
+                        "error_detail": detail, "raw_value": raw})
 
                 all_errors = parse_errors + repo_errors
                 if all_errors:

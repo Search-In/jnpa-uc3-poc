@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional
 from jnpa_shared.logging import get_logger
 
 from . import upload_parsers as P
-from .parsers import ParseResult, detect_format, parse_marine
+from .parsers import DocumentTypeError, ParseResult, detect_format, parse_marine
 from .repository import VesselCallRepository
 
 log = get_logger("services.marine.upload_service")
@@ -84,11 +84,17 @@ class MarineUploadService:
         return P.template_csv()
 
     # ---------------------------------------------------------------- parse core
-    def _parse(self, content: bytes, filename: str) -> ParseResult:
+    def _parse(self, content: bytes, filename: str,
+               document_type: Optional[str] = None) -> ParseResult:
         """Detect the envelope and parse to normalized records. CSV / XML / LOG all
         route through the pure parser framework; never raises for a bad document — the
-        framework returns typed errors instead."""
-        return parse_marine(content, filename)
+        framework returns typed errors instead.
+
+        ``document_type`` (optional) routes explicitly through the parser registry; when
+        omitted, envelope detection routes exactly as before. It raises DocumentTypeError
+        for a client-supplied value that is unknown or contradicts the detected envelope —
+        a REQUEST fault, distinct from a bad document, and surfaced as HTTP 400 upstream."""
+        return parse_marine(content, filename, document_type)
 
     @staticmethod
     def _summary(res: ParseResult) -> Dict[str, Any]:
@@ -100,10 +106,17 @@ class MarineUploadService:
 
     # ---------------------------------------------------------------- validate (dry-run)
     async def validate(self, content: bytes, filename: str,
-                       uploaded_by: str) -> Dict[str, Any]:
+                       uploaded_by: str,
+                       document_type: Optional[str] = None) -> Dict[str, Any]:
         t0 = perf_counter()
         try:
-            res = self._parse(content, filename)
+            res = self._parse(content, filename, document_type)
+        except DocumentTypeError:
+            # A client-supplied document_type fault, NOT a bad file: re-raise so the
+            # router answers 400. DocumentTypeError subclasses ValueError, so it MUST be
+            # caught ahead of the read_error handler below or it would be masked as a
+            # REJECTED parse result.
+            raise
         except ValueError as exc:
             res = ParseResult(); res.rejected = True
             res.err(None, None, "read_error", f"could not read file: {exc}")
@@ -120,12 +133,17 @@ class MarineUploadService:
 
     # ---------------------------------------------------------------- import (confirm)
     async def import_file(self, content: bytes, filename: str,
-                          uploaded_by: str) -> Dict[str, Any]:
+                          uploaded_by: str,
+                          document_type: Optional[str] = None) -> Dict[str, Any]:
         t0 = perf_counter()
         sha = _sha256(content)
         physical_format = _physical_format(filename, content)
         try:
-            res = self._parse(content, filename)
+            res = self._parse(content, filename, document_type)
+        except DocumentTypeError:
+            # See validate(): a request fault, re-raised for the router's 400. Raised
+            # BEFORE any ledger write, so a bad document_type never records an upload.
+            raise
         except ValueError as exc:
             res = ParseResult(); res.rejected = True
             res.err(None, None, "read_error", f"could not read file: {exc}")

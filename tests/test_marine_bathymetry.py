@@ -34,7 +34,7 @@ from services.marine.parsers.bathymetry_model import (
     row_sha256,
     sounding_errors,
 )
-from services.marine.parsers.bathymetry_pdf import NOT_IMPLEMENTED_CODE, parse_bathymetry_pdf
+from services.marine.parsers.bathymetry_pdf import parse_bathymetry_pdf
 from services.marine.parsers.registry import _sniff_bathymetry
 from services.marine.upload_parsers import ParseResult
 
@@ -198,22 +198,139 @@ class TestCrossSourceEquivalence:
 
 
 # --------------------------------------------------------------------------- PDF arm
-class TestPdfPlaceholder:
-    def test_placeholder_rejects_explicitly_and_never_raises(self):
-        res = parse_bathymetry_pdf(b"%PDF-1.4 fake", "bathy_chart.pdf")
+_PDF_DIR = (Path(__file__).resolve().parents[2] / "client-data"
+            / "2-JNPA_Sea_Channels_Bathymetry" / "Bathymetry Data")
+
+
+def _have_pdfplumber() -> bool:
+    try:
+        import pdfplumber  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _chart(name: str) -> Path:
+    return _PDF_DIR / name
+
+
+_EA322 = _chart("34_3652-JNPA-POST-EA-322_-_Post_Dredge_Survey_EA_Area.pdf")
+_BC304 = _chart("34_3652-JNPA-POST-BC-304_-_Post_Dredge_Survey_B-C_Area.pdf")
+_EF112 = _chart("6148-24-SUR-PO-112-EF.pdf")
+_MB005 = _chart("MB-005-25-BMCT-Chart_2k-Model.pdf")
+
+_needs_charts = pytest.mark.skipif(
+    not (_EA322.is_file() and _BC304.is_file() and _have_pdfplumber()),
+    reason="bathymetry chart PDFs or pdfplumber absent")
+
+
+class TestPdfRejection:
+    """Failure modes need no client data, so these always run."""
+
+    def test_unreadable_pdf_is_rejected_and_never_raises(self):
+        res = parse_bathymetry_pdf(b"%PDF-1.4 not really a pdf", "broken.pdf")
         assert res.rejected
-        assert res.errors[0]["error_code"] == NOT_IMPLEMENTED_CODE
-        assert not res.records, "a placeholder must not look like a successful empty import"
+        assert res.errors, "a rejection must carry a typed reason"
+        assert not res.records, "a rejected parse must not look like an empty success"
 
-    def test_bathymetry_named_pdf_reaches_the_placeholder_not_port_craft(self):
-        """The silent-misroute bug this phase closes: before the sniff, a chart PDF was
-        fed to the port-craft regex and reported ok with zero rows."""
-        res = parse_marine(b"%PDF-1.4 fake chart", "6148-24-SUR-PO-119-JNPA.pdf")
-        assert res.errors and res.errors[0]["error_code"] == NOT_IMPLEMENTED_CODE
+    def test_empty_content_is_rejected(self):
+        res = parse_bathymetry_pdf(b"", "empty.pdf")
+        assert res.rejected and not res.records
 
-    def test_explicit_document_type_reaches_the_placeholder(self):
-        res = parse_marine(b"%PDF-1.4 fake", "anything.pdf", "BATHYMETRY")
-        assert res.errors[0]["error_code"] == NOT_IMPLEMENTED_CODE
+    @pytest.mark.skipif(not (_MB005.is_file() and _have_pdfplumber()),
+                        reason="MB-005 chart absent")
+    def test_chart_without_sounding_text_is_rejected_not_silently_empty(self):
+        """MB-005 is a raster/model chart carrying no numeric depth glyphs. It must REJECT
+        rather than report a successful zero-row import — the silent-empty failure mode."""
+        res = parse_bathymetry_pdf(_MB005.read_bytes(), _MB005.name)
+        assert res.rejected
+        assert res.errors[0]["error_code"] == "no_sounding_glyphs"
+
+
+@_needs_charts
+class TestPdfExtraction:
+    """Golden-reference accuracy. Counts come from seed_bathy_soundings.sql, the original
+    extraction of these same charts."""
+
+    def test_ea322_exact_sounding_count(self):
+        res = parse_bathymetry_pdf(_EA322.read_bytes(), _EA322.name)
+        assert not res.rejected
+        assert len(res.records) == 31731, f"got {len(res.records)}, golden is 31731"
+
+    def test_ea322_exact_red_flag_count(self):
+        res = parse_bathymetry_pdf(_EA322.read_bytes(), _EA322.name)
+        red = sum(1 for r in res.records if r["above_design"])
+        assert red == 6660, f"got {red} above-design flags, golden is 6660"
+
+    def test_bc304_exact_sounding_count(self):
+        res = parse_bathymetry_pdf(_BC304.read_bytes(), _BC304.name)
+        assert not res.rejected
+        assert len(res.records) == 14346, f"got {len(res.records)}, golden is 14346"
+
+    def test_bc304_exact_red_flag_count(self):
+        res = parse_bathymetry_pdf(_BC304.read_bytes(), _BC304.name)
+        red = sum(1 for r in res.records if r["above_design"])
+        assert red == 3968, f"got {red} above-design flags, golden is 3968"
+
+    def test_metre_decimetre_pairing_produces_one_decimal_place(self):
+        res = parse_bathymetry_pdf(_EA322.read_bytes(), _EA322.name)
+        for r in res.records[:500]:
+            d = r["depth_m"]
+            assert 0.0 <= d <= 60.0
+            assert round(d * 10) == pytest.approx(d * 10, abs=1e-6), \
+                f"{d} is not a metre+decimetre value"
+
+    def test_ea322_is_fully_georeferenced_and_reprojected(self):
+        res = parse_bathymetry_pdf(_EA322.read_bytes(), _EA322.name)
+        geo = [r for r in res.records if r["easting_m"] is not None]
+        assert len(geo) == len(res.records), "EA-322 has clean grid labels; expect 100%"
+        for r in geo[:200]:
+            assert 100_000 <= r["easting_m"] <= 900_000
+            assert 1_000_000 <= r["northing_m"] <= 3_000_000
+            assert 18.0 <= r["lat"] <= 19.5, "JNPA latitude band"
+            assert 72.0 <= r["lon"] <= 73.5, "JNPA longitude band"
+
+    def test_records_are_canonical(self):
+        res = parse_bathymetry_pdf(_EA322.read_bytes(), _EA322.name)
+        r = res.records[0]
+        assert r["_target"] == TARGET_SOUNDING
+        assert r["_message"] == DOCUMENT_TYPE
+        assert r["drawing_no"] and "survey_id" not in r
+        assert r["row_sha256"]
+
+    def test_page_coordinates_always_present(self):
+        res = parse_bathymetry_pdf(_BC304.read_bytes(), _BC304.name)
+        assert all(r["page_x_pt"] is not None and r["page_y_pt"] is not None
+                   for r in res.records[:500])
+
+    @pytest.mark.skipif(not _EF112.is_file(), reason="112-EF chart absent")
+    def test_metadata_extraction(self):
+        res = parse_bathymetry_pdf(_EF112.read_bytes(), _EF112.name)
+        # survey header is echoed onto every record's drawing_no; the rest is asserted
+        # through the module helper so the title-block regexes stay covered.
+        from services.marine.parsers.bathymetry_pdf import _survey_metadata
+        import pdfplumber
+        with pdfplumber.open(_EF112) as pdf:
+            text = pdf.pages[0].extract_text() or ""
+        meta = _survey_metadata(text, _EF112.name)
+        assert meta["drawing_no"] == "6148-24-SUR-PO-112-EF"
+        assert meta["survey_vessel"] == "ME QUEEN"
+        assert meta["design_depth_m"] == 14.40
+        assert meta["utm_zone"] == "43N"
+        assert meta["horizontal_datum"] == "WGS84"
+        assert meta["chart_datum"] == "CD"
+        assert meta["chainage"] == "33.200"
+
+    def test_green_annotation_is_excluded_with_a_warning(self):
+        res = parse_bathymetry_pdf(_EF112.read_bytes(), _EF112.name)
+        codes = {w["error_code"] for w in res.warnings}
+        assert "green_annotation_excluded" in codes, \
+            "green design-depth annotation must be excluded AND reported, never dropped silently"
+
+    def test_routes_through_the_registry_as_bathymetry(self):
+        res = parse_marine(_EA322.read_bytes(), _EA322.name, "BATHYMETRY")
+        assert len(res.records) == 31731
+        assert {r["_target"] for r in res.records} == {TARGET_SOUNDING}
 
 
 # --------------------------------------------------------------------------- routing

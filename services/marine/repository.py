@@ -488,12 +488,11 @@ class VesselCallRepository:
                         dup += 1  # ON CONFLICT (row_sha256) DO NOTHING
 
                 # 9. BATHYMETRY soundings (resolve survey_id from drawing_no; unresolved →
-                #    error, never a stub survey). Row-hash idempotent.
-                #    NOTE: per-record execute matches every target above, and is adequate
-                #    for the Phase 1 JSON arm. Real chart PDFs yield ~17k soundings each,
-                #    so Phase 2 must batch this loop (executemany/COPY) before the PDF
-                #    parser is enabled — see the bathymetry plan, risk R4.
+                #    error, never a stub survey). Row-hash idempotent, inserted in batches
+                #    of _BATHYMETRY_BATCH: one chart is 15k-30k soundings, so a per-row
+                #    execute would make an import take hours.
                 survey_ids: dict[str, Optional[int]] = {}
+                pending: list[dict] = []
                 for bs in bathy_soundings:
                     dn = bs.get("drawing_no")
                     if dn not in survey_ids:
@@ -509,13 +508,29 @@ class VesselCallRepository:
                                              f"its soundings"),
                             "raw_value": dn})
                         continue
-                    r = (await conn.execute(text(_BATHYMETRY_SOUNDING_INSERT),
-                                            self._bathymetry_sounding_params(bs, sid, fid))
-                         ).mappings().first()
-                    if r is not None:
-                        ins += 1
-                    else:
-                        dup += 1  # ON CONFLICT (row_sha256) DO NOTHING — already stored
+                    pending.append(self._bathymetry_sounding_params(bs, sid, fid))
+
+                # Hashes already written by an EARLIER batch of this same transaction are
+                # invisible to the pre-filter SELECT, so track them here too — otherwise a
+                # payload repeating a sounding across batches would be counted twice.
+                seen_hashes: set[str] = set()
+                for start in range(0, len(pending), _BATHYMETRY_BATCH):
+                    chunk = pending[start:start + _BATHYMETRY_BATCH]
+                    hashes = [p["row_sha256"] for p in chunk]
+                    existing = set((await conn.execute(
+                        text(_BATHYMETRY_EXISTING_HASHES), {"hashes": hashes})).scalars().all())
+                    fresh: list[dict] = []
+                    for p in chunk:
+                        h = p["row_sha256"]
+                        if h in existing or h in seen_hashes:
+                            dup += 1
+                            continue
+                        seen_hashes.add(h)
+                        fresh.append(p)
+                    if fresh:
+                        # One round trip for the whole chunk.
+                        await conn.execute(text(_BATHYMETRY_SOUNDING_INSERT), fresh)
+                        ins += len(fresh)
 
                 for u in unknown:
                     raw = u.get("_target")
@@ -831,6 +846,14 @@ _RESOLVE_SURVEY_BY_DRAWING = (
 # key, so this follows core.sea_channel rather than the port_craft natural-key upsert.
 # The hash is computed in the canonical model, so a sounding ingested from the chart PDF
 # and the same sounding ingested from the JSON API collide correctly.
+#
+# Executed with executemany (one round trip per _BATHYMETRY_BATCH rows) because a single
+# chart carries 15k-30k soundings and a per-row execute makes an import take hours. That is
+# why there is NO `RETURNING` here: a multi-parameter execute cannot return rows, so the
+# insert/duplicate split is established by _BATHYMETRY_EXISTING_HASHES below instead of by
+# counting returned ids. ON CONFLICT DO NOTHING is retained as the concurrency backstop —
+# the pre-filter answers "how many were new", the conflict clause guarantees correctness if
+# a competing import inserts the same hash between the SELECT and the INSERT.
 _BATHYMETRY_SOUNDING_INSERT = """
 INSERT INTO core.bathymetry_sounding
     (survey_id, easting_m, northing_m, lat, lon, depth_m, above_design,
@@ -839,8 +862,16 @@ VALUES
     (:survey_id, :easting_m, :northing_m, :lat, :lon, :depth_m, :above_design,
      :page_x_pt, :page_y_pt, :import_file_id, :row_sha256)
 ON CONFLICT (row_sha256) DO NOTHING
-RETURNING sounding_id
 """
+
+# Which of this batch's hashes are already stored. Indexed lookup on uq_bathymetry_sounding_row.
+_BATHYMETRY_EXISTING_HASHES = (
+    "SELECT row_sha256 FROM core.bathymetry_sounding WHERE row_sha256 = ANY(:hashes)"
+)
+
+#: Rows per executemany round trip. Large enough that a 30k-sounding chart is ~6 round
+#: trips, small enough to keep the parameter payload well inside asyncpg's limits.
+_BATHYMETRY_BATCH = 5000
 
 # --------------------------------------------------------------------------- port craft
 # Fleet-register upsert on the natural key `name`. All particulars are COALESCE-enriched

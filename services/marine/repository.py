@@ -280,6 +280,23 @@ class VesselCallRepository:
                 "row_sha256": rec.get("row_sha256"), "import_file_id": fid}
 
     @staticmethod
+    def _bathymetry_sounding_params(rec: Mapping[str, Any], survey_id: int, fid: int) -> dict:
+        """Canonical sounding record -> bind params.
+
+        Positional fields are passed through as-is (already coerced to float-or-None by the
+        canonical model), so an ungeoreferenced chart writes NULL easting/northing/lat/lon
+        and keeps only its page coordinates — that is valid data, not a defect.
+        """
+        p = {k: rec.get(k) for k in (
+            "easting_m", "northing_m", "lat", "lon", "depth_m",
+            "page_x_pt", "page_y_pt")}
+        p["above_design"] = bool(rec.get("above_design"))
+        p["row_sha256"] = rec.get("row_sha256")
+        p["survey_id"] = survey_id
+        p["import_file_id"] = fid
+        return p
+
+    @staticmethod
     def _port_craft_params(rec: Mapping[str, Any], fid: int) -> dict:
         p = {k: rec.get(k) for k in (
             "name", "craft_type", "owned_or_hired", "owner_name", "year_built",
@@ -379,8 +396,9 @@ class VesselCallRepository:
         pilotages = [r for r in records if _target(r) == "pilotage"]
         port_crafts = [r for r in records if _target(r) == "port_craft"]
         sea_channels = [r for r in records if _target(r) == "sea_channel"]
+        bathy_soundings = [r for r in records if _target(r) == "bathymetry_sounding"]
         _KNOWN = ("vessel", "vessel_call", "vessel_call_event", "pilot", "pilotage",
-                  "port_craft", "sea_channel")
+                  "port_craft", "sea_channel", "bathymetry_sounding")
         unknown = [r for r in records if _target(r) not in _KNOWN]
 
         ins = upd = dup = 0
@@ -468,6 +486,36 @@ class VesselCallRepository:
                         ins += 1
                     else:
                         dup += 1  # ON CONFLICT (row_sha256) DO NOTHING
+
+                # 9. BATHYMETRY soundings (resolve survey_id from drawing_no; unresolved →
+                #    error, never a stub survey). Row-hash idempotent.
+                #    NOTE: per-record execute matches every target above, and is adequate
+                #    for the Phase 1 JSON arm. Real chart PDFs yield ~17k soundings each,
+                #    so Phase 2 must batch this loop (executemany/COPY) before the PDF
+                #    parser is enabled — see the bathymetry plan, risk R4.
+                survey_ids: dict[str, Optional[int]] = {}
+                for bs in bathy_soundings:
+                    dn = bs.get("drawing_no")
+                    if dn not in survey_ids:
+                        survey_ids[dn] = (await conn.execute(
+                            text(_RESOLVE_SURVEY_BY_DRAWING), {"drawing_no": dn})).scalar()
+                    sid = survey_ids[dn]
+                    if sid is None:
+                        repo_errors.append({
+                            "row_number": None, "column_name": "drawing_no",
+                            "error_code": "unresolved_survey",
+                            "error_detail": (f"no core.bathymetry_survey with drawing_no "
+                                             f"{dn!r}; register the survey before importing "
+                                             f"its soundings"),
+                            "raw_value": dn})
+                        continue
+                    r = (await conn.execute(text(_BATHYMETRY_SOUNDING_INSERT),
+                                            self._bathymetry_sounding_params(bs, sid, fid))
+                         ).mappings().first()
+                    if r is not None:
+                        ins += 1
+                    else:
+                        dup += 1  # ON CONFLICT (row_sha256) DO NOTHING — already stored
 
                 for u in unknown:
                     raw = u.get("_target")
@@ -768,6 +816,30 @@ VALUES
      :import_file_id, :row_sha256)
 ON CONFLICT (row_sha256) DO NOTHING
 RETURNING channel_id
+"""
+
+# --------------------------------------------------------------------------- bathymetry
+# Soundings arrive keyed by the survey's NATURAL key (drawing_no) — survey_id is a
+# per-database identity surrogate and never crosses the wire. Resolve-or-error, the same
+# posture as vessel_call_event: a sounding whose survey is unknown becomes a typed row
+# error, never a stub survey.
+_RESOLVE_SURVEY_BY_DRAWING = (
+    "SELECT survey_id FROM core.bathymetry_survey WHERE drawing_no = :drawing_no LIMIT 1"
+)
+
+# Idempotent on the content hash (uq_bathymetry_sounding_row): a sounding has no natural
+# key, so this follows core.sea_channel rather than the port_craft natural-key upsert.
+# The hash is computed in the canonical model, so a sounding ingested from the chart PDF
+# and the same sounding ingested from the JSON API collide correctly.
+_BATHYMETRY_SOUNDING_INSERT = """
+INSERT INTO core.bathymetry_sounding
+    (survey_id, easting_m, northing_m, lat, lon, depth_m, above_design,
+     page_x_pt, page_y_pt, import_file_id, row_sha256)
+VALUES
+    (:survey_id, :easting_m, :northing_m, :lat, :lon, :depth_m, :above_design,
+     :page_x_pt, :page_y_pt, :import_file_id, :row_sha256)
+ON CONFLICT (row_sha256) DO NOTHING
+RETURNING sounding_id
 """
 
 # --------------------------------------------------------------------------- port craft

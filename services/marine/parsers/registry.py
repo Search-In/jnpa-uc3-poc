@@ -82,6 +82,51 @@ def _load_sea_channel() -> ParserFn:
     return parse_sea_channel_shp
 
 
+def _load_bathymetry() -> ParserFn:
+    """BATHYMETRY accepts two envelopes, so the loader dispatches on the detected one.
+
+    Keeping both behind ONE document type means a client declares
+    ``document_type=BATHYMETRY`` regardless of whether it is posting a chart PDF or the
+    canonical JSON — the two arms differ only in how they reach the shared canonical model.
+    """
+    def _parse(content: bytes, filename: Optional[str]) -> ParseResult:
+        from .envelope import detect_format
+        if detect_format(filename, content) == "JSON":
+            from .bathymetry_json import parse_bathymetry_json
+            return parse_bathymetry_json(content, filename)
+        from .bathymetry_pdf import parse_bathymetry_pdf
+        return parse_bathymetry_pdf(content, filename)
+    return _parse
+
+
+# --------------------------------------------------------------------------- sniffs
+# A sniff disambiguates an envelope claimed by MORE THAN ONE document type. It is
+# consulted ONLY for such formats, so single-claimant envelopes (CSV/XLSX/SHP/JSON) keep
+# the original zero-cost mapping and cannot change behaviour.
+
+_BATHY_NAME_MARKERS = ("bathy", "sounding", "dredge", "sur-po", "sur_po", "chart")
+_BATHY_CONTENT_MARKERS = (b"SOUNDINGS IN METRES", b"CHART DATUM", b"BATHYMETRIC",
+                          b"POST DREDGE", b"DREDGE SURVEY")
+
+
+def _sniff_bathymetry(content: bytes, filename: Optional[str]) -> bool:
+    """Is this PDF a bathymetry chart rather than the port-craft register?
+
+    DELIBERATELY CONSERVATIVE. A negative answer falls through to the format default
+    (PORT_CRAFT), so the port-craft path is unreachable-by-accident only if this returns a
+    false POSITIVE. It therefore requires a positive marker in the filename or in the raw
+    bytes, and never guesses from structure. `Details_of_Port_Crafts.pdf` matches none of
+    these markers — asserted by test_marine_bathymetry.py.
+    """
+    name = (filename or "").lower()
+    if any(m in name for m in _BATHY_NAME_MARKERS):
+        return True
+    # Chart text is usually compressed inside the PDF, so this is a bonus signal only —
+    # cheap, and it catches an unhelpfully-named upload. Bounded to the first 512 KiB.
+    head = content[:512 * 1024].upper()
+    return any(m in head for m in _BATHY_CONTENT_MARKERS)
+
+
 # --------------------------------------------------------------------------- spec
 @dataclass(frozen=True)
 class ParserSpec:
@@ -96,6 +141,9 @@ class ParserSpec:
     loader: Optional[Callable[[], ParserFn]] = None
     per_document: bool = False
     aliases: tuple[str, ...] = field(default=())
+    #: Content discriminator, consulted ONLY when an envelope has several claimants.
+    #: ``(content, filename) -> bool``. None means "never claims this format implicitly".
+    sniff: Optional[Callable[[bytes, Optional[str]], bool]] = None
 
     def load(self) -> ParserFn:
         if self.loader is None:
@@ -126,6 +174,12 @@ PARSER_REGISTRY: dict[str, ParserSpec] = {
     "SEA_CHANNEL": ParserSpec(
         "SEA_CHANNEL", ("SHP",), _load_sea_channel,
         aliases=("SEACHANNEL", "SEA_CHANNELS", "SHP")),
+    # Bathymetry shares the PDF envelope with PORT_CRAFT — hence the sniff. It also
+    # accepts the canonical JSON envelope, so ONE document type covers both arms.
+    "BATHYMETRY": ParserSpec(
+        "BATHYMETRY", ("PDF", "JSON"), _load_bathymetry,
+        aliases=("BATHY", "SOUNDINGS", "BATHYMETRY_PDF", "BATHYMETRY_JSON"),
+        sniff=_sniff_bathymetry),
     # --- PCS message types: per-message routed inside parse_marine ---
     "CALINF": _pcs("CALINF"),
     "BERMAN": _pcs("BERMAN"),
@@ -134,14 +188,19 @@ PARSER_REGISTRY: dict[str, ParserSpec] = {
     "VESDEP": _pcs("VESDEP"),
 }
 
-# Envelope format -> canonical document type, for the IMPLICIT (historical) path.
+# Envelope format -> DEFAULT canonical document type, for the IMPLICIT (historical) path.
 # XML/LOG are deliberately ABSENT: they fall through to per-message routing, exactly as
 # the original `if fmt == …` chain did.
+#
+# "PDF": "PORT_CRAFT" is load-bearing. PDF now has two claimants, and this entry keeps the
+# port-craft register the DEFAULT: bathymetry is chosen only when its sniff positively
+# identifies a chart, so an unrecognised PDF behaves exactly as it always has.
 FORMAT_TO_DOCUMENT_TYPE: dict[str, str] = {
     "CSV": "VESSEL_CALL_CSV",
     "XLSX": "PILOTAGE",
     "PDF": "PORT_CRAFT",
     "SHP": "SEA_CHANNEL",
+    "JSON": "BATHYMETRY",
 }
 
 # alias (normalised) -> canonical, built once from the specs above.
@@ -172,10 +231,35 @@ def resolve_by_document_type(raw: str) -> ParserSpec:
     return spec
 
 
-def resolve_by_format(fmt: str) -> Optional[ParserSpec]:
-    """IMPLICIT routing. None ⇒ no whole-file parser for this envelope (XML/LOG)."""
-    canon = FORMAT_TO_DOCUMENT_TYPE.get(fmt)
-    return PARSER_REGISTRY[canon] if canon else None
+def candidates_for_format(fmt: str) -> tuple[ParserSpec, ...]:
+    """Every whole-file parser that accepts this envelope, in registry order."""
+    return tuple(s for s in PARSER_REGISTRY.values()
+                 if fmt in s.formats and not s.per_document)
+
+
+def resolve_by_format(fmt: str, content: Optional[bytes] = None,
+                      filename: Optional[str] = None) -> Optional[ParserSpec]:
+    """IMPLICIT routing. None ⇒ no whole-file parser for this envelope (XML/LOG).
+
+    Single-claimant envelopes resolve straight from the format, exactly as before — no
+    sniff runs, so CSV / XLSX / SHP cannot change behaviour. Only a MULTI-claimant envelope
+    (today: PDF, shared by PORT_CRAFT and BATHYMETRY) consults the candidates' sniffs, and
+    only when ``content`` is supplied. With no content, or with no sniff matching, the
+    format DEFAULT wins — which keeps a PDF routed to PORT_CRAFT as it always was.
+    """
+    cands = candidates_for_format(fmt)
+    if not cands:
+        return None
+    if len(cands) == 1:
+        return cands[0]
+
+    default = PARSER_REGISTRY.get(FORMAT_TO_DOCUMENT_TYPE.get(fmt, ""))
+    if content is None:
+        return default or cands[0]
+    for spec in cands:
+        if spec is not default and spec.sniff is not None and spec.sniff(content, filename):
+            return spec
+    return default or cands[0]
 
 
 def formats_for(raw: str) -> tuple[str, ...]:

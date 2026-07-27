@@ -121,9 +121,15 @@ class TestRegistry:
 
     def test_unknown_document_type_raises_with_the_accepted_list(self):
         with pytest.raises(UnknownDocumentType) as ei:
-            resolve_by_document_type("BATHYMETRY")   # not implemented yet — must reject
-        assert ei.value.raw == "BATHYMETRY"
+            resolve_by_document_type("NO_SUCH_SOURCE")
+        assert ei.value.raw == "NO_SUCH_SOURCE"
         assert "PORT_CRAFT" in ei.value.accepted
+
+    def test_bathymetry_is_registered(self):
+        # Phase 1 registered BATHYMETRY; before it, this value was rejected outright.
+        spec = resolve_by_document_type("BATHYMETRY")
+        assert spec.formats == ("PDF", "JSON"), "both ingestion arms share one document type"
+        assert spec.sniff is not None, "PDF is shared with PORT_CRAFT, so it needs a sniff"
 
     @pytest.mark.parametrize("fmt,expected", [
         ("CSV", "VESSEL_CALL_CSV"), ("XLSX", "PILOTAGE"),

@@ -105,8 +105,10 @@ def parse_marine(content: bytes, filename: Optional[str] = None,
             raise DocumentTypeMismatch(declared.document_type, fmt, declared.formats)
 
     # Whole-file parsers. Explicit declaration wins; otherwise fall back to the envelope
-    # mapping, which reproduces the original per-format branch exactly.
-    spec = declared if declared is not None else resolve_by_format(fmt)
+    # mapping, which reproduces the original per-format branch exactly. `content` is passed
+    # so an envelope with several claimants (today: PDF — PORT_CRAFT + BATHYMETRY) can be
+    # disambiguated by the candidates' sniffs; single-claimant envelopes ignore it.
+    spec = declared if declared is not None else resolve_by_format(fmt, content, filename)
     if spec is not None and not spec.per_document:
         return spec.load()(content, filename)
 

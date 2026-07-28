@@ -95,6 +95,20 @@ class GatewayConfig:
     openweather_api_key: str = ""
     openweather_url: str = ""
 
+    # --- TomTom Traffic (/api/traffic/current) ---
+    # BACKEND-ONLY credential: read from the environment, sent only to
+    # api.tomtom.com — never exposed to the frontend (no VITE_ var, no browser
+    # call). Empty key -> provider disabled and /api/traffic/current degrades
+    # through its CACHED/DATABASE/SYNTHETIC rungs. URLs empty -> the client's
+    # official defaults (traffic flowSegmentData v4 / incidentDetails v5 /
+    # routing v1); set to point at a proxy. NO hardcoded vendor URL in
+    # business code.
+    tomtom_api_key: str = ""
+    tomtom_flow_url: str = ""
+    tomtom_incidents_url: str = ""
+    tomtom_routing_url: str = ""
+    cache_ttl_tomtom_s: int = 120            # TomTom CACHED fallback rung
+
     # --- Provisional vehicle flow ---
     provisional_window_h: int = 24           # 24-hour cure window (spec)
 
@@ -177,6 +191,12 @@ class GatewayConfig:
             openweather_api_key=os.environ.get(
                 "OPENWEATHER_API_KEY", shared.openweather_api_key).strip(),
             openweather_url=os.environ.get("OPENWEATHER_URL", "").strip(),
+            tomtom_api_key=os.environ.get(
+                "TOMTOM_API_KEY", shared.tomtom_api_key).strip(),
+            tomtom_flow_url=os.environ.get("TOMTOM_FLOW_URL", "").strip(),
+            tomtom_incidents_url=os.environ.get("TOMTOM_INCIDENTS_URL", "").strip(),
+            tomtom_routing_url=os.environ.get("TOMTOM_ROUTING_URL", "").strip(),
+            cache_ttl_tomtom_s=_as_int(os.environ.get("GATEWAY_CACHE_TTL_TOMTOM_S"), 120),
             provisional_window_h=_as_int(os.environ.get("GATEWAY_PROVISIONAL_WINDOW_H"), 24),
             require_driver_profile=_as_bool(os.environ.get("REQUIRE_DRIVER_PROFILE"), False),
             gate_boom_delay_s=_as_int(os.environ.get("GATEWAY_GATE_BOOM_DELAY_S"), 5),
@@ -196,6 +216,12 @@ class GatewayConfig:
         """True if an OpenWeatherMap API key is configured (enables the
         openweather block on /api/weather/current)."""
         return bool(self.openweather_api_key.strip())
+
+    @property
+    def tomtom_enabled(self) -> bool:
+        """True if a TomTom API key is configured (enables the LIVE rung on
+        /api/traffic/current)."""
+        return bool(self.tomtom_api_key.strip())
 
     @property
     def surepass_enabled(self) -> bool:

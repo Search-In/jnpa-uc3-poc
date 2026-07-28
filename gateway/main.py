@@ -89,6 +89,7 @@ from .routers import (
     double_trip,
     ldb,
     marine_calls,
+    marine_live_vessels,
     marine_imports,
     marine_pilotage,
     marine_bathymetry,
@@ -549,7 +550,8 @@ app.include_router(cfs_ecy.router)           # CFS-ECY CODECO gate movements (mo
 app.include_router(customs.router)           # Customs docs (module 5: IGM/OOC/SMTP/RMS/LEO/SB)
 app.include_router(shipping_lines.router)     # Shipping Lines (module 4: IAL/EAL/EDO, read-only + import)
 app.include_router(berthing.router)          # Berthing Reports (module 7: per-terminal vessel calls + upload)
-app.include_router(marine_calls.router)      # UC-I Marine vessel-call spine (module: marine, read-only)
+app.include_router(marine_calls.router)         # UC-I Marine vessel-call spine (module: marine, read-only)
+app.include_router(marine_live_vessels.router)  # Live AIS vessel positions (MarineTraffic proxy, no DB write)
 app.include_router(marine_imports.router)    # UC-I Marine Data-Upload sub-module (CSV: validate/upload/history)
 app.include_router(marine_pilotage.router)   # UC-I Marine pilotage movements (read-only; XLSX via marine_imports)
 app.include_router(marine_port_craft.router) # UC-I Marine port-craft register (read-only; PDF via marine_imports)
@@ -602,7 +604,8 @@ async def root() -> dict:
                  "/api/gates", "/api/corridor", "/api/zones", "/api/push",
                  "/api/reports/police", "/api/empty", "/api/carbon",
                  "/api/gate-data", "/api/identity", "/api/parking",
-                 "/api/debug/decisions", "/api/ws", "/checkin"],
+                 "/api/debug/decisions", "/api/ws", "/checkin",
+                 "/api/marine/vessels"],
     }
 
 

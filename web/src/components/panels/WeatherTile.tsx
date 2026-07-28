@@ -59,9 +59,7 @@ export function WeatherTile() {
         </span>
       }
       subtitle={t("panels.weather.subtitle", "Open-Meteo · JNPA port area")}
-      headerRight={
-        w ? <StatusChip label={w.status} tone={statusTone(w.status)} /> : undefined
-      }
+      headerRight={w ? <StatusChip label={w.status} tone={statusTone(w.status)} /> : undefined}
       bodyClassName="space-y-3"
     >
       {q.isLoading ? (
@@ -92,7 +90,11 @@ export function WeatherTile() {
             />
             <Stat
               label={t("panels.weather.visibility", "Visibility")}
-              value={w.weather.visibility == null ? "—" : `${(w.weather.visibility / 1000).toFixed(1)} km`}
+              value={
+                w.weather.visibility == null
+                  ? "—"
+                  : `${(w.weather.visibility / 1000).toFixed(1)} km`
+              }
             />
           </div>
 

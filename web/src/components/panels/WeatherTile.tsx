@@ -57,7 +57,9 @@ export function WeatherTile() {
         </span>
       }
       subtitle={t("panels.weather.subtitle", "Open-Meteo + OpenWeather · JNPA port area")}
-      headerRight={w ? <StatusChip label={w.status} tone={weatherStatusTone(w.status)} /> : undefined}
+      headerRight={
+        w ? <StatusChip label={w.status} tone={weatherStatusTone(w.status)} /> : undefined
+      }
       bodyClassName="space-y-3"
     >
       {q.isLoading ? (
@@ -107,10 +109,7 @@ export function WeatherTile() {
                   label={t("panels.weather.humidity", "Humidity")}
                   value={fmtMeasure(ow.humidity, "%", 0)}
                 />
-                <Stat
-                  label={t("panels.weather.rain", "Rain")}
-                  value={fmtMeasure(ow.rain, "mm")}
-                />
+                <Stat label={t("panels.weather.rain", "Rain")} value={fmtMeasure(ow.rain, "mm")} />
                 <Stat
                   label={t("panels.weather.clouds", "Cloud")}
                   value={fmtMeasure(ow.clouds, "%", 0)}
@@ -119,10 +118,13 @@ export function WeatherTile() {
               {/* Cross-provider temperature validation — only flagged on disagreement */}
               {ow.temperature_consistent === false && (
                 <div className="text-[10px] text-muted-foreground">
-                  {t("panels.weather.tempMismatch",
-                    "Providers disagree on temperature (Δ {{delta}} °C)", {
+                  {t(
+                    "panels.weather.tempMismatch",
+                    "Providers disagree on temperature (Δ {{delta}} °C)",
+                    {
                       delta: ow.temperature_delta?.toFixed(1) ?? "?",
-                    })}
+                    },
+                  )}
                 </div>
               )}
             </>

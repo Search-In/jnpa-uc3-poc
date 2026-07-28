@@ -104,6 +104,7 @@ from .routers import (
     transporters,
     transporters_drivers_upload,
     trt,
+    weather,
 )
 from .state import GatewayState
 
@@ -298,6 +299,15 @@ async def _lifespan(app: FastAPI):
         await td_upload_ext.ensure_td_upload_schema(cfg.postgres_dsn or None)
     except Exception as exc:  # noqa: BLE001
         log.warning("td_upload_schema_boot_failed", error=str(exc))
+
+    # Weather module (Open-Meteo Weather + Marine): the core.weather_reading audit /
+    # fallback table. Idempotent, additive — mirrors v3 migration 0105 so a dev DB
+    # that never ran it still gets the object. Touches no existing table.
+    try:
+        from . import weather_ext
+        await weather_ext.ensure_weather_schema(cfg.postgres_dsn or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("weather_schema_boot_failed", error=str(exc))
 
     # Vehicle Master (fleet registry): ensure the table, then migrate the truck-sim
     # fleet into it (idempotent, never clobbering an operator edit) so no existing
@@ -543,6 +553,7 @@ app.include_router(reefer.router)            # reefer availability
 app.include_router(pdp.router)               # PDP adapter
 app.include_router(ldb.router)               # LDB adapter
 app.include_router(rms_tas.router)           # RMS-TAS persisted appointment surface
+app.include_router(weather.router)           # Open-Meteo weather + marine (LIVE→CACHED→SYNTHETIC)
 app.include_router(double_trip.router)       # TT double-trip workflow
 app.include_router(ws.router)
 app.include_router(checkin.router)

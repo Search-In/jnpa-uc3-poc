@@ -928,6 +928,15 @@ services:
       FASTAG_ULIP_RETRIES: ${FASTAG_ULIP_RETRIES:-2}
       # Surepass token drives the LIVE_PRIMARY vahan rung (empty -> LIVE_FALLBACK).
       SUREPASS_API_TOKEN: ${SUREPASS_API_TOKEN:-}
+      # Open-Meteo Weather + Marine (/api/weather). Free public APIs — no account,
+      # no API key. Empty -> the client's public defaults (api.open-meteo.com /
+      # marine-api.open-meteo.com); set to point at a proxy or self-hosted stack.
+      # Failure never breaks the API: LIVE -> CACHED (Redis/DB) -> SYNTHETIC.
+      OPEN_METEO_WEATHER_URL: ${OPEN_METEO_WEATHER_URL:-}
+      OPEN_METEO_MARINE_URL: ${OPEN_METEO_MARINE_URL:-}
+      OPEN_METEO_TIMEOUT_S: ${OPEN_METEO_TIMEOUT_S:-5}
+      OPEN_METEO_RETRIES: ${OPEN_METEO_RETRIES:-2}
+      GATEWAY_CACHE_TTL_WEATHER_S: ${GATEWAY_CACHE_TTL_WEATHER_S:-600}
       # Infra.
       POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
@@ -1002,6 +1011,9 @@ services:
       # FASTag integration layer — imported by the /api/fastag router. Mounted
       # read-only so local edits are picked up (matches the ./gateway mount).
       - ./services:/app/services:ro
+      # External-API integration packages (Open-Meteo) — imported by
+      # services.weather via PYTHONPATH=/app (matches the ./services mount).
+      - ./integrations:/app/integrations:ro
       # Firebase Admin-SDK service-account key(s). Host dir (gitignored `secrets/`,
       # override with FIREBASE_SECRETS_DIR) mounted read-only at /run/secrets/firebase.
       # Drop the JSON in there and set FIREBASE_SERVICE_ACCOUNT_PATH to its container

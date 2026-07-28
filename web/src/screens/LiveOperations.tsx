@@ -15,6 +15,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { ThroughputChart } from "@/components/ThroughputChart";
 import { KpiStrip } from "@/components/panels/KpiStrip";
 import { CarbonTile } from "@/components/panels/CarbonTile";
+import { WeatherTile } from "@/components/panels/WeatherTile";
 import { EmptyContainerBoard } from "@/components/panels/EmptyContainerBoard";
 import { TasWidget } from "@/components/panels/TasWidget";
 import { ParkingBoard } from "@/components/panels/ParkingBoard";
@@ -435,8 +436,9 @@ export default function LiveOperations() {
           </div>
         )}
 
-        {/* Appendix-C capability tiles (DTCCC view). */}
+        {/* Appendix-C capability tiles (DTCCC view) + live port weather. */}
         <div className="grid grid-cols-1 gap-2.5 border-t border-border px-4 py-2.5 md:grid-cols-2 lg:grid-cols-3">
+          <WeatherTile />
           <CarbonTile />
           <ParkingBoard />
           <EmptyContainerBoard />

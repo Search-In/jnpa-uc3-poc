@@ -54,14 +54,79 @@ _ADV_REL = """(
     LEFT JOIN core.advance_list_dg dg ON dg.al_id = a.al_id AND dg.slot = 1
 ) adv"""
 
+# Delivery orders over the CANONICAL v3 model (schema.sql is the source of truth).
+#
+# The legacy `jnpa.sl_delivery_orders` table was ONE flat row per container carrying
+# the AGDORD header, the line detail and the CODECO gate event together. v3 normalises
+# that into three tables, so this projection reassembles the legacy row shape from
+# them and the response contract is preserved key-for-key:
+#
+#   core.delivery_order       parent  — AGDORD header, keyed by do_number
+#   core.delivery_order_line  child   — container detail, PK (do_number, line_no)
+#   core.codeco_movement      event   — terminal gate in/out (gate pass, vehicle,
+#                                       equipment status, arrival/receipt)
+#
+# Every column below exists in schema.sql. In particular this projection does NOT
+# depend on the columns added by infra/postgres/v3/0102_arch_extensions.sql, so it
+# works against a database built from schema.sql alone.
+#
+# The CODECO join is a soft by-value join (container_no + vcn), consistent with the
+# rest of this schema, and is collapsed with DISTINCT ON to the LATEST movement per
+# container. Without that collapse a container with several gate movements would
+# multiply its delivery-order line into several rows and inflate `total`.
 _DO_REL = """(
-    SELECT l.id, l.common_ref_number, l.container_no, l.iso_code,
-           l.container_valid_iso, l.equipment_status, l.shipping_agent_code,
-           l.vcn, l.imo_number, l.pol AS loading_port, l.pod AS dest_port,
-           l.final_pod, l.arrival_ts, l.receipt_date, l.delivery_mode,
-           l.gate_pass_no, l.gate_pass_ts, l.vehicle_no,
-           l.gate_number, l.issued_ts, l.created_at
-    FROM core.delivery_order_line l
+    SELECT
+        -- The canonical line table has a COMPOSITE primary key (do_number, line_no)
+        -- and no surrogate integer. `id` is therefore a positional row number, kept
+        -- because the response contract has always carried it and clients use it as a
+        -- list key. Ordered oldest-first so the existing `ORDER BY id DESC` still
+        -- yields newest-first. Nothing looks a row up by this value — no by-id
+        -- delivery-order endpoint exists. `do_number` and `line_no` are exposed
+        -- alongside it as the real, stable identity.
+        row_number() OVER (ORDER BY hdr.do_date NULLS FIRST, hdr.do_number, ln.line_no) AS id,
+        hdr.do_number,
+        ln.line_no,
+        -- The importer stores the CODECO common reference in the header's payload
+        -- jsonb (there is no canonical column); fall back to the DO number itself.
+        coalesce(hdr.payload->>'common_ref_number', hdr.do_number) AS common_ref_number,
+        ln.container_no,
+        ln.iso_code,
+        -- No canonical column: the legacy boolean was the parser's ISO-checksum
+        -- verdict, which v3 does not persist. NULL rather than a guess derived from
+        -- the ISO code being non-empty, which would assert a validation never run.
+        NULL::boolean AS container_valid_iso,
+        cdc.equipment_status,
+        -- The importer writes the agent code into the header's agency_name.
+        hdr.agency_name AS shipping_agent_code,
+        hdr.vcn,
+        hdr.imo_no AS imo_number,
+        ln.pol AS loading_port,
+        ln.pod AS dest_port,
+        cdc.final_pod,
+        cdc.arrival_ts,
+        cdc.receipt_date,
+        coalesce(cdc.delivery_mode, hdr.delivery_type) AS delivery_mode,
+        cdc.gate_pass_no,
+        cdc.gate_pass_ts,
+        cdc.vehicle_no,
+        cdc.gate_no AS gate_number,
+        -- v3 keeps only a DATE for the AGDORD issue; the legacy shape had a
+        -- timestamp. Widened back to timestamptz so the JSON type is unchanged.
+        hdr.do_date::timestamptz AS issued_ts,
+        hdr.do_date::timestamptz AS created_at
+    FROM core.delivery_order hdr
+    JOIN core.delivery_order_line ln ON ln.do_number = hdr.do_number
+    LEFT JOIN (
+        SELECT DISTINCT ON (container_no, coalesce(vcn, ''))
+               container_no, vcn, equipment_status, final_pod, arrival_ts,
+               receipt_date, delivery_mode, gate_pass_no, gate_pass_ts, vehicle_no,
+               gate_no
+        FROM core.codeco_movement
+        ORDER BY container_no, coalesce(vcn, ''),
+                 coalesce(gate_pass_ts, arrival_ts) DESC NULLS LAST, id DESC
+    ) cdc
+      ON cdc.container_no = ln.container_no
+     AND coalesce(cdc.vcn, '') = coalesce(hdr.vcn, '')
 ) sdo"""
 
 _CONTAINER_COLS: tuple[str, ...] = (
@@ -250,14 +315,14 @@ class ShippingLinesRepository:
             row = {k: o.get(k) for k in _DO_COLS}
             row["import_file_id"] = file_id
             rows.append(row)
-        before = await self._scalar(
-            conn, "SELECT count(*) FROM core.delivery_order_line WHERE import_file_id = :id",
-            {"id": file_id})
+        # `core.delivery_order_line` has no import_file_id in the canonical schema, so
+        # the inserted count is a whole-table before/after delta instead of a per-file
+        # one. Equivalent here: this runs inside the single import transaction and is
+        # its only writer of the table, so the delta is exactly this batch's rows.
+        before = await self._scalar(conn, "SELECT count(*) FROM core.delivery_order_line", {})
         await conn.execute(text(_DO_HEADER_INSERT), rows)
         await conn.execute(text(_DO_INSERT), rows)
-        after = await self._scalar(
-            conn, "SELECT count(*) FROM core.delivery_order_line WHERE import_file_id = :id",
-            {"id": file_id})
+        after = await self._scalar(conn, "SELECT count(*) FROM core.delivery_order_line", {})
         return after - before
 
     async def _record_failure(self, envelope: Mapping[str, Any], detail: str) -> dict:

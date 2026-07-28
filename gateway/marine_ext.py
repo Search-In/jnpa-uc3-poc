@@ -425,6 +425,52 @@ _DDL: list[str] = [
                 CHECK (physical_format IN ('CSV','XLS','XLSX','PDF','XML','LOG','ZIP','SHP'));
         END IF;
     END $$""",
+
+    # ==================================================================
+    # Migration 0051 — bathymetry depth soundings (core.bathymetry_sounding) + the
+    # 'JSON' physical_format widening. Additive; mirrors 0051 byte-for-byte.
+    # core.bathymetry_survey already exists (schema.sql §10); this is its detail table
+    # and the FIRST inbound FK it has ever had.
+    # ==================================================================
+    """CREATE TABLE IF NOT EXISTS core.bathymetry_sounding (
+        sounding_id    bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        survey_id      smallint NOT NULL
+                           REFERENCES core.bathymetry_survey (survey_id) ON DELETE CASCADE,
+        easting_m      numeric(10,2),
+        northing_m     numeric(11,2),
+        lat            numeric(9,6),
+        lon            numeric(9,6),
+        depth_m        numeric(5,2) NOT NULL,
+        above_design   boolean NOT NULL DEFAULT false,
+        page_x_pt      numeric(8,2),
+        page_y_pt      numeric(8,2),
+        import_file_id bigint,
+        row_sha256     text,
+        created_at     timestamptz NOT NULL DEFAULT now(),
+        CONSTRAINT uq_bathymetry_sounding_row UNIQUE (row_sha256))""",
+    "CREATE INDEX IF NOT EXISTS idx_bathy_sounding_survey ON core.bathymetry_sounding (survey_id)",
+    "CREATE INDEX IF NOT EXISTS idx_bathy_sounding_bbox ON core.bathymetry_sounding (survey_id, easting_m, northing_m)",
+    "CREATE INDEX IF NOT EXISTS idx_bathy_sounding_depth ON core.bathymetry_sounding (survey_id, depth_m)",
+    "CREATE INDEX IF NOT EXISTS idx_bathy_sounding_import_file ON core.bathymetry_sounding (import_file_id)",
+
+    # 'JSON' physical_format — the canonical bathymetry JSON arm. Without it the ledger
+    # insert violates the closed-vocabulary CHECK and aborts the import transaction.
+    """DO $$
+    DECLARE v_conname text;
+    BEGIN
+        SELECT c.conname INTO v_conname
+        FROM pg_constraint c
+        WHERE c.conrelid = 'core.marine_import_files'::regclass
+          AND c.contype = 'c'
+          AND pg_get_constraintdef(c.oid) ILIKE '%physical_format%'
+          AND pg_get_constraintdef(c.oid) NOT ILIKE '%JSON%';
+        IF v_conname IS NOT NULL THEN
+            EXECUTE format('ALTER TABLE core.marine_import_files DROP CONSTRAINT %I', v_conname);
+            ALTER TABLE core.marine_import_files
+                ADD CONSTRAINT marine_import_files_physical_format_check
+                CHECK (physical_format IN ('CSV','XLS','XLSX','PDF','XML','LOG','ZIP','SHP','JSON'));
+        END IF;
+    END $$""",
 ]
 
 

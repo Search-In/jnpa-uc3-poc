@@ -34,7 +34,13 @@ function response(overrides: Partial<TrafficCurrent> = {}): TrafficCurrent {
       road_class: "FRC0",
     },
     incidents: [
-      { type: "ROAD_WORKS", description: "Roadworks", severity: "MODERATE", road: "NH-348", delay: 120 },
+      {
+        type: "ROAD_WORKS",
+        description: "Roadworks",
+        severity: "MODERATE",
+        road: "NH-348",
+        delay: 120,
+      },
     ],
     incident_count: 1,
     sources: { traffic: "LIVE", incidents: "LIVE" },

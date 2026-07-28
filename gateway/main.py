@@ -309,6 +309,15 @@ async def _lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         log.warning("weather_schema_boot_failed", error=str(exc))
 
+    # Traffic module (TomTom Flow + Incidents): the core.traffic_reading audit /
+    # fallback table. Idempotent, additive — mirrors v3 migration 0107 so a dev DB
+    # that never ran it still gets the object. Touches no existing table.
+    try:
+        from . import traffic_ext
+        await traffic_ext.ensure_traffic_schema(cfg.postgres_dsn or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("traffic_schema_boot_failed", error=str(exc))
+
     # Vehicle Master (fleet registry): ensure the table, then migrate the truck-sim
     # fleet into it (idempotent, never clobbering an operator edit) so no existing
     # vehicle disappears when the master is introduced. Best-effort — a sim/DB blip

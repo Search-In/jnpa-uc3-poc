@@ -19,6 +19,13 @@ import { DecisionPathBadge } from "@/components/DecisionPathBadge";
 import { fmtEta } from "@/lib/utils";
 import { weatherCondition, weatherHumidityPct, weatherRainMm } from "@/lib/weather";
 import {
+  congestionTone,
+  fmtDelay,
+  fmtSpeed,
+  incidentSeverityTone,
+  trafficStatusTone,
+} from "@/lib/traffic";
+import {
   Navigation,
   CheckCircle2,
   AlertCircle,
@@ -26,6 +33,7 @@ import {
   DoorOpen,
   AlertTriangle,
   CloudRain,
+  TrafficCone,
 } from "lucide-react";
 
 const GATES = ["G-NSICT", "G-JNPCT", "G-NSIGT", "G-BMCT"];
@@ -81,6 +89,16 @@ export default function DriverAdvisory() {
   const weather = useQuery({
     queryKey: ["weather-current", "advisory"],
     queryFn: () => api.weatherCurrent(),
+  });
+
+  // --- Traffic Advisory (additive) ----------------------------------------
+  // Live corridor conditions from the TomTom integration
+  // (GET /api/traffic/current) — real flow + incident data replacing any
+  // static traffic placeholder. Degrades LIVE → CACHED → DATABASE → SYNTHETIC
+  // instead of failing; the panel shows which rung served the data.
+  const traffic = useQuery({
+    queryKey: ["traffic-current", "advisory"],
+    queryFn: () => api.trafficCurrent(),
   });
 
   // Queue depth per gate -> the recommendation steers toward the shortest queue.
@@ -228,6 +246,79 @@ export default function DriverAdvisory() {
                   </tbody>
                 </table>
               </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Traffic Advisory — live TomTom corridor conditions with provenance */}
+      <div className="px-4 py-3">
+        <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+          <TrafficCone className="h-4 w-4 text-muted-foreground" />
+          {t("advisory.trafficAdvisory", "Traffic Advisory")}
+        </div>
+        <Card>
+          <CardContent className="space-y-2 p-4 text-sm">
+            {traffic.isLoading ? (
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Spinner /> {t("advisory.loadingTraffic", "Loading corridor traffic…")}
+              </div>
+            ) : traffic.isError || !traffic.data ? (
+              <ErrorState onRetry={() => void traffic.refetch()} />
+            ) : (
+              <>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="inline-flex items-center gap-1.5 font-medium">
+                    {t("advisory.trafficCongestion", "Corridor congestion")}
+                    <StatusChip
+                      label={traffic.data.traffic.congestion_level}
+                      tone={congestionTone(traffic.data.traffic.congestion_level)}
+                    />
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <StatusChip
+                      label={traffic.data.status}
+                      tone={trafficStatusTone(traffic.data.status)}
+                    />
+                    <DecisionPathBadge path={traffic.data.decision_path} />
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums text-foreground">
+                  <span>
+                    {t("advisory.trafficSpeed", "Speed")}:{" "}
+                    {fmtSpeed(traffic.data.traffic.current_speed)}
+                  </span>
+                  <span>
+                    {t("advisory.trafficFreeFlow", "Free flow")}:{" "}
+                    {fmtSpeed(traffic.data.traffic.free_flow_speed)}
+                  </span>
+                  <span>
+                    {t("advisory.trafficDelay", "Delay")}:{" "}
+                    {fmtDelay(traffic.data.traffic.delay_seconds)}
+                  </span>
+                  <span>
+                    {t("advisory.trafficIncidents", "Incidents")}: {traffic.data.incident_count}
+                  </span>
+                </div>
+                {traffic.data.incidents.slice(0, 3).map((inc, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-2 py-1 text-xs"
+                  >
+                    <span className="truncate">
+                      {inc.description ?? inc.type}
+                      {inc.road ? ` · ${inc.road}` : ""}
+                    </span>
+                    <StatusChip label={inc.severity} tone={incidentSeverityTone(inc.severity)} />
+                  </div>
+                ))}
+                <p className="text-xs text-muted-foreground">
+                  {t(
+                    "advisory.trafficCaption",
+                    "Live TomTom feed for the NH-348 JNPA corridor; when the feed is unreachable the last cached reading is shown and labelled.",
+                  )}
+                </p>
+              </>
             )}
           </CardContent>
         </Card>

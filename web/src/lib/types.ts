@@ -952,3 +952,54 @@ export interface WeatherHealth {
   cache_ttl_s: number;
   default_location: { latitude: number; longitude: number };
 }
+
+// --- Traffic (TomTom flow + incidents, /api/traffic/current) -----------------
+// Mirrors services/traffic/service.py's response contract. `status` / `source` /
+// `decision_path` carry the LIVE → CACHED → DATABASE → SYNTHETIC fallback
+// provenance; the endpoint never 5xxes for a TomTom outage, it degrades and
+// says so here. Distinct from TrafficSnapshot (per-segment sim map overlay).
+export type CongestionLevel = "LOW" | "MEDIUM" | "HIGH" | "SEVERE" | "UNKNOWN";
+export interface TrafficBlock {
+  current_speed: number | null; // km/h
+  free_flow_speed: number | null; // km/h
+  current_travel_time: number | null; // seconds
+  free_flow_travel_time: number | null; // seconds
+  congestion_level: CongestionLevel;
+  delay_seconds: number | null; // seconds vs free flow
+  road_closure: boolean;
+  confidence: number | null; // 0..1 (TomTom flow confidence)
+  road_class: string | null; // functional road class, e.g. "FRC0"
+  synthetic?: boolean;
+}
+export interface TrafficIncident {
+  type: string; // ACCIDENT / JAM / ROAD_WORKS / ROAD_CLOSED / …
+  description: string | null;
+  severity: string; // MINOR / MODERATE / MAJOR / CLOSURE / UNKNOWN
+  road: string | null;
+  delay: number | null; // seconds
+}
+export interface TrafficCurrent {
+  status: "LIVE" | "DEGRADED" | "OFFLINE";
+  source: "TOMTOM" | "TOMTOM_CACHE" | "TOMTOM_DB" | "SYNTHETIC";
+  decision_path: "LIVE" | "CACHED" | "DATABASE" | "SYNTHETIC";
+  location: { latitude: number; longitude: number };
+  traffic: TrafficBlock;
+  incidents: TrafficIncident[];
+  incident_count: number;
+  sources: { traffic: string; incidents: string };
+  cache_age_s: number | null;
+  units: Record<string, string>;
+  timestamp: string;
+}
+export interface TrafficHealth {
+  system: string; // "TRAFFIC"
+  provider: string; // "TOMTOM"
+  configured: boolean;
+  api_key_required: boolean;
+  flow_url: string;
+  incidents_url: string;
+  timeout_s: number;
+  retries: number;
+  cache_ttl_s: number;
+  default_location: { latitude: number; longitude: number };
+}

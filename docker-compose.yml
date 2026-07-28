@@ -945,6 +945,17 @@ services:
       OPENWEATHER_TIMEOUT_S: ${OPENWEATHER_TIMEOUT_S:-5}
       OPENWEATHER_RETRIES: ${OPENWEATHER_RETRIES:-2}
       GATEWAY_CACHE_TTL_WEATHER_S: ${GATEWAY_CACHE_TTL_WEATHER_S:-600}
+      # TomTom Traffic Flow + Incidents for /api/traffic/current. The key is
+      # BACKEND-ONLY (never a VITE_ variable, never called from the browser).
+      # Empty key -> LIVE rung disabled and the surface degrades through
+      # CACHED (Redis) -> DATABASE -> SYNTHETIC; an outage never breaks the API.
+      TOMTOM_API_KEY: ${TOMTOM_API_KEY:-}
+      TOMTOM_FLOW_URL: ${TOMTOM_FLOW_URL:-}
+      TOMTOM_INCIDENTS_URL: ${TOMTOM_INCIDENTS_URL:-}
+      TOMTOM_ROUTING_URL: ${TOMTOM_ROUTING_URL:-}
+      TOMTOM_TIMEOUT_S: ${TOMTOM_TIMEOUT_S:-5}
+      TOMTOM_RETRIES: ${TOMTOM_RETRIES:-2}
+      GATEWAY_CACHE_TTL_TOMTOM_S: ${GATEWAY_CACHE_TTL_TOMTOM_S:-120}
       # Infra.
       POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}

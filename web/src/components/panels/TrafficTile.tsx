@@ -80,10 +80,7 @@ export function TrafficTile() {
                 tone={congestionTone(d.traffic.congestion_level)}
               />
               {d.traffic.road_closure && (
-                <StatusChip
-                  label={t("panels.traffic.roadClosed", "ROAD CLOSED")}
-                  tone="critical"
-                />
+                <StatusChip label={t("panels.traffic.roadClosed", "ROAD CLOSED")} tone="critical" />
               )}
             </div>
             <DecisionPathBadge path={d.decision_path} />

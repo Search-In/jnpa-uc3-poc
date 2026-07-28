@@ -857,3 +857,63 @@ export interface DriverIntel {
   vehicle_no: string | null;
   violations: Record<string, unknown>[];
 }
+
+// --- Weather (Open-Meteo weather + marine, /api/weather) ---------------------
+// Mirrors services/weather/service.py's response contract. `status` / `source` /
+// `decision_path` carry the LIVE → CACHED → SYNTHETIC fallback provenance; the
+// endpoint never 5xxes for an upstream outage, it degrades and says so here.
+export interface WeatherBlock {
+  temperature: number | null; // °C
+  wind_speed: number | null; // km/h
+  wind_direction: number | null; // degrees
+  wind_gusts: number | null; // km/h
+  visibility: number | null; // metres
+  precipitation: number | null; // mm
+  weather_code: number | null; // WMO code
+  condition: string | null;
+  observed_at: string | null;
+  synthetic?: boolean;
+}
+export interface MarineBlock {
+  wave_height: number | null; // metres
+  wave_period: number | null; // seconds
+  swell_wave_height: number | null; // metres
+  sea_level_height: number | null; // metres
+  observed_at: string | null;
+  synthetic?: boolean;
+}
+export interface WeatherForecastHour {
+  time: string;
+  temperature: number | null;
+  wind_speed: number | null;
+  wind_direction: number | null;
+  wind_gusts: number | null;
+  visibility: number | null;
+  precipitation: number | null;
+  weather_code: number | null;
+  condition: string | null;
+}
+export interface WeatherCurrent {
+  status: "LIVE" | "DEGRADED" | "OFFLINE";
+  source: "OPEN_METEO" | "OPEN_METEO_CACHE" | "SYNTHETIC";
+  decision_path: "LIVE" | "CACHED" | "SYNTHETIC";
+  location: { latitude: number; longitude: number };
+  weather: WeatherBlock;
+  marine: MarineBlock;
+  sources: { weather: string; marine: string };
+  cache_age_s: number | null;
+  units: Record<string, string>;
+  timestamp: string;
+  forecast?: WeatherForecastHour[];
+}
+export interface WeatherHealth {
+  system: string;
+  configured: boolean;
+  api_key_required: boolean;
+  weather_url: string;
+  marine_url: string;
+  timeout_s: number;
+  retries: number;
+  cache_ttl_s: number;
+  default_location: { latitude: number; longitude: number };
+}

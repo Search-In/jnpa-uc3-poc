@@ -76,6 +76,14 @@ class GatewayConfig:
     cache_ttl_anpr_s: int = 60               # last 60 s of frames (spec)
     cache_ttl_traffic_s: int = 90
     cache_ttl_default_s: int = 300
+    cache_ttl_weather_s: int = 600           # Open-Meteo CACHED fallback rung
+
+    # --- Open-Meteo Weather + Marine (/api/weather) ---
+    # Free public APIs — no account, no API key. Empty -> the client's public
+    # defaults (api.open-meteo.com / marine-api.open-meteo.com); set to point at
+    # a proxy / self-hosted instance. NO hardcoded vendor URL in business code.
+    open_meteo_weather_url: str = ""
+    open_meteo_marine_url: str = ""
 
     # --- Provisional vehicle flow ---
     provisional_window_h: int = 24           # 24-hour cure window (spec)
@@ -153,6 +161,9 @@ class GatewayConfig:
             cache_ttl_vahan_s=_as_int(os.environ.get("GATEWAY_CACHE_TTL_VAHAN_S"), 12 * 3600),
             cache_ttl_anpr_s=_as_int(os.environ.get("GATEWAY_CACHE_TTL_ANPR_S"), 60),
             cache_ttl_traffic_s=_as_int(os.environ.get("GATEWAY_CACHE_TTL_TRAFFIC_S"), 90),
+            cache_ttl_weather_s=_as_int(os.environ.get("GATEWAY_CACHE_TTL_WEATHER_S"), 600),
+            open_meteo_weather_url=os.environ.get("OPEN_METEO_WEATHER_URL", "").strip(),
+            open_meteo_marine_url=os.environ.get("OPEN_METEO_MARINE_URL", "").strip(),
             provisional_window_h=_as_int(os.environ.get("GATEWAY_PROVISIONAL_WINDOW_H"), 24),
             require_driver_profile=_as_bool(os.environ.get("REQUIRE_DRIVER_PROFILE"), False),
             gate_boom_delay_s=_as_int(os.environ.get("GATEWAY_GATE_BOOM_DELAY_S"), 5),

@@ -1013,6 +1013,19 @@ export const api = {
     );
   },
   rmsHealth: () => http<any>("/api/rms-tas/health"),
+
+  // --- Weather (Open-Meteo weather + marine, LIVE→CACHED→SYNTHETIC) ---
+  // Coordinates default to the configured JNPA port location on the backend, so
+  // callers normally pass no params. The endpoint degrades instead of failing:
+  // read `status` / `source` / `decision_path` for provenance.
+  weatherCurrent: (params?: { latitude?: number; longitude?: number; forecast_hours?: number }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<import("./types").WeatherCurrent>(
+      `/api/weather/current${q.toString() ? `?${q}` : ""}`,
+    );
+  },
+  weatherHealth: () => http<import("./types").WeatherHealth>("/api/weather/health"),
   rmsSeed: (body: Record<string, any>) =>
     http<any>("/api/rms-tas/seed", { method: "POST", body: JSON.stringify(body) }),
   rmsBook: (body: Record<string, any>) =>

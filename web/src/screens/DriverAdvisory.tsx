@@ -13,8 +13,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Spinner, EmptyState } from "@/components/ui/misc";
-import { PageContainer, PageHeader, StatGrid, StatCard } from "@/components/ui/dtccc";
+import { Spinner, EmptyState, ErrorState } from "@/components/ui/misc";
+import { PageContainer, PageHeader, StatGrid, StatCard, StatusChip } from "@/components/ui/dtccc";
+import { DecisionPathBadge } from "@/components/DecisionPathBadge";
 import { fmtEta } from "@/lib/utils";
 import {
   Navigation,
@@ -72,12 +73,13 @@ export default function DriverAdvisory() {
   const accidentsLoading = accReported.isLoading || accInvestigating.isLoading;
 
   // --- Weather Advisory (additive) ----------------------------------------
-  // There is no live weather feed. This panel only reflects the existing
-  // traffic/congestion model output; weather advisories surface via the
-  // Monsoon what-if scenario, never from invented weather data.
+  // Live port-area conditions from the Open-Meteo integration
+  // (GET /api/weather/current). The endpoint degrades LIVE → CACHED →
+  // SYNTHETIC instead of failing; the panel always shows which rung served
+  // the data so a synthetic reading is never presented as live.
   const weather = useQuery({
-    queryKey: ["traffic", "predict", "advisory"],
-    queryFn: () => api.trafficPredict(15),
+    queryKey: ["weather-current", "advisory"],
+    queryFn: () => api.weatherCurrent(),
   });
 
   // Queue depth per gate -> the recommendation steers toward the shortest queue.
@@ -230,7 +232,7 @@ export default function DriverAdvisory() {
         </Card>
       </div>
 
-      {/* Weather Advisory (additive, honest) */}
+      {/* Weather Advisory — live Open-Meteo conditions with provenance */}
       <div className="px-4 py-3">
         <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
           <CloudRain className="h-4 w-4 text-muted-foreground" />
@@ -240,20 +242,71 @@ export default function DriverAdvisory() {
           <CardContent className="space-y-2 p-4 text-sm">
             {weather.isLoading ? (
               <div className="flex items-center gap-2 text-muted-foreground">
-                <Spinner /> {t("advisory.loadingWeather", "Loading advisory context…")}
+                <Spinner /> {t("advisory.loadingWeather", "Loading port weather…")}
               </div>
+            ) : weather.isError || !weather.data ? (
+              <ErrorState onRetry={() => void weather.refetch()} />
             ) : (
-              <div className="text-foreground">
-                {t("advisory.weatherModelPath", "Congestion model path")}:{" "}
-                <span className="font-mono text-xs">{weather.data?.decision_path ?? "—"}</span>
-              </div>
+              <>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-medium">
+                    {weather.data.weather.condition ??
+                      t("advisory.weatherNoCondition", "Conditions unavailable")}
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <StatusChip
+                      label={weather.data.status}
+                      tone={
+                        weather.data.status === "LIVE"
+                          ? "ok"
+                          : weather.data.status === "DEGRADED"
+                            ? "warn"
+                            : "critical"
+                      }
+                    />
+                    <DecisionPathBadge path={weather.data.decision_path} />
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums text-foreground">
+                  <span>
+                    {t("advisory.weatherTemp", "Temp")}:{" "}
+                    {weather.data.weather.temperature != null
+                      ? `${weather.data.weather.temperature.toFixed(1)} °C`
+                      : "—"}
+                  </span>
+                  <span>
+                    {t("advisory.weatherWind", "Wind")}:{" "}
+                    {weather.data.weather.wind_speed != null
+                      ? `${weather.data.weather.wind_speed.toFixed(0)} km/h`
+                      : "—"}
+                  </span>
+                  <span>
+                    {t("advisory.weatherVisibility", "Visibility")}:{" "}
+                    {weather.data.weather.visibility != null
+                      ? `${(weather.data.weather.visibility / 1000).toFixed(1)} km`
+                      : "—"}
+                  </span>
+                  <span>
+                    {t("advisory.weatherRain", "Rain")}:{" "}
+                    {weather.data.weather.precipitation != null
+                      ? `${weather.data.weather.precipitation.toFixed(1)} mm`
+                      : "—"}
+                  </span>
+                  <span>
+                    {t("advisory.weatherWave", "Waves")}:{" "}
+                    {weather.data.marine.wave_height != null
+                      ? `${weather.data.marine.wave_height.toFixed(1)} m`
+                      : "—"}
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {t(
+                    "advisory.weatherCaption",
+                    "Live Open-Meteo feed for the JNPA port area; when the feed is unreachable the last cached reading is shown and labelled.",
+                  )}
+                </p>
+              </>
             )}
-            <p className="text-xs text-muted-foreground">
-              {t(
-                "advisory.weatherCaption",
-                "Weather advisories surface during the Monsoon what-if scenario; no live weather feed is connected.",
-              )}
-            </p>
           </CardContent>
         </Card>
       </div>

@@ -17,6 +17,7 @@ import { Spinner, EmptyState, ErrorState } from "@/components/ui/misc";
 import { PageContainer, PageHeader, StatGrid, StatCard, StatusChip } from "@/components/ui/dtccc";
 import { DecisionPathBadge } from "@/components/DecisionPathBadge";
 import { fmtEta } from "@/lib/utils";
+import { weatherCondition, weatherHumidityPct, weatherRainMm } from "@/lib/weather";
 import {
   Navigation,
   CheckCircle2,
@@ -250,7 +251,7 @@ export default function DriverAdvisory() {
               <>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="font-medium">
-                    {weather.data.weather.condition ??
+                    {weatherCondition(weather.data) ??
                       t("advisory.weatherNoCondition", "Conditions unavailable")}
                   </span>
                   <span className="inline-flex items-center gap-1.5">
@@ -288,10 +289,16 @@ export default function DriverAdvisory() {
                   </span>
                   <span>
                     {t("advisory.weatherRain", "Rain")}:{" "}
-                    {weather.data.weather.precipitation != null
-                      ? `${weather.data.weather.precipitation.toFixed(1)} mm`
+                    {weatherRainMm(weather.data) != null
+                      ? `${weatherRainMm(weather.data)!.toFixed(1)} mm`
                       : "—"}
                   </span>
+                  {weatherHumidityPct(weather.data) != null && (
+                    <span>
+                      {t("advisory.weatherHumidity", "Humidity")}:{" "}
+                      {`${weatherHumidityPct(weather.data)!.toFixed(0)} %`}
+                    </span>
+                  )}
                   <span>
                     {t("advisory.weatherWave", "Waves")}:{" "}
                     {weather.data.marine.wave_height != null
@@ -302,7 +309,7 @@ export default function DriverAdvisory() {
                 <p className="text-xs text-muted-foreground">
                   {t(
                     "advisory.weatherCaption",
-                    "Live Open-Meteo feed for the JNPA port area; when the feed is unreachable the last cached reading is shown and labelled.",
+                    "Live Open-Meteo + OpenWeather feed for the JNPA port area; when a feed is unreachable the last cached reading is shown and labelled.",
                   )}
                 </p>
               </>

@@ -882,6 +882,30 @@ export interface MarineBlock {
   observed_at: string | null;
   synthetic?: boolean;
 }
+// OpenWeatherMap enrichment (integrations/openweather). `null` on the parent
+// response when the provider is disabled (no OPENWEATHER_API_KEY configured) —
+// the surface then behaves exactly as the Open-Meteo-only build.
+export interface OpenWeatherBlock {
+  temperature: number | null; // °C
+  feels_like: number | null; // °C
+  humidity: number | null; // %
+  pressure: number | null; // hPa
+  rain: number | null; // mm over the last hour (0 = not raining)
+  clouds: number | null; // % cloud cover
+  condition: string | null; // e.g. "Cloudy"
+  condition_id: number | null; // OpenWeatherMap condition code
+  description: string | null; // e.g. "scattered clouds"
+  label: string | null; // operational label: CLEAR/CLOUDY/RAIN/STORM/…
+  wind_speed: number | null; // km/h (converted from m/s)
+  wind_direction: number | null; // degrees
+  visibility: number | null; // metres
+  station: string | null;
+  observed_at: string | null;
+  // Cross-provider temperature validation vs the Open-Meteo block.
+  temperature_delta?: number | null; // °C (openweather − open-meteo)
+  temperature_consistent?: boolean | null; // |delta| within tolerance
+  synthetic?: boolean;
+}
 export interface WeatherForecastHour {
   time: string;
   temperature: number | null;
@@ -895,12 +919,14 @@ export interface WeatherForecastHour {
 }
 export interface WeatherCurrent {
   status: "LIVE" | "DEGRADED" | "OFFLINE";
-  source: "OPEN_METEO" | "OPEN_METEO_CACHE" | "SYNTHETIC";
+  source: "OPEN_METEO+OPENWEATHER" | "OPEN_METEO" | "OPEN_METEO_CACHE" | "SYNTHETIC";
   decision_path: "LIVE" | "CACHED" | "SYNTHETIC";
   location: { latitude: number; longitude: number };
   weather: WeatherBlock;
   marine: MarineBlock;
-  sources: { weather: string; marine: string };
+  // null when OPENWEATHER_API_KEY is not configured (sources.openweather = "DISABLED").
+  openweather: OpenWeatherBlock | null;
+  sources: { weather: string; marine: string; openweather: string };
   cache_age_s: number | null;
   units: Record<string, string>;
   timestamp: string;
@@ -908,12 +934,21 @@ export interface WeatherCurrent {
 }
 export interface WeatherHealth {
   system: string;
+  provider: string; // "OPEN_METEO" | "OPEN_METEO + OPENWEATHER"
+  providers: string[];
   configured: boolean;
   api_key_required: boolean;
   weather_url: string;
   marine_url: string;
   timeout_s: number;
   retries: number;
+  openweather: {
+    configured: boolean;
+    api_key_required: boolean;
+    url: string;
+    timeout_s: number;
+    retries: number;
+  };
   cache_ttl_s: number;
   default_location: { latitude: number; longitude: number };
 }

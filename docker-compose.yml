@@ -936,6 +936,14 @@ services:
       OPEN_METEO_MARINE_URL: ${OPEN_METEO_MARINE_URL:-}
       OPEN_METEO_TIMEOUT_S: ${OPEN_METEO_TIMEOUT_S:-5}
       OPEN_METEO_RETRIES: ${OPEN_METEO_RETRIES:-2}
+      # OpenWeatherMap enrichment for /api/weather (openweather block). The key
+      # is BACKEND-ONLY (never a VITE_ variable, never called from the browser).
+      # Empty key -> provider disabled and /api/weather serves Open-Meteo alone;
+      # an OpenWeather outage degrades only its block, never the API.
+      OPENWEATHER_API_KEY: ${OPENWEATHER_API_KEY:-}
+      OPENWEATHER_URL: ${OPENWEATHER_URL:-}
+      OPENWEATHER_TIMEOUT_S: ${OPENWEATHER_TIMEOUT_S:-5}
+      OPENWEATHER_RETRIES: ${OPENWEATHER_RETRIES:-2}
       GATEWAY_CACHE_TTL_WEATHER_S: ${GATEWAY_CACHE_TTL_WEATHER_S:-600}
       # Infra.
       POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}

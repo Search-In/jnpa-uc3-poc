@@ -26,7 +26,8 @@ _COORD_MATCH_SQL = ("round(CAST(latitude AS numeric), 2) = round(CAST(:lat AS nu
                     "AND round(CAST(longitude AS numeric), 2) = round(CAST(:lon AS numeric), 2)")
 
 _READING_COLS = ("id, latitude, longitude, temperature, wind_speed, wind_direction, "
-                 "visibility, precipitation, wave_height, wave_period, source, payload, created_at")
+                 "visibility, precipitation, wave_height, wave_period, "
+                 "humidity, clouds, source, payload, created_at")
 
 
 class WeatherRepository:
@@ -47,6 +48,8 @@ class WeatherRepository:
         precipitation: Optional[float] = None,
         wave_height: Optional[float] = None,
         wave_period: Optional[float] = None,
+        humidity: Optional[float] = None,
+        clouds: Optional[float] = None,
         source: str = "OPEN_METEO",
         payload: Optional[Dict[str, Any]] = None,
     ) -> Optional[int]:
@@ -54,16 +57,18 @@ class WeatherRepository:
         row = await execute_returning(
             """INSERT INTO core.weather_reading
                  (latitude, longitude, temperature, wind_speed, wind_direction,
-                  visibility, precipitation, wave_height, wave_period, source, payload)
+                  visibility, precipitation, wave_height, wave_period,
+                  humidity, clouds, source, payload)
                VALUES (:lat, :lon, :temperature, :wind_speed, :wind_direction,
                        :visibility, :precipitation, :wave_height, :wave_period,
-                       :source, CAST(:payload AS jsonb))
+                       :humidity, :clouds, :source, CAST(:payload AS jsonb))
                RETURNING id""",
             {
                 "lat": latitude, "lon": longitude, "temperature": temperature,
                 "wind_speed": wind_speed, "wind_direction": wind_direction,
                 "visibility": visibility, "precipitation": precipitation,
                 "wave_height": wave_height, "wave_period": wave_period,
+                "humidity": humidity, "clouds": clouds,
                 "source": source, "payload": json.dumps(payload or {}),
             },
             dsn=self._dsn,

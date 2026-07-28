@@ -1,11 +1,14 @@
-"""/api/weather — Open-Meteo Weather + Marine conditions for the port area.
+"""/api/weather — Open-Meteo Weather + Marine + OpenWeatherMap conditions for
+the port area.
 
 A thin router over :class:`services.weather.WeatherService` (service → OpenMeteo
-client + raw-SQL WeatherRepository), in the same mould as
-gateway/routers/shipping_lines.py. The external seam is integrations/openmeteo
-(free public APIs — no account, no API key); an Open-Meteo outage NEVER breaks
-this surface: the service degrades LIVE → CACHED (Redis, then the last
-core.weather_reading row) → SYNTHETIC and says so via status/source metadata.
++ OpenWeather clients + raw-SQL WeatherRepository), in the same mould as
+gateway/routers/shipping_lines.py. The external seams are integrations/openmeteo
+(free public APIs — no key) and integrations/openweather (key-gated via
+OPENWEATHER_API_KEY, backend-only, never exposed to the browser); a provider
+outage NEVER breaks this surface: the service degrades LIVE → CACHED (Redis,
+then the last core.weather_reading row) → SYNTHETIC and says so via
+status/source metadata — Open-Meteo data still returns when OpenWeather is down.
 
     GET /api/weather/current   -> combined weather + marine conditions
     GET /api/weather/readings  -> persisted reading history (filter + page)
@@ -39,12 +42,19 @@ def get_service(request: Request) -> WeatherService:
     if _service is None:
         cfg = getattr(getattr(request.app.state, "gw", None), "cfg", None)
         from integrations.openmeteo import OpenMeteoClient
+        from integrations.openweather import OpenWeatherClient
 
         _service = WeatherService(
             dsn=getattr(cfg, "postgres_dsn", None) or None,
             client=OpenMeteoClient(
                 weather_url=getattr(cfg, "open_meteo_weather_url", "") or None,
                 marine_url=getattr(cfg, "open_meteo_marine_url", "") or None,
+            ),
+            # Key empty -> provider disabled; the openweather block is null and
+            # the surface behaves exactly as the Open-Meteo-only build.
+            openweather_client=OpenWeatherClient(
+                api_key=getattr(cfg, "openweather_api_key", None),
+                url=getattr(cfg, "openweather_url", "") or None,
             ),
             cache_ttl_s=getattr(cfg, "cache_ttl_weather_s", None) or 600,
         )
@@ -68,7 +78,8 @@ def _default_coords(latitude: Optional[float], longitude: Optional[float]) -> tu
 
 
 # ------------------------------------------------------------------- current
-@router.get("/current", summary="Combined Open-Meteo weather + marine conditions")
+@router.get("/current",
+            summary="Combined Open-Meteo weather + marine + OpenWeatherMap conditions")
 async def current_conditions(
     latitude: Optional[float] = Query(None, ge=-90, le=90),
     longitude: Optional[float] = Query(None, ge=-180, le=180),
@@ -99,18 +110,30 @@ async def list_readings(
 
 
 # ------------------------------------------------------------------- health
-@router.get("/health", summary="Open-Meteo integration posture")
+@router.get("/health", summary="Weather integration posture (Open-Meteo + OpenWeatherMap)")
 async def weather_health(svc: WeatherService = Depends(get_service)) -> Dict[str, Any]:
     s = get_settings()
     client = svc._client  # noqa: SLF001 - posture surface for the health panel
+    ow = svc._ow_client  # noqa: SLF001 - posture only; the key itself is never returned
+    providers = ["OPEN_METEO"] + (["OPENWEATHER"] if ow.configured else [])
     return {
-        "system": "OPEN_METEO",
-        "configured": True,          # public API — no key required
+        "system": "WEATHER",
+        "provider": " + ".join(providers),
+        "providers": providers,
+        "configured": True,          # Open-Meteo is public — the surface always works
         "api_key_required": False,
         "weather_url": client.weather_url,
         "marine_url": client.marine_url,
         "timeout_s": client.timeout_s,
         "retries": client.retries,
+        # OpenWeatherMap posture — key-gated enrichment; the key is NEVER echoed.
+        "openweather": {
+            "configured": ow.configured,
+            "api_key_required": True,
+            "url": ow.url,
+            "timeout_s": ow.timeout_s,
+            "retries": ow.retries,
+        },
         "cache_ttl_s": svc.cache_ttl_s,
         "default_location": {"latitude": s.port_lat, "longitude": s.port_lon},
     }

@@ -85,6 +85,16 @@ class GatewayConfig:
     open_meteo_weather_url: str = ""
     open_meteo_marine_url: str = ""
 
+    # --- OpenWeatherMap (/api/weather openweather block) ---
+    # BACKEND-ONLY credential: read from the environment, sent only to
+    # api.openweathermap.org — never exposed to the frontend (no VITE_ var, no
+    # browser call). Empty key -> provider disabled and the weather surface
+    # behaves exactly as the Open-Meteo-only build. URL empty -> the client's
+    # official default (api.openweathermap.org/data/2.5/weather); set to point
+    # at a proxy. NO hardcoded vendor URL in business code.
+    openweather_api_key: str = ""
+    openweather_url: str = ""
+
     # --- Provisional vehicle flow ---
     provisional_window_h: int = 24           # 24-hour cure window (spec)
 
@@ -164,6 +174,9 @@ class GatewayConfig:
             cache_ttl_weather_s=_as_int(os.environ.get("GATEWAY_CACHE_TTL_WEATHER_S"), 600),
             open_meteo_weather_url=os.environ.get("OPEN_METEO_WEATHER_URL", "").strip(),
             open_meteo_marine_url=os.environ.get("OPEN_METEO_MARINE_URL", "").strip(),
+            openweather_api_key=os.environ.get(
+                "OPENWEATHER_API_KEY", shared.openweather_api_key).strip(),
+            openweather_url=os.environ.get("OPENWEATHER_URL", "").strip(),
             provisional_window_h=_as_int(os.environ.get("GATEWAY_PROVISIONAL_WINDOW_H"), 24),
             require_driver_profile=_as_bool(os.environ.get("REQUIRE_DRIVER_PROFILE"), False),
             gate_boom_delay_s=_as_int(os.environ.get("GATEWAY_GATE_BOOM_DELAY_S"), 5),
@@ -177,6 +190,12 @@ class GatewayConfig:
             firebase_service_account_path=os.environ.get("FIREBASE_SERVICE_ACCOUNT_PATH", ""),
             log_level=os.environ.get("LOG_LEVEL", "INFO"),
         )
+
+    @property
+    def openweather_enabled(self) -> bool:
+        """True if an OpenWeatherMap API key is configured (enables the
+        openweather block on /api/weather/current)."""
+        return bool(self.openweather_api_key.strip())
 
     @property
     def surepass_enabled(self) -> bool:

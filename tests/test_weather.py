@@ -240,6 +240,11 @@ def fake_cache(monkeypatch):
 
 
 def _service(client, repo=None, **kwargs) -> WeatherService:
+    # OpenWeather explicitly disabled (no API key) — these tests pin the
+    # original Open-Meteo-only contract regardless of the ambient environment.
+    from integrations.openweather import OpenWeatherClient
+
+    kwargs.setdefault("openweather_client", OpenWeatherClient(api_key=""))
     return WeatherService(client=client, repository=repo or _StubRepo(), **kwargs)
 
 
@@ -290,7 +295,8 @@ def test_service_partial_failure_is_degraded(fake_cache):
     """Weather live, marine down, nothing cached -> marine degrades to SYNTHETIC."""
     out = _run(_service(_StubClient(marine_ok=False)).current(18.9489, 72.9492))
     assert out["status"] == "DEGRADED"
-    assert out["sources"] == {"weather": "LIVE", "marine": "SYNTHETIC"}
+    assert out["sources"] == {"weather": "LIVE", "marine": "SYNTHETIC",
+                              "openweather": "DISABLED"}
     assert out["weather"]["temperature"] == 30.1
     assert out["marine"]["synthetic"] is True
 

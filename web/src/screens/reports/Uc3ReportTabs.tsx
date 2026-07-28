@@ -531,8 +531,11 @@ export function IntegrationReport() {
       { system: "NVR", mode: h(nvrQ).mode, configured: h(nvrQ).configured },
       // Open-Meteo needs no API key: `configured` comes straight from
       // /api/weather/health and the adapter is LIVE whenever it answers.
+      // `provider` lists the active feeds ("OPEN_METEO" or
+      // "OPEN_METEO + OPENWEATHER" once an OpenWeather key is configured).
       {
         system: "WEATHER",
+        provider: h(weatherQ).provider,
         mode: weatherQ.data ? "LIVE" : undefined,
         configured: h(weatherQ).configured,
       },
@@ -544,7 +547,19 @@ export function IntegrationReport() {
 
   const columns: Column<any>[] = useMemo(
     () => [
-      { key: "system", header: "System", className: "font-medium", render: (r) => r.system },
+      {
+        key: "system",
+        header: "System",
+        className: "font-medium",
+        render: (r) => (
+          <div>
+            {r.system}
+            {r.provider ? (
+              <div className="text-[10px] font-normal text-muted-foreground">{r.provider}</div>
+            ) : null}
+          </div>
+        ),
+      },
       {
         key: "status",
         header: "Status",
@@ -576,7 +591,7 @@ export function IntegrationReport() {
           void weatherQ.refetch();
         }}
         emptyLabel="No integration adapters reported."
-        search={(r, q) => includesQ(`${r.system} ${modeLabel(r)}`, q)}
+        search={(r, q) => includesQ(`${r.system} ${r.provider ?? ""} ${modeLabel(r)}`, q)}
         searchPlaceholder="Search system…"
         toolbar={
           <ReportToolbar

@@ -24,11 +24,7 @@ export function weatherSourceTone(source?: WeatherCurrent["source"]): Tone {
 }
 
 /** "—"-safe numeric formatter: `fmtMeasure(1.23, "m") -> "1.2 m"`. */
-export function fmtMeasure(
-  value: number | null | undefined,
-  unit: string,
-  digits = 1,
-): string {
+export function fmtMeasure(value: number | null | undefined, unit: string, digits = 1): string {
   return value == null ? "—" : `${value.toFixed(digits)} ${unit}`;
 }
 

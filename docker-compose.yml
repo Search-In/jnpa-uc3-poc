@@ -964,6 +964,15 @@ services:
       OPENAQ_TIMEOUT_S: ${OPENAQ_TIMEOUT_S:-5}
       OPENAQ_RETRIES: ${OPENAQ_RETRIES:-2}
       GATEWAY_CACHE_TTL_OPENAQ_S: ${GATEWAY_CACHE_TTL_OPENAQ_S:-300}
+      # Bhuvan WMS (ISRO/NRSC geospatial layer, /api/bhuvan). NO key required —
+      # the gateway is control-plane only (GetCapabilities + layer config); the
+      # browser renders the WMS tiles directly. BHUVAN_ENABLED=false hides the
+      # layer from the frontend without touching code.
+      BHUVAN_WMS_URL: ${BHUVAN_WMS_URL:-https://bhuvan-vec1.nrsc.gov.in/bhuvan/wms}
+      BHUVAN_LAYER: ${BHUVAN_LAYER:-india3}
+      BHUVAN_ENABLED: ${BHUVAN_ENABLED:-true}
+      BHUVAN_TIMEOUT_S: ${BHUVAN_TIMEOUT_S:-5}
+      BHUVAN_RETRIES: ${BHUVAN_RETRIES:-2}
       # Infra.
       POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}

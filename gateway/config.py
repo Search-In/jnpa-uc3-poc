@@ -109,6 +109,18 @@ class GatewayConfig:
     tomtom_routing_url: str = ""
     cache_ttl_tomtom_s: int = 120            # TomTom CACHED fallback rung
 
+    # --- Bhuvan WMS (ISRO/NRSC geospatial layer, /api/bhuvan) ---
+    # OGC WMS map service — NO API key required. The gateway is control-plane
+    # only: it validates availability (GetCapabilities) and serves the layer
+    # configuration; the browser renders the WMS tiles directly on the ArcGIS
+    # map. Empty URL/layer -> the client's official defaults
+    # (bhuvan-vec1.nrsc.gov.in/bhuvan/wms, layer "india3"); set to point at a
+    # proxy or a different Bhuvan layer. BHUVAN_ENABLED=false hides the layer
+    # from the frontend without touching code.
+    bhuvan_wms_url: str = ""
+    bhuvan_layer: str = ""
+    bhuvan_enabled: bool = True
+
     # --- Provisional vehicle flow ---
     provisional_window_h: int = 24           # 24-hour cure window (spec)
 
@@ -197,6 +209,9 @@ class GatewayConfig:
             tomtom_incidents_url=os.environ.get("TOMTOM_INCIDENTS_URL", "").strip(),
             tomtom_routing_url=os.environ.get("TOMTOM_ROUTING_URL", "").strip(),
             cache_ttl_tomtom_s=_as_int(os.environ.get("GATEWAY_CACHE_TTL_TOMTOM_S"), 120),
+            bhuvan_wms_url=os.environ.get("BHUVAN_WMS_URL", "").strip(),
+            bhuvan_layer=os.environ.get("BHUVAN_LAYER", "").strip(),
+            bhuvan_enabled=_as_bool(os.environ.get("BHUVAN_ENABLED"), True),
             provisional_window_h=_as_int(os.environ.get("GATEWAY_PROVISIONAL_WINDOW_H"), 24),
             require_driver_profile=_as_bool(os.environ.get("REQUIRE_DRIVER_PROFILE"), False),
             gate_boom_delay_s=_as_int(os.environ.get("GATEWAY_GATE_BOOM_DELAY_S"), 5),

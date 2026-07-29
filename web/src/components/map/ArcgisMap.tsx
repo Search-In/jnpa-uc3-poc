@@ -17,7 +17,7 @@
 //
 // Colours come exclusively from src/lib/tokens.ts (single source of truth).
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 // Register the <arcgis-map> custom element + bundle its runtime locally. The
 // React wrapper below only creates the React→element binding; this side-effect
@@ -37,7 +37,14 @@ import SimpleLineSymbol from "@arcgis/core/symbols/SimpleLineSymbol";
 import SimpleFillSymbol from "@arcgis/core/symbols/SimpleFillSymbol";
 import TextSymbol from "@arcgis/core/symbols/TextSymbol";
 import type MapView from "@arcgis/core/views/MapView";
+import type WMSLayer from "@arcgis/core/layers/WMSLayer";
 import esriConfig from "@arcgis/core/config";
+
+// Bhuvan (ISRO/NRSC) WMS overlay — gateway-configured (/api/bhuvan), rendered
+// client-side as an ArcGIS WMSLayer. Pure state helpers + the layer factory
+// live in src/map/ so the lifecycle stays unit-testable without a DOM.
+import { createBhuvanWmsLayer, fetchBhuvanConfig, loadBhuvanLayer } from "@/map/BhuvanWmsLayer";
+import { bhuvanReducer, initialBhuvanState } from "@/map/bhuvan";
 
 import type {
   CorridorGeometry,
@@ -241,6 +248,13 @@ export function ArcgisMap({
   );
   const layersCtrlRef = useRef<HTMLDivElement>(null);
   useClickOutside(layersCtrlRef, () => setLayersOpen(false), layersOpen);
+  // Bhuvan WMS overlay: toggle → lazy config fetch (/api/bhuvan/layers) →
+  // WMSLayer at the bottom of the operational stack. Nothing is fetched and no
+  // layer exists until the operator first enables it, so the default map is
+  // byte-for-byte the pre-Bhuvan build.
+  const [bhuvan, dispatchBhuvan] = useReducer(bhuvanReducer, initialBhuvanState);
+  const bhuvanLayerRef = useRef<WMSLayer | null>(null);
+  const bhuvanBusy = useRef(false);
   // Last spotlight id-set we framed, so we only re-zoom when it changes — exactly
   // the reference PortMap's lastZoomKey guard.
   const lastZoomKey = useRef<string>("");
@@ -304,6 +318,10 @@ export function ArcgisMap({
       // remount (e.g. guided-tour navigation) doesn't silently re-show a layer
       // the operator had hidden.
       set.violationHeatmap.visible = layerVis.violationHeatmap ?? true;
+      // Re-attach the Bhuvan WMS overlay across canvas remounts (2D↔3D toggle
+      // recreates the MapView) so the operator's toggle survives. Index 0 keeps
+      // it above the basemap but below every GraphicsLayer.
+      if (bhuvanLayerRef.current) view.map.add(bhuvanLayerRef.current, 0);
 
       // Click routing (all via hitTest):
       //   1. gate graphic → onGateClick callback (unchanged);
@@ -856,6 +874,57 @@ export function ArcgisMap({
     setLayerVis((v) => ({ ...v, [key]: next }));
   }
 
+  // Toggle the Bhuvan WMS overlay. First enable lazily fetches the gateway
+  // config and creates the WMSLayer (loading state while it resolves); later
+  // toggles only flip visibility. Any failure — gateway down, integration
+  // disabled, WMS endpoint unreachable — lands in the error state and unchecks
+  // the box; the rest of the map is untouched.
+  async function toggleBhuvan() {
+    if (bhuvanBusy.current) return;
+    const existing = bhuvanLayerRef.current;
+    if (bhuvan.visible) {
+      if (existing) existing.visible = false;
+      dispatchBhuvan({ type: "toggle" });
+      return;
+    }
+    dispatchBhuvan({ type: "toggle" });
+    if (existing) {
+      existing.visible = true;
+      return;
+    }
+    bhuvanBusy.current = true;
+    dispatchBhuvan({ type: "loadStart" });
+    try {
+      const config = await fetchBhuvanConfig();
+      if (!config) {
+        throw new Error(t("map.bhuvanDisabled", "Bhuvan WMS is not enabled on the gateway"));
+      }
+      const layer = createBhuvanWmsLayer(config, bhuvan.opacity);
+      // load() + pin the GetMap endpoint to the same-origin relay (the
+      // capabilities document's own href points at nrsc.gov.in — CORS-blocked).
+      await loadBhuvanLayer(layer, config);
+      const map = viewRef.current?.map;
+      if (!map) throw new Error("map is not ready");
+      map.add(layer, 0);
+      bhuvanLayerRef.current = layer;
+      dispatchBhuvan({ type: "loadSuccess" });
+    } catch (err) {
+      dispatchBhuvan({
+        type: "loadError",
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      bhuvanBusy.current = false;
+    }
+  }
+
+  // Opacity control for the Bhuvan overlay (0–1, applied live to the layer).
+  function setBhuvanOpacity(value: number) {
+    dispatchBhuvan({ type: "setOpacity", opacity: value });
+    const layer = bhuvanLayerRef.current;
+    if (layer) layer.opacity = Math.min(1, Math.max(0, value));
+  }
+
   // The initial centre Point (the prop's getter type is Point, not a tuple).
   // Memoised on mount so it is only ever handed to the element once (see the
   // memoised <ArcgisMapWC> element below for why that matters).
@@ -1002,6 +1071,52 @@ export function ArcgisMap({
                   {t(`map.layer.${d.key}`)}
                 </label>
               ))}
+              {/* Bhuvan (ISRO) WMS overlay — gateway-configured, lazily loaded.
+                  Separated by a divider because unlike the GraphicsLayers above
+                  it carries loading/error states and an opacity control. */}
+              <div className="mt-1 border-t border-border pt-1" data-testid="bhuvan-layer-control">
+                <label className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-xs hover:bg-muted">
+                  <input
+                    type="checkbox"
+                    checked={bhuvan.visible}
+                    disabled={bhuvan.status === "loading"}
+                    onChange={() => void toggleBhuvan()}
+                    className="h-3.5 w-3.5 accent-severity-info"
+                  />
+                  {t("map.layer.bhuvan", "Bhuvan Satellite Layer")}
+                  {bhuvan.status === "loading" && (
+                    <span className="ml-auto text-[10px] italic text-muted-foreground">
+                      {t("map.bhuvanLoading", "loading…")}
+                    </span>
+                  )}
+                </label>
+                {bhuvan.status === "error" && (
+                  <div className="px-1 pb-1 text-[10px] text-severity-critical" role="alert">
+                    {t("map.bhuvanError", "Bhuvan layer failed to load")}
+                    {bhuvan.error ? ` — ${bhuvan.error}` : ""}
+                  </div>
+                )}
+                {bhuvan.visible && bhuvan.status === "ready" && (
+                  <label className="flex items-center gap-2 px-1 py-1 text-[10px] text-muted-foreground">
+                    {t("map.bhuvanOpacity", "Opacity")}
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={Math.round(bhuvan.opacity * 100)}
+                      onChange={(e) => setBhuvanOpacity(Number(e.target.value) / 100)}
+                      aria-label={t("map.bhuvanOpacity", "Opacity")}
+                      className="h-1 min-w-0 flex-1 accent-severity-info"
+                    />
+                    <span className="w-8 text-right tabular-nums">
+                      {Math.round(bhuvan.opacity * 100)}%
+                    </span>
+                  </label>
+                )}
+                <div className="px-1 pb-0.5 text-[10px] text-muted-foreground">
+                  {t("map.bhuvanSource", "Source: ISRO Bhuvan WMS")}
+                </div>
+              </div>
             </div>
           )}
         </div>

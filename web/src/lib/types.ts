@@ -1003,3 +1003,46 @@ export interface TrafficHealth {
   cache_ttl_s: number;
   default_location: { latitude: number; longitude: number };
 }
+
+// --- Air quality (OpenAQ, /api/air-quality/current) ---------------------------
+// Mirrors services/air_quality/service.py's response contract. `status` /
+// `source` / `decision_path` carry the LIVE → CACHED → DATABASE → SYNTHETIC
+// fallback provenance; the endpoint never 5xxes for an OpenAQ outage, it
+// degrades and says so here. All concentrations are µg/m³.
+export type AqStatus = "GOOD" | "MODERATE" | "UNHEALTHY" | "VERY_UNHEALTHY" | "UNKNOWN";
+export interface AirQualityBlock {
+  pm25: number | null;
+  pm10: number | null;
+  no2: number | null;
+  so2: number | null;
+  co: number | null;
+  o3: number | null;
+  air_quality_status: AqStatus;
+  source: string; // "OPENAQ" | "SYNTHETIC"
+  observed_at: string | null; // newest station timestamp (UTC ISO)
+  stations?: string[]; // contributing OpenAQ station names
+  synthetic?: boolean;
+}
+export interface AirQualityCurrent {
+  status: "LIVE" | "DEGRADED" | "OFFLINE";
+  source: "OPENAQ" | "OPENAQ_CACHE" | "OPENAQ_DB" | "SYNTHETIC";
+  decision_path: "LIVE" | "CACHED" | "DATABASE" | "SYNTHETIC";
+  location: { latitude: number; longitude: number };
+  air_quality: AirQualityBlock;
+  cache_age_s: number | null;
+  units: Record<string, string>;
+  timestamp: string;
+}
+export interface AirQualityHealth {
+  system: string; // "AIR_QUALITY"
+  provider: string; // "OPENAQ"
+  configured: boolean;
+  api_key_required: boolean; // always false — OpenAQ needs no key
+  api_key_present: boolean;
+  base_url: string;
+  timeout_s: number;
+  retries: number;
+  radius_m: number;
+  cache_ttl_s: number;
+  default_location: { latitude: number; longitude: number };
+}

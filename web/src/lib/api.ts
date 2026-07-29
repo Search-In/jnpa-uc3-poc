@@ -1040,6 +1040,20 @@ export const api = {
     );
   },
   trafficHealth: () => http<import("./types").TrafficHealth>("/api/traffic/health"),
+
+  // --- Air quality (OpenAQ, LIVE→CACHED→DATABASE→SYNTHETIC) ---
+  // Coordinates default to the configured JNPA port location on the backend, so
+  // callers normally pass no params. The endpoint degrades instead of failing:
+  // read `status` / `source` / `decision_path` for provenance. The browser
+  // only ever talks to the gateway — never to api.openaq.org.
+  airQualityCurrent: (params?: { latitude?: number; longitude?: number }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<import("./types").AirQualityCurrent>(
+      `/api/air-quality/current${q.toString() ? `?${q}` : ""}`,
+    );
+  },
+  airQualityHealth: () => http<import("./types").AirQualityHealth>("/api/air-quality/health"),
   rmsSeed: (body: Record<string, any>) =>
     http<any>("/api/rms-tas/seed", { method: "POST", body: JSON.stringify(body) }),
   rmsBook: (body: Record<string, any>) =>

@@ -80,6 +80,7 @@ from .routers import (
 # UC-III Final-Completion routers (additive; see gateway/uc3_ext.py + migration 0024).
 from .routers import (
     accidents,
+    air_quality,
     berthing,
     bottlenecks,
     camera_ai,
@@ -318,6 +319,15 @@ async def _lifespan(app: FastAPI):
         await traffic_ext.ensure_traffic_schema(cfg.postgres_dsn or None)
     except Exception as exc:  # noqa: BLE001
         log.warning("traffic_schema_boot_failed", error=str(exc))
+
+    # Air-quality module (OpenAQ): the core.air_quality_readings audit /
+    # fallback table. Idempotent, additive — mirrors v3 migration 0108 so a dev DB
+    # that never ran it still gets the object. Touches no existing table.
+    try:
+        from . import air_quality_ext
+        await air_quality_ext.ensure_air_quality_schema(cfg.postgres_dsn or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("air_quality_schema_boot_failed", error=str(exc))
 
     # Vehicle Master (fleet registry): ensure the table, then migrate the truck-sim
     # fleet into it (idempotent, never clobbering an operator edit) so no existing
@@ -565,6 +575,7 @@ app.include_router(pdp.router)               # PDP adapter
 app.include_router(ldb.router)               # LDB adapter
 app.include_router(rms_tas.router)           # RMS-TAS persisted appointment surface
 app.include_router(weather.router)           # Open-Meteo weather + marine (LIVE→CACHED→SYNTHETIC)
+app.include_router(air_quality.router)       # OpenAQ air quality (LIVE→CACHED→DATABASE→SYNTHETIC)
 app.include_router(double_trip.router)       # TT double-trip workflow
 app.include_router(ws.router)
 app.include_router(checkin.router)

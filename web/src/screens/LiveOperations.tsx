@@ -17,6 +17,7 @@ import { KpiStrip } from "@/components/panels/KpiStrip";
 import { CarbonTile } from "@/components/panels/CarbonTile";
 import { WeatherTile } from "@/components/panels/WeatherTile";
 import { TrafficTile } from "@/components/panels/TrafficTile";
+import { AirQualityTile } from "@/components/panels/AirQualityTile";
 import { EmptyContainerBoard } from "@/components/panels/EmptyContainerBoard";
 import { TasWidget } from "@/components/panels/TasWidget";
 import { ParkingBoard } from "@/components/panels/ParkingBoard";
@@ -441,6 +442,7 @@ export default function LiveOperations() {
         <div className="grid grid-cols-1 gap-2.5 border-t border-border px-4 py-2.5 md:grid-cols-2 lg:grid-cols-3">
           <WeatherTile />
           <TrafficTile />
+          <AirQualityTile />
           <CarbonTile />
           <ParkingBoard />
           <EmptyContainerBoard />

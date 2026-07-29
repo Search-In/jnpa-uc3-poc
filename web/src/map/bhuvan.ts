@@ -20,6 +20,12 @@ export interface BhuvanConfig {
   provider: string;
   enabled: boolean;
   wms_url: string;
+  /**
+   * Same-origin gateway relay path (/api/bhuvan/wms). The Bhuvan server sends
+   * no CORS headers, so the browser's ArcGIS WMSLayer MUST go through this —
+   * a direct wms_url fetch always dies with "Failed to fetch".
+   */
+  proxy_url?: string;
   default_layer: string;
   /** LIVE (capabilities parsed) | CONFIGURED (provider down, env fallback) | DISABLED. */
   source?: string;
@@ -81,10 +87,23 @@ export function parseBhuvanConfig(raw: unknown): BhuvanConfig | null {
     provider: typeof o.provider === "string" ? o.provider : "BHUVAN",
     enabled: o.enabled !== false,
     wms_url: wmsUrl,
+    proxy_url:
+      typeof o.proxy_url === "string" && o.proxy_url.trim() ? o.proxy_url.trim() : undefined,
     default_layer: defaultLayer,
     source: typeof o.source === "string" ? o.source : undefined,
     layers,
   };
+}
+
+/**
+ * The URL the ArcGIS WMSLayer should actually request. Prefers the gateway's
+ * same-origin relay (absolutised against the dashboard origin) because Bhuvan
+ * sends no CORS headers; falls back to the raw WMS URL only when no relay is
+ * advertised (older gateway build).
+ */
+export function resolveWmsUrl(config: BhuvanConfig, origin: string): string {
+  if (config.proxy_url) return new URL(config.proxy_url, origin).toString();
+  return config.wms_url;
 }
 
 // ---- toggle / loading / error state machine ------------------------------

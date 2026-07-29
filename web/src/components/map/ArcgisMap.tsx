@@ -43,7 +43,7 @@ import esriConfig from "@arcgis/core/config";
 // Bhuvan (ISRO/NRSC) WMS overlay — gateway-configured (/api/bhuvan), rendered
 // client-side as an ArcGIS WMSLayer. Pure state helpers + the layer factory
 // live in src/map/ so the lifecycle stays unit-testable without a DOM.
-import { createBhuvanWmsLayer, fetchBhuvanConfig } from "@/map/BhuvanWmsLayer";
+import { createBhuvanWmsLayer, fetchBhuvanConfig, loadBhuvanLayer } from "@/map/BhuvanWmsLayer";
 import { bhuvanReducer, initialBhuvanState } from "@/map/bhuvan";
 
 import type {
@@ -900,7 +900,9 @@ export function ArcgisMap({
         throw new Error(t("map.bhuvanDisabled", "Bhuvan WMS is not enabled on the gateway"));
       }
       const layer = createBhuvanWmsLayer(config, bhuvan.opacity);
-      await layer.load();
+      // load() + pin the GetMap endpoint to the same-origin relay (the
+      // capabilities document's own href points at nrsc.gov.in — CORS-blocked).
+      await loadBhuvanLayer(layer, config);
       const map = viewRef.current?.map;
       if (!map) throw new Error("map is not ready");
       map.add(layer, 0);

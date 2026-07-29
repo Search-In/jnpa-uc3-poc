@@ -49,6 +49,11 @@ DEFAULT_LAYER = "india3"
 # GetCapabilities documents can be large but are text-only; a hard cap keeps a
 # misbehaving server from streaming an unbounded body into the gateway.
 MAX_CAPABILITIES_BYTES = 8 * 1024 * 1024
+# Upper bound for one relayed WMS response (a 2048×2048 PNG stays well under
+# this). The relay exists because the Bhuvan server sends no CORS headers, so
+# the browser's ArcGIS WMSLayer cannot call it directly — the gateway forwards
+# bounded, whitelisted WMS requests instead (see BhuvanClient.relay_wms).
+MAX_RELAY_BYTES = 16 * 1024 * 1024
 
 
 def _as_float(value: Optional[str], default: float) -> float:
@@ -125,6 +130,39 @@ class BhuvanClient:
         """Health probe: one GetCapabilities round-trip. Any BhuvanError means
         the service is not currently usable; a parsed document means it is."""
         return await self.fetch_capabilities()
+
+    # ----------------------------------------------------------------- relay
+    async def relay_wms(self, params: dict) -> tuple[bytes, str]:
+        """Forward ONE whitelisted WMS request (GetCapabilities / GetMap) and
+        return ``(body, content_type)`` verbatim.
+
+        Same-origin CORS relay for the browser's ArcGIS WMSLayer — the Bhuvan
+        server sends no Access-Control-Allow-Origin header, so direct browser
+        fetches always fail. Single attempt, no retries: map images are
+        latency-sensitive and the map re-requests on pan/zoom anyway. The
+        caller (gateway/routers/bhuvan.py) owns parameter whitelisting and
+        size clamping; this method only bounds the response body.
+        """
+        client = self._http or httpx.AsyncClient(timeout=self.timeout_s)
+        owns = self._http is None
+        try:
+            try:
+                resp = await client.get(self.wms_url, params=params)
+            except httpx.TimeoutException as exc:
+                raise BhuvanTimeout(
+                    f"Bhuvan WMS timed out after {self.timeout_s}s") from exc
+            except httpx.HTTPError as exc:
+                raise BhuvanUnavailable(f"Bhuvan WMS unreachable: {exc}") from exc
+            if resp.status_code != 200:
+                raise BhuvanHTTPError(resp.status_code,
+                                      (resp.text or "")[:200] or None)
+            if len(resp.content) > MAX_RELAY_BYTES:
+                raise BhuvanHTTPError(200, "response exceeds the relay size cap")
+            return resp.content, resp.headers.get("content-type",
+                                                  "application/octet-stream")
+        finally:
+            if owns:
+                await client.aclose()
 
     # ------------------------------------------------------------- plumbing
     async def _get_text(self, url: str, params: dict) -> str:

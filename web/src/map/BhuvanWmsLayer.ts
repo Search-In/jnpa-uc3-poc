@@ -19,6 +19,7 @@ import {
   DEFAULT_BHUVAN_OPACITY,
   clampOpacity,
   parseBhuvanConfig,
+  resolveWmsUrl,
   type BhuvanConfig,
 } from "./bhuvan";
 
@@ -40,6 +41,10 @@ export async function fetchBhuvanConfig(): Promise<BhuvanConfig | null> {
  * definition (url + sublayers + version) so drawing starts immediately from
  * the gateway-validated config. The layer belongs at the BOTTOM of the
  * operational stack — above the basemap, below every GraphicsLayer.
+ *
+ * The url is the gateway's same-origin /api/bhuvan/wms relay whenever the
+ * gateway advertises one — the Bhuvan server sends no CORS headers, so the
+ * browser can never fetch it directly (TypeError: Failed to fetch).
  */
 export function createBhuvanWmsLayer(
   config: BhuvanConfig,
@@ -48,7 +53,7 @@ export function createBhuvanWmsLayer(
   return new WMSLayer({
     id: BHUVAN_LAYER_ID,
     title: "Bhuvan Satellite Layer",
-    url: config.wms_url,
+    url: resolveWmsUrl(config, window.location.origin),
     sublayers: [{ name: config.default_layer }],
     version: "1.1.1",
     imageFormat: "image/png",
@@ -57,4 +62,21 @@ export function createBhuvanWmsLayer(
     opacity: clampOpacity(opacity),
     copyright: `© ${BHUVAN_SOURCE_LABEL} / NRSC`,
   });
+}
+
+/**
+ * Load the layer, then pin its GetMap endpoint to the same-origin relay.
+ *
+ * ArcGIS derives GetMap requests from the capabilities document's
+ * OnlineResource href (runtime property `mapUrl`), NOT from `layer.url` — so
+ * a live Bhuvan capabilities answer would send every map-image request
+ * straight to nrsc.gov.in, where the missing CORS headers kill it with
+ * "Failed to fetch". `mapUrl` is not in the public typings but is a stable
+ * runtime member (see @arcgis/core/layers/WMSLayer.js fetchImageBitmap);
+ * overwriting it after load() forces all imagery through the gateway relay.
+ */
+export async function loadBhuvanLayer(layer: WMSLayer, config: BhuvanConfig): Promise<WMSLayer> {
+  await layer.load();
+  (layer as unknown as { mapUrl?: string }).mapUrl = resolveWmsUrl(config, window.location.origin);
+  return layer;
 }

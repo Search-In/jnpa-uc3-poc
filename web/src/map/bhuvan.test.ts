@@ -12,6 +12,7 @@ import {
   clampOpacity,
   initialBhuvanState,
   parseBhuvanConfig,
+  resolveWmsUrl,
   type BhuvanState,
 } from "./bhuvan";
 
@@ -19,6 +20,7 @@ const GATEWAY_ANSWER = {
   provider: "BHUVAN",
   enabled: true,
   wms_url: "https://bhuvan-vec1.nrsc.gov.in/bhuvan/wms",
+  proxy_url: "/api/bhuvan/wms",
   default_layer: "india3",
   source: "LIVE",
   layers: [
@@ -75,6 +77,29 @@ describe("parseBhuvanConfig (layer configuration)", () => {
       layers: [{ name: "india3" }, { title: "no name" }, 42],
     });
     expect(cfg!.layers).toEqual([{ name: "india3", title: "india3", type: "WMS" }]);
+  });
+});
+
+describe("resolveWmsUrl (CORS relay selection)", () => {
+  it("prefers the gateway's same-origin relay — Bhuvan sends no CORS headers", () => {
+    const cfg = parseBhuvanConfig(GATEWAY_ANSWER)!;
+    expect(cfg.proxy_url).toBe("/api/bhuvan/wms");
+    expect(resolveWmsUrl(cfg, "http://localhost:3000")).toBe(
+      "http://localhost:3000/api/bhuvan/wms",
+    );
+  });
+
+  it("falls back to the raw WMS URL when no relay is advertised (older gateway)", () => {
+    const cfg = parseBhuvanConfig({ ...GATEWAY_ANSWER, proxy_url: undefined })!;
+    expect(cfg.proxy_url).toBeUndefined();
+    expect(resolveWmsUrl(cfg, "http://localhost:3000")).toBe(
+      "https://bhuvan-vec1.nrsc.gov.in/bhuvan/wms",
+    );
+  });
+
+  it("treats a blank proxy_url as absent", () => {
+    const cfg = parseBhuvanConfig({ ...GATEWAY_ANSWER, proxy_url: "  " })!;
+    expect(cfg.proxy_url).toBeUndefined();
   });
 });
 

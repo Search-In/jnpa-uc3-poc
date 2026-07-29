@@ -289,6 +289,122 @@ def test_router_degrades_when_wms_unavailable():
         {"name": "india3", "title": "india3", "type": "WMS"}]
 
 
+def test_router_layers_advertises_proxy_url():
+    """The frontend must be pointed at the same-origin relay — Bhuvan sends no
+    CORS headers, so the browser can never call the raw wms_url."""
+    from gateway.routers import bhuvan as bhuvan_router
+
+    client = _client_with(lambda req: httpx.Response(200, text=CAPS_111))
+    req = _StubRequest()
+    layers = _run(bhuvan_router.bhuvan_layers(req, limit=50, client=client))
+    assert layers["proxy_url"] == "/api/bhuvan/wms"
+
+
+class _RelayRequest(_StubRequest):
+    """Stub with the query_params the /wms relay reads."""
+
+    def __init__(self, params, cfg=None):
+        super().__init__(cfg=cfg)
+        self.query_params = params
+
+
+def test_wms_relay_forwards_getmap():
+    from gateway.routers import bhuvan as bhuvan_router
+
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(dict(request.url.params))
+        return httpx.Response(200, content=b"\x89PNGfake",
+                              headers={"content-type": "image/png"})
+
+    client = _client_with(handler)
+    req = _RelayRequest({
+        "SERVICE": "WMS", "REQUEST": "GetMap", "LAYERS": "india3",
+        "BBOX": "0,0,1,1", "WIDTH": "256", "HEIGHT": "256",
+        "FORMAT": "image/png", "evil_param": "1",
+    })
+    resp = _run(bhuvan_router.bhuvan_wms(req, client=client))
+    assert resp.status_code == 200
+    assert resp.media_type == "image/png"
+    assert resp.body == b"\x89PNGfake"
+    assert seen["LAYERS"] == "india3"
+    assert "evil_param" not in seen          # non-whitelisted params dropped
+
+
+def test_wms_relay_rejects_bad_requests():
+    from gateway.routers import bhuvan as bhuvan_router
+
+    client = _client_with(lambda req: httpx.Response(200, content=b"x"))
+    # unsupported request type (GetFeatureInfo) and missing request type
+    for params in ({"request": "GetFeatureInfo"}, {"service": "WMS"}):
+        resp = _run(bhuvan_router.bhuvan_wms(_RelayRequest(params), client=client))
+        assert resp.status_code == 400
+    # oversized image dimension
+    resp = _run(bhuvan_router.bhuvan_wms(
+        _RelayRequest({"request": "GetMap", "width": "9999", "height": "256"}),
+        client=client))
+    assert resp.status_code == 400
+
+
+def test_wms_relay_maps_getmap_failures():
+    from gateway.config import GatewayConfig
+    from gateway.routers import bhuvan as bhuvan_router
+
+    def timeout(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("slow", request=request)
+
+    resp = _run(bhuvan_router.bhuvan_wms(
+        _RelayRequest({"request": "GetMap", "width": "256"}),
+        client=_client_with(timeout)))
+    assert resp.status_code == 504           # provider timeout -> gateway timeout
+
+    def down(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    resp = _run(bhuvan_router.bhuvan_wms(
+        _RelayRequest({"request": "GetMap"}), client=_client_with(down)))
+    assert resp.status_code == 502           # provider unreachable -> bad gateway
+
+    # disabled -> 503, upstream never called
+    resp = _run(bhuvan_router.bhuvan_wms(
+        _RelayRequest({"request": "GetMap"}, cfg=GatewayConfig(bhuvan_enabled=False)),
+        client=_client_with(down)))
+    assert resp.status_code == 503
+
+
+def test_wms_relay_capabilities_synthetic_fallback():
+    """NRSC's GetCapabilities routinely hangs even while GetMap serves, and
+    the ArcGIS WMSLayer cannot load() without a capabilities answer — so the
+    relay degrades GetCapabilities to a SYNTHETIC minimal document (200)
+    advertising the configured layer, never a 5xx."""
+    from gateway.routers import bhuvan as bhuvan_router
+
+    def hang(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("capabilities hang", request=request)
+
+    resp = _run(bhuvan_router.bhuvan_wms(
+        _RelayRequest({"service": "WMS", "request": "GetCapabilities"}),
+        client=_client_with(hang)))
+    assert resp.status_code == 200
+    assert resp.headers["x-bhuvan-source"] == "SYNTHETIC"
+    # The synthetic document must be a valid WMS capabilities answer that our
+    # own parser (and therefore ArcGIS's) accepts, naming the configured layer.
+    caps = parse_capabilities(resp.body.decode())
+    assert caps.version == "1.1.1"
+    assert caps.find_layer("india3") is not None
+
+    # A live (non-failing) capabilities pass-through stays verbatim.
+    resp = _run(bhuvan_router.bhuvan_wms(
+        _RelayRequest({"request": "GetCapabilities"}),
+        client=_client_with(lambda req: httpx.Response(
+            200, text=CAPS_111,
+            headers={"content-type": "application/vnd.ogc.wms_xml"}))))
+    assert resp.status_code == 200
+    assert "x-bhuvan-source" not in resp.headers
+    assert resp.body.decode() == CAPS_111
+
+
 def test_router_disabled_via_config():
     from gateway.config import GatewayConfig
     from gateway.routers import bhuvan as bhuvan_router

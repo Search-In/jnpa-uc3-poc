@@ -956,6 +956,14 @@ services:
       TOMTOM_TIMEOUT_S: ${TOMTOM_TIMEOUT_S:-5}
       TOMTOM_RETRIES: ${TOMTOM_RETRIES:-2}
       GATEWAY_CACHE_TTL_TOMTOM_S: ${GATEWAY_CACHE_TTL_TOMTOM_S:-120}
+      # OpenAQ Air Quality (backend-only, /api/air-quality/* surfaces). NO key
+      # required — OPENAQ_API_KEY is optional and only raises the platform
+      # rate limit; an outage degrades LIVE -> CACHED -> DATABASE -> SYNTHETIC.
+      OPENAQ_API_URL: ${OPENAQ_API_URL:-https://api.openaq.org/v3}
+      OPENAQ_API_KEY: ${OPENAQ_API_KEY:-}
+      OPENAQ_TIMEOUT_S: ${OPENAQ_TIMEOUT_S:-5}
+      OPENAQ_RETRIES: ${OPENAQ_RETRIES:-2}
+      GATEWAY_CACHE_TTL_OPENAQ_S: ${GATEWAY_CACHE_TTL_OPENAQ_S:-300}
       # Infra.
       POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}

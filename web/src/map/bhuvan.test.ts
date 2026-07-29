@@ -70,7 +70,9 @@ describe("parseBhuvanConfig (layer configuration)", () => {
     // no URL -> nothing to draw from
     expect(parseBhuvanConfig({ ...GATEWAY_ANSWER, wms_url: "" })).toBeNull();
     // no default layer AND no layer list -> nothing to request
-    expect(parseBhuvanConfig({ wms_url: "https://x/wms", default_layer: "", layers: [] })).toBeNull();
+    expect(
+      parseBhuvanConfig({ wms_url: "https://x/wms", default_layer: "", layers: [] }),
+    ).toBeNull();
     // malformed layer entries are dropped, not fatal
     const cfg = parseBhuvanConfig({
       ...GATEWAY_ANSWER,

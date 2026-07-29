@@ -401,8 +401,14 @@
       "trucks": "ट्रक (1:50)",
       "heatmap": "भीड़ हीटमैप",
       "zones": "जियोफेंस ज़ोन",
-      "parking": "पार्किंग सुविधाएँ"
+      "parking": "पार्किंग सुविधाएँ",
+      "bhuvan": "भुवन सैटेलाइट लेयर"
     },
+    "bhuvanLoading": "लोड हो रहा है…",
+    "bhuvanError": "भुवन लेयर लोड नहीं हो सकी",
+    "bhuvanDisabled": "गेटवे पर भुवन WMS सक्षम नहीं है",
+    "bhuvanOpacity": "अपारदर्शिता",
+    "bhuvanSource": "स्रोत: ISRO भुवन WMS",
     "legendItem": {
       "freeFlow": "मुक्त प्रवाह / लक्ष्य पर",
       "moderate": "मध्यम",

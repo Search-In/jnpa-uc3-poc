@@ -82,6 +82,7 @@ from .routers import (
     accidents,
     air_quality,
     berthing,
+    bhuvan,
     bottlenecks,
     camera_ai,
     cfs_ecy,
@@ -551,6 +552,7 @@ app.include_router(ldb.router)               # LDB adapter
 app.include_router(rms_tas.router)           # RMS-TAS persisted appointment surface
 app.include_router(weather.router)           # Open-Meteo weather + marine (LIVE→CACHED→SYNTHETIC)
 app.include_router(air_quality.router)       # OpenAQ air quality (LIVE→CACHED→DATABASE→SYNTHETIC)
+app.include_router(bhuvan.router)            # Bhuvan WMS geospatial layer (ISRO/NRSC, control-plane only)
 app.include_router(double_trip.router)       # TT double-trip workflow
 app.include_router(ws.router)
 app.include_router(checkin.router)

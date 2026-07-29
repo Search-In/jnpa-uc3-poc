@@ -1054,6 +1054,14 @@ export const api = {
     );
   },
   airQualityHealth: () => http<import("./types").AirQualityHealth>("/api/air-quality/health"),
+
+  // --- Bhuvan WMS (ISRO/NRSC geospatial layer, control-plane only) ---
+  // The gateway never proxies imagery: /layers returns the WMS endpoint +
+  // named layers (validated server-side via GetCapabilities) and the ArcGIS
+  // WMSLayer renders GetMap tiles from the Bhuvan server directly. The raw
+  // answer is validated by map/bhuvan.parseBhuvanConfig before use.
+  bhuvanHealth: () => http<import("@/map/bhuvan").BhuvanHealth>("/api/bhuvan/health"),
+  bhuvanLayers: () => http<unknown>("/api/bhuvan/layers"),
   rmsSeed: (body: Record<string, any>) =>
     http<any>("/api/rms-tas/seed", { method: "POST", body: JSON.stringify(body) }),
   rmsBook: (body: Record<string, any>) =>

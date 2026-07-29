@@ -973,6 +973,21 @@ services:
       BHUVAN_ENABLED: ${BHUVAN_ENABLED:-true}
       BHUVAN_TIMEOUT_S: ${BHUVAN_TIMEOUT_S:-5}
       BHUVAN_RETRIES: ${BHUVAN_RETRIES:-2}
+      # ULIP Logistics Intelligence (/api/logistics/*). Credentials are
+      # BACKEND-ONLY (never a VITE_ variable, never called from the browser).
+      # Auth: ULIP_CLIENT_ID + ULIP_CLIENT_SECRET (login-token flow) or the
+      # pre-issued ULIP_API_KEY above. No credential -> LIVE rung disabled and
+      # the surfaces degrade through CACHED (Redis) -> DATABASE -> FALLBACK
+      # (explicitly empty, clearly tagged); an outage never breaks the API.
+      ULIP_API_URL: ${ULIP_API_URL:-}
+      ULIP_CLIENT_ID: ${ULIP_CLIENT_ID:-}
+      ULIP_CLIENT_SECRET: ${ULIP_CLIENT_SECRET:-}
+      ULIP_TIMEOUT_S: ${ULIP_TIMEOUT_S:-5}
+      ULIP_RETRIES: ${ULIP_RETRIES:-2}
+      ULIP_TOKEN_TTL_S: ${ULIP_TOKEN_TTL_S:-1800}
+      ULIP_FASTAG_API: ${ULIP_FASTAG_API:-}
+      ULIP_LDB_API: ${ULIP_LDB_API:-}
+      GATEWAY_CACHE_TTL_ULIP_S: ${GATEWAY_CACHE_TTL_ULIP_S:-300}
       # Infra.
       POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}

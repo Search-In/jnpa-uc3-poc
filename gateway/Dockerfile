@@ -78,6 +78,7 @@ RUN python -c "import starlette.exceptions, fastapi; from starlette.exceptions i
     && python -c "from integrations.openmeteo import OpenMeteoClient; from services.weather import WeatherService; print('weather layer OK')" \
     && python -c "from integrations.tomtom import TomTomClient; from services.traffic import TrafficService; print('traffic layer OK')" \
     && python -c "from integrations.openaq import OpenAQClient; from services.air_quality import AirQualityService; print('air-quality layer OK')" \
+    && python -c "from integrations.ulip import UlipClient; from services.logistics import LogisticsService; print('logistics layer OK')" \
     && python -c "import empty_container.optimizer, carbon.calculator, gate_data.leo, identity.embeddings, parking.facilities; print('capability fallbacks OK')" \
     && python -c "import openpyxl, xlrd; from services.shipping_lines import upload_parsers; print('spreadsheet ingest deps OK', openpyxl.__version__, xlrd.__version__)"
 

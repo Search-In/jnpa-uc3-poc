@@ -1055,6 +1055,30 @@ export const api = {
   },
   airQualityHealth: () => http<import("./types").AirQualityHealth>("/api/air-quality/health"),
 
+  // --- Logistics (ULIP, LIVE→CACHED→DATABASE→FALLBACK) ---
+  // The endpoints degrade instead of failing: read `status` / `source` /
+  // `decision_path` for provenance. The FALLBACK rung is explicitly empty
+  // (data_available: false) — the surface never fabricates shipment data.
+  // The browser only ever talks to the gateway — never to the ULIP platform.
+  logisticsCurrent: () => http<import("./types").LogisticsCurrent>("/api/logistics/current"),
+  logisticsTracking: (refId: string) =>
+    http<import("./types").LogisticsTracking>(
+      `/api/logistics/tracking/${encodeURIComponent(refId)}`,
+    ),
+  logisticsEvents: (params?: {
+    ref_id?: string;
+    event_type?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<import("./types").LogisticsEventsPage>(
+      `/api/logistics/events${q.toString() ? `?${q}` : ""}`,
+    );
+  },
+  logisticsHealth: () => http<import("./types").LogisticsHealth>("/api/logistics/health"),
+
   // --- Bhuvan WMS (ISRO/NRSC geospatial layer, control-plane only) ---
   // The gateway never proxies imagery: /layers returns the WMS endpoint +
   // named layers (validated server-side via GetCapabilities) and the ArcGIS

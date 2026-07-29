@@ -90,6 +90,7 @@ from .routers import (
     document_ocr,
     double_trip,
     ldb,
+    logistics,
     nvr,
     pdp,
     performance,
@@ -311,6 +312,15 @@ async def _lifespan(app: FastAPI):
         await air_quality_ext.ensure_air_quality_schema(cfg.postgres_dsn or None)
     except Exception as exc:  # noqa: BLE001
         log.warning("air_quality_schema_boot_failed", error=str(exc))
+
+    # Logistics module (ULIP): the core.logistics_event / logistics_tracking /
+    # ulip_api_audit tables. Idempotent, additive — mirrors v3 migration 0109 so
+    # a dev DB that never ran it still gets the objects. Touches no existing table.
+    try:
+        from . import logistics_ext
+        await logistics_ext.ensure_logistics_schema(cfg.postgres_dsn or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("logistics_schema_boot_failed", error=str(exc))
 
     # Vehicle Master (fleet registry): ensure the table, then migrate the truck-sim
     # fleet into it (idempotent, never clobbering an operator edit) so no existing
@@ -553,6 +563,7 @@ app.include_router(rms_tas.router)           # RMS-TAS persisted appointment sur
 app.include_router(weather.router)           # Open-Meteo weather + marine (LIVE→CACHED→SYNTHETIC)
 app.include_router(air_quality.router)       # OpenAQ air quality (LIVE→CACHED→DATABASE→SYNTHETIC)
 app.include_router(bhuvan.router)            # Bhuvan WMS geospatial layer (ISRO/NRSC, control-plane only)
+app.include_router(logistics.router)         # ULIP logistics intelligence (LIVE→CACHED→DATABASE→FALLBACK)
 app.include_router(double_trip.router)       # TT double-trip workflow
 app.include_router(ws.router)
 app.include_router(checkin.router)

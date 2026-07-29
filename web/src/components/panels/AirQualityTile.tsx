@@ -58,10 +58,7 @@ export function AirQualityTile() {
       subtitle={t("panels.airQuality.subtitle", "OpenAQ · JNPA port")}
       headerRight={
         d ? (
-          <StatusChip
-            label={`${d.status} • ${d.source}`}
-            tone={airQualityStatusTone(d.status)}
-          />
+          <StatusChip label={`${d.status} • ${d.source}`} tone={airQualityStatusTone(d.status)} />
         ) : undefined
       }
       bodyClassName="space-y-3"

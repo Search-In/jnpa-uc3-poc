@@ -138,6 +138,7 @@ file documents where to obtain each key:
 | `HERE_API_KEY`          | https://platform.here.com/                        |
 | `TOMTOM_API_KEY`        | https://developer.tomtom.com/                     |
 | `OPENWEATHER_API_KEY`   | https://openweathermap.org/api                    |
+| `WORLDTIDES_API_KEY`    | https://www.worldtides.info/developer             |
 | `SUREPASS_API_TOKEN`    | https://surepass.io/ (Vahan / FASTag / RC)        |
 | `ULIP_API_KEY`          | https://www.ulip.dpiit.gov.in/                    |
 | `BHUVAN_API_KEY`        | https://bhuvan.nrsc.gov.in/                        |

@@ -294,7 +294,8 @@ def test_service_combined_live(fake_cache):
 
     assert out["status"] == "LIVE"
     assert out["source"] == SOURCE_COMBINED == "OPEN_METEO+OPENWEATHER"
-    assert out["sources"] == {"weather": "LIVE", "marine": "LIVE", "openweather": "LIVE"}
+    assert out["sources"] == {"weather": "LIVE", "marine": "LIVE",
+                              "openweather": "LIVE", "tide": "OPEN_METEO_MARINE"}
     # Open-Meteo blocks untouched by the enrichment.
     assert out["weather"]["temperature"] == 29.8
     assert out["marine"]["wave_height"] == 1.2
@@ -391,7 +392,7 @@ def test_service_db_fallback_replays_openweather(fake_cache):
     out = _run(svc.current(18.9489, 72.9492))
     assert out["status"] == "DEGRADED"
     assert out["sources"] == {"weather": "CACHED", "marine": "CACHED",
-                              "openweather": "CACHED"}
+                              "openweather": "CACHED", "tide": "ANALYTIC"}
     assert out["openweather"]["humidity"] == 64
 
 

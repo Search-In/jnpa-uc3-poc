@@ -44,6 +44,12 @@ from jnpa_shared.logging import get_logger
 
 from integrations.openmeteo import OpenMeteoClient, OpenMeteoError
 from integrations.openweather import OpenWeatherClient, OpenWeatherError
+from integrations.worldtides import (
+    TIDE_FALLING,
+    TIDE_RISING,
+    WorldTidesClient,
+    WorldTidesError,
+)
 
 from .repository import WeatherRepository
 
@@ -75,12 +81,69 @@ STATUS_OFFLINE = "OFFLINE"
 # temperature validation (openweather.temperature_consistent = False).
 TEMP_VALIDATION_TOLERANCE_C = 3.0
 
+# ---------------------------------------------------------------- tide block
+# Rung labels for the ADDITIVE ``tide`` block (WorldTides is key-gated exactly
+# like OpenWeather). The block itself is always served; when the key is
+# absent it comes from the keyless rungs and is EXCLUDED from status/source
+# aggregation so the pre-existing contract is unchanged:
+#
+#     WORLDTIDES LIVE -> OPEN_METEO_MARINE (live sea level, no extremes)
+#                     -> CACHED (Redis, then core.weather_reading payload)
+#                     -> ANALYTIC (deterministic M2 model, clearly tagged)
+TIDE_RUNG_LIVE = "LIVE"
+TIDE_RUNG_MARINE = "OPEN_METEO_MARINE"
+TIDE_RUNG_CACHED = "CACHED"
+TIDE_RUNG_ANALYTIC = "ANALYTIC"
+# How each tide rung ranks in the existing status aggregation (only when the
+# WorldTides provider is configured — see openweather's DISABLED precedent).
+_TIDE_RANK_PATH = {TIDE_RUNG_LIVE: PATH_LIVE, TIDE_RUNG_MARINE: PATH_CACHED,
+                   TIDE_RUNG_CACHED: PATH_CACHED, TIDE_RUNG_ANALYTIC: PATH_SYNTHETIC}
+_TIDE_SOURCE = {TIDE_RUNG_LIVE: "WORLDTIDES", TIDE_RUNG_MARINE: "OPEN_METEO_MARINE",
+                TIDE_RUNG_CACHED: "WORLDTIDES_CACHE", TIDE_RUNG_ANALYTIC: "ANALYTIC"}
+
+# Deterministic analytic tide floor — the semidiurnal (M2) constituent for the
+# Mumbai/JNPA approaches, MSL-relative so it is directly comparable with both
+# WorldTides (datum=MSL) and Open-Meteo's sea_level_height_msl. Amplitude per
+# the WS3 integration plan's analytic tide curve. Clearly tagged synthetic —
+# a model, never presented as an observation.
+M2_PERIOD_S = 12.4206 * 3600.0
+TIDE_ANALYTIC_AMPLITUDE_M = 1.7
+
+
+def analytic_tide(now_epoch: Optional[float] = None) -> Dict[str, Any]:
+    """The last-ditch tide rung: a pure M2 sine, deterministic in time."""
+    import math
+
+    now = now_epoch if now_epoch is not None else datetime.now(tz=timezone.utc).timestamp()
+    phase = (now % M2_PERIOD_S) / M2_PERIOD_S          # 0..1 through one cycle
+    height = TIDE_ANALYTIC_AMPLITUDE_M * math.sin(2 * math.pi * phase)
+    rising = math.cos(2 * math.pi * phase) > 0
+    # Peaks sit at phase 0.25 (high) and 0.75 (low) of the sine cycle.
+    to_high_s = ((0.25 - phase) % 1.0) * M2_PERIOD_S
+    to_low_s = ((0.75 - phase) % 1.0) * M2_PERIOD_S
+
+    def _iso_in(seconds: float) -> str:
+        return datetime.fromtimestamp(now + seconds, tz=timezone.utc).isoformat()
+
+    return {
+        "tide_height": round(height, 3),
+        "next_high_tide": {"time": _iso_in(to_high_s),
+                           "height": TIDE_ANALYTIC_AMPLITUDE_M},
+        "next_low_tide": {"time": _iso_in(to_low_s),
+                          "height": -TIDE_ANALYTIC_AMPLITUDE_M},
+        "tide_state": TIDE_RISING if rising else TIDE_FALLING,
+        "station": None,
+        "datum": "MSL",
+        "observed_at": None,
+        "synthetic": True,
+    }
+
 # Default units for the normalised blocks (documentation for clients).
 UNITS: Dict[str, str] = {
     "temperature": "°C", "wind_speed": "km/h", "wind_direction": "°",
     "wind_gusts": "km/h", "visibility": "m", "precipitation": "mm",
     "wave_height": "m", "wave_period": "s", "swell_wave_height": "m",
-    "sea_level_height": "m",
+    "sea_level_height": "m", "tide_height": "m",
     # openweather block
     "humidity": "%", "clouds": "%", "rain": "mm", "pressure": "hPa",
     "feels_like": "°C", "temperature_delta": "°C",
@@ -189,11 +252,13 @@ class WeatherService:
         *,
         client: Optional[OpenMeteoClient] = None,
         openweather_client: Optional[OpenWeatherClient] = None,
+        worldtides_client: Optional[WorldTidesClient] = None,
         repository: Optional[WeatherRepository] = None,
         cache_ttl_s: int = DEFAULT_CACHE_TTL_S,
     ) -> None:
         self._client = client or OpenMeteoClient()
         self._ow_client = openweather_client or OpenWeatherClient()
+        self._wt_client = worldtides_client or WorldTidesClient()
         self._repo = repository or WeatherRepository(dsn)
         self.cache_ttl_s = cache_ttl_s
 
@@ -202,6 +267,11 @@ class WeatherService:
         """True when the OpenWeather provider participates (API key present)."""
         return self._ow_client.configured
 
+    @property
+    def worldtides_enabled(self) -> bool:
+        """True when the WorldTides provider participates (API key present)."""
+        return self._wt_client.configured
+
     # ---------------------------------------------------------------- current
     async def current(self, latitude: float, longitude: float,
                       *, forecast_hours: int = 0) -> Dict[str, Any]:
@@ -209,10 +279,13 @@ class WeatherService:
         it degrades through CACHED to SYNTHETIC and says so in the metadata."""
         key = cache_key(latitude, longitude)
         ow_enabled = self.openweather_enabled
+        wt_enabled = self.worldtides_enabled
 
         weather, marine, openweather, forecast = None, None, None, []
         weather_path = marine_path = PATH_LIVE
         openweather_path = PATH_LIVE if ow_enabled else PATH_DISABLED
+        tide: Optional[Dict[str, Any]] = None
+        tide_rung = TIDE_RUNG_LIVE
 
         tasks = [
             self._client.fetch_weather(latitude, longitude,
@@ -221,9 +294,13 @@ class WeatherService:
         ]
         if ow_enabled:
             tasks.append(self._ow_client.fetch_current(latitude, longitude))
+        wt_index = len(tasks)
+        if wt_enabled:
+            tasks.append(self._wt_client.fetch_tides(latitude, longitude))
         results = await asyncio.gather(*tasks, return_exceptions=True)
         wres, mres = results[0], results[1]
         owres = results[2] if ow_enabled else None
+        wtres = results[wt_index] if wt_enabled else None
 
         if isinstance(wres, OpenMeteoError):
             log.warning("weather_live_failed", lat=latitude, lon=longitude, error=str(wres))
@@ -246,12 +323,37 @@ class WeatherService:
                 raise owres
             else:
                 openweather = owres.normalize()
+        if wt_enabled:
+            if isinstance(wtres, WorldTidesError):
+                log.warning("worldtides_live_failed", lat=latitude, lon=longitude,
+                            error=str(wtres))
+            elif isinstance(wtres, BaseException):
+                raise wtres
+            else:
+                tide = wtres.normalize()
+                tide["tide_source"] = _TIDE_SOURCE[TIDE_RUNG_LIVE]
+                tide["fetched_at"] = _now_iso()
+
+        # -------------------------- tide rung 2: live Open-Meteo marine sea level
+        # No extremes/state available from a single sample — those degrade to
+        # null rather than being fabricated. Only a LIVE marine block qualifies
+        # (a synthetic one would launder fake data into the tide block).
+        if tide is None and marine is not None and marine.get("sea_level_height") is not None:
+            tide = {
+                "tide_height": marine["sea_level_height"],
+                "next_high_tide": None, "next_low_tide": None, "tide_state": None,
+                "station": None, "datum": "MSL",
+                "observed_at": marine.get("observed_at"),
+                "tide_source": _TIDE_SOURCE[TIDE_RUNG_MARINE],
+                "fetched_at": _now_iso(), "synthetic": False,
+            }
+            tide_rung = TIDE_RUNG_MARINE
 
         # ---------------------------------------------- CACHED rung (Redis → DB)
         cached: Optional[Dict[str, Any]] = None
         cache_age_s: Optional[float] = None
         ow_missing = ow_enabled and openweather is None
-        if weather is None or marine is None or ow_missing:
+        if weather is None or marine is None or ow_missing or tide is None:
             cached = await _cache_get(key)
             if cached is None:
                 cached = await self._db_cache(latitude, longitude)
@@ -263,6 +365,10 @@ class WeatherService:
                 if ow_missing and cached["value"].get("openweather"):
                     openweather = cached["value"]["openweather"]
                     openweather_path = PATH_CACHED
+                if tide is None and cached["value"].get("tide"):
+                    tide = cached["value"]["tide"]
+                    tide_rung = TIDE_RUNG_CACHED
+                    tide["tide_source"] = _TIDE_SOURCE[TIDE_RUNG_CACHED]
                 cache_age_s = cached.get("age_s")
 
         # ---------------------------------------------- SYNTHETIC rung (floor)
@@ -272,6 +378,10 @@ class WeatherService:
             marine, marine_path = synthetic_marine(), PATH_SYNTHETIC
         if ow_enabled and openweather is None:
             openweather, openweather_path = synthetic_openweather(), PATH_SYNTHETIC
+        if tide is None:
+            tide, tide_rung = analytic_tide(), TIDE_RUNG_ANALYTIC
+            tide["tide_source"] = _TIDE_SOURCE[TIDE_RUNG_ANALYTIC]
+            tide["fetched_at"] = _now_iso()
 
         # Cross-provider temperature validation (annotated on the OW block).
         _validate_temperature(openweather, weather)
@@ -283,14 +393,24 @@ class WeatherService:
             value: Dict[str, Any] = {"weather": weather, "marine": marine}
             if openweather_path == PATH_LIVE and openweather is not None:
                 value["openweather"] = openweather
+            # The tide block is written back only when WorldTides itself served
+            # it — a derived / analytic block is never cached as if it were live.
+            if tide_rung == TIDE_RUNG_LIVE:
+                value["tide"] = tide
             await _cache_put(key, value, self.cache_ttl_s)
             await self._persist(
                 latitude, longitude, weather, marine,
-                openweather=value.get("openweather"))
+                openweather=value.get("openweather"),
+                tide=value.get("tide"))
 
         active_paths = [weather_path, marine_path]
         if openweather_path != PATH_DISABLED:
             active_paths.append(openweather_path)
+        # WorldTides participates in status aggregation only when configured —
+        # without a key the (marine/analytic-served) tide block must not turn a
+        # fully-LIVE answer DEGRADED (openweather's DISABLED precedent).
+        if wt_enabled:
+            active_paths.append(_TIDE_RANK_PATH[tide_rung])
         worst = max(active_paths, key=_PATH_RANK.__getitem__)
         if worst == PATH_LIVE:
             status = STATUS_LIVE
@@ -312,8 +432,9 @@ class WeatherService:
             "weather": weather,
             "marine": marine,
             "openweather": openweather,
+            "tide": tide,
             "sources": {"weather": weather_path, "marine": marine_path,
-                        "openweather": openweather_path},
+                        "openweather": openweather_path, "tide": tide_rung},
             "cache_age_s": cache_age_s,
             "units": UNITS,
             "timestamp": _now_iso(),
@@ -360,18 +481,24 @@ class WeatherService:
         created_at = row.get("created_at")
         cached_at = created_at.isoformat() if isinstance(created_at, datetime) else None
         value: Dict[str, Any] = {"weather": weather, "marine": marine}
-        # openweather is only present in payloads persisted while OW was LIVE.
+        # openweather / tide are only present in payloads persisted while that
+        # block was LIVE — the DATABASE rung never resurrects derived data.
         if payload.get("openweather"):
             value["openweather"] = payload["openweather"]
+        if payload.get("tide"):
+            value["tide"] = payload["tide"]
         return {"value": value, "cached_at": cached_at, "age_s": _age_seconds(cached_at)}
 
     async def _persist(self, latitude: float, longitude: float,
                        weather: Dict[str, Any], marine: Dict[str, Any],
-                       openweather: Optional[Dict[str, Any]] = None) -> None:
+                       openweather: Optional[Dict[str, Any]] = None,
+                       tide: Optional[Dict[str, Any]] = None) -> None:
         """Append the LIVE reading to core.weather_reading (best-effort)."""
         payload: Dict[str, Any] = {"weather": weather, "marine": marine}
         if openweather is not None:
             payload["openweather"] = openweather
+        if tide is not None:
+            payload["tide"] = tide
         try:
             await self._repo.insert_reading(
                 latitude=latitude, longitude=longitude,
@@ -384,6 +511,8 @@ class WeatherService:
                 wave_period=marine.get("wave_period"),
                 humidity=(openweather or {}).get("humidity"),
                 clouds=(openweather or {}).get("clouds"),
+                tide_height=(tide or {}).get("tide_height"),
+                tide_state=(tide or {}).get("tide_state"),
                 source=SOURCE_COMBINED if openweather is not None else "OPEN_METEO",
                 payload=payload,
             )
@@ -397,7 +526,9 @@ def _as_float(value: Any) -> Optional[float]:
 
 
 __all__ = ["WeatherService", "cache_key", "synthetic_weather", "synthetic_marine",
-           "synthetic_openweather",
+           "synthetic_openweather", "analytic_tide",
            "STATUS_LIVE", "STATUS_DEGRADED", "STATUS_OFFLINE",
            "PATH_LIVE", "PATH_CACHED", "PATH_SYNTHETIC", "PATH_DISABLED",
+           "TIDE_RUNG_LIVE", "TIDE_RUNG_MARINE", "TIDE_RUNG_CACHED",
+           "TIDE_RUNG_ANALYTIC",
            "SOURCE_COMBINED", "TEMP_VALIDATION_TOLERANCE_C", "UNITS"]

@@ -1046,3 +1046,97 @@ export interface AirQualityHealth {
   cache_ttl_s: number;
   default_location: { latitude: number; longitude: number };
 }
+
+// --- Logistics (ULIP, /api/logistics/*) ---------------------------------------
+// Mirrors services/logistics/service.py's response contract. `status` /
+// `source` / `decision_path` carry the LIVE → CACHED → DATABASE → FALLBACK
+// provenance; the endpoints never 5xx for a ULIP outage — they degrade and say
+// so here. The FALLBACK rung is explicitly EMPTY (data_available: false):
+// the logistics surface never fabricates shipment data.
+export type LogisticsTrackingStatus = "IN_TRANSIT" | "IDLE" | "UNKNOWN";
+export interface LogisticsEvent {
+  ref_type: "VEHICLE" | "CONTAINER";
+  ref_id: string;
+  event_type: string; // "TOLL_CROSSING" | "CONTAINER_MOVEMENT"
+  event_ts: string | null;
+  location: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  source: string; // "ULIP"
+  source_api: string | null; // "FASTAG" | "LDB"
+}
+export interface LogisticsTrackedRef {
+  ref_type: "VEHICLE" | "CONTAINER";
+  ref_id: string;
+  status: LogisticsTrackingStatus;
+  last_event: string | null;
+  last_location: string | null;
+  last_event_ts: string | null;
+  event_count: number;
+  updated_at: string | null;
+}
+export interface LogisticsSummaryBlock {
+  window_h: number;
+  event_count: number;
+  vehicle_count: number;
+  container_count: number;
+  events_by_type: Record<string, number>;
+  last_event_ts: string | null;
+  latest_events: LogisticsEvent[];
+  tracked: LogisticsTrackedRef[];
+  data_available: boolean;
+}
+export interface LogisticsCurrent {
+  status: "LIVE" | "DEGRADED" | "OFFLINE";
+  source: "ULIP" | "ULIP_CACHE" | "ULIP_DB" | "NONE";
+  decision_path: "LIVE" | "CACHED" | "DATABASE" | "FALLBACK";
+  logistics: LogisticsSummaryBlock;
+  ulip: {
+    configured: boolean;
+    last_call_at: string | null;
+    last_call_ok: boolean | null;
+    fresh: boolean;
+  };
+  cache_age_s: number | null;
+  timestamp: string;
+}
+export interface LogisticsTrackingBlock {
+  ref_id: string;
+  ref_type: "VEHICLE" | "CONTAINER";
+  tracking_status: LogisticsTrackingStatus;
+  last_event: string | null;
+  last_location: string | null;
+  last_event_ts: string | null;
+  event_count: number;
+  events: LogisticsEvent[];
+  data_available: boolean;
+}
+export interface LogisticsTracking {
+  status: "LIVE" | "DEGRADED" | "OFFLINE";
+  source: "ULIP" | "ULIP_CACHE" | "ULIP_DB" | "NONE";
+  decision_path: "LIVE" | "CACHED" | "DATABASE" | "FALLBACK";
+  tracking: LogisticsTrackingBlock;
+  cache_age_s: number | null;
+  timestamp: string;
+}
+export interface LogisticsEventsPage {
+  events: LogisticsEvent[];
+  count: number;
+  total: number;
+  limit: number;
+  offset: number;
+}
+export interface LogisticsHealth {
+  system: string; // "LOGISTICS"
+  provider: string; // "ULIP"
+  configured: boolean;
+  auth_mode: "static" | "login" | "none";
+  api_url: string;
+  apis: { vehicle: string; container: string };
+  timeout_s: number;
+  retries: number;
+  cache_ttl_s: number;
+  last_call_at: string | null;
+  last_call_ok: boolean | null;
+  fresh: boolean;
+}

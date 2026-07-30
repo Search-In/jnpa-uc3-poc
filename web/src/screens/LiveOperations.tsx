@@ -18,6 +18,7 @@ import { CarbonTile } from "@/components/panels/CarbonTile";
 import { WeatherTile } from "@/components/panels/WeatherTile";
 import { TrafficTile } from "@/components/panels/TrafficTile";
 import { AirQualityTile } from "@/components/panels/AirQualityTile";
+import { LogisticsTile } from "@/components/panels/LogisticsTile";
 import { EmptyContainerBoard } from "@/components/panels/EmptyContainerBoard";
 import { TasWidget } from "@/components/panels/TasWidget";
 import { ParkingBoard } from "@/components/panels/ParkingBoard";
@@ -443,6 +444,7 @@ export default function LiveOperations() {
           <WeatherTile />
           <TrafficTile />
           <AirQualityTile />
+          <LogisticsTile />
           <CarbonTile />
           <ParkingBoard />
           <EmptyContainerBoard />

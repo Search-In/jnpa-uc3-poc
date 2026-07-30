@@ -121,6 +121,21 @@ class GatewayConfig:
     bhuvan_layer: str = ""
     bhuvan_enabled: bool = True
 
+    # --- ULIP Logistics Intelligence (/api/logistics/*) ---
+    # BACKEND-ONLY credentials: read from the environment, sent only to the
+    # ULIP platform (DPIIT) — never exposed to the frontend (no VITE_ var, no
+    # browser call). Auth: either ULIP_CLIENT_ID + ULIP_CLIENT_SECRET (POST
+    # /user/login token flow) or the pre-issued static ULIP_API_KEY above
+    # (shared with the trucking-app relay). No credential -> LIVE rung
+    # disabled and /api/logistics/* degrades through its CACHED/DATABASE/
+    # FALLBACK rungs. URL empty -> the client's official default
+    # (www.ulip.dpiit.gov.in/ulip/v1.0.0); set to point at staging or a
+    # proxy. NO hardcoded vendor URL in business code.
+    ulip_api_url: str = ""
+    ulip_client_id: str = ""
+    ulip_client_secret: str = ""
+    cache_ttl_ulip_s: int = 300              # ULIP CACHED fallback rung
+
     # --- Provisional vehicle flow ---
     provisional_window_h: int = 24           # 24-hour cure window (spec)
 
@@ -212,6 +227,10 @@ class GatewayConfig:
             bhuvan_wms_url=os.environ.get("BHUVAN_WMS_URL", "").strip(),
             bhuvan_layer=os.environ.get("BHUVAN_LAYER", "").strip(),
             bhuvan_enabled=_as_bool(os.environ.get("BHUVAN_ENABLED"), True),
+            ulip_api_url=os.environ.get("ULIP_API_URL", "").strip(),
+            ulip_client_id=os.environ.get("ULIP_CLIENT_ID", "").strip(),
+            ulip_client_secret=os.environ.get("ULIP_CLIENT_SECRET", "").strip(),
+            cache_ttl_ulip_s=_as_int(os.environ.get("GATEWAY_CACHE_TTL_ULIP_S"), 300),
             provisional_window_h=_as_int(os.environ.get("GATEWAY_PROVISIONAL_WINDOW_H"), 24),
             require_driver_profile=_as_bool(os.environ.get("REQUIRE_DRIVER_PROFILE"), False),
             gate_boom_delay_s=_as_int(os.environ.get("GATEWAY_GATE_BOOM_DELAY_S"), 5),
@@ -237,6 +256,14 @@ class GatewayConfig:
         """True if a TomTom API key is configured (enables the LIVE rung on
         /api/traffic/current)."""
         return bool(self.tomtom_api_key.strip())
+
+    @property
+    def ulip_logistics_enabled(self) -> bool:
+        """True if a ULIP credential is configured (enables the LIVE rung on
+        /api/logistics/*): either the login pair or a static key."""
+        return bool(self.ulip_api_key.strip()
+                    or (self.ulip_client_id.strip()
+                        and self.ulip_client_secret.strip()))
 
     @property
     def surepass_enabled(self) -> bool:

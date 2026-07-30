@@ -92,6 +92,11 @@ _POLICY: tuple[tuple[str, frozenset[str]], ...] = (
     # Berthing Reports (module 7) — per-terminal vessel-call surface + Data-Upload write.
     # Same control-room + customs audience as the other terminal/cargo data modules.
     ("/api/berthing", CONTROL_ROOM | {Role.CUSTOMS.value}),
+    # UC-I Marine (vessel-call spine, read-only) — the canonical vessel-visit model for
+    # Vessel Traffic Management. Same control-room + customs audience as the other
+    # terminal/vessel data modules. One prefix covers the whole /api/marine/* family as
+    # the remaining UC-I modules (vessels/pilotage/port-craft/geo) land.
+    ("/api/marine", CONTROL_ROOM | {Role.CUSTOMS.value}),
     # CFS-ECY CODECO gate movements (module 13) — off-dock container logistics for the
     # control room + customs, covering both the read surface and the Data-Upload write.
     ("/api/cfs-ecy", CONTROL_ROOM | {Role.CUSTOMS.value}),

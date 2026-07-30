@@ -12,9 +12,9 @@ Called once from gateway/main.py::_lifespan (best-effort; a DB blip only logs)
 and, like the other exts, gated on JNPA_RUNTIME_DDL — under schema-v3 the DDL
 is owned by the infra/postgres/v3 migrations, never runtime.
 
-The _DDL list below MUST stay in lock-step with migrations 0105 + 0106; the
-tests tests/test_weather.py and tests/test_openweather.py assert both define
-the same table + columns.
+The _DDL list below MUST stay in lock-step with migrations 0105 + 0106 + 0110;
+the tests tests/test_weather.py, tests/test_openweather.py and
+tests/test_worldtides.py assert both define the same table + columns.
 """
 from __future__ import annotations
 
@@ -51,6 +51,9 @@ _DDL: list[str] = [
     # Migration 0106 — OpenWeatherMap enrichment (additive, idempotent).
     "ALTER TABLE core.weather_reading ADD COLUMN IF NOT EXISTS humidity numeric",
     "ALTER TABLE core.weather_reading ADD COLUMN IF NOT EXISTS clouds numeric",
+    # Mirrors migration 0110 (WorldTides tide block).
+    "ALTER TABLE core.weather_reading ADD COLUMN IF NOT EXISTS tide_height numeric",
+    "ALTER TABLE core.weather_reading ADD COLUMN IF NOT EXISTS tide_state text",
 ]
 
 

@@ -110,12 +110,16 @@ async def list_readings(
 
 
 # ------------------------------------------------------------------- health
-@router.get("/health", summary="Weather integration posture (Open-Meteo + OpenWeatherMap)")
+@router.get("/health",
+            summary="Weather integration posture (Open-Meteo + OpenWeatherMap "
+                    "+ WorldTides)")
 async def weather_health(svc: WeatherService = Depends(get_service)) -> Dict[str, Any]:
     s = get_settings()
     client = svc._client  # noqa: SLF001 - posture surface for the health panel
     ow = svc._ow_client  # noqa: SLF001 - posture only; the key itself is never returned
-    providers = ["OPEN_METEO"] + (["OPENWEATHER"] if ow.configured else [])
+    wt = svc._wt_client  # noqa: SLF001 - posture only; the key itself is never returned
+    providers = (["OPEN_METEO"] + (["OPENWEATHER"] if ow.configured else [])
+                 + (["WORLDTIDES"] if wt.configured else []))
     return {
         "system": "WEATHER",
         "provider": " + ".join(providers),
@@ -133,6 +137,16 @@ async def weather_health(svc: WeatherService = Depends(get_service)) -> Dict[str
             "url": ow.url,
             "timeout_s": ow.timeout_s,
             "retries": ow.retries,
+        },
+        # WorldTides posture — key-gated tide block; the key is NEVER echoed.
+        # Unconfigured, the tide block still serves from the keyless rungs
+        # (Open-Meteo marine sea level → cached → analytic model).
+        "worldtides": {
+            "configured": wt.configured,
+            "api_key_required": True,
+            "url": wt.base_url,
+            "timeout_s": wt.timeout_s,
+            "retries": wt.retries,
         },
         "cache_ttl_s": svc.cache_ttl_s,
         "default_location": {"latitude": s.port_lat, "longitude": s.port_lon},

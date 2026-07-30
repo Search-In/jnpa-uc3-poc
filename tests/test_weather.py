@@ -296,7 +296,7 @@ def test_service_partial_failure_is_degraded(fake_cache):
     out = _run(_service(_StubClient(marine_ok=False)).current(18.9489, 72.9492))
     assert out["status"] == "DEGRADED"
     assert out["sources"] == {"weather": "LIVE", "marine": "SYNTHETIC",
-                              "openweather": "DISABLED"}
+                              "openweather": "DISABLED", "tide": "ANALYTIC"}
     assert out["weather"]["temperature"] == 30.1
     assert out["marine"]["synthetic"] is True
 

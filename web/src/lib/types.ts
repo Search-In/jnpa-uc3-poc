@@ -1091,7 +1091,12 @@ export interface LogisticsCurrent {
   source: "ULIP" | "ULIP_CACHE" | "ULIP_DB" | "NONE";
   decision_path: "LIVE" | "CACHED" | "DATABASE" | "FALLBACK";
   logistics: LogisticsSummaryBlock;
-  ulip: { configured: boolean; last_call_at: string | null; last_call_ok: boolean | null; fresh: boolean };
+  ulip: {
+    configured: boolean;
+    last_call_at: string | null;
+    last_call_ok: boolean | null;
+    fresh: boolean;
+  };
   cache_age_s: number | null;
   timestamp: string;
 }

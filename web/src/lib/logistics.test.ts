@@ -113,15 +113,11 @@ describe("eventTypeLabel", () => {
 
 describe("eventCaption", () => {
   it("joins label, location and reference", () => {
-    expect(eventCaption(event())).toBe(
-      "Toll crossing · Karal Phata Toll Plaza (MH46AB1234)",
-    );
+    expect(eventCaption(event())).toBe("Toll crossing · Karal Phata Toll Plaza (MH46AB1234)");
   });
 
   it("omits a missing location", () => {
-    expect(eventCaption(event({ location: null }))).toBe(
-      "Toll crossing (MH46AB1234)",
-    );
+    expect(eventCaption(event({ location: null }))).toBe("Toll crossing (MH46AB1234)");
   });
 
   it("handles container movements", () => {

@@ -3,11 +3,7 @@
 // logistics.test.ts), the same split as lib/air_quality.ts. All data comes
 // from GET /api/logistics/* — the browser never talks to the ULIP platform.
 import type { Tone } from "@/components/ui/dtccc";
-import type {
-  LogisticsCurrent,
-  LogisticsEvent,
-  LogisticsTrackingStatus,
-} from "./types";
+import type { LogisticsCurrent, LogisticsEvent, LogisticsTrackingStatus } from "./types";
 
 /** Tone for the LIVE / DEGRADED / OFFLINE status chip. */
 export function logisticsStatusTone(status?: LogisticsCurrent["status"]): Tone {

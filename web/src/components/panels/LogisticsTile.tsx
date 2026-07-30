@@ -16,12 +16,7 @@ import { DecisionPathBadge } from "@/components/DecisionPathBadge";
 import { Spinner, ErrorState } from "@/components/ui/misc";
 import { StatusChip } from "@/components/ui/dtccc";
 import { fmtTimeIST } from "@/lib/utils";
-import {
-  eventCaption,
-  fmtCount,
-  logisticsSourceTone,
-  logisticsStatusTone,
-} from "@/lib/logistics";
+import { eventCaption, fmtCount, logisticsSourceTone, logisticsStatusTone } from "@/lib/logistics";
 
 // ULIP source systems batch their feeds (toll crossings arrive minutes after
 // the fact) and the backend caches the summary — polling every 2 min keeps

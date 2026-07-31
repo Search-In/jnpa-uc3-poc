@@ -440,8 +440,13 @@ export default function CommandCenter() {
               crit: false,
               to: "/geofencing",
             });
+          // Only raise the TRT banner from MEASURED data. /api/trt/summary
+          // returns a hardcoded baseline (135 min) with source:"baseline" when
+          // no TRT records exist — surfacing that as an operator alert would
+          // report a placeholder as a live condition.
           const trt = (trtQ.data as any)?.avg_trt_min ?? 0;
-          if (trt >= 120)
+          const trtMeasured = (trtQ.data as any)?.source === "live";
+          if (trtMeasured && trt >= 120)
             items.push({ label: `TRT ${Math.round(trt)} min`, crit: false, to: "/live?tab=trt" });
           if (items.length === 0)
             return (

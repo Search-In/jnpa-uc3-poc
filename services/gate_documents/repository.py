@@ -96,8 +96,12 @@ def _insert_sql(doc_type: str) -> str:
     cols = _COLS[doc_type]
     collist = ", ".join(cols) + ", import_file_id"
     vals = ", ".join(f":{c}" for c in cols) + ", :import_file_id"
+    # The row-hash unique index is PARTIAL (WHERE row_sha256 IS NOT NULL);
+    # Postgres can only infer a partial index when the ON CONFLICT clause
+    # repeats its predicate — without it every insert raises
+    # InvalidColumnReferenceError.
     return (f"INSERT INTO {TABLES[doc_type]} ({collist}) VALUES ({vals}) "
-            "ON CONFLICT (row_sha256) DO NOTHING")
+            "ON CONFLICT (row_sha256) WHERE row_sha256 IS NOT NULL DO NOTHING")
 
 
 def _form13_params(rec: Mapping[str, Any], import_file_id: int) -> dict[str, Any]:
@@ -127,14 +131,23 @@ class GateDocumentRepository:
                       source_file: str, source_sha256: str, physical_format: str,
                       file_size: Optional[int] = None, uploaded_by: Optional[str] = None,
                       duplicate_count: int = 0, source: str = "UPLOAD") -> dict:
+        # Content-level dedup, but a PRIOR ATTEMPT THAT IMPORTED NOTHING must not
+        # poison the file forever: without this, one FAILED/PARTIAL upload makes
+        # every retry of the same bytes return SKIPPED_DUPLICATE and the file can
+        # never be loaded. Such a ledger row is reused (reset to PENDING) instead.
         existing = await self.find_file_by_sha(source_sha256)
+        retry_file_id: Optional[int] = None
         if existing is not None:
-            return {"file_id": existing["id"], "import_status": "SKIPPED_DUPLICATE",
-                    "record_count": existing["record_count"],
-                    "imported_count": existing["imported_count"],
-                    "error_count": existing["error_count"],
-                    "duplicate_count": existing["duplicate_count"], "duplicate": True,
-                    "row_errors": []}
+            if (existing.get("imported_count") or 0) > 0 or existing["import_status"] == "SUCCESS":
+                return {"file_id": existing["id"], "import_status": "SKIPPED_DUPLICATE",
+                        "record_count": existing["record_count"],
+                        "imported_count": existing["imported_count"],
+                        "error_count": existing["error_count"],
+                        "duplicate_count": existing["duplicate_count"], "duplicate": True,
+                        "row_errors": []}
+            retry_file_id = existing["id"]
+            log.info("gate_doc.retry_failed_upload",
+                     extra={"file_id": retry_file_id, "source_file": source_file})
 
         envelope = {
             "doc_type": doc_type, "physical_format": physical_format,
@@ -149,7 +162,17 @@ class GateDocumentRepository:
         row_errors: list[dict[str, Any]] = []
         try:
             async with get_engine(self._dsn).begin() as conn:
-                fid = (await conn.execute(text(_FILE_INSERT), envelope)).mappings().first()["id"]
+                if retry_file_id is not None:
+                    await conn.execute(text(
+                        "UPDATE core.gate_doc_import_file SET import_status='PENDING', "
+                        "record_count=:rc, error_count=0, error_detail=NULL, updated_at=now() "
+                        "WHERE id=:id"), {"rc": len(records), "id": retry_file_id})
+                    await conn.execute(text(
+                        "DELETE FROM core.gate_doc_import_error WHERE import_file_id=:id"),
+                        {"id": retry_file_id})
+                    fid = retry_file_id
+                else:
+                    fid = (await conn.execute(text(_FILE_INSERT), envelope)).mappings().first()["id"]
                 for rec in records:
                     if doc_type == "FORM13":
                         params = _form13_params(rec, fid)

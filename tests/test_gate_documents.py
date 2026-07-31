@@ -291,3 +291,35 @@ def test_boot_ddl_matches_migration_table_set():
     sql = Path("infra/postgres/v3/0112_gate_documents.sql").read_text()
     pat = re.compile(r"CREATE TABLE IF NOT EXISTS\s+(core\.\w+)", re.I)
     assert set(pat.findall(sql)) == set(pat.findall("\n".join(_DDL)))
+
+
+# ------------------------------------------------- production-drift regressions
+# These guard defects that unit tests with fake repositories CANNOT catch — each
+# was found only when the module first ran against the real RDS schema.
+def test_row_hash_conflict_clause_repeats_the_partial_index_predicate():
+    """`ON CONFLICT (row_sha256)` alone cannot infer a PARTIAL unique index.
+
+    uq_eir_row_sha / uq_pin_row_sha are `... WHERE row_sha256 IS NOT NULL`, so
+    Postgres raises InvalidColumnReferenceError unless the ON CONFLICT clause
+    repeats that predicate. Without this every gate-document row insert failed
+    in production while validation still reported the rows as importable."""
+    from services.gate_documents.repository import _insert_sql
+
+    for doc_type in ("EIR", "PIN"):
+        sql = _insert_sql(doc_type)
+        assert "ON CONFLICT (row_sha256) WHERE row_sha256 IS NOT NULL" in sql, doc_type
+
+
+def test_rms_selection_query_avoids_unapplied_0102_columns():
+    """The deployed RDS carries the BASE core.rms_scan_container shape (migration
+    0102's id / igm_no / iso_valid were never applied there), so the scanner
+    routing query must read igm_no from the parent report and order by columns
+    that exist in both schema variants."""
+    import inspect
+
+    from services.container_job.repository import ContainerJobRepository
+
+    sql = inspect.getsource(ContainerJobRepository.rms_selection_for)
+    assert "rc.igm_no" not in sql
+    assert "r.igm_no" in sql and "core.rms_scan_report" in sql
+    assert "rc.id" not in sql          # child table has no id column in production

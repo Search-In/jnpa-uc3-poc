@@ -196,6 +196,10 @@ async def list_rms_containers(
     offset: int = Query(0, ge=0),
     svc: CustomsService = Depends(get_service),
 ) -> Page:
+    if not str(igm_no).strip().isdigit():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail={"error": "invalid_igm_no", "igm_no": igm_no,
+                                    "detail": "igm_no must be numeric"})
     filters = {"igm_no": igm_no, "machine_type": machine_type,
                "scan_location": scan_location, "container_no": container_no}
     items = await svc.list_rms_containers(filters=filters, limit=limit, offset=offset)

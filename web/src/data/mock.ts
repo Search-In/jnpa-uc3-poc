@@ -453,7 +453,10 @@ function buildKpi(spec: KpiSpec): KpiResult {
         : (rand01(`${spec.key}-trend-${i}`) - 0.5) * (Math.abs(spec.baseline - spec.value) * 0.12);
     trend.push(round(i === 7 ? spec.value : eased + wob, 2));
   }
-  return buildKpiResult(spec, trend);
+  // Provenance: mock values are fabricated (and deliberately near-target), so
+  // they MUST carry a non-live source or KpiStrip's SourceBadge renders nothing
+  // and the operator cannot tell them from measured data.
+  return { ...buildKpiResult(spec, trend), source: "baseline" as const };
 }
 
 // --------------------------------------------------------------------------

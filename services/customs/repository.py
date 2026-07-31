@@ -259,18 +259,29 @@ class CustomsRepository:
         where, params = self._where(filters, ("igm_no",))
         return await self._count(f"SELECT count(*) FROM core.rms_scan_report{where}", params)
 
+    # The scan-list rows are keyed to their report by report_id; igm_no lives on
+    # the PARENT report. The deployed RDS carries the base child-table shape
+    # (report_id, sl_no, container_no, machine_type, scan_location, cfs_name,
+    # goods_desc) without migration 0102's extension columns (id / igm_no /
+    # iso_valid / created_at), so every query here goes through the join and
+    # selects only columns present in both schema variants.
+    _RMS_CONT_FROM = ("FROM core.rms_scan_container rc "
+                      "JOIN core.rms_scan_report r ON r.report_id = rc.report_id")
+
     @staticmethod
     def _rms_container_where(filters: Mapping[str, Any]) -> tuple[str, dict]:
-        clauses = ["igm_no = CAST(:igm_no AS bigint)"]
-        params: dict = {"igm_no": filters["igm_no"]}
+        # igm_no must be bound as a real int: asyncpg infers $1's type from the
+        # bigint column and rejects a str regardless of any SQL-level CAST.
+        clauses = ["r.igm_no = :igm_no"]
+        params: dict = {"igm_no": int(str(filters["igm_no"]).strip())}
         if filters.get("machine_type"):
-            clauses.append("upper(machine_type) = upper(:machine_type)")
+            clauses.append("upper(rc.machine_type) = upper(:machine_type)")
             params["machine_type"] = filters["machine_type"]
         if filters.get("scan_location"):
-            clauses.append("scan_location ILIKE :scan_location")
+            clauses.append("rc.scan_location ILIKE :scan_location")
             params["scan_location"] = f"%{filters['scan_location']}%"
         if filters.get("container_no"):
-            clauses.append("container_no = :container_no")
+            clauses.append("rc.container_no = :container_no")
             params["container_no"] = str(filters["container_no"]).strip().upper()
         return " WHERE " + " AND ".join(clauses), params
 
@@ -281,14 +292,16 @@ class CustomsRepository:
         where, params = self._rms_container_where(filters)
         params.update(limit=limit, offset=offset)
         return await self._rows(
-            "SELECT id, report_id, igm_no, sl_no, container_no, iso_valid, "
-            "machine_type AS scan_machine, scan_location, cfs_name, goods_desc, created_at "
-            f"FROM core.rms_scan_container{where} "
-            "ORDER BY sl_no NULLS LAST, id LIMIT :limit OFFSET :offset", params)
+            "SELECT rc.report_id, r.igm_no, rc.sl_no, rc.container_no, "
+            "rc.machine_type AS scan_machine, rc.scan_location, "
+            "(rc.machine_type || '-' || rc.scan_location) AS machine_code, "
+            "rc.cfs_name, rc.goods_desc "
+            f"{self._RMS_CONT_FROM}{where} "
+            "ORDER BY rc.sl_no NULLS LAST LIMIT :limit OFFSET :offset", params)
 
     async def count_rms_containers(self, *, filters: Mapping[str, Any]) -> int:
         where, params = self._rms_container_where(filters)
-        return await self._count(f"SELECT count(*) FROM core.rms_scan_container{where}", params)
+        return await self._count(f"SELECT count(*) {self._RMS_CONT_FROM}{where}", params)
 
     async def list_leo(self, *, filters: Mapping[str, Any], limit: int, offset: int) -> list[dict]:
         where, params = self._where(filters, ("sb_no",))

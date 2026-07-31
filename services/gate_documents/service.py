@@ -106,6 +106,11 @@ class GateDocumentService:
 
         file_id = result.get("file_id")
         status = result["import_status"]
+        # Persist DB-level per-row failures too. Without this the ledger showed
+        # error_count>0 with NO error rows, so a failed import gave the operator
+        # a count and no reason.
+        if file_id and result.get("row_errors"):
+            await self._repo.add_row_errors(file_id, result["row_errors"])
         if status == "SUCCESS" and res.invalid_count and file_id:
             await self._repo.add_row_errors(file_id, res.errors)
             await self._repo.mark_partial(file_id, error_count=res.invalid_count)

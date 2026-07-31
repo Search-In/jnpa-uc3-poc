@@ -14,6 +14,7 @@ import Fastag from "@/screens/Fastag";
 import GateCustoms from "@/screens/GateCustoms";
 import Intelligence from "@/screens/Intelligence";
 import Uc3Lifecycle from "@/screens/Uc3Lifecycle";
+import TruckOperations from "@/screens/TruckOperations";
 import ParkingManagement from "@/screens/ParkingManagement";
 import SystemHealth from "@/screens/SystemHealth";
 import WhatIfConsole from "@/screens/WhatIfConsole";
@@ -168,6 +169,14 @@ function DashboardShell({
             }
           />
           <Route
+            path="/truck-ops"
+            element={
+              <Guard path="/truck-ops">
+                <TruckOperations />
+              </Guard>
+            }
+          />
+          <Route
             path="/uc3-lifecycle"
             element={
               <Guard path="/uc3-lifecycle">
@@ -291,14 +300,27 @@ function DashboardShell({
             path="/transporters"
             element={<Navigate to="/vehicles?tab=transporters" replace />}
           />
-          <Route path="/camera-ai" element={<Navigate to="/gate-customs" replace />} />
-          <Route path="/document-ocr" element={<Navigate to="/uc3-lifecycle" replace />} />
-          <Route path="/nvr" element={<Navigate to="/health" replace />} />
-          <Route path="/trt" element={<Navigate to="/live?tab=trt" replace />} />
-          <Route path="/bottlenecks" element={<Navigate to="/geofencing" replace />} />
-          <Route path="/reefer" element={<Navigate to="/parking" replace />} />
-          <Route path="/integrations" element={<Navigate to="/health" replace />} />
-          <Route path="/double-trip" element={<Navigate to="/live?tab=double-trip" replace />} />
+          <Route path="/camera-ai" element={<Navigate to="/gate-customs?tab=camera" replace />} />
+          {/* Document OCR is hosted by Reports & Enforcement, not UC-3 Lifecycle. */}
+          <Route
+            path="/document-ocr"
+            element={<Navigate to="/reports?tab=document_ocr" replace />}
+          />
+          <Route path="/nvr" element={<Navigate to="/health?tab=nvr" replace />} />
+          <Route path="/trt" element={<Navigate to="/truck-ops?tab=trt" replace />} />
+          <Route
+            path="/bottlenecks"
+            element={<Navigate to="/geofencing?tab=bottlenecks" replace />}
+          />
+          <Route path="/reefer" element={<Navigate to="/parking?tab=reefer" replace />} />
+          <Route
+            path="/integrations"
+            element={<Navigate to="/health?tab=integrations" replace />}
+          />
+          <Route
+            path="/double-trip"
+            element={<Navigate to="/truck-ops?tab=double-trip" replace />}
+          />
           <Route path="*" element={<Navigate to="/command-center" replace />} />
         </Routes>
       </main>

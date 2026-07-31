@@ -43,6 +43,7 @@ import {
   SegmentedTabs,
   SearchInput,
   StatusChip,
+  Embedded,
   type Tone,
 } from "@/components/ui/dtccc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -52,6 +53,7 @@ import { EmptyState, ErrorState, LoadingState } from "@/components/ui/misc";
 import { api } from "../lib/api";
 import type { ContainerJob, EcyCfsChain, JobEvent, JobStatus } from "../lib/api";
 import GateDocUploadPanel from "./gatedocs/UploadPanel";
+import DocumentOCR from "@/screens/DocumentOCR";
 
 type Tab = "lifecycle" | "documents" | "chains" | "upload";
 
@@ -290,7 +292,7 @@ export default function Uc3Lifecycle() {
       <PageHeader
         icon={Workflow}
         title="UC-3 Lifecycle Console"
-        subtitle="Transporter → PDP → vehicle → job → gate document → gate-in → yard → scanner → gate-out"
+        subtitle="Container Journey & Operations"
         isFetching={jobsQ.isFetching}
         onRefresh={() => qc.invalidateQueries({ queryKey: ["uc3-jobs"] })}
       />
@@ -598,6 +600,14 @@ export default function Uc3Lifecycle() {
                 </CardContent>
               )}
             </Card>
+
+            {/* Document OCR belongs to the UC-3 document lifecycle: it extracts
+                structured fields from the same transport documents (Form-13, LR,
+                permit) this tab lists. Previously it was only reachable from
+                Reports & Enforcement. */}
+            <Embedded>
+              <DocumentOCR />
+            </Embedded>
           </>
         )}
 

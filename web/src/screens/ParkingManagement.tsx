@@ -4,7 +4,8 @@
 // via /api/parking/* — no synthetic occupancy. Redesigned onto the DTCCC kit
 // (summary cards, occupancy chart, facilities map, tabbed searchable tables).
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   SquareParking,
@@ -45,6 +46,8 @@ import type {
 
 type TabKey = "facilities" | "vehicles" | "history" | "violations" | "reefer";
 
+const PARKING_TABS: TabKey[] = ["facilities", "vehicles", "history", "violations", "reefer"];
+
 function statusTone(status?: string | null, freePct?: number | null): Tone {
   if (status === "FULL") return "critical";
   if ((freePct ?? 100) < 15) return "warn";
@@ -54,7 +57,21 @@ function statusTone(status?: string | null, freePct?: number | null): Tone {
 export default function ParkingManagement() {
   const qc = useQueryClient();
   const { basemap } = useMapSettings();
-  const [tab, setTab] = useState<TabKey>("facilities");
+  // `?tab=` deep-link (Command Center / Demo Console link to ?tab=reefer).
+  const [params, setParams] = useSearchParams();
+  const urlTab = params.get("tab") as TabKey | null;
+  const [tab, setTabState] = useState<TabKey>(
+    urlTab && PARKING_TABS.includes(urlTab) ? urlTab : "facilities",
+  );
+  useEffect(() => {
+    if (urlTab && PARKING_TABS.includes(urlTab) && urlTab !== tab) setTabState(urlTab);
+  }, [urlTab]); // eslint-disable-line react-hooks/exhaustive-deps
+  const setTab = (k: TabKey) => {
+    setTabState(k);
+    const next = new URLSearchParams(params);
+    next.set("tab", k);
+    setParams(next, { replace: true });
+  };
 
   const availQ = useQuery({
     queryKey: ["parking-avail"],

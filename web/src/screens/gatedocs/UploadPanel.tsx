@@ -15,6 +15,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { FilterSelect, StatusChip, type Tone } from "@/components/ui/dtccc";
 import { EmptyState, ErrorState, LoadingState } from "@/components/ui/misc";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 import { api } from "../../lib/api";
 
@@ -36,6 +37,15 @@ export default function GateDocUploadPanel() {
   const [docType, setDocType] = useState("EIR");
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<Record<string, any> | null>(null);
+  // Per-file drill-down: the ledger listed uploads but no panel could open one,
+  // so an operator saw an error COUNT with no way to read the reasons.
+  const [openFileId, setOpenFileId] = useState<number | null>(null);
+
+  const detailQ = useQuery({
+    queryKey: ["gate-doc-upload-detail", openFileId],
+    queryFn: () => api.gateDocUploadDetail(openFileId as number),
+    enabled: openFileId !== null,
+  });
 
   const historyQ = useQuery({
     queryKey: ["gate-doc-uploads", docType],
@@ -242,7 +252,11 @@ export default function GateDocUploadPanel() {
               </thead>
               <tbody className="divide-y divide-border">
                 {historyQ.data?.items?.map((f: Record<string, any>) => (
-                  <tr key={f.id} className="hover:bg-muted/40">
+                  <tr
+                    key={f.id}
+                    onClick={() => setOpenFileId(Number(f.id))}
+                    className="cursor-pointer hover:bg-muted/40"
+                  >
                     <td className="px-3 py-2 font-mono text-foreground">{f.source_file}</td>
                     <td className="px-3 py-2 text-muted-foreground">{f.doc_type}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{f.record_count}</td>
@@ -260,6 +274,68 @@ export default function GateDocUploadPanel() {
           </div>
         )}
       </Card>
+
+      <Dialog open={openFileId !== null} onOpenChange={(o) => !o && setOpenFileId(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Upload #{openFileId}</DialogTitle>
+          </DialogHeader>
+          {detailQ.isLoading ? (
+            <LoadingState />
+          ) : detailQ.isError ? (
+            <ErrorState onRetry={() => detailQ.refetch()} />
+          ) : (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-3">
+                {(
+                  [
+                    ["File", detailQ.data?.source_file],
+                    ["Type", detailQ.data?.doc_type],
+                    ["Status", detailQ.data?.import_status],
+                    ["Rows", detailQ.data?.record_count],
+                    ["Imported", detailQ.data?.imported_count],
+                    ["Errors", detailQ.data?.error_count],
+                  ] as [string, unknown][]
+                ).map(([k, v]) => (
+                  <div key={k}>
+                    <div className="text-muted-foreground">{k}</div>
+                    <div className="font-medium text-foreground">{String(v ?? "—")}</div>
+                  </div>
+                ))}
+              </div>
+
+              {(detailQ.data?.errors?.length ?? 0) === 0 ? (
+                <EmptyState>No row errors recorded for this file.</EmptyState>
+              ) : (
+                <div className="max-h-72 overflow-y-auto rounded-lg border border-border">
+                  <table className="w-full text-left text-[12px]">
+                    <thead className="border-b border-border bg-muted/40 text-[11px] uppercase text-muted-foreground">
+                      <tr>
+                        <th className="px-2.5 py-1.5 font-semibold">Row</th>
+                        <th className="px-2.5 py-1.5 font-semibold">Code</th>
+                        <th className="px-2.5 py-1.5 font-semibold">Detail</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {detailQ.data?.errors?.map((e: Record<string, any>) => (
+                        <tr key={e.id}>
+                          <td className="px-2.5 py-1.5 text-muted-foreground">
+                            {e.record_ref ?? "—"}
+                          </td>
+                          <td className="px-2.5 py-1.5 font-mono text-severity-critical">
+                            {e.error_code}
+                          </td>
+                          <td className="px-2.5 py-1.5 text-foreground">{e.error_detail}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

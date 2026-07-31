@@ -473,9 +473,9 @@ function DeferredWindowsCard() {
       </div>
       {windows.length === 0 ? (
         <div className="text-xs text-muted-foreground">
-          No DeferredArrivalWindow consumed yet — publish one on Kafka topic
-          {" "}<code>jnpa.crosstwin.deferred-arrival</code> (e.g. UC-II scenario S2)
-          and it will appear here with its TAS re-slots and booking cap.
+          No DeferredArrivalWindow consumed yet — publish one on Kafka topic{" "}
+          <code>jnpa.crosstwin.deferred-arrival</code> (e.g. UC-II scenario S2) and it will appear
+          here with its TAS re-slots and booking cap.
         </div>
       ) : (
         <div className="overflow-x-auto">
@@ -496,8 +496,8 @@ function DeferredWindowsCard() {
                   <td className="py-1 pr-3 font-mono">{w.correlation_id}</td>
                   <td className="py-1 pr-3">{w.gate_id ?? "all"}</td>
                   <td className="py-1 pr-3">
-                    {String(w.window_start).slice(11, 16)}–{String(w.window_end).slice(11, 16)}
-                    {" "}({w.window_min} min)
+                    {String(w.window_start).slice(11, 16)}–{String(w.window_end).slice(11, 16)} (
+                    {w.window_min} min)
                   </td>
                   <td className="py-1 pr-3">{w.applied_slots?.length ?? 0}</td>
                   <td className="py-1 pr-3">

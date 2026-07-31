@@ -255,8 +255,7 @@ export const api = {
     ),
   // Cross-twin XT-2: DeferredArrivalWindow events consumed from UC-II via
   // jnpa.crosstwin.deferred-arrival and applied to the TAS slot book.
-  tasDeferredWindows: () =>
-    http<{ windows: any[] }>(`/api/tas/deferred-windows`),
+  tasDeferredWindows: () => http<{ windows: any[] }>(`/api/tas/deferred-windows`),
 
   health: () => http<{ status: string; ws_clients: number }>("/healthz"),
 

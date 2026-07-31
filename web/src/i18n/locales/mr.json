@@ -35,7 +35,8 @@
     "simulator": "सिम्युलेटर",
     "demo": "डेमो कन्सोल",
     "enrollments": "चालक नोंदणी",
-    "vehicles": "वाहन व्यवस्थापन"
+    "vehicles": "वाहन व्यवस्थापन",
+    "uc3Lifecycle": "UC-3 जीवनचक्र"
   },
   "followBox": {
     "title": "फॉलो द बॉक्स",

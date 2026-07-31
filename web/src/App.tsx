@@ -13,7 +13,7 @@ import PoliceReports from "@/screens/PoliceReports";
 import Fastag from "@/screens/Fastag";
 import GateCustoms from "@/screens/GateCustoms";
 import Intelligence from "@/screens/Intelligence";
-import FollowTheBox from "@/screens/FollowTheBox";
+import Uc3Lifecycle from "@/screens/Uc3Lifecycle";
 import ParkingManagement from "@/screens/ParkingManagement";
 import SystemHealth from "@/screens/SystemHealth";
 import WhatIfConsole from "@/screens/WhatIfConsole";
@@ -168,13 +168,16 @@ function DashboardShell({
             }
           />
           <Route
-            path="/follow-the-box"
+            path="/uc3-lifecycle"
             element={
-              <Guard path="/follow-the-box">
-                <FollowTheBox />
+              <Guard path="/uc3-lifecycle">
+                <Uc3Lifecycle />
               </Guard>
             }
           />
+          {/* Follow-The-Box is out of scope (client clarification); its former
+              route now resolves to the UC-3 Lifecycle console. */}
+          <Route path="/follow-the-box" element={<Navigate to="/uc3-lifecycle" replace />} />
           <Route
             path="/parking"
             element={
@@ -289,7 +292,7 @@ function DashboardShell({
             element={<Navigate to="/vehicles?tab=transporters" replace />}
           />
           <Route path="/camera-ai" element={<Navigate to="/gate-customs" replace />} />
-          <Route path="/document-ocr" element={<Navigate to="/follow-the-box" replace />} />
+          <Route path="/document-ocr" element={<Navigate to="/uc3-lifecycle" replace />} />
           <Route path="/nvr" element={<Navigate to="/health" replace />} />
           <Route path="/trt" element={<Navigate to="/live?tab=trt" replace />} />
           <Route path="/bottlenecks" element={<Navigate to="/geofencing" replace />} />

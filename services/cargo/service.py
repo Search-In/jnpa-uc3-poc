@@ -52,6 +52,14 @@ EVENT_REEFER_PLANNED = "cargo.reefer_planned"
 EVENT_RAKE_ASSIGNED = "cargo.rake_assigned"
 EVENT_VERIFIED = "cargo.verified"
 
+# Milestones that are DISTRIBUTED (Kafka + WS) in addition to being logged to
+# core.cargo_event. Deliberately a small set: the handover signals other systems
+# and screens actually react to — not the full CRUD chatter.
+_BUS_EVENTS = frozenset({
+    EVENT_RELEASED, EVENT_VERIFIED, EVENT_VESSEL_DISCHARGED,
+    EVENT_LIFECYCLE_CHANGED, EVENT_CUSTOMS_STATUS_CHANGED,
+})
+
 # --------------------------------------------------------------------- lifecycle
 # The single source of truth for the cargo lifecycle state machine (task #1).
 #
@@ -172,13 +180,21 @@ class CargoService:
         and swallowed so it can NEVER fail the underlying cargo mutation. Only the
         repository is asked to record — the repo may be a fake in tests."""
         recorder = getattr(self._repo, "record_event", None)
-        if recorder is None:
-            return
-        try:
-            await recorder(event, container_number, payload)
-        except Exception as exc:  # noqa: BLE001 — never let notification I/O break CRUD
-            log.warning("cargo.event.record_failed", event=event,
-                        container_number=container_number, error=str(exc))
+        if recorder is not None:
+            try:
+                await recorder(event, container_number, payload)
+            except Exception as exc:  # noqa: BLE001 — never let notification I/O break CRUD
+                log.warning("cargo.event.record_failed", event=event,
+                            container_number=container_number, error=str(exc))
+        # Distribute the milestone (Kafka + WS) so downstream twins/screens do not
+        # have to poll the event table. Best-effort by construction: lifecycle_bus
+        # swallows every failure, and the DB row above is the source of truth.
+        if event in _BUS_EVENTS:
+            try:
+                from services.lifecycle_bus import publish
+                await publish(event, {"container_number": container_number, **dict(payload)})
+            except Exception as exc:  # noqa: BLE001
+                log.warning("cargo.event.publish_failed", event=event, error=str(exc))
 
     @staticmethod
     def _derive_update_events(old: Mapping[str, Any],

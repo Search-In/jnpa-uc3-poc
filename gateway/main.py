@@ -88,8 +88,11 @@ from .routers import (
     camera_ai,
     cfs_ecy,
     customs,
+    container_job,
     document_ocr,
     double_trip,
+    driver_jobs,
+    gate_documents,
     ldb,
     logistics,
     marine_calls,
@@ -236,6 +239,23 @@ async def _lifespan(app: FastAPI):
         await cfs_ecy_ext.ensure_cfs_ecy_schema(cfg.postgres_dsn or None)
     except Exception as exc:  # noqa: BLE001
         log.warning("cfs_ecy_schema_boot_failed", error=str(exc))
+
+    # UC-III gate documents (EIR / PIN / Form-13): mirrors migration 0112 for a dev
+    # DB. Additive; touches nothing existing.
+    try:
+        from . import gate_docs_ext
+        await gate_docs_ext.ensure_gate_doc_schema(cfg.postgres_dsn or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("gate_doc_schema_boot_failed", error=str(exc))
+
+    # UC-III lifecycle bus: hand the live WS hub to services/lifecycle_bus so
+    # cargo/job/gate/yard/scan milestones fan out to the control room in real time
+    # instead of only landing in an event table for polling.
+    try:
+        from services.lifecycle_bus import set_ws_broadcaster
+        set_ws_broadcaster(app.state.gw.ws.broadcast)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("lifecycle_bus_ws_wire_failed", error=str(exc))
 
     # Berthing Reports (module 7): per-terminal vessel-call tables + lifecycle events +
     # upload ledger. Idempotent, additive — mirrors migration 0036 so a dev DB that never
@@ -592,6 +612,9 @@ app.include_router(nvr.router)               # NVR device/stream integration
 app.include_router(trt.router)               # ECY TRT KPI
 app.include_router(cfs_ecy.router)           # CFS-ECY CODECO gate movements (module 13, read-only)
 app.include_router(customs.router)           # Customs docs (module 5: IGM/OOC/SMTP/RMS/LEO/SB)
+app.include_router(gate_documents.router)    # UC-III gate documents (EIR / PIN ticket / Form-13 + TAT)
+app.include_router(container_job.router)     # UC-III job spine: assignment + gate/yard/scan events
+app.include_router(driver_jobs.router)       # DRIVER-scoped job surface for the mobile PWA
 app.include_router(shipping_lines.router)     # Shipping Lines (module 4: IAL/EAL/EDO, read-only + import)
 app.include_router(berthing.router)          # Berthing Reports (module 7: per-terminal vessel calls + upload)
 app.include_router(marine_calls.router)         # UC-I Marine vessel-call spine (module: marine, read-only)

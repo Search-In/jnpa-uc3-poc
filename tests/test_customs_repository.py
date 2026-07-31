@@ -2,7 +2,7 @@
 
 Opt-in: skipped unless Postgres is reachable on 5433 AND the customer data dir is
 present. The test OWNS the customs schema state during its run (it truncates the
-jnpa.customs_* tables to a clean slate), so run it against a dev DB.
+core customs tables (v3 names) to a clean slate), so run it against a dev DB.
 
 Covers: atomic + idempotent import of every official file, honest imported-vs-record
 accounting (the Shipping Bill sheet's duplicate rows collapse to 15), and the
@@ -124,21 +124,21 @@ def test_import_all_files_idempotent_and_accurate():
                 assert r["imported_count"] == r["record_count"], (name, r)
 
         # DB row counts match the parsed leaf totals exactly.
-        assert await _table_count(_DSN, "customs_igm_container") == 4357
-        assert await _table_count(_DSN, "customs_smtp_line") == 209
-        assert await _table_count(_DSN, "customs_rms_container") == 98
-        assert await _table_count(_DSN, "customs_leo") == 100
-        assert await _table_count(_DSN, "customs_shipping_bill") == 15
-        assert await _table_count(_DSN, "customs_messages") == len(files)
+        assert await _table_count(_DSN, "igm_line_container") == 4357
+        assert await _table_count(_DSN, "smtp_container") == 209
+        assert await _table_count(_DSN, "rms_scan_container") == 98
+        assert await _table_count(_DSN, "leo") == 100
+        assert await _table_count(_DSN, "shipping_bill") == 15
+        assert await _table_count(_DSN, "customs_message") == len(files)
 
         # Idempotent re-import: every file SKIPPED_DUPLICATE, no row growth.
-        before = await _table_count(_DSN, "customs_igm_container")
+        before = await _table_count(_DSN, "igm_line_container")
         for path, parser in files:
             r = await repo.persist(parser(str(path)), source_file=path.name,
                                    source_sha256=_sha(path), file_size=path.stat().st_size)
             assert r["import_status"] == "SKIPPED_DUPLICATE" and r["duplicate"] is True
-        assert await _table_count(_DSN, "customs_igm_container") == before
-        assert await _table_count(_DSN, "customs_messages") == len(files)
+        assert await _table_count(_DSN, "igm_line_container") == before
+        assert await _table_count(_DSN, "customs_message") == len(files)
 
     _run_isolated(run)
 
@@ -204,7 +204,7 @@ def test_failed_import_rolls_back_and_records_ledger():
         await _truncate(_DSN)
         repo = CustomsRepository(_DSN)
 
-        before_vessels = await _table_count(_DSN, "customs_igm_vessel")
+        before_vessels = await _table_count(_DSN, "igm")
         # A structurally-broken IGM: a vessel with NULL igm_no violates NOT NULL, so
         # the whole transaction must roll back (no partial vessel/line/container rows).
         bad = ParsedMessage(
@@ -220,7 +220,7 @@ def test_failed_import_rolls_back_and_records_ledger():
         assert r["message_id"] is not None      # a FAILED ledger row was recorded
         assert r["imported_count"] == 0
         # Rollback: NO domain rows persisted for the failed message.
-        assert await _table_count(_DSN, "customs_igm_vessel") == before_vessels
-        assert await _table_count(_DSN, "customs_import_errors") >= 1
+        assert await _table_count(_DSN, "igm") == before_vessels
+        assert await _table_count(_DSN, "customs_import_error") >= 1
 
     _run_isolated(run)

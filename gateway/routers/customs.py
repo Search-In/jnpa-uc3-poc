@@ -62,6 +62,9 @@ class ImportResponse(BaseModel):
     root: str
     totals: ImportTotals
     results: List[Dict[str, Any]]
+    # Auto-reconcile outcome (customs facts -> core.cargo.customs_status); None
+    # when nothing new was imported or reconcile was skipped.
+    reconcile: Optional[Dict[str, Any]] = None
 
 
 def _page(items: List[dict], total: int, limit: int, offset: int, response: Response) -> Page:
@@ -178,6 +181,25 @@ async def list_rms(
     filters = {"igm_no": igm_no}
     items = await svc.list_rms(filters=filters, limit=limit, offset=offset)
     total = await svc.count_rms(filters=filters)
+    return _page(items, total, limit, offset, response)
+
+
+@router.get("/rms/{igm_no}/containers", response_model=Page,
+            summary="Selected containers of an RMS scan list (scanner routing facts)")
+async def list_rms_containers(
+    igm_no: str,
+    response: Response,
+    machine_type: Optional[str] = Query(None, description="scanner machine class: D (drive-through) / M (mobile) / F (fixed)"),
+    scan_location: Optional[str] = Query(None, description="scanner location code contains-match, e.g. INNSA1RSDT02"),
+    container_no: Optional[str] = None,
+    limit: int = Query(200, ge=1, le=2000),
+    offset: int = Query(0, ge=0),
+    svc: CustomsService = Depends(get_service),
+) -> Page:
+    filters = {"igm_no": igm_no, "machine_type": machine_type,
+               "scan_location": scan_location, "container_no": container_no}
+    items = await svc.list_rms_containers(filters=filters, limit=limit, offset=offset)
+    total = await svc.count_rms_containers(filters=filters)
     return _page(items, total, limit, offset, response)
 
 

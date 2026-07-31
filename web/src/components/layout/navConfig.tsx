@@ -92,7 +92,7 @@ export const NAV_SECTIONS: NavSection[] = [
     emoji: "📊",
     items: [
       leaf("/intelligence", "nav.intelligence", ScanSearch),
-      leaf("/follow-the-box", "nav.followBox", Box),
+      leaf("/uc3-lifecycle", "nav.uc3Lifecycle", Box),
       leaf("/cfs-ecy", "nav.cfsEcy", Boxes),
       leaf("/shipping-lines", "nav.shippingLines", Ship),
       leaf("/berthing", "nav.berthing", Anchor),

@@ -599,6 +599,214 @@ export const api = {
   },
   cfsEcyUploadDetail: (fileId: number) => http<any>(`/api/cfs-ecy/uploads/${fileId}`),
 
+  // --- ECY→CFS repositioning chains (F-Y1 lifecycle, migration 0114) ---
+  ecyCfsChains: (params?: {
+    container?: string;
+    chain_status?: string;
+    anomaly_only?: boolean;
+    anomaly_code?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{
+      items: EcyCfsChain[];
+      total: number;
+      limit: number;
+      offset: number;
+      count: number;
+    }>(`/api/cfs-ecy/chains${qs.toString() ? `?${qs}` : ""}`);
+  },
+  ecyCfsChain: (containerNumber: string) =>
+    http<EcyCfsChain>(`/api/cfs-ecy/chains/${encodeURIComponent(containerNumber)}`),
+  ecyCfsChainStats: () => http<EcyCfsChainStats>("/api/cfs-ecy/chains/stats"),
+  ecyCfsChainRebuild: () =>
+    http<{ chains: number; complete: number; anomalies: number; ms: number }>(
+      "/api/cfs-ecy/chains/rebuild",
+      { method: "POST" },
+    ),
+
+  // --- UC-III gate documents (EIR / PIN ticket / Form-13) ---
+  gateDocSummary: () => http<GateDocSummary>("/api/gate-docs/summary"),
+  gateDocList: (
+    docType: "eir" | "pin" | "form13",
+    params?: {
+      container?: string;
+      truck?: string;
+      vehicle?: string;
+      pin?: string;
+      visit_id?: string;
+      terminal?: string;
+      limit?: number;
+      offset?: number;
+    },
+  ) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/gate-docs/${docType}${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  gateDocsForContainer: (containerNo: string) =>
+    http<GateDocBundle>(`/api/gate-docs/container/${encodeURIComponent(containerNo)}`),
+  gateDocsForTruck: (truckNo: string) =>
+    http<GateDocBundle>(`/api/gate-docs/truck/${encodeURIComponent(truckNo)}`),
+  gateDocTat: (terminal?: string) =>
+    http<GateDocTat>(
+      `/api/gate-docs/tat${terminal ? `?terminal=${encodeURIComponent(terminal)}` : ""}`,
+    ),
+  gateDocDownloadTemplate: (docType: string) =>
+    downloadFile(
+      `/api/gate-docs/templates/${docType}`,
+      `gate_doc_${docType.toLowerCase()}_template.csv`,
+    ),
+  gateDocUploadValidate: (docType: string, file: File) => {
+    const f = new FormData();
+    f.append("file", file);
+    f.append("doc_type", docType);
+    return postForm<any>("/api/gate-docs/validate", f);
+  },
+  gateDocUpload: (docType: string, file: File) => {
+    const f = new FormData();
+    f.append("file", file);
+    f.append("doc_type", docType);
+    return postForm<any>("/api/gate-docs/upload", f);
+  },
+  gateDocUploads: (params?: { doc_type?: string; status?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && qs.set(k, String(v)));
+    return http<{ items: any[]; total: number; count: number }>(
+      `/api/gate-docs/uploads${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  gateDocUploadDetail: (fileId: number) => http<any>(`/api/gate-docs/uploads/${fileId}`),
+
+  // --- UC-III job spine: assignment + gate / yard / scan events ---
+  jobs: (params?: {
+    container?: string;
+    vehicle_id?: string;
+    driver_id?: string;
+    status?: string;
+    open_only?: boolean;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{
+      items: ContainerJob[];
+      total: number;
+      limit: number;
+      offset: number;
+      count: number;
+    }>(`/api/jobs${qs.toString() ? `?${qs}` : ""}`);
+  },
+  job: (jobId: number) => http<ContainerJob & { events: JobEvent[] }>(`/api/jobs/${jobId}`),
+  jobValidate: (body: JobAssignInput) =>
+    http<{ ok: boolean; checks: JobCheck[]; vehicle: any; permit: any }>("/api/jobs/validate", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  jobAssign: (body: JobAssignInput) =>
+    http<{ job: ContainerJob; checks: JobCheck[] }>("/api/jobs", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  jobAccept: (jobId: number) =>
+    http<{ job: ContainerJob }>(`/api/jobs/${jobId}/accept`, { method: "POST" }),
+  jobComplete: (jobId: number, notes?: string) =>
+    http<{ job: ContainerJob }>(`/api/jobs/${jobId}/complete`, {
+      method: "POST",
+      body: JSON.stringify({ notes }),
+    }),
+  jobCancel: (jobId: number, reason: string) =>
+    http<{ job: ContainerJob }>(`/api/jobs/${jobId}/cancel`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    }),
+  jobForContainer: (containerNo: string) =>
+    http<ContainerJob & { events: JobEvent[] }>(
+      `/api/cargo-jobs/container/${encodeURIComponent(containerNo)}`,
+    ),
+
+  gateEventCreate: (body: {
+    event_type: string;
+    plate: string;
+    gate_id?: string;
+    job_id?: number;
+    container_number?: string;
+    bat_lane?: string;
+    document_type?: string;
+    document_reference?: string;
+  }) =>
+    http<{ gate_event: any; job: ContainerJob | null }>("/api/gate/events", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  gateEvents: (params?: {
+    plate?: string;
+    container?: string;
+    job_id?: number;
+    limit?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; count: number }>(
+      `/api/gate/events${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+
+  yardMovementCreate: (body: {
+    movement_type: string;
+    job_id?: number;
+    container_number?: string;
+    yard_location?: string;
+    from_location?: string;
+    terminal?: string;
+  }) =>
+    http<{ movement: any; job: ContainerJob | null }>("/api/yard/movements", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  yardMovements: (params?: { container?: string; job_id?: number; limit?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; count: number }>(
+      `/api/yard/movements${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+
+  scanMachines: () => http<{ items: ScannerMachine[]; count: number }>("/api/scan/machines"),
+  scanStatus: (containerNo: string) =>
+    http<ScanStatus>(`/api/scan/status/${encodeURIComponent(containerNo)}`),
+  scanRecord: (body: {
+    container_number: string;
+    result: string;
+    machine_code?: string;
+    job_id?: number;
+    remarks?: string;
+  }) => http<{ scan: any }>("/api/scan/events", { method: "POST", body: JSON.stringify(body) }),
+  scanEvents: (params?: { container?: string; result?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; count: number }>(
+      `/api/scan/events${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+
   // --- Berthing Reports (module 7) — vessel calls + lifecycle + Data Upload ---
   berthingReports: (params?: {
     terminal?: string;
@@ -1256,4 +1464,171 @@ export interface WfExecution {
   event: Record<string, unknown>;
   results: WfExecutionResult[];
   matched_count: number;
+}
+
+// ===================================================================== UC-III
+// Types for the UC-III lifecycle surface (gate documents, job spine, ECY→CFS
+// chains). Kept next to the helpers above so the screens import one module.
+
+export interface EcyCfsChainLeg {
+  seq: number;
+  leg: string;
+  label: string;
+  ts: string | null;
+  duration_hours?: number | null;
+  present: boolean;
+  note?: string;
+}
+export interface EcyCfsChain {
+  id: number;
+  container_number: string;
+  ecy_out_ts: string | null;
+  cfs_in_ts: string | null;
+  cfs_out_ts: string | null;
+  ecy_in_ts: string | null;
+  transit_hours: number | null;
+  dwell_hours: number | null;
+  cycle_hours: number | null;
+  chain_status: "COMPLETE" | "PARTIAL" | "ORPHAN";
+  legs_present: number;
+  event_count: number;
+  has_anomaly: boolean;
+  anomaly_codes: string[];
+  anomaly_labels?: string[];
+  anomaly_detail: Record<string, unknown>;
+  legs?: EcyCfsChainLeg[];
+}
+export interface EcyCfsChainStats {
+  chains: number;
+  complete_chains: number;
+  partial_chains: number;
+  anomaly_chains: number;
+  avg_transit_hours: number | null;
+  avg_dwell_hours: number | null;
+  avg_cycle_hours: number | null;
+  median_cycle_hours: number | null;
+  by_anomaly: { code: string; chains: number }[];
+  anomaly_labels: Record<string, string>;
+  last_rebuilt_at: string | null;
+}
+
+export interface GateDocSummary {
+  eir: number;
+  pin_tickets: number;
+  pin_legs: number;
+  dual_move_tickets: number;
+  form13: number;
+  containerless_docs: number;
+  eir_with_tat: number;
+  files: number;
+}
+export interface GateDocBundle {
+  container_no?: string;
+  truck_no?: string;
+  eir: any[];
+  pin: any[];
+  form13: any[];
+  total: number;
+  terminals?: string[];
+  tat_samples?: {
+    eir_no: string | null;
+    terminal: string | null;
+    container_number: string | null;
+    truck_in_time: string | null;
+    truck_out_time: string | null;
+    tat_minutes: number | null;
+  }[];
+}
+export interface GateDocTat {
+  samples: number;
+  avg_tat_min: number | null;
+  median_tat_min: number | null;
+  min_tat_min: number | null;
+  max_tat_min: number | null;
+  source: string;
+  by_terminal: { terminal: string; samples: number; avg_tat_min: number }[];
+}
+
+export type JobStatus =
+  | "ASSIGNED"
+  | "ACCEPTED"
+  | "AT_GATE"
+  | "IN_YARD"
+  | "PICKED_UP"
+  | "DROPPED"
+  | "COMPLETED"
+  | "CANCELLED";
+export interface ContainerJob {
+  id: number;
+  container_number: string | null;
+  group_code: string | null;
+  transporter_id: number | null;
+  vehicle_id: string;
+  vehicle_no: string | null;
+  driver_id: string | null;
+  driver_licence: string | null;
+  move_type: string;
+  document_type: string | null;
+  document_reference: string | null;
+  terminal: string | null;
+  gate: string | null;
+  status: JobStatus;
+  assigned_by: string | null;
+  assigned_at: string;
+  accepted_at: string | null;
+  completed_at: string | null;
+  cancelled_reason: string | null;
+  notes: string | null;
+}
+export interface JobEvent {
+  id: number;
+  event: string;
+  old_status: string | null;
+  new_status: string | null;
+  actor: string | null;
+  actor_role: string | null;
+  detail: Record<string, unknown>;
+  created_at: string;
+}
+export interface JobCheck {
+  check: string;
+  ok: boolean;
+  detail: string;
+  [k: string]: unknown;
+}
+export interface JobAssignInput {
+  container_number?: string;
+  group_code?: string;
+  vehicle_id?: string;
+  vehicle_no?: string;
+  driver_id?: string;
+  driver_licence?: string;
+  move_type: string;
+  document_type?: string;
+  document_reference?: string;
+  terminal?: string;
+  gate?: string;
+  notes?: string;
+}
+
+export interface ScannerMachine {
+  machine_code: string;
+  machine_class: "DRIVE_THROUGH" | "MOBILE" | "FIXED";
+  machine_type: string | null;
+  location_code: string | null;
+  customs_house: string | null;
+  terminal: string | null;
+  lane: string | null;
+  active: boolean;
+}
+export interface ScanStatus {
+  container_number: string;
+  scan_required: boolean;
+  rms_selection: Record<string, unknown> | null;
+  machine_code: string | null;
+  machine_class: string | null;
+  latest_scan: Record<string, unknown> | null;
+  result: string | null;
+  cleared: boolean;
+  job_id: number | null;
 }

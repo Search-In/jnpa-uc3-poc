@@ -443,7 +443,75 @@ export default function WhatIfConsole() {
       <div className="px-4 pb-6">
         <ReactiveGuidePanel scenarioId={activeHandle ? scenario : null} />
       </div>
+
+      {/* Cross-twin XT-2 proof surface: DeferredArrivalWindow events consumed
+          from UC-II (Kafka jnpa.crosstwin.deferred-arrival) -> TAS metering. */}
+      <div className="px-4 pb-6">
+        <DeferredWindowsCard />
+      </div>
     </PageContainer>
+  );
+}
+
+function DeferredWindowsCard() {
+  const q = useQuery({
+    queryKey: ["tas-deferred-windows"],
+    queryFn: api.tasDeferredWindows,
+    refetchInterval: 10_000,
+  });
+  const windows = q.data?.windows ?? [];
+  return (
+    <Card className="p-4">
+      <div className="mb-2 flex items-center justify-between">
+        <div className="text-sm font-semibold">
+          UC-II Deferred-Arrival Windows (cross-twin TAS metering)
+        </div>
+        <StatusChip
+          tone={windows.length ? ("warn" as Tone) : ("ok" as Tone)}
+          label={windows.length ? `${windows.length} active` : "none consumed"}
+        />
+      </div>
+      {windows.length === 0 ? (
+        <div className="text-xs text-muted-foreground">
+          No DeferredArrivalWindow consumed yet — publish one on Kafka topic
+          {" "}<code>jnpa.crosstwin.deferred-arrival</code> (e.g. UC-II scenario S2)
+          and it will appear here with its TAS re-slots and booking cap.
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="text-left text-muted-foreground">
+              <tr>
+                <th className="py-1 pr-3">Correlation</th>
+                <th className="py-1 pr-3">Gate</th>
+                <th className="py-1 pr-3">Window (UTC)</th>
+                <th className="py-1 pr-3">Slots re-scheduled</th>
+                <th className="py-1 pr-3">Bookings (cap)</th>
+                <th className="py-1 pr-3">Source</th>
+              </tr>
+            </thead>
+            <tbody>
+              {windows.map((w: any) => (
+                <tr key={w.correlation_id} className="border-t border-border/50">
+                  <td className="py-1 pr-3 font-mono">{w.correlation_id}</td>
+                  <td className="py-1 pr-3">{w.gate_id ?? "all"}</td>
+                  <td className="py-1 pr-3">
+                    {String(w.window_start).slice(11, 16)}–{String(w.window_end).slice(11, 16)}
+                    {" "}({w.window_min} min)
+                  </td>
+                  <td className="py-1 pr-3">{w.applied_slots?.length ?? 0}</td>
+                  <td className="py-1 pr-3">
+                    {w.booked} / {w.slot_cap}
+                    {w.booked >= w.slot_cap ? " — refusing" : ""}
+                  </td>
+                  <td className="py-1 pr-3">{w.source}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
   );
 }
 

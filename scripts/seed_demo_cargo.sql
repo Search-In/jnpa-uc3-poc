@@ -1,5 +1,5 @@
 -- ===========================================================================
--- Demo seed — jnpa.cargo (Cargo Twin ⇄ Traffic Twin shared record).
+-- Demo seed — core.cargo (Cargo Twin ⇄ Traffic Twin shared record).
 -- FOR DEMONSTRATION ONLY. ~15 realistic cargo records so /api/cargo (consumed by
 -- both the POC-3 dashboard and the POC-2 Cargo-Twin frontend) has non-empty data
 -- on a fresh boot.
@@ -12,12 +12,12 @@
 -- never duplicates and never overwrites edits made through the API.
 --
 -- APPLY: psql "$DSN" -v ON_ERROR_STOP=1 -f scripts/seed_demo_cargo.sql
--- REMOVE: DELETE FROM jnpa.cargo WHERE container_number IN (see list below);
+-- REMOVE: DELETE FROM core.cargo WHERE container_number IN (see list below);
 -- ===========================================================================
-CREATE SCHEMA IF NOT EXISTS jnpa;
-SET search_path TO jnpa, public;
+CREATE SCHEMA IF NOT EXISTS core;
+SET search_path TO core, public;
 
-INSERT INTO jnpa.cargo
+INSERT INTO core.cargo
     (container_number, vessel_name, customs_status, yard_block, is_released,
      vehicle_number, gate, camera_id, eta)
 VALUES
@@ -36,4 +36,20 @@ VALUES
     ('CAIU1304566', 'HAPAG ANTWERP',      'CLEARED',          'D-06', true,  'MH12AB7890', 'GATE-4', 'CAM-ANPR-04', now() - interval '3 hours'),
     ('DFSU2405676', 'OOCL GERMANY',       'UNDER_INSPECTION', 'B-03', false, 'MH14CD2346', 'GATE-2', 'CAM-ANPR-02', now() + interval '9 hours'),
     ('NYKU3506780', 'NYK VESTA',          'PENDING',          'C-12', false, 'MH01EF6780', 'GATE-3', 'CAM-ANPR-03', now() + interval '7 hours')
+ON CONFLICT (container_number) DO NOTHING;
+
+-- ---------------------------------------------------------------------------
+-- Doc-pack Auto-LEO demo containers — these four container numbers appear in
+-- the demo documentation pack and MUST resolve in cargo lookups (Auto-LEO
+-- reconciliation demo). Values follow the same shape as the block above.
+-- Idempotent: ON CONFLICT (container_number) DO NOTHING (core.cargo PK).
+-- ---------------------------------------------------------------------------
+INSERT INTO core.cargo
+    (container_number, vessel_name, customs_status, yard_block, is_released,
+     vehicle_number, gate, camera_id, eta)
+VALUES
+    ('APLU0896946', 'APL SINGAPORE',      'CLEARED', 'A-11', false, 'MH04KN3106', 'GATE-1', 'CAM-ANPR-01', now() - interval '90 minutes'),
+    ('CMAU3549370', 'CMA CGM MARCO POLO', 'CLEARED', 'B-05', false, 'MH43SV7025', 'GATE-2', 'CAM-ANPR-02', now() - interval '45 minutes'),
+    ('MSCU1234566', 'MSC ANNA',           'PENDING', 'C-09', false, 'MH05CD4567', 'GATE-3', 'CAM-ANPR-03', now() + interval '4 hours'),
+    ('MAEU7654320', 'MAERSK SEMBAWANG',   'CLEARED', 'D-02', true,  'MH04AB1234', 'GATE-4', 'CAM-ANPR-04', now() - interval '15 minutes')
 ON CONFLICT (container_number) DO NOTHING;

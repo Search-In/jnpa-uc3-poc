@@ -466,6 +466,25 @@ class DpdReleaseEvent(_Base):
     ts: datetime = Field(default_factory=_utcnow)
 
 
+class DeferredArrivalWindow(_Base):
+    """UC-II -> UC-III deferred-arrival window (XT-2).
+
+    Published by UC-II's gate-queue forecaster (e.g. the S2 customs-flag-surge
+    scenario) on topic ``jnpa.crosstwin.deferred-arrival`` when it wants inbound
+    truck arrivals metered: UC-III's TAS marks appointment slots inside the
+    window RESCHEDULED and caps new bookings at ``slot_cap``. Defined ONCE here
+    so both twins agree on the wire shape (same XT pattern as DpdReleaseEvent).
+    """
+
+    correlation_id: str = Field(description="producer's run/scenario id, e.g. S2-20260615")
+    window_start: datetime = Field(default_factory=_utcnow)
+    window_min: int = Field(default=90, ge=1, description="metering window in minutes")
+    slot_cap: int = Field(default=4, ge=0, description="max new bookings inside the window")
+    gate_id: Optional[str] = Field(default=None, description="target gate; None = all gates")
+    source: str = Field(default="UC-II")
+    ts: datetime = Field(default_factory=_utcnow)
+
+
 # Topic name constants used across services.
 TOPIC_ANPR = "anpr.reads"
 TOPIC_RFID = "rfid.reads"
@@ -486,6 +505,7 @@ TOPIC_CARBON = "carbon.records"
 TOPIC_FACE = "face.verifications"
 TOPIC_GEOFENCE = "geofence.violations"
 TOPIC_DPD_RELEASE = "cargo.dpd_release"  # cross-twin (UC-II -> UC-III), XT-1/XT-2
+TOPIC_DEFERRED_ARRIVAL = "jnpa.crosstwin.deferred-arrival"  # cross-twin (UC-II -> UC-III TAS), XT-2
 
 MQTT_RFID_PREFIX = "rfid/readers"  # e.g. rfid/readers/R-01
 
@@ -527,6 +547,7 @@ __all__ = [
     "GeofenceType",
     "GeofenceViolation",
     "DpdReleaseEvent",
+    "DeferredArrivalWindow",
     # --- topics ---
     "TOPIC_ANPR",
     "TOPIC_RFID",
@@ -543,5 +564,6 @@ __all__ = [
     "TOPIC_FACE",
     "TOPIC_GEOFENCE",
     "TOPIC_DPD_RELEASE",
+    "TOPIC_DEFERRED_ARRIVAL",
     "MQTT_RFID_PREFIX",
 ]

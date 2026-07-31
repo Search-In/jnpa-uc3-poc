@@ -40,6 +40,77 @@ def test_registry_has_expected_scenarios():
     assert mf is not None and callable(mf.run) and callable(mf.reset)
 
 
+def test_stub_cleanup_tags_match_run_tags():
+    """Post-restart stub resets must mint the SAME tags run() uses — the old
+    generic ``{NAME.upper()}:{id}`` stub silently removed zero trucks."""
+    from scenarios import tfc1, tfc2, tfc3, monsoon_friday
+
+    hid = "sc_test123"
+    assert tfc1.stub_cleanup(hid)["truck_tag"] == f"TFC-1:{hid}"
+    assert tfc3.stub_cleanup(hid)["truck_tag"] == f"TFC-3:{hid}"
+    m = monsoon_friday.stub_cleanup(hid)
+    assert m["demand_tag"] == f"MONSOON:demand:{hid}"
+    assert m["queue_tag"] == f"MONSOON:queue:{hid}"
+    assert tfc2.stub_cleanup(hid)["device_id"] == f"SYN-TFC2-{hid}"
+
+
+def _kafka_up() -> bool:
+    # 29092 is the EXTERNAL (host-reachable) listener; 9092 is INTERNAL and
+    # advertises the docker-network name `kafka:9092` which won't resolve here.
+    try:
+        with socket.create_connection(("localhost", 29092), timeout=2.0):
+            return True
+    except OSError:
+        return False
+
+
+@pytest.mark.skipif(not _kafka_up(), reason="Kafka not reachable on localhost:29092")
+def test_uc2_bridge_consumes_from_broker():
+    """publish -> Kafka -> uc2_bridge listener -> next_event round-trip.
+
+    Proves the cross-twin consumption is REAL (not the inline fallback):
+    the event must come back through the broker via group uc3-uc2-bridge.
+    """
+    import asyncio
+    import os
+
+    # Host-side run: point jnpa_shared at the EXTERNAL listener (containers use
+    # the in-network default kafka:9092). Settings are built per-call, so this
+    # takes effect without a reload.
+    os.environ.setdefault("KAFKA_BROKERS", "localhost:29092")
+
+    from jnpa_shared import kafka_io
+    from scenarios import uc2_bridge
+
+    async def _roundtrip() -> dict:
+        await uc2_bridge.start_listener(group=f"uc3-uc2-bridge-test-{int(time.time())}")
+        try:
+            assert await asyncio.to_thread(uc2_bridge.wait_assigned, 30.0), \
+                "consumer never got partition assignments"
+            corr = f"test-{int(time.time())}"
+            event = {"dpd_release_spike": 2.5, "window_min": 40,
+                     "source": "UC-II", "correlation_id": corr}
+            producer = kafka_io.get_producer()
+            kafka_io.produce(producer, uc2_bridge.TOPIC_DPD_RELEASE, event,
+                             key="dpd", flush=True,
+                             event_type="jnpa.crosstwin.dpd_release",
+                             source_system="TEST", raw_ref="pytest://uc2_bridge")
+            deadline = time.monotonic() + 20.0
+            while time.monotonic() < deadline:
+                try:
+                    evt = await uc2_bridge.next_event(timeout=deadline - time.monotonic())
+                except asyncio.TimeoutError:
+                    break
+                if evt.get("correlation_id") == corr:
+                    return evt
+            raise AssertionError("published event never came back through the broker")
+        finally:
+            await uc2_bridge.stop_listener()
+
+    evt = asyncio.run(_roundtrip())
+    assert evt["dpd_release_spike"] == 2.5
+
+
 # --------------------------------------------------------------------------- e2e
 RUNNER = "http://localhost:8400"
 

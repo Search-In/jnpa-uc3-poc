@@ -30,7 +30,8 @@ from fastapi.responses import JSONResponse
 
 from .mode import ProductionSafetyError, mode_name, production_mode
 
-from jnpa_shared.schemas import TOPIC_ALERTS, TOPIC_ANPR, TOPIC_TRAFFIC
+from jnpa_shared.schemas import (TOPIC_ALERTS, TOPIC_ANPR, TOPIC_DEFERRED_ARRIVAL,
+                                 TOPIC_TRAFFIC, DeferredArrivalWindow)
 from jnpa_shared import tracing
 
 from . import audit
@@ -405,9 +406,30 @@ async def _lifespan(app: FastAPI):
         state, loop, TOPIC_ANPR, "anpr", "jnpa-gateway-anpr",
         persist=audit.persist_anpr_read, broadcast=False,
     )
+    # Cross-twin TAS metering (XT-2): consume UC-II DeferredArrivalWindow
+    # events and apply them to the TAS slot book. Also broadcast on WS as
+    # type=tas so both frontends see the re-slot live.
+    async def _apply_deferred(value) -> None:
+        from . import tas_mock
+        try:
+            win = DeferredArrivalWindow(**value)
+        except Exception as exc:  # noqa: BLE001 - reject malformed, keep pump alive
+            log.warning("deferred_arrival_invalid", error=str(exc))
+            return
+        result = tas_mock.apply_deferred_window(win)
+        log.info("deferred_arrival_applied", correlation_id=win.correlation_id,
+                 gate_id=win.gate_id, applied_slots=result["applied_slots"],
+                 slot_cap=win.slot_cap)
+
+    deferred_pump = KafkaPump(
+        state, loop, TOPIC_DEFERRED_ARRIVAL, "tas", "jnpa-gateway-tas",
+        persist=_apply_deferred,
+    )
+
     alert_pump.start()
     traffic_pump.start()
     anpr_pump.start()
+    deferred_pump.start()
 
     # MQTT truck-position pump (async task) — best-effort.
     mqtt_task = asyncio.create_task(mqtt_truck_pump(state, stop), name="mqtt-truck-pump")
@@ -419,6 +441,7 @@ async def _lifespan(app: FastAPI):
         alert_pump.stop()
         traffic_pump.stop()
         anpr_pump.stop()
+        deferred_pump.stop()
         mqtt_task.cancel()
         try:
             await mqtt_task

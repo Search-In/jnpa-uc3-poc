@@ -20,13 +20,14 @@
 | 0.2 | Open the dashboard at **http://localhost:3000** | Live Operations loads; corridor map + KPI strip render |
 | 0.3 | Confirm mode badge | Header / System Health shows **MOCK** mode |
 | 0.4 | `make demo-reset` | Clean baseline (ephemeral data wiped, trained models kept) |
-| 0.5 | (optional) `python scripts/poc_selftest.py` | 22/23 checks, 0 required failing; B.1 honest WARN (F1 0.8411) |
+| 0.5 | (optional) `python scripts/poc_selftest.py` | 25/25 checks, 0 required failing; B.1 required and passing (F1 0.8797 ≥ 0.85) |
 
 > **Honesty note for Q&A:** on a CPU-only host the dashboard shows a "DEGRADED
-> MODEL" notice on the ANPR/OCR card (fallback ~11%, not the committed ≥95%) and
-> the congestion F1 reads 0.8411 (below the 0.85 target). These are **enforced by
-> tests** and labelled everywhere — say plainly they are post-award weights/tuning
-> items; the architectures are real. Do not claim the headline numbers are met.
+> MODEL" notice on the ANPR/OCR card (fallback ~11%, not the committed ≥95%) —
+> a post-award weights item; the architecture is real. The congestion F1 is
+> **0.8797 (target ≥ 0.85 met)** after the train_stride=1 retrain; the prior
+> 0.8411 stays in the artifact as retrain evidence. Both numbers are **enforced
+> by tests** and labelled everywhere. Do not over- or under-claim either.
 
 ---
 
@@ -96,8 +97,9 @@ the evaluator-evidence surfaces.
   fallback (~11%), shown honestly with a DEGRADED banner. The CRNN architecture is
   real; ≥95% is a post-award weights/real-data item, and a test enforces it once
   weights load.
-- **"Congestion F1?"** 0.8411 vs the 0.85 target — a tuning item, enforced by an
-  xfail-strict test so it can't silently drift or be silently "fixed."
+- **"Congestion F1?"** 0.8797 vs the 0.85 target — **met** (train_stride=1
+  retrain; prev 0.8411 kept in the artifact as retrain-loop evidence), enforced
+  by a hard test gate so it can't silently drift or be silently "fixed."
 - **"Is the ETA AI?"** No — it's a heuristic (OSRM + dead-reckoning); we label it
   as such. A learned ETA head is post-award.
 - **"Security?"** Flag-gated JWT + 6-role RBAC + rate limiting on the gateway

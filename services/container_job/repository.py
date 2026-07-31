@@ -335,17 +335,25 @@ class ContainerJobRepository:
         """The RMS scan selection for a container: which machine it was routed to.
 
         Reconstitutes the full machine code (D-INNSA1RSDT02) from the stored
-        machine_type letter + scan_location — the join the audit found missing."""
+        machine_type letter + scan_location — the join the audit found missing.
+
+        ``igm_no`` is read from the PARENT scan report, not from the child row:
+        the deployed RDS carries the base ``core.rms_scan_container`` shape
+        (report_id, sl_no, container_no, machine_type, scan_location, cfs_name,
+        goods_desc) without migration 0102's extension columns (id / igm_no /
+        iso_valid), so selecting them here fails in production. Ordering likewise
+        uses (report_id, sl_no), which exist in both schema variants."""
         return await self._one(
-            """SELECT rc.container_no, rc.igm_no, rc.machine_type, rc.scan_location,
+            """SELECT rc.container_no, r.igm_no, rc.machine_type, rc.scan_location,
                       rc.cfs_name,
                       (rc.machine_type || '-' || rc.scan_location) AS machine_code,
                       sm.machine_class, sm.terminal AS scanner_terminal, sm.active AS scanner_active
                FROM core.rms_scan_container rc
+               LEFT JOIN core.rms_scan_report r ON r.report_id = rc.report_id
                LEFT JOIN core.scanner_machine sm
                       ON sm.machine_code = (rc.machine_type || '-' || rc.scan_location)
                WHERE rc.container_no = :cn
-               ORDER BY rc.id DESC LIMIT 1""",
+               ORDER BY rc.report_id DESC, rc.sl_no DESC LIMIT 1""",
             {"cn": container_number})
 
     async def record_scan(self, rec: Mapping[str, Any]) -> dict:

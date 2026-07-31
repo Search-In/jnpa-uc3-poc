@@ -1,13 +1,20 @@
-/**
- * Gate-document Data-Upload panel (EIR / PIN ticket / Form-13).
- *
- * Same three-step workflow as the CFS-ECY and shipping-lines panels — download
- * template → validate (dry-run preview) → confirm import → history — so the
- * operator learns one flow for every module. Backed by /api/gate-docs/*.
- */
+// Gate-document Data-Upload panel (EIR / PIN ticket / Form-13).
+//
+// Same three-step workflow as the CFS-ECY and shipping-lines panels — download
+// template → validate (dry-run preview) → confirm import → history — so the
+// operator learns one flow for every module. Backed by /api/gate-docs/*.
+//
+// Uses the shared DTCCC kit (Card / Button / FilterSelect / StatusChip /
+// Loading-Error-Empty states) and semantic theme tokens only.
+
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CheckCircle2, Download, FileUp, Loader2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Download, FileUp, Inbox, UploadCloud } from "lucide-react";
+
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { FilterSelect, StatusChip, type Tone } from "@/components/ui/dtccc";
+import { EmptyState, ErrorState, LoadingState } from "@/components/ui/misc";
 
 import { api } from "../../lib/api";
 
@@ -15,13 +22,20 @@ const DOC_TYPES = [
   { value: "EIR", label: "EIR (Equipment Interchange Report)" },
   { value: "PIN", label: "PIN ticket" },
   { value: "FORM13", label: "Form 13" },
-] as const;
+];
+
+function statusTone(s: string): Tone {
+  if (s === "SUCCESS" || s === "VALIDATED") return "ok";
+  if (s === "FAILED" || s === "REJECTED") return "critical";
+  if (s === "PARTIAL") return "warn";
+  return "neutral";
+}
 
 export default function GateDocUploadPanel() {
   const qc = useQueryClient();
-  const [docType, setDocType] = useState<string>("EIR");
+  const [docType, setDocType] = useState("EIR");
   const [file, setFile] = useState<File | null>(null);
-  const [preview, setPreview] = useState<any>(null);
+  const [preview, setPreview] = useState<Record<string, any> | null>(null);
 
   const historyQ = useQuery({
     queryKey: ["gate-doc-uploads", docType],
@@ -44,102 +58,116 @@ export default function GateDocUploadPanel() {
   });
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-end gap-3 rounded-lg border border-slate-800 bg-slate-900/60 p-3">
-        <label className="text-sm">
-          <span className="mb-1 block text-xs text-slate-500">Document type</span>
-          <select
-            value={docType}
-            onChange={(e) => {
-              setDocType(e.target.value);
-              setPreview(null);
-            }}
-            className="rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-200"
+    <div className="flex flex-col gap-3 sm:gap-4">
+      <Card>
+        <CardHeader className="flex-row items-center gap-2">
+          <UploadCloud className="h-4 w-4 text-muted-foreground" aria-hidden />
+          <CardTitle>Upload gate documents</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-[11px] font-medium text-muted-foreground">Document type</span>
+            <FilterSelect
+              value={docType}
+              onChange={(v) => {
+                setDocType(v);
+                setPreview(null);
+              }}
+              options={DOC_TYPES}
+              label="Document type"
+            />
+          </label>
+
+          <Button variant="outline" size="sm" onClick={() => api.gateDocDownloadTemplate(docType)}>
+            <Download className="h-3.5 w-3.5" />
+            Template
+          </Button>
+
+          <label className="flex flex-col gap-1">
+            <span className="text-[11px] font-medium text-muted-foreground">
+              File (CSV / XLS / XLSX)
+            </span>
+            <input
+              type="file"
+              accept=".csv,.xls,.xlsx"
+              onChange={(e) => {
+                setFile(e.target.files?.[0] ?? null);
+                setPreview(null);
+              }}
+              className="h-9 max-w-[16rem] rounded-md border border-border bg-background px-2 py-1.5 text-[13px] text-foreground file:mr-2 file:rounded file:border-0 file:bg-muted file:px-2 file:py-1 file:text-xs file:font-medium file:text-foreground"
+            />
+          </label>
+
+          <Button
+            variant="subtle"
+            size="sm"
+            disabled={!file || validate.isPending}
+            onClick={() => validate.mutate()}
           >
-            {DOC_TYPES.map((d) => (
-              <option key={d.value} value={d.value}>
-                {d.label}
-              </option>
-            ))}
-          </select>
-        </label>
+            {validate.isPending ? "Validating…" : "Validate"}
+          </Button>
 
-        <button
-          onClick={() => api.gateDocDownloadTemplate(docType)}
-          className="rounded-md border border-slate-700 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800"
-        >
-          <Download className="mr-1 inline h-4 w-4" />
-          Template
-        </button>
-
-        <label className="text-sm">
-          <span className="mb-1 block text-xs text-slate-500">File (CSV / XLS / XLSX)</span>
-          <input
-            type="file"
-            accept=".csv,.xls,.xlsx"
-            onChange={(e) => {
-              setFile(e.target.files?.[0] ?? null);
-              setPreview(null);
-            }}
-            className="text-sm text-slate-400 file:mr-2 file:rounded file:border-0 file:bg-slate-800 file:px-2 file:py-1 file:text-slate-300"
-          />
-        </label>
-
-        <button
-          disabled={!file || validate.isPending}
-          onClick={() => validate.mutate()}
-          className="rounded-md bg-slate-800 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-700 disabled:opacity-40"
-        >
-          {validate.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Validate"}
-        </button>
-
-        <button
-          disabled={!preview?.valid || upload.isPending}
-          onClick={() => upload.mutate()}
-          className="rounded-md bg-sky-500/20 px-3 py-1.5 text-sm text-sky-200 ring-1 ring-sky-500/40 hover:bg-sky-500/30 disabled:opacity-40"
-        >
-          {upload.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Import"}
-        </button>
-      </div>
+          <Button
+            size="sm"
+            disabled={!preview?.valid || upload.isPending}
+            onClick={() => upload.mutate()}
+          >
+            {upload.isPending ? "Importing…" : "Import"}
+          </Button>
+        </CardContent>
+      </Card>
 
       {(validate.isError || upload.isError) && (
-        <p className="rounded border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
-          {String(((validate.error || upload.error) as Error).message)}
-        </p>
+        <div
+          role="alert"
+          className="flex items-start gap-2 rounded-lg border border-severity-critical/40 bg-severity-critical/10 px-3 py-2 text-xs text-foreground"
+        >
+          <AlertTriangle
+            className="mt-0.5 h-3.5 w-3.5 shrink-0 text-severity-critical"
+            aria-hidden
+          />
+          <span>{String(((validate.error || upload.error) as Error).message)}</span>
+        </div>
       )}
 
       {upload.isSuccess && (
-        <p className="rounded border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
-          <CheckCircle2 className="mr-1 inline h-4 w-4" />
-          {upload.data.status}: imported {upload.data.imported}, skipped {upload.data.skipped},
-          invalid {upload.data.invalid}
-        </p>
+        <div className="flex items-start gap-2 rounded-lg border border-severity-ok/40 bg-severity-ok/10 px-3 py-2 text-xs text-foreground">
+          <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-severity-ok" aria-hidden />
+          <span>
+            {upload.data.status}: imported {upload.data.imported}, skipped {upload.data.skipped},
+            invalid {upload.data.invalid}
+          </span>
+        </div>
       )}
 
       {preview && (
-        <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
-          <h3 className="mb-2 text-sm text-slate-300">
-            <FileUp className="mr-1 inline h-4 w-4" />
-            Validation: {preview.status} — {preview.summary?.valid}/{preview.summary?.rows} rows
-            importable
-          </h3>
+        <Card className="overflow-hidden">
+          <CardHeader className="flex-row flex-wrap items-center gap-2 border-b border-border">
+            <FileUp className="h-4 w-4 text-muted-foreground" aria-hidden />
+            <CardTitle>Validation preview</CardTitle>
+            <StatusChip label={preview.status} tone={statusTone(preview.status)} />
+            <span className="text-[11px] text-muted-foreground">
+              {preview.summary?.valid}/{preview.summary?.rows} rows importable
+            </span>
+          </CardHeader>
+
           {preview.preview?.length > 0 && (
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="text-slate-500">
+              <table className="w-full text-left text-[12px]">
+                <thead className="border-b border-border bg-muted/40 text-[11px] uppercase tracking-wide text-muted-foreground">
                   <tr>
                     {Object.keys(preview.preview[0]).map((k) => (
-                      <th key={k} className="px-2 py-1">
+                      <th key={k} className="px-2.5 py-1.5 font-semibold">
                         {k}
                       </th>
                     ))}
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-800 text-slate-300">
-                  {preview.preview.map((row: any, i: number) => (
-                    <tr key={i}>
-                      {Object.values(row).map((v: any, j: number) => (
-                        <td key={j} className="px-2 py-1 font-mono">
+                <tbody className="divide-y divide-border">
+                  {preview.preview.map((row: Record<string, unknown>, i: number) => (
+                    <tr key={i} className="hover:bg-muted/40">
+                      {Object.values(row).map((v, j) => (
+                        <td key={j} className="px-2.5 py-1.5 font-mono text-foreground">
                           {String(v)}
                         </td>
                       ))}
@@ -149,68 +177,89 @@ export default function GateDocUploadPanel() {
               </table>
             </div>
           )}
-          {preview.errors?.length > 0 && (
-            <ul className="mt-2 space-y-0.5 text-xs text-rose-300">
-              {preview.errors.slice(0, 10).map((e: any, i: number) => (
-                <li key={i}>
-                  <AlertTriangle className="mr-1 inline h-3 w-3" />
-                  {e.row_number ? `row ${e.row_number}: ` : ""}
-                  {e.error_detail}
-                </li>
+
+          {(preview.errors?.length > 0 || preview.warnings?.length > 0) && (
+            <CardContent className="space-y-1">
+              {preview.errors?.slice(0, 10).map((e: Record<string, any>, i: number) => (
+                <div key={`e${i}`} className="flex items-start gap-1.5 text-[11px]">
+                  <AlertTriangle
+                    className="mt-0.5 h-3 w-3 shrink-0 text-severity-critical"
+                    aria-hidden
+                  />
+                  <span className="text-foreground">
+                    {e.row_number ? `row ${e.row_number}: ` : ""}
+                    {e.error_detail}
+                  </span>
+                </div>
               ))}
-            </ul>
-          )}
-          {preview.warnings?.length > 0 && (
-            <ul className="mt-2 space-y-0.5 text-xs text-amber-300">
-              {preview.warnings.slice(0, 10).map((w: any, i: number) => (
-                <li key={i}>
-                  {w.row_number ? `row ${w.row_number}: ` : ""}
-                  {w.error_detail}
-                </li>
+              {preview.warnings?.slice(0, 10).map((w: Record<string, any>, i: number) => (
+                <div key={`w${i}`} className="flex items-start gap-1.5 text-[11px]">
+                  <AlertTriangle
+                    className="mt-0.5 h-3 w-3 shrink-0 text-severity-warning"
+                    aria-hidden
+                  />
+                  <span className="text-muted-foreground">
+                    {w.row_number ? `row ${w.row_number}: ` : ""}
+                    {w.error_detail}
+                  </span>
+                </div>
               ))}
-            </ul>
+            </CardContent>
           )}
-        </section>
+        </Card>
       )}
 
-      <section className="rounded-lg border border-slate-800 bg-slate-900/60">
-        <h3 className="border-b border-slate-800 px-3 py-2 text-sm text-slate-300">
-          Import history
-        </h3>
-        <table className="w-full text-left text-xs">
-          <thead className="text-slate-500">
-            <tr>
-              <th className="px-3 py-1.5">File</th>
-              <th className="px-3 py-1.5">Type</th>
-              <th className="px-3 py-1.5">Rows</th>
-              <th className="px-3 py-1.5">Imported</th>
-              <th className="px-3 py-1.5">Status</th>
-              <th className="px-3 py-1.5">When</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-800 text-slate-300">
-            {historyQ.data?.items?.map((f: any) => (
-              <tr key={f.id}>
-                <td className="px-3 py-1.5 font-mono">{f.source_file}</td>
-                <td className="px-3 py-1.5">{f.doc_type}</td>
-                <td className="px-3 py-1.5">{f.record_count}</td>
-                <td className="px-3 py-1.5">{f.imported_count}</td>
-                <td className="px-3 py-1.5">{f.import_status}</td>
-                <td className="px-3 py-1.5 text-slate-500">
-                  {f.created_at ? new Date(f.created_at).toLocaleString() : "—"}
-                </td>
-              </tr>
-            ))}
-            {historyQ.data?.items?.length === 0 && (
-              <tr>
-                <td colSpan={6} className="px-3 py-6 text-center text-slate-500">
-                  No uploads yet.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </section>
+      <Card className="overflow-hidden">
+        <CardHeader className="flex-row items-center gap-2 border-b border-border">
+          <CardTitle>Import history</CardTitle>
+        </CardHeader>
+        {historyQ.isLoading ? (
+          <LoadingState />
+        ) : historyQ.isError ? (
+          <ErrorState onRetry={() => historyQ.refetch()} />
+        ) : (historyQ.data?.items?.length ?? 0) === 0 ? (
+          <EmptyState>
+            <div className="flex flex-col items-center gap-2">
+              <Inbox className="h-6 w-6 text-muted-foreground" aria-hidden />
+              <div className="font-medium text-foreground">No uploads yet</div>
+              <p className="text-xs text-muted-foreground">
+                Download the template, fill it in, then validate and import.
+              </p>
+            </div>
+          </EmptyState>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-[12px]">
+              <thead className="border-b border-border bg-muted/40 text-[11px] uppercase tracking-wide text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2 font-semibold">File</th>
+                  <th className="px-3 py-2 font-semibold">Type</th>
+                  <th className="px-3 py-2 text-right font-semibold">Rows</th>
+                  <th className="px-3 py-2 text-right font-semibold">Imported</th>
+                  <th className="px-3 py-2 font-semibold">Status</th>
+                  <th className="px-3 py-2 font-semibold">When</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {historyQ.data?.items?.map((f: Record<string, any>) => (
+                  <tr key={f.id} className="hover:bg-muted/40">
+                    <td className="px-3 py-2 font-mono text-foreground">{f.source_file}</td>
+                    <td className="px-3 py-2 text-muted-foreground">{f.doc_type}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{f.record_count}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{f.imported_count}</td>
+                    <td className="px-3 py-2">
+                      <StatusChip label={f.import_status} tone={statusTone(f.import_status)} />
+                    </td>
+                    <td className="px-3 py-2 text-muted-foreground">
+                      {f.created_at ? new Date(f.created_at).toLocaleString() : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
     </div>
   );
 }

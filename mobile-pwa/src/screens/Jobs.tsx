@@ -112,11 +112,7 @@ export default function Jobs() {
               </strong>
               <Chip
                 status={
-                  job.status === "COMPLETED"
-                    ? "ok"
-                    : job.status === "CANCELLED"
-                      ? "down"
-                      : "open"
+                  job.status === "COMPLETED" ? "ok" : job.status === "CANCELLED" ? "down" : "open"
                 }
               >
                 {STATUS_LABEL[job.status]}

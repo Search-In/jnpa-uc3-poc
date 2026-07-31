@@ -42,7 +42,12 @@ type Tab = "lifecycle" | "documents" | "chains" | "upload";
 const STEPS: { key: string; label: string; icon: typeof Truck; statuses: JobStatus[] }[] = [
   { key: "assignment", label: "Truck Assignment", icon: Truck, statuses: ["ASSIGNED", "ACCEPTED"] },
   { key: "gate_in", label: "Gate In (BAT lane)", icon: DoorOpen, statuses: ["AT_GATE"] },
-  { key: "yard", label: "Yard Pickup / Drop", icon: Boxes, statuses: ["IN_YARD", "PICKED_UP", "DROPPED"] },
+  {
+    key: "yard",
+    label: "Yard Pickup / Drop",
+    icon: Boxes,
+    statuses: ["IN_YARD", "PICKED_UP", "DROPPED"],
+  },
   { key: "scan", label: "RMS Scanner", icon: ScanLine, statuses: [] },
   { key: "gate_out", label: "Gate Out", icon: ArrowRight, statuses: ["COMPLETED"] },
 ];
@@ -79,8 +84,7 @@ export default function Uc3Lifecycle() {
 
   const jobsQ = useQuery({
     queryKey: ["uc3-jobs", term],
-    queryFn: () =>
-      api.jobs(term ? { container: term.toUpperCase(), limit: 25 } : { limit: 25 }),
+    queryFn: () => api.jobs(term ? { container: term.toUpperCase(), limit: 25 } : { limit: 25 }),
   });
 
   const jobQ = useQuery({
@@ -239,8 +243,8 @@ export default function Uc3Lifecycle() {
         <div>
           <h1 className="text-xl font-semibold text-slate-100">UC-3 Lifecycle Console</h1>
           <p className="text-sm text-slate-400">
-            Transporter → PDP → vehicle → job → gate document → gate-in → yard → scanner →
-            release → gate-out, in one view.
+            Transporter → PDP → vehicle → job → gate document → gate-in → yard → scanner → release →
+            gate-out, in one view.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -308,7 +312,9 @@ export default function Uc3Lifecycle() {
                       <span className="font-mono text-sm text-slate-200">
                         {j.container_number || j.group_code || `job #${j.id}`}
                       </span>
-                      <span className={`rounded border px-1.5 py-0.5 text-[10px] ${statusTone(j.status)}`}>
+                      <span
+                        className={`rounded border px-1.5 py-0.5 text-[10px] ${statusTone(j.status)}`}
+                      >
                         {j.status}
                       </span>
                     </div>
@@ -374,10 +380,16 @@ export default function Uc3Lifecycle() {
                         >
                           <span
                             className={`flex h-7 w-7 items-center justify-center rounded-full ${
-                              s.done ? "bg-emerald-500/20 text-emerald-300" : "bg-slate-800 text-slate-500"
+                              s.done
+                                ? "bg-emerald-500/20 text-emerald-300"
+                                : "bg-slate-800 text-slate-500"
                             }`}
                           >
-                            {s.done ? <CheckCircle2 className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
+                            {s.done ? (
+                              <CheckCircle2 className="h-4 w-4" />
+                            ) : (
+                              <Icon className="h-4 w-4" />
+                            )}
                           </span>
                           <span className="flex-1">
                             <span className="block text-sm text-slate-200">{s.label}</span>
@@ -629,8 +641,8 @@ export default function Uc3Lifecycle() {
               <ul className="space-y-0.5">
                 {chainStatsQ.data.by_anomaly.map((a) => (
                   <li key={a.code}>
-                    <span className="font-mono text-amber-300">{a.code}</span> — {a.chains} chain(s):{" "}
-                    {chainStatsQ.data?.anomaly_labels?.[a.code]}
+                    <span className="font-mono text-amber-300">{a.code}</span> — {a.chains}{" "}
+                    chain(s): {chainStatsQ.data?.anomaly_labels?.[a.code]}
                   </li>
                 ))}
               </ul>

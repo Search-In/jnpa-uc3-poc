@@ -156,16 +156,15 @@ export const api = {
     http<{ items: DriverJob[]; count: number; total: number; scope: string }>(
       `/api/driver/jobs?include_closed=${includeClosed ? "true" : "false"}`,
     ),
-  myJob: (jobId: number) => http<DriverJob & { events: DriverJobEvent[] }>(
-    `/api/driver/jobs/${jobId}`,
-  ),
+  myJob: (jobId: number) =>
+    http<DriverJob & { events: DriverJobEvent[] }>(`/api/driver/jobs/${jobId}`),
   jobAccept: (jobId: number) =>
     http<{ job: DriverJob }>(`/api/driver/jobs/${jobId}/accept`, { method: "POST" }),
   jobGateArrival: (jobId: number, gateId?: string) =>
-    http<{ gate_event: unknown; job: DriverJob | null }>(
-      `/api/driver/jobs/${jobId}/gate-arrival`,
-      { method: "POST", body: JSON.stringify({ gate_id: gateId }) },
-    ),
+    http<{ gate_event: unknown; job: DriverJob | null }>(`/api/driver/jobs/${jobId}/gate-arrival`, {
+      method: "POST",
+      body: JSON.stringify({ gate_id: gateId }),
+    }),
   jobPickup: (jobId: number, yardLocation?: string) =>
     http<{ movement: unknown; job: DriverJob | null }>(`/api/driver/jobs/${jobId}/pickup`, {
       method: "POST",

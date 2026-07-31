@@ -612,9 +612,13 @@ export const api = {
     Object.entries(params || {}).forEach(
       ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
     );
-    return http<{ items: EcyCfsChain[]; total: number; limit: number; offset: number; count: number }>(
-      `/api/cfs-ecy/chains${qs.toString() ? `?${qs}` : ""}`,
-    );
+    return http<{
+      items: EcyCfsChain[];
+      total: number;
+      limit: number;
+      offset: number;
+      count: number;
+    }>(`/api/cfs-ecy/chains${qs.toString() ? `?${qs}` : ""}`);
   },
   ecyCfsChain: (containerNumber: string) =>
     http<EcyCfsChain>(`/api/cfs-ecy/chains/${encodeURIComponent(containerNumber)}`),
@@ -653,9 +657,14 @@ export const api = {
   gateDocsForTruck: (truckNo: string) =>
     http<GateDocBundle>(`/api/gate-docs/truck/${encodeURIComponent(truckNo)}`),
   gateDocTat: (terminal?: string) =>
-    http<GateDocTat>(`/api/gate-docs/tat${terminal ? `?terminal=${encodeURIComponent(terminal)}` : ""}`),
+    http<GateDocTat>(
+      `/api/gate-docs/tat${terminal ? `?terminal=${encodeURIComponent(terminal)}` : ""}`,
+    ),
   gateDocDownloadTemplate: (docType: string) =>
-    downloadFile(`/api/gate-docs/templates/${docType}`, `gate_doc_${docType.toLowerCase()}_template.csv`),
+    downloadFile(
+      `/api/gate-docs/templates/${docType}`,
+      `gate_doc_${docType.toLowerCase()}_template.csv`,
+    ),
   gateDocUploadValidate: (docType: string, file: File) => {
     const f = new FormData();
     f.append("file", file);
@@ -691,9 +700,13 @@ export const api = {
     Object.entries(params || {}).forEach(
       ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
     );
-    return http<{ items: ContainerJob[]; total: number; limit: number; offset: number; count: number }>(
-      `/api/jobs${qs.toString() ? `?${qs}` : ""}`,
-    );
+    return http<{
+      items: ContainerJob[];
+      total: number;
+      limit: number;
+      offset: number;
+      count: number;
+    }>(`/api/jobs${qs.toString() ? `?${qs}` : ""}`);
   },
   job: (jobId: number) => http<ContainerJob & { events: JobEvent[] }>(`/api/jobs/${jobId}`),
   jobValidate: (body: JobAssignInput) =>
@@ -737,12 +750,19 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  gateEvents: (params?: { plate?: string; container?: string; job_id?: number; limit?: number }) => {
+  gateEvents: (params?: {
+    plate?: string;
+    container?: string;
+    job_id?: number;
+    limit?: number;
+  }) => {
     const qs = new URLSearchParams();
     Object.entries(params || {}).forEach(
       ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
     );
-    return http<{ items: any[]; count: number }>(`/api/gate/events${qs.toString() ? `?${qs}` : ""}`);
+    return http<{ items: any[]; count: number }>(
+      `/api/gate/events${qs.toString() ? `?${qs}` : ""}`,
+    );
   },
 
   yardMovementCreate: (body: {
@@ -782,7 +802,9 @@ export const api = {
     Object.entries(params || {}).forEach(
       ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
     );
-    return http<{ items: any[]; count: number }>(`/api/scan/events${qs.toString() ? `?${qs}` : ""}`);
+    return http<{ items: any[]; count: number }>(
+      `/api/scan/events${qs.toString() ? `?${qs}` : ""}`,
+    );
   },
 
   // --- Berthing Reports (module 7) — vessel calls + lifecycle + Data Upload ---

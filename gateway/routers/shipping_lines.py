@@ -280,7 +280,11 @@ async def list_containers(
 # -------------------------------------------------------------------- import
 @router.post("/import", response_model=ImportResponse, status_code=status.HTTP_200_OK,
              summary="Import all official customer files under $SHIPPING_LINES_DATA_DIR (idempotent)")
-async def import_shipping_lines(svc: ShippingLinesService = Depends(get_service)) -> ImportResponse:
+async def import_shipping_lines(request: Request,
+                                svc: ShippingLinesService = Depends(get_service)) -> ImportResponse:
+    # Same uploader gate as the /upload sibling — this was the one write in the
+    # module that skipped it (audit C7 note).
+    require_uploader(request)
     try:
         summary_ = await svc.import_configured()
     except FileNotFoundError as exc:

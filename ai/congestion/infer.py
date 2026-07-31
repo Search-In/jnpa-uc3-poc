@@ -313,10 +313,38 @@ async def _store_snapshots(rows: List[HistoryRow]) -> int:
                     [(r.ts, r.segment_id, r.speed_kmh, r.jam_factor, r.source) for r in recent],
                 )
             conn.commit()
-        return len(recent)
     except Exception as exc:  # noqa: BLE001
         log.warning("snapshot_store_failed", error=str(exc))
         return 0
+    _publish_snapshots(recent)
+    return len(recent)
+
+
+def _publish_snapshots(rows: List[HistoryRow]) -> None:
+    """Best-effort publish of persisted snapshots to Kafka ``traffic.snapshots``.
+
+    The gateway's traffic pump consumes this topic and fans each row out as a
+    WS ``traffic`` frame; until now NOTHING produced it, so the pump (and the
+    dashboard's live-traffic listener) sat silent forever (audit H11).
+    """
+    try:
+        from jnpa_shared import kafka_io
+        from jnpa_shared.schemas import TOPIC_TRAFFIC
+
+        producer = kafka_io.get_producer()
+        for r in rows:
+            kafka_io.produce(
+                producer, TOPIC_TRAFFIC,
+                {"ts": r.ts.isoformat() if hasattr(r.ts, "isoformat") else str(r.ts),
+                 "segment_id": r.segment_id, "speed_kmh": r.speed_kmh,
+                 "jam_factor": r.jam_factor, "source": r.source},
+                key=r.segment_id, flush=False,
+                event_type="jnpa.traffic.snapshot", source_system="LIVE",
+                raw_ref="congestion://store_snapshots",
+            )
+        producer.flush(2.0)
+    except Exception as exc:  # noqa: BLE001 - Kafka down must never fail persistence
+        log.warning("snapshot_publish_failed", error=str(exc))
 
 
 def run() -> None:  # pragma: no cover - container entrypoint

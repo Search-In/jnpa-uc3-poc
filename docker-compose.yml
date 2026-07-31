@@ -665,6 +665,10 @@ services:
       HERE_API_KEY: ${HERE_API_KEY:-}
       TOMTOM_API_KEY: ${TOMTOM_API_KEY:-}
       # Training / target knobs.
+      # Per-source live-fetch budget for the google->here->tomtom cascade.
+      # Default 1 s is tighter than a cold TLS handshake on slow networks —
+      # override (e.g. 3) in .env.local when live keys are set.
+      CONGESTION_SOURCE_TIMEOUT_S: ${CONGESTION_SOURCE_TIMEOUT_S:-1.0}
       CONGESTION_HISTORY_DAYS: ${CONGESTION_HISTORY_DAYS:-14}
       CONGESTION_EPOCHS: ${CONGESTION_EPOCHS:-50}
       CONGESTION_TARGET_F1: ${CONGESTION_TARGET_F1:-0.85}

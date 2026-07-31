@@ -46,7 +46,7 @@ CREATE SCHEMA IF NOT EXISTS core;
 CREATE TABLE IF NOT EXISTS core.vehicle (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     vehicle_id      text NOT NULL UNIQUE,
-    vehicle_number  text,
+    vehicle_no      text UNIQUE,
     vehicle_type    text,
     chassis_number  text,
     rfid_fastag_id  text,
@@ -57,9 +57,11 @@ CREATE TABLE IF NOT EXISTS core.vehicle (
     updated_at      timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_fleet_vehicles_vehicle_id ON core.vehicle (vehicle_id);
-CREATE INDEX IF NOT EXISTS idx_fleet_vehicles_number ON core.vehicle (vehicle_number);
+CREATE INDEX IF NOT EXISTS idx_fleet_vehicles_number ON core.vehicle (vehicle_no);
 CREATE INDEX IF NOT EXISTS idx_fleet_vehicles_status ON core.vehicle (status);
 """
+# ^ column is vehicle_no (the v3 runtime name every query in this module uses);
+# the old vehicle_number here made the dev bootstrap diverge from runtime SQL.
 
 # in-memory fallback store (DEV ONLY — used when no Postgres DSN is reachable),
 # keyed by normalised vehicle_id.

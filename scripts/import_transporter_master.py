@@ -216,32 +216,36 @@ def load_rows(xlsx_path: str, limit: Optional[int]) -> List[Dict[str, Any]]:
 
 
 # --- upsert ------------------------------------------------------------------
+# v3 runtime schema (core.transporter): the source company id IS the arch PK
+# `company_id`; legacy DTO names map to the arch column names (company_name,
+# mobile_number, document_type, document_file, user_id). Mirrors the proven
+# upsert in services/transporters_drivers/repository.py.
 _UPSERT = """
 INSERT INTO core.transporter AS t
-    (source_company_id, source_user_id, name, contact_person, designation,
-     email, mobile, address, doc_type, doc_file, contact, status)
+    (company_id, user_id, company_name, contact_person, designation,
+     email, mobile_number, address, document_type, document_file, contact, status)
 VALUES
     (:source_company_id, :source_user_id, :name, :contact_person, :designation,
      :email, :mobile, :address, :doc_type, :doc_file,
      CAST(:contact AS jsonb), 'ACTIVE')
-ON CONFLICT (source_company_id) DO UPDATE SET
-    source_user_id = EXCLUDED.source_user_id,
-    name           = EXCLUDED.name,
+ON CONFLICT (company_id) DO UPDATE SET
+    user_id        = EXCLUDED.user_id,
+    company_name   = EXCLUDED.company_name,
     contact_person = EXCLUDED.contact_person,
     designation    = EXCLUDED.designation,
     email          = EXCLUDED.email,
-    mobile         = EXCLUDED.mobile,
+    mobile_number  = EXCLUDED.mobile_number,
     address        = EXCLUDED.address,
-    doc_type       = EXCLUDED.doc_type,
-    doc_file       = EXCLUDED.doc_file,
+    document_type  = EXCLUDED.document_type,
+    document_file  = EXCLUDED.document_file,
     contact        = EXCLUDED.contact,
     updated_at     = now()
-WHERE (t.source_user_id, t.name, t.contact_person, t.designation, t.email,
-       t.mobile, t.address, t.doc_type, t.doc_file, t.contact)
+WHERE (t.user_id, t.company_name, t.contact_person, t.designation, t.email,
+       t.mobile_number, t.address, t.document_type, t.document_file, t.contact)
   IS DISTINCT FROM
-      (EXCLUDED.source_user_id, EXCLUDED.name, EXCLUDED.contact_person,
-       EXCLUDED.designation, EXCLUDED.email, EXCLUDED.mobile, EXCLUDED.address,
-       EXCLUDED.doc_type, EXCLUDED.doc_file, EXCLUDED.contact)
+      (EXCLUDED.user_id, EXCLUDED.company_name, EXCLUDED.contact_person,
+       EXCLUDED.designation, EXCLUDED.email, EXCLUDED.mobile_number, EXCLUDED.address,
+       EXCLUDED.document_type, EXCLUDED.document_file, EXCLUDED.contact)
 RETURNING (xmax = 0) AS inserted
 """
 

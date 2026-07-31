@@ -259,6 +259,37 @@ class CustomsRepository:
         where, params = self._where(filters, ("igm_no",))
         return await self._count(f"SELECT count(*) FROM core.rms_scan_report{where}", params)
 
+    @staticmethod
+    def _rms_container_where(filters: Mapping[str, Any]) -> tuple[str, dict]:
+        clauses = ["igm_no = CAST(:igm_no AS bigint)"]
+        params: dict = {"igm_no": filters["igm_no"]}
+        if filters.get("machine_type"):
+            clauses.append("upper(machine_type) = upper(:machine_type)")
+            params["machine_type"] = filters["machine_type"]
+        if filters.get("scan_location"):
+            clauses.append("scan_location ILIKE :scan_location")
+            params["scan_location"] = f"%{filters['scan_location']}%"
+        if filters.get("container_no"):
+            clauses.append("container_no = :container_no")
+            params["container_no"] = str(filters["container_no"]).strip().upper()
+        return " WHERE " + " AND ".join(clauses), params
+
+    async def list_rms_containers(self, *, filters: Mapping[str, Any],
+                                  limit: int, offset: int) -> list[dict]:
+        """The selected containers of an RMS scan list (per IGM), with the scanner
+        machine/location routing facts — previously only reachable per-container."""
+        where, params = self._rms_container_where(filters)
+        params.update(limit=limit, offset=offset)
+        return await self._rows(
+            "SELECT id, report_id, igm_no, sl_no, container_no, iso_valid, "
+            "machine_type AS scan_machine, scan_location, cfs_name, goods_desc, created_at "
+            f"FROM core.rms_scan_container{where} "
+            "ORDER BY sl_no NULLS LAST, id LIMIT :limit OFFSET :offset", params)
+
+    async def count_rms_containers(self, *, filters: Mapping[str, Any]) -> int:
+        where, params = self._rms_container_where(filters)
+        return await self._count(f"SELECT count(*) FROM core.rms_scan_container{where}", params)
+
     async def list_leo(self, *, filters: Mapping[str, Any], limit: int, offset: int) -> list[dict]:
         where, params = self._where(filters, ("sb_no",))
         params.update(limit=limit, offset=offset)
@@ -814,8 +845,16 @@ INSERT INTO core.rms_scan_container
 VALUES
     (:scanlist_id, {", ".join(('CAST(:igm_no AS bigint)' if c == 'igm_no' else f':{c}')
                               for c in _RMS_CONT_COLS)})
-ON CONFLICT (report_id, sl_no) DO NOTHING
+ON CONFLICT (report_id, sl_no) DO UPDATE SET
+    container_no  = EXCLUDED.container_no,
+    iso_valid     = EXCLUDED.iso_valid,
+    machine_type  = EXCLUDED.machine_type,
+    scan_location = EXCLUDED.scan_location,
+    cfs_name      = EXCLUDED.cfs_name,
+    goods_desc    = EXCLUDED.goods_desc
 """
+# ^ DO UPDATE (was DO NOTHING): a re-issued/amended selection list that changes a
+# container's assigned scanner machine must not be silently discarded (audit).
 
 # LEO / Shipping Bill --------------------------------------------------------
 _LEO_COLS = _cols("sb_no, sb_date, site_id, rotation_no, leo_date, action")

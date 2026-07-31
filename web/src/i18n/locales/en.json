@@ -50,7 +50,8 @@
     "bottlenecks": "Road Bottlenecks",
     "reefer": "Reefer Availability",
     "integrations": "Integrations",
-    "doubleTrip": "Double Trip"
+    "doubleTrip": "Double Trip",
+    "uc3Lifecycle": "UC-3 Lifecycle"
   },
   "followBox": {
     "title": "Follow the Box",

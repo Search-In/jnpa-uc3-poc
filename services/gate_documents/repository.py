@@ -34,9 +34,10 @@ _COLS: dict[str, tuple[str, ...]] = {
             "driver_licence", "truck_in_time", "truck_out_time", "gross_weight_mt",
             "company", "cfs_from", "cfs_to", "group_code", "scanner_stamp", "remarks",
             "row_sha256", "source_file"),
-    "PIN": ("pin_number", "ticket_type", "terminal", "truck_no", "company",
-            "container_number", "iso_valid", "group_code", "yard_location", "gate",
-            "move_type", "leg_seq", "issued_at", "remarks", "row_sha256", "source_file"),
+    "PIN": ("pin_number", "transaction_no", "ticket_type", "terminal", "truck_no",
+            "company", "container_number", "iso_valid", "line_code", "group_code",
+            "yard_location", "gate", "move_type", "leg_seq", "issued_at", "remarks",
+            "row_sha256", "source_file"),
 }
 
 # Form-13 fields that live inside core.gate_capture.payload (everything except the

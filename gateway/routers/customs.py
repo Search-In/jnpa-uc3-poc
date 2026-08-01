@@ -152,6 +152,17 @@ async def list_ooc(
     return _page(items, total, limit, offset, response)
 
 
+@router.get("/ooc/{be_no}/items", summary="One Bill of Entry: OOC facts, containers and invoice items")
+async def ooc_detail(be_no: str, svc: CustomsService = Depends(get_service)) -> Dict[str, Any]:
+    """Everything behind one BE — the out-of-charge grant, the containers it covers
+    and every invoice line item (description, HS code, CIF/assessable value)."""
+    view = await svc.ooc_detail(be_no)
+    if view.get("ooc") is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail={"error": "bill_of_entry_not_found", "be_no": be_no})
+    return view
+
+
 # ---------------------------------------------------------------------- SMTP
 @router.get("/smtp", response_model=Page, summary="Sub-Manifest Transhipment Permits (CHPOI13)")
 async def list_smtp(

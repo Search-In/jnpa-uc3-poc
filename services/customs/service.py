@@ -312,6 +312,9 @@ class CustomsService:
     async def count_ooc(self, *, filters):
         return await self._repo.count_ooc(filters=filters)
 
+    async def ooc_detail(self, be_no: str):
+        return await self._repo.ooc_detail(be_no)
+
     async def list_smtp(self, *, filters, limit, offset):
         return await self._repo.list_smtp(filters=filters, limit=limit, offset=offset)
 

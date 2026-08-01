@@ -262,6 +262,42 @@ class CustomsRepository:
         where, params = self._where(filters, ("bill_of_entry_no", "igm_no", "out_of_charge_no"))
         return await self._count(f"SELECT count(*) FROM core.bill_of_entry_ooc{where}", params)
 
+    async def ooc_detail(self, be_no: str) -> dict:
+        """One Bill of Entry with its out-of-charge facts, the containers it covers
+        and every invoice line item.
+
+        core.ooc_item carries BOTH the container and the invoice item on one row
+        (one row per BE + container + invoice + item serial), so the container list
+        is the DISTINCT projection of the same table the items come from — there is
+        no separate container table to join."""
+        # be_no is bigint; bind as int so asyncpg does not reject a str param.
+        try:
+            key = int(str(be_no).strip())
+        except ValueError:
+            return {"bill_of_entry_no": be_no, "ooc": None, "containers": [], "items": []}
+        params = {"be": key}
+        ooc = await self._one(
+            "SELECT be_no AS bill_of_entry_no, be_date AS bill_of_entry_date, document_type, "
+            "igm_no, igm_line_no AS line_no, igm_subline_no AS subline_no, "
+            "ooc_no AS out_of_charge_no, ooc_date AS out_of_charge_date, "
+            "importer_name, importer_addr AS importer_address, importer_city, pincode AS pin_code, "
+            "iec_code AS ie_code, cha_code, country_of_origin, nature_of_cargo, "
+            "packages AS no_of_packages, quantity AS quantity_out_of_charged, "
+            "quantity_unit AS unit_of_quantity, assessable_value, cif_value, "
+            "duty_paid AS total_customs_duty "
+            "FROM core.bill_of_entry_ooc WHERE be_no = :be", params)
+        containers = await self._rows(
+            "SELECT DISTINCT container_no FROM core.ooc_item WHERE be_no = :be "
+            "ORDER BY container_no", params)
+        items = await self._rows(
+            "SELECT container_no, invoice_no AS invoice_number, item_sr_no, "
+            "item_desc AS item_description, hs_code AS hs_classification, "
+            "cif_value, assessable_value "
+            "FROM core.ooc_item WHERE be_no = :be "
+            "ORDER BY container_no, invoice_no, item_sr_no", params)
+        return {"bill_of_entry_no": be_no, "ooc": ooc,
+                "containers": [r["container_no"] for r in containers], "items": items}
+
     async def list_smtp(self, *, filters: Mapping[str, Any], limit: int, offset: int) -> list[dict]:
         where, params = self._where(filters, ("smtp_no", "igm_no", "bond_no"), alias="s")
         params.update(limit=limit, offset=offset)

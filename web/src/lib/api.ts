@@ -4,6 +4,7 @@
 // Query surfaces the error state.
 
 import { getToken } from "./auth";
+import type { AvailableVehicle } from "./types";
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   // Attach the bearer token when a session exists (auth-enabled builds). When
@@ -27,6 +28,48 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+// The gateway reports refusals as `{detail: {error, detail, ...extra}}` with a
+// machine-readable `error` code (e.g. "pdp_expired", "no_gate_document"), but
+// http() flattens that into an Error message so TanStack Query can surface it.
+// This reads the structure back out so a caller can render the precise reason
+// instead of a raw "400 Bad Request — {...}" string.
+export interface ApiErrorInfo {
+  status: number | null;
+  code: string | null;
+  detail: string;
+  extra: Record<string, unknown>;
+}
+
+export function apiError(err: unknown): ApiErrorInfo {
+  const message = err instanceof Error ? err.message : String(err ?? "");
+  const status = Number.parseInt(message, 10);
+  const sep = message.indexOf(" — ");
+  const out: ApiErrorInfo = {
+    status: Number.isNaN(status) ? null : status,
+    code: null,
+    detail: message,
+    extra: {},
+  };
+  if (sep === -1) return out;
+  try {
+    const body = JSON.parse(message.slice(sep + 3)) as { detail?: unknown };
+    const d = body?.detail;
+    if (typeof d === "string") return { ...out, detail: d };
+    if (d && typeof d === "object") {
+      const { error, detail, ...extra } = d as Record<string, unknown>;
+      return {
+        ...out,
+        code: typeof error === "string" ? error : null,
+        detail: typeof detail === "string" ? detail : out.detail,
+        extra,
+      };
+    }
+  } catch {
+    /* non-JSON error body — keep the raw message */
+  }
+  return out;
 }
 
 // Authenticated file download. A plain <a href>/new-tab navigation can NOT carry
@@ -735,6 +778,21 @@ export const api = {
     http<ContainerJob & { events: JobEvent[] }>(
       `/api/cargo-jobs/container/${encodeURIComponent(containerNo)}`,
     ),
+
+  // --- assignment dropdown sources ------------------------------------------
+  // The two masters a job is raised against. Both resolve to the SAME tables the
+  // assignment validator checks (core.vehicle / core.driver_identity), so a
+  // selected option's id is always a valid vehicle_id / driver_id.
+  // NOTE: these two live under a stricter RBAC policy than /api/jobs itself
+  // (CUSTOMS + DTCCC_ADMIN only) — callers must handle 403 (see JobAssignPanel).
+  availableVehicles: (q?: string, limit = 50) => {
+    const qs = new URLSearchParams({ limit: String(limit) });
+    if (q) qs.set("q", q);
+    return http<{ vehicles: AvailableVehicle[]; count: number }>(
+      `/api/vehicles/available?${qs.toString()}`,
+    );
+  },
+  activeDrivers: () => http<{ drivers: ActiveDriver[]; count: number }>("/api/identity/drivers"),
 
   gateEventCreate: (body: {
     event_type: string;
@@ -1595,6 +1653,15 @@ export interface JobCheck {
   ok: boolean;
   detail: string;
   [k: string]: unknown;
+}
+// An enrolled driver from core.driver_identity (GET /api/identity/drivers).
+// `license_no` is what the PDP permit check is resolved through, so a driver
+// without one can never clear validation.
+export interface ActiveDriver {
+  driver_id: string;
+  name?: string | null;
+  license_no?: string | null;
+  photo_url?: string | null;
 }
 export interface JobAssignInput {
   container_number?: string;

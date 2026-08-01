@@ -52,6 +52,7 @@ import { EmptyState, ErrorState, LoadingState } from "@/components/ui/misc";
 
 import { api } from "../lib/api";
 import type { ContainerJob, EcyCfsChain, JobEvent, JobStatus } from "../lib/api";
+import JobAssignPanel from "@/components/uc3/JobAssignPanel";
 import GateDocUploadPanel from "./gatedocs/UploadPanel";
 import DocumentOCR from "@/screens/DocumentOCR";
 
@@ -320,6 +321,17 @@ export default function Uc3Lifecycle() {
                 sub={scanQ.data?.machine_code ?? undefined}
               />
             </StatGrid>
+
+            {/* The CREATE step. Everything below operates on a job that already
+                exists; this is where one is raised. On success it selects the
+                new job so the stepper opens straight at Assignment -> Accept. */}
+            <JobAssignPanel
+              defaultContainer={term}
+              onAssigned={(jobId) => {
+                setSelectedJob(jobId);
+                setOpenStep("assignment");
+              }}
+            />
 
             <SearchInput
               value={term}

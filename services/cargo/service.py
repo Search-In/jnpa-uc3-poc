@@ -21,6 +21,7 @@ from .repository import (
     CargoNotFound,
     CargoRepository,
     CargoTransitionError,
+    _infer_lifecycle,
 )
 
 log = get_logger("services.cargo.service")
@@ -95,9 +96,10 @@ _LIFECYCLE_RANK: dict[str, int] = {
 # rank lies strictly between the current and target ranks.
 _MANDATORY_STATES: frozenset[str] = frozenset(
     {LC_CREATED, LC_VESSEL_DISCHARGED, LC_YARD_ASSIGNED, LC_VERIFIED, LC_RELEASED})
-# Every non-terminal state — the permissive predecessor set for the LEGACY
-# PUT is_released=true path, which forces lifecycle to RELEASED from anywhere so
-# the UC-III handover query (?status=RELEASED) stays consistent (see update_cargo).
+# Every non-terminal state. Retained as a descriptive helper only: the PUT
+# is_released=true path used to force RELEASED from anywhere via this set, which
+# let a caller bypass VERIFY. update_cargo now applies the same VERIFY gate as
+# POST /release, so no write path may use this as a predecessor set.
 _ALL_NON_RELEASED: frozenset[str] = frozenset(
     s for s in _LIFECYCLE_RANK if s != LC_RELEASED)
 
@@ -248,10 +250,14 @@ class CargoService:
                             since_id=since_id, limit=limit, offset=offset)
 
     # ------------------------------------------------------------------ create
-    async def create_cargo(self, row: Mapping[str, Any]) -> dict:
+    async def create_cargo(self, row: Mapping[str, Any], *,
+                           actor_role: Optional[str] = None) -> dict:
+        """Create a cargo record. The repository writes the container's opening
+        lifecycle audit row (NULL -> CREATED, action CREATE) inside the same
+        transaction, so a container never exists without an audit trail."""
         t0 = perf_counter()
         try:
-            out = await self._repo.create(row)
+            out = await self._repo.create(row, actor_role=actor_role)
         except CargoConflict:
             self._observe("create", "conflict", t0, container=row.get("container_number"))
             raise
@@ -324,6 +330,15 @@ class CargoService:
         # Snapshot the pre-image so the diff can be turned into specific lifecycle
         # events (released / status_changed / yard_assigned / gate_movement).
         old = await self._repo.get(container_number) or {}
+        # A PUT that flips is_released -> true is a release, so it faces the same
+        # VERIFY gate as POST /release. Checked BEFORE the write: letting the flag
+        # through and then failing the lifecycle move would leave the row claiming
+        # released with a lifecycle that never reached RELEASED.
+        if fields.get("is_released") and old and not old.get("is_released"):
+            current = _infer_lifecycle(old)
+            if not can_transition(current, LC_RELEASED):
+                self._observe("update", "illegal_transition", t0, container=container_number)
+                raise CargoTransitionError(container_number, current, LC_RELEASED)
         try:
             out = await self._repo.update(container_number, fields)
         except CargoNotFound:
@@ -332,15 +347,15 @@ class CargoService:
         self._observe("update", "success", t0, container=container_number)
         for event, payload in self._derive_update_events(old, out):
             await self._emit(event, container_number, payload)
-        # LEGACY release path: a PUT that flips is_released -> true also drives the
-        # lifecycle to RELEASED (best-effort, from any state) so the UC-III handover
-        # query (?status=RELEASED) is consistent regardless of which release path was
-        # used. The dedicated POST /release is the VALIDATED path; this keeps the old
-        # contract working AND its lifecycle coherent. cargo.released already fired
-        # above (via the diff), so _advance only adds cargo.lifecycle_changed.
+        # The PUT release path drives the lifecycle to RELEASED as well, so the
+        # UC-III handover query (?status=RELEASED) is consistent regardless of
+        # which release path was used. The VERIFY gate was enforced above, so this
+        # uses the same strict predecessor set as POST /release rather than
+        # forcing the move. cargo.released already fired above (via the diff), so
+        # _advance only adds cargo.lifecycle_changed.
         if not old.get("is_released") and out.get("is_released"):
             await self._advance(container_number, target=LC_RELEASED, action="RELEASE",
-                                allowed_from=_ALL_NON_RELEASED, strict=False)
+                                allowed_from=allowed_predecessors(LC_RELEASED), strict=False)
         return out
 
     # ------------------------------------------------------------------ delete

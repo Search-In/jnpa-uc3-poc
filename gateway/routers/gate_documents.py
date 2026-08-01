@@ -31,6 +31,7 @@ from pydantic import BaseModel
 from ..auth import CONTROL_ROOM, Role, auth_enabled
 from ..metrics import REQUESTS
 from services.gate_documents import GateDocumentService
+from services.gate_documents.repository import FORM13_SOURCES
 from services.gate_documents.upload_parsers import DOC_TYPES, doc_type_ok
 
 router = APIRouter(prefix="/api/gate-docs", tags=["gate-documents"])
@@ -67,6 +68,22 @@ def _check_doc_type(doc_type: str) -> str:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail={"error": "invalid_doc_type", "doc_type": doc_type,
                                     "allowed": list(DOC_TYPES)})
+    return v
+
+
+def _check_source(source: Optional[str]) -> Optional[str]:
+    """Validate the optional Form-13 provenance filter (live | sim). Omitted =
+    both, so a caller always sees that a document exists and judges it by the
+    `source_mode` on each row."""
+    if source is None or source == "":
+        return None
+    v = source.strip().lower()
+    if v == "all":
+        return None
+    if v not in FORM13_SOURCES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail={"error": "invalid_source", "source": source,
+                                    "allowed": [*FORM13_SOURCES, "all"]})
     return v
 
 
@@ -151,28 +168,37 @@ async def list_form13(
     container: Optional[str] = None,
     vehicle: Optional[str] = None,
     terminal: Optional[str] = None,
+    source: Optional[str] = Query(None, description="provenance filter: live | sim | all"),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     svc: GateDocumentService = Depends(get_service),
 ) -> Page:
     filters = {"visit_id": visit_id, "container_number": container,
-               "truck_no": _norm_plate(vehicle) if vehicle else None, "terminal": terminal}
+               "truck_no": _norm_plate(vehicle) if vehicle else None, "terminal": terminal,
+               "source": _check_source(source)}
     return await _list(svc, "FORM13", response, filters, limit, offset)
 
 
 # ------------------------------------------------------------ cross-doc views
 @router.get("/container/{container_no}", summary="Every gate document for one container")
-async def docs_for_container(container_no: str,
-                             svc: GateDocumentService = Depends(get_service)) -> Dict[str, Any]:
-    res = await svc.docs_for_container(container_no.strip().upper())
+async def docs_for_container(
+    container_no: str,
+    source: Optional[str] = Query(None, description="Form-13 provenance filter: live | sim | all (default all)"),
+    svc: GateDocumentService = Depends(get_service),
+) -> Dict[str, Any]:
+    res = await svc.docs_for_container(container_no.strip().upper(),
+                                       source=_check_source(source))
     REQUESTS.labels("gate_docs", "ok").inc()
     return res
 
 
 @router.get("/truck/{truck_no}", summary="Every gate document for one truck (incl. containerless)")
-async def docs_for_truck(truck_no: str,
-                         svc: GateDocumentService = Depends(get_service)) -> Dict[str, Any]:
-    res = await svc.docs_for_truck(_norm_plate(truck_no))
+async def docs_for_truck(
+    truck_no: str,
+    source: Optional[str] = Query(None, description="Form-13 provenance filter: live | sim | all (default all)"),
+    svc: GateDocumentService = Depends(get_service),
+) -> Dict[str, Any]:
+    res = await svc.docs_for_truck(_norm_plate(truck_no), source=_check_source(source))
     REQUESTS.labels("gate_docs", "ok").inc()
     return res
 

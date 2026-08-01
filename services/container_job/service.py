@@ -51,11 +51,56 @@ EVENT_ASSIGNED = "job.assigned"
 EVENT_ACCEPTED = "job.accepted"
 EVENT_GATE_IN = "job.gate_in"
 EVENT_GATE_OUT = "job.gate_out"
+EVENT_IN_YARD = "job.in_yard"
 EVENT_YARD_PICKUP = "job.yard_pickup"
 EVENT_YARD_DROP = "job.yard_drop"
 EVENT_SCAN = "job.scan_recorded"
 EVENT_COMPLETED = "job.completed"
 EVENT_CANCELLED = "job.cancelled"
+
+# Canonical UC-3 milestone codes. The `job.*` strings above are the wire/history
+# names and stay as-is: they are already persisted in core.container_job_event
+# and subscribed to on the bus, so renaming them would orphan existing rows.
+# Every event instead carries its canonical code alongside, which is what the
+# UC-3 lifecycle spec and the dashboards key on. Several wire events collapse
+# onto one milestone (both yard legs are JOB_YARD until the box actually moves).
+JOB_CREATED = "JOB_CREATED"
+JOB_ACCEPTED = "JOB_ACCEPTED"
+JOB_GATE_IN = "JOB_GATE_IN"
+JOB_GATE_OUT = "JOB_GATE_OUT"
+JOB_YARD = "JOB_YARD"
+JOB_PICKUP = "JOB_PICKUP"
+JOB_DROP = "JOB_DROP"
+JOB_SCAN = "JOB_SCAN"
+JOB_COMPLETE = "JOB_COMPLETE"
+JOB_CANCELLED = "JOB_CANCELLED"
+
+EVENT_CODES: Dict[str, str] = {
+    EVENT_ASSIGNED: JOB_CREATED,
+    EVENT_ACCEPTED: JOB_ACCEPTED,
+    EVENT_GATE_IN: JOB_GATE_IN,
+    EVENT_GATE_OUT: JOB_GATE_OUT,
+    EVENT_IN_YARD: JOB_YARD,
+    EVENT_YARD_PICKUP: JOB_PICKUP,
+    EVENT_YARD_DROP: JOB_DROP,
+    EVENT_SCAN: JOB_SCAN,
+    EVENT_COMPLETED: JOB_COMPLETE,
+    EVENT_CANCELLED: JOB_CANCELLED,
+}
+
+# Status -> milestone, for the arrival at a state that has no dedicated event
+# (AT_GATE/IN_YARD are reached by the gate and movement recorders).
+STATUS_CODES: Dict[str, str] = {
+    "ASSIGNED": JOB_CREATED, "ACCEPTED": JOB_ACCEPTED, "AT_GATE": JOB_GATE_IN,
+    "IN_YARD": JOB_YARD, "PICKED_UP": JOB_PICKUP, "DROPPED": JOB_DROP,
+    "COMPLETED": JOB_COMPLETE, "CANCELLED": JOB_CANCELLED,
+}
+
+
+def event_code(event: Optional[str], new_status: Optional[str] = None) -> Optional[str]:
+    """Canonical JOB_* milestone for a wire event, falling back to the state
+    reached so a row written by an older build still resolves to a milestone."""
+    return EVENT_CODES.get(event or "") or STATUS_CODES.get((new_status or "").upper())
 
 
 def normalize_plate(raw: Optional[str]) -> str:
@@ -121,10 +166,24 @@ class ContainerJobService:
                                        f"{cn} already has open job #{open_job['id']}",
                                        job_id=open_job["id"])
             cargo = await self._repo.cargo_exists(cn)
+            if not cargo:
+                raise ValidationFailed("container_not_found",
+                                       f"{cn} is not in the cargo registry")
             checks.append({"check": "container", "ok": True,
-                           "detail": ("known to cargo lifecycle" if cargo
-                                      else "not in cargo registry (allowed)"),
-                           "lifecycle_status": (cargo or {}).get("lifecycle_status")})
+                           "detail": "known to cargo lifecycle",
+                           "lifecycle_status": cargo.get("lifecycle_status")})
+
+            # A truck is not dispatched against a box with no paperwork: at least
+            # one of the three client gate documents must already reference it.
+            docs = await self._repo.document_counts(cn)
+            if not docs.get("total"):
+                raise ValidationFailed("no_gate_document",
+                                       f"{cn} has no FORM13, PIN or EIR on record",
+                                       documents=docs)
+            checks.append({"check": "gate_document", "ok": True,
+                           "detail": ", ".join(f"{k.upper()}={docs[k]}"
+                                               for k in ("form13", "pin", "eir")),
+                           "documents": docs})
 
         # --- vehicle: must exist and be ACTIVE
         vehicle = None
@@ -264,6 +323,7 @@ class ContainerJobService:
         try:
             from services.lifecycle_bus import publish
             await publish(event, {
+                "event_code": event_code(event, job.get("status")),
                 "job_id": job.get("id"), "container_number": job.get("container_number"),
                 "vehicle_id": job.get("vehicle_id"), "vehicle_no": job.get("vehicle_no"),
                 "driver_id": job.get("driver_id"), "status": job.get("status"),
@@ -387,7 +447,7 @@ class ContainerJobService:
                 if movement_type == "YARD_PICKUP":
                     # entering the yard is implied by the first pickup
                     if (job or {}).get("status") == "AT_GATE":
-                        await self._advance(job_id, new_status="IN_YARD", event="job.in_yard",
+                        await self._advance(job_id, new_status="IN_YARD", event=EVENT_IN_YARD,
                                             actor=actor, actor_role=actor_role,
                                             detail={"yard_location": yard_location})
                     advanced = await self._advance(
@@ -395,7 +455,7 @@ class ContainerJobService:
                         actor_role=actor_role, detail={"yard_location": yard_location})
                 elif movement_type == "YARD_DROP":
                     if (job or {}).get("status") == "AT_GATE":
-                        await self._advance(job_id, new_status="IN_YARD", event="job.in_yard",
+                        await self._advance(job_id, new_status="IN_YARD", event=EVENT_IN_YARD,
                                             actor=actor, actor_role=actor_role,
                                             detail={"yard_location": yard_location})
                     advanced = await self._advance(
@@ -481,11 +541,19 @@ class ContainerJobService:
         return await self._repo.scans_for(**kw)
 
     # ================================================================== reads
+    async def _events(self, job_id: int) -> list[dict]:
+        """Job history with each row tagged with its canonical JOB_* milestone,
+        including rows written before the codes existed."""
+        rows = await self._repo.job_events(job_id)
+        for row in rows:
+            row["event_code"] = event_code(row.get("event"), row.get("new_status"))
+        return rows
+
     async def get_job(self, job_id: int) -> Optional[Dict[str, Any]]:
         job = await self._repo.get_job(job_id)
         if job is None:
             return None
-        job["events"] = await self._repo.job_events(job_id)
+        job["events"] = await self._events(job_id)
         return job
 
     async def list_jobs(self, *, filters, limit: int, offset: int) -> Dict[str, Any]:
@@ -498,5 +566,5 @@ class ContainerJobService:
         job = await self._repo.latest_job_for_container(container_number.strip().upper())
         if job is None:
             return None
-        job["events"] = await self._repo.job_events(job["id"])
+        job["events"] = await self._events(job["id"])
         return job

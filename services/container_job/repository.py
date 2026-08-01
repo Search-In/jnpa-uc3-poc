@@ -125,6 +125,24 @@ class ContainerJobRepository:
             "SELECT container_number, lifecycle_status, customs_status, is_released "
             "FROM core.cargo WHERE container_number = :c", {"c": container_number})
 
+    async def document_counts(self, container_number: str) -> dict:
+        """How many gate documents of each type reference this container.
+
+        A truck may not be dispatched against a container with no paperwork, so
+        the assignment gate needs a cheap existence probe rather than the full
+        document payloads. Form-13 lives in the shared core.gate_capture store
+        (both provenances count — a document exists regardless of whether it was
+        uploaded or seeded)."""
+        row = await self._one(
+            "SELECT (SELECT count(*) FROM core.eir WHERE container_number = :c) AS eir, "
+            "       (SELECT count(*) FROM core.pin_ticket WHERE container_number = :c) AS pin, "
+            "       (SELECT count(*) FROM core.gate_capture "
+            "         WHERE capture_type = 'FORM13' AND container_no = :c) AS form13",
+            {"c": container_number})
+        out = {k: int(v or 0) for k, v in (row or {}).items()}
+        out["total"] = out.get("eir", 0) + out.get("pin", 0) + out.get("form13", 0)
+        return out
+
     # ------------------------------------------------------------------ create
     async def create_job(self, rec: Mapping[str, Any]) -> dict:
         """Insert the assignment + its ASSIGNED history row in one transaction."""

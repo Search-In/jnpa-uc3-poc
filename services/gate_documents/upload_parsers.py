@@ -171,6 +171,12 @@ ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
         "leg_seq": ("leg", "legseq", "legno", "sequence", "seq"),
         "issued_at": ("issuedat", "issuedon", "issuetime", "timestamp", "datetime",
                       "date", "tickettime"),
+        # The ticket's own transaction/visit reference and the shipping line it
+        # belongs to — both printed on the pickup ticket (e.g. Transaction
+        # 1216572, Line OOL) and stored on core.pin_ticket.
+        "transaction_no": ("transaction", "transactionno", "transactionnumber",
+                           "txn", "txnno", "visitid", "visitno"),
+        "line_code": ("line", "linecode", "shippingline", "liner", "carrier"),
     },
     "FORM13": {
         **_COMMON,
@@ -214,10 +220,11 @@ _TEMPLATES: dict[str, tuple[list[str], list[str], str]] = {
         "Truck In/Out format DD/MM/YYYY HH:MM (IST) — TAT is computed from them.",
     ),
     "PIN": (
-        ["PIN Number", "Terminal", "Truck No", "Company", "Container No", "Group Code",
-         "Yard Location", "Gate", "Move Type", "Leg", "Issued At", "Remarks"],
-        ["230283", "NSFT", "MH43CQ2814", "TRANSTAR", "OOLU9340457", "", "2P08D.1",
-         "10", "IMPORT_PICK", "1", "10/06/2026 12:29", ""],
+        ["PIN Number", "Transaction", "Terminal", "Truck No", "Company", "Container No",
+         "Line", "Group Code", "Yard Location", "Gate", "Move Type", "Leg",
+         "Issued At", "Remarks"],
+        ["230283", "1216572", "NSFT", "MH43CQ2814", "TRANSTAR", "OOLU9340457",
+         "OOL", "", "2P08D.1", "Gate 10", "IMPORT_PICK", "1", "30/05/2026 16:53", ""],
         "REQUIRED: PIN Number + Truck No. A DUAL-MOVE ticket is TWO rows sharing the "
         "PIN Number with Leg 1 and Leg 2. Move Type: IMPORT_PICK / EXPORT_DROP / "
         "EMPTY_PICK / EMPTY_DROP. Yard Location is free-format (e.g. 2P08D.1).",

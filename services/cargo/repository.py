@@ -128,6 +128,18 @@ class CargoTransitionError(Exception):
             f"{current or 'UNKNOWN'} -> {target}")
 
 
+# The ONE audit-row shape for core.cargo_lifecycle_event (see
+# CargoRepository.record_lifecycle_event).
+_LIFECYCLE_EVENT_INSERT = (
+    "INSERT INTO core.cargo_lifecycle_event "
+    "(container_number, action, old_status, new_status, actor_role, note) "
+    "VALUES (:cn, :action, :old, :new, :actor, :note)"
+)
+# Opening state + action recorded when a container first enters the registry.
+LIFECYCLE_CREATED = "CREATED"
+LIFECYCLE_ACTION_CREATE = "CREATE"
+
+
 def _infer_lifecycle(row: Mapping[str, Any]) -> str:
     """Resolve a row's effective lifecycle when ``lifecycle_status`` is NULL — the
     case for rows written before migration 0023 backfilled them, or by a fake in a
@@ -151,18 +163,63 @@ class CargoRepository:
         self._dsn = dsn
 
     # ------------------------------------------------------------------ create
-    async def create(self, row: Mapping[str, Any]) -> dict:
+    async def record_lifecycle_event(
+        self,
+        container_number: str,
+        *,
+        action: str,
+        new_status: str,
+        old_status: Optional[str] = None,
+        actor_role: Optional[str] = None,
+        note: Optional[str] = None,
+        conn: Any = None,
+    ) -> None:
+        """Append ONE row to the ``core.cargo_lifecycle_event`` audit log.
+
+        The single writer for that table — both :meth:`create` (the CREATE entry)
+        and :meth:`transition_lifecycle` (every subsequent move) go through here,
+        so the audit row shape is defined in exactly one place.
+
+        Pass ``conn`` to enlist in the caller's OPEN transaction; the cargo write
+        and its audit row then commit together and can never diverge. Omit it and
+        the insert runs in its own transaction."""
+        params = {"cn": container_number, "action": action, "old": old_status,
+                  "new": new_status, "actor": actor_role, "note": note}
+        if conn is not None:
+            await conn.execute(text(_LIFECYCLE_EVENT_INSERT), params)
+            return
+        async with get_engine(self._dsn).begin() as own:
+            await own.execute(text(_LIFECYCLE_EVENT_INSERT), params)
+
+    async def create(self, row: Mapping[str, Any], *,
+                     actor_role: Optional[str] = None) -> dict:
         """INSERT one cargo row and return it. Raises :class:`CargoConflict` if
-        the container_number already exists (PK violation)."""
+        the container_number already exists (PK violation).
+
+        The container's opening audit row (``old_status=NULL -> CREATED``,
+        action ``CREATE``) is written in the SAME transaction, matching the
+        atomicity guarantee :meth:`transition_lifecycle` already makes: a cargo
+        record never exists without the audit row explaining how it got there."""
         params = {c: row.get(c) for c in
                   ("container_number", *_WRITABLE)}
         try:
             async with get_engine(self._dsn).begin() as conn:
                 result = await conn.execute(text(_INSERT), params)
                 created = result.mappings().first()
+                out = dict(created) if created else dict(params)
+                await self.record_lifecycle_event(
+                    out.get("container_number") or params["container_number"],
+                    action=LIFECYCLE_ACTION_CREATE,
+                    old_status=None,
+                    # Honour whatever status the INSERT actually landed on (the
+                    # column defaults to CREATED) rather than assuming it.
+                    new_status=out.get("lifecycle_status") or LIFECYCLE_CREATED,
+                    actor_role=actor_role,
+                    conn=conn,
+                )
         except IntegrityError as exc:  # unique_violation on the PK
             raise CargoConflict(str(getattr(exc, "orig", exc))) from exc
-        return dict(created) if created else dict(params)
+        return out
 
     # -------------------------------------------------------------------- read
     async def get(self, container_number: str) -> Optional[dict]:
@@ -522,12 +579,10 @@ class CargoRepository:
                      f"WHERE container_number = :cn RETURNING {_SELECT_COLS}"),
                 {"ns": target, "cn": container_number})
             row = upd.mappings().first()
-            await conn.execute(
-                text("INSERT INTO core.cargo_lifecycle_event "
-                     "(container_number, action, old_status, new_status, actor_role, note) "
-                     "VALUES (:cn, :action, :old, :new, :actor, :note)"),
-                {"cn": container_number, "action": action, "old": current,
-                 "new": target, "actor": actor_role, "note": note})
+            # Same writer as create()'s opening entry — one audit-row shape.
+            await self.record_lifecycle_event(
+                container_number, action=action, old_status=current,
+                new_status=target, actor_role=actor_role, note=note, conn=conn)
         out = dict(row) if row else dict(existing)
         out["_old_status"] = current
         out["_new_status"] = target

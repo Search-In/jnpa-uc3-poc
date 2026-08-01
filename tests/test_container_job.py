@@ -68,6 +68,10 @@ class FakeRepo:
         self.cargo = {"MRKU5014206": {"container_number": "MRKU5014206",
                                       "lifecycle_status": "VERIFIED",
                                       "customs_status": "PENDING", "is_released": False}}
+        # Gate documents on record per container, keyed as the repository counts
+        # them. The seeded box carries a Form-13, which is what clears the
+        # assignment gate's paperwork check.
+        self.documents = {"MRKU5014206": {"form13": 1, "pin": 0, "eir": 0}}
         self.jobs: dict[int, dict] = {}
         self.events: list[dict] = []
         self.gate_events: list[dict] = []
@@ -113,7 +117,19 @@ class FakeRepo:
         return next((j for j in self.jobs.values()
                      if j["container_number"] == cn and j["status"] not in ("COMPLETED", "CANCELLED")), None)
 
+    def seed_container(self, cn, **cargo):
+        """Register a container in the cargo registry WITH a gate document, the
+        normal state of an assignable box. Tests that exercise the paperwork gate
+        write to self.documents directly instead."""
+        self.cargo[cn] = {"container_number": cn, **cargo}
+        self.documents[cn] = {"form13": 1, "pin": 0, "eir": 0}
+
     async def cargo_exists(self, cn): return self.cargo.get(cn)
+
+    async def document_counts(self, cn):
+        counts = dict(self.documents.get(cn) or {"form13": 0, "pin": 0, "eir": 0})
+        counts["total"] = sum(counts.values())
+        return counts
 
     # -- writes
     async def create_job(self, rec):
@@ -315,7 +331,7 @@ async def test_assign_rejects_blacklisted_transporter(svc, repo):
 async def test_no_double_assignment_of_truck_or_container(svc, repo):
     await svc.assign(**_assign_kw())
     # same truck, different container
-    repo.cargo["NYKU4768188"] = {"container_number": "NYKU4768188"}
+    repo.seed_container("NYKU4768188")
     with pytest.raises(ValidationFailed) as e:
         await svc.assign(**_assign_kw(container_number="NYKU4768188"))
     assert e.value.code == "vehicle_already_assigned"
@@ -363,7 +379,7 @@ async def test_completed_job_frees_the_truck(svc, repo):
     await svc.complete(jid, actor="ops1")
     assert repo.jobs[jid]["status"] == "COMPLETED"
 
-    repo.cargo["NYKU4768188"] = {"container_number": "NYKU4768188"}
+    repo.seed_container("NYKU4768188")
     again = await svc.assign(**_assign_kw(container_number="NYKU4768188"))
     assert again["job"]["id"] != jid
 
@@ -497,7 +513,7 @@ def client(svc):
     return TestClient(app)
 
 
-def test_router_assign_and_conflicts(client):
+def test_router_assign_and_conflicts(client, repo):
     r = client.post("/api/jobs", json={"container_number": "MRKU5014206",
                                        "vehicle_id": "TRK-000001", "driver_id": "DRV-1",
                                        "driver_licence": "UP6420140008203",
@@ -505,7 +521,9 @@ def test_router_assign_and_conflicts(client):
     assert r.status_code == 201, r.text
     jid = r.json()["job"]["id"]
 
-    # second job on the same truck -> 400 with the precise reason
+    # second job on the same truck -> 400 with the precise reason. The second box
+    # is fully registered so the truck rule is what refuses it, not the paperwork.
+    repo.seed_container("NYKU4768188")
     r2 = client.post("/api/jobs", json={"container_number": "NYKU4768188",
                                         "vehicle_id": "TRK-000001",
                                         "driver_licence": "UP6420140008203",
@@ -516,6 +534,8 @@ def test_router_assign_and_conflicts(client):
     r3 = client.get(f"/api/jobs/{jid}")
     assert r3.status_code == 200 and r3.json()["status"] == "ASSIGNED"
     assert r3.json()["events"][0]["event"] == "job.assigned"
+    # the same row also carries its canonical UC-3 milestone
+    assert r3.json()["events"][0]["event_code"] == "JOB_CREATED"
 
     r4 = client.get("/api/jobs", params={"open_only": True})
     assert r4.status_code == 200 and r4.json()["count"] == 1
@@ -582,3 +602,83 @@ def test_router_job_actions_and_404s(client):
     assert client.get("/api/jobs/9999").status_code == 404
     assert client.post("/api/jobs/9999/accept").status_code == 404
     assert client.get("/api/cargo-jobs/container/ZZZU0000000").status_code == 404
+
+
+# ============================================ document / registry gate (UC-3)
+@pytest.mark.asyncio
+async def test_assign_rejects_container_absent_from_cargo_registry(svc, repo):
+    """A job may only be raised against a box the twin actually knows about —
+    a typo'd or never-discharged container must not create a live trip."""
+    with pytest.raises(ValidationFailed) as e:
+        await svc.assign(**_assign_kw(container_number="TCNU1234565"))
+    assert e.value.code == "container_not_found"
+    assert repo.jobs == {}          # nothing written
+
+
+@pytest.mark.asyncio
+async def test_assign_rejects_container_with_no_gate_document(svc, repo):
+    """Registered but paperless: no Form-13, PIN or EIR on record -> refused."""
+    repo.seed_container("TCNU1234565")
+    repo.documents["TCNU1234565"] = {"form13": 0, "pin": 0, "eir": 0}
+    with pytest.raises(ValidationFailed) as e:
+        await svc.assign(**_assign_kw(container_number="TCNU1234565"))
+    assert e.value.code == "no_gate_document"
+    assert repo.jobs == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("doc", ["form13", "pin", "eir"])
+async def test_any_one_gate_document_satisfies_the_paperwork_gate(svc, repo, doc):
+    repo.seed_container("TCNU1234565")
+    repo.documents["TCNU1234565"] = {"form13": 0, "pin": 0, "eir": 0, doc: 1}
+    res = await svc.assign(**_assign_kw(container_number="TCNU1234565"))
+    assert res["job"]["status"] == "ASSIGNED"
+
+
+@pytest.mark.asyncio
+async def test_validation_reports_both_registry_and_document_checks(svc):
+    """The validate endpoint shows the operator WHY a box cleared, not just that
+    it did — the document counts are part of the evidence."""
+    v = await svc.validate_assignment(container_number="MRKU5014206",
+                                      vehicle_id="TRK-000001", vehicle_no=None,
+                                      driver_id="DRV-1",
+                                      driver_licence="UP6420140008203")
+    by_check = {c["check"]: c for c in v["checks"]}
+    assert by_check["container"]["lifecycle_status"] == "VERIFIED"
+    assert by_check["gate_document"]["documents"]["total"] == 1
+
+
+# ==================================== canonical JOB_* milestones (UC-3 spec)
+def test_every_job_event_maps_to_a_canonical_milestone():
+    """Each wire event resolves to a JOB_* code, and the six spec milestones are
+    all reachable. Guards against a new event being added without a code."""
+    from services.container_job import service as S
+
+    assert set(S.EVENT_CODES) == {
+        S.EVENT_ASSIGNED, S.EVENT_ACCEPTED, S.EVENT_GATE_IN, S.EVENT_GATE_OUT,
+        S.EVENT_IN_YARD, S.EVENT_YARD_PICKUP, S.EVENT_YARD_DROP, S.EVENT_SCAN,
+        S.EVENT_COMPLETED, S.EVENT_CANCELLED}
+    assert {"JOB_CREATED", "JOB_ACCEPTED", "JOB_GATE_IN", "JOB_YARD",
+            "JOB_PICKUP", "JOB_COMPLETE"} <= set(S.STATUS_CODES.values())
+    assert S.event_code(S.EVENT_ASSIGNED) == "JOB_CREATED"
+    assert S.event_code(S.EVENT_COMPLETED) == "JOB_COMPLETE"
+    # a history row from an older build still resolves, via the state reached
+    assert S.event_code("job.unknown_legacy", "IN_YARD") == "JOB_YARD"
+    assert S.event_code(None, None) is None
+
+
+@pytest.mark.asyncio
+async def test_job_history_is_tagged_with_milestones_end_to_end(svc, repo):
+    """Walk a real trip and assert the canonical milestone sequence."""
+    jid = (await svc.assign(**_assign_kw()))["job"]["id"]
+    await svc.accept(jid, actor="drv")
+    await svc.record_gate_event(event_type="GATE_IN", plate="MH43BX1488", job_id=jid)
+    await svc.record_movement(job_id=jid, container_number="MRKU5014206",
+                              movement_type="YARD_PICKUP", yard_location="A-01")
+    await svc.complete(jid, actor="ops1")
+
+    # The full spec sequence, in order: the yard-pickup leg first records the
+    # arrival in the yard, then the lift itself.
+    codes = [e["event_code"] for e in (await svc.get_job(jid))["events"]]
+    assert codes == ["JOB_CREATED", "JOB_ACCEPTED", "JOB_GATE_IN",
+                     "JOB_YARD", "JOB_PICKUP", "JOB_COMPLETE"]

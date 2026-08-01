@@ -76,8 +76,26 @@ SELECT id,
 FROM core.gate_capture
 """
 
-# Real (uploaded) Form-13 rows only — never the deterministic 'sim' seed rows.
-_FORM13_SCOPE = "capture_type = 'FORM13' AND source_mode = 'live'"
+# Form-13 lives in the shared core.gate_capture store, which holds BOTH real
+# uploads (source_mode='live') and rows from the deterministic seed generator
+# (source_mode='sim').
+#
+# Reads must NOT hide the seeded rows. Scoping to 'live' meant a container with
+# a Form-13 on file reported `form13: []` — the API said "no document" when one
+# demonstrably existed. Provenance is a property of the row for the caller to
+# judge, not grounds for suppressing it, so every read returns `source_mode` and
+# callers narrow explicitly via the optional `source` filter.
+_FORM13_SCOPE = "capture_type = 'FORM13'"
+
+# Provenance values a caller may filter on; anything else means "no filter".
+FORM13_SOURCES = ("live", "sim")
+
+
+def _form13_scope(source: Optional[str] = None) -> tuple[str, dict]:
+    """Form-13 WHERE fragment, optionally narrowed to one provenance."""
+    if source in FORM13_SOURCES:
+        return f"{_FORM13_SCOPE} AND source_mode = :form13_source", {"form13_source": source}
+    return _FORM13_SCOPE, {}
 
 _FORM13_INSERT = """
 INSERT INTO core.gate_capture
@@ -299,8 +317,12 @@ class GateDocumentRepository:
     def _doc_where(doc_type: str, f: Mapping[str, Any]) -> tuple[str, dict]:
         """Filters for EIR/PIN (native columns) and FORM13 (gate_capture + payload)."""
         form13 = doc_type == "FORM13"
-        clauses: list[str] = [_FORM13_SCOPE] if form13 else []
+        clauses: list[str] = []
         p: dict[str, Any] = {}
+        if form13:
+            scope, scope_params = _form13_scope(f.get("source"))
+            clauses.append(scope)
+            p.update(scope_params)
         if f.get("container_number"):
             clauses.append(("container_no = :cn") if form13 else "container_number = :cn")
             p["cn"] = str(f["container_number"]).strip().upper()
@@ -330,30 +352,44 @@ class GateDocumentRepository:
         where, p = self._doc_where(doc_type, filters)
         return await self._count(f"SELECT count(*) FROM {TABLES[doc_type]}{where}", p)
 
-    async def docs_for_container(self, container_no: str) -> dict:
-        """Every gate document referencing one container (the box-side view)."""
-        cn = {"cn": container_no}
+    async def docs_for_container(self, container_no: str, *,
+                                 source: Optional[str] = None) -> dict:
+        """Every gate document referencing one container (the box-side view).
+
+        Returns Form-13 rows of BOTH provenances by default, each carrying
+        `source_mode`; pass source='live'/'sim' to narrow. EIR and PIN can only
+        originate from an upload, so they report 'live'."""
+        scope, scope_params = _form13_scope(source)
+        cn = {"cn": container_no, **scope_params}
         return {
-            "eir": await self._rows("SELECT * FROM core.eir WHERE container_number = :cn "
-                                    "ORDER BY truck_in_time NULLS LAST, id", cn),
-            "pin": await self._rows("SELECT * FROM core.pin_ticket WHERE container_number = :cn "
-                                    "ORDER BY issued_at NULLS LAST, id", cn),
+            "eir": await self._rows(
+                "SELECT *, 'live' AS source_mode FROM core.eir WHERE container_number = :cn "
+                "ORDER BY truck_in_time NULLS LAST, id", {"cn": container_no}),
+            "pin": await self._rows(
+                "SELECT *, 'live' AS source_mode FROM core.pin_ticket "
+                "WHERE container_number = :cn ORDER BY issued_at NULLS LAST, id",
+                {"cn": container_no}),
             "form13": await self._rows(
-                f"{_FORM13_SELECT} WHERE {_FORM13_SCOPE} AND container_no = :cn "
+                f"{_FORM13_SELECT} WHERE {scope} AND container_no = :cn "
                 "ORDER BY captured_at NULLS LAST, id", cn),
         }
 
-    async def docs_for_truck(self, truck_no: str) -> dict:
+    async def docs_for_truck(self, truck_no: str, *, source: Optional[str] = None) -> dict:
         """Every gate document for one truck — the client's hero view (one tractor,
-        4 documents, 3 terminals, 7 days). Includes containerless documents."""
-        t = {"t": truck_no}
+        4 documents, 3 terminals, 7 days). Includes containerless documents.
+
+        Same provenance rules as :meth:`docs_for_container`."""
+        scope, scope_params = _form13_scope(source)
+        t = {"t": truck_no, **scope_params}
         return {
-            "eir": await self._rows("SELECT * FROM core.eir WHERE truck_no = :t "
-                                    "ORDER BY truck_in_time NULLS LAST, id", t),
-            "pin": await self._rows("SELECT * FROM core.pin_ticket WHERE truck_no = :t "
-                                    "ORDER BY issued_at NULLS LAST, id", t),
+            "eir": await self._rows(
+                "SELECT *, 'live' AS source_mode FROM core.eir WHERE truck_no = :t "
+                "ORDER BY truck_in_time NULLS LAST, id", {"t": truck_no}),
+            "pin": await self._rows(
+                "SELECT *, 'live' AS source_mode FROM core.pin_ticket WHERE truck_no = :t "
+                "ORDER BY issued_at NULLS LAST, id", {"t": truck_no}),
             "form13": await self._rows(
-                f"{_FORM13_SELECT} WHERE {_FORM13_SCOPE} AND vehicle_plate = :t "
+                f"{_FORM13_SELECT} WHERE {scope} AND vehicle_plate = :t "
                 "ORDER BY captured_at NULLS LAST, id", t),
         }
 
@@ -389,7 +425,15 @@ class GateDocumentRepository:
                 "dual_move_tickets": await n(
                     "SELECT count(*) FROM (SELECT pin_number FROM core.pin_ticket "
                     "GROUP BY pin_number HAVING count(*) > 1) x"),
+                # form13 is the TOTAL across both provenances, broken out below so
+                # the count is never silently inflated by seed rows.
                 "form13": await n(f"SELECT count(*) FROM core.gate_capture WHERE {_FORM13_SCOPE}"),
+                "form13_live": await n(
+                    f"SELECT count(*) FROM core.gate_capture WHERE {_FORM13_SCOPE} "
+                    "AND source_mode = 'live'"),
+                "form13_sim": await n(
+                    f"SELECT count(*) FROM core.gate_capture WHERE {_FORM13_SCOPE} "
+                    "AND source_mode = 'sim'"),
                 "containerless_docs": await n(
                     "SELECT (SELECT count(*) FROM core.eir WHERE container_number IS NULL) + "
                     "(SELECT count(*) FROM core.pin_ticket WHERE container_number IS NULL) + "

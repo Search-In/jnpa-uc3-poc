@@ -135,14 +135,16 @@ class GateDocumentService:
         return {"items": rows, "total": total, "limit": limit, "offset": offset,
                 "count": len(rows)}
 
-    async def docs_for_container(self, container_no: str) -> Dict[str, Any]:
-        docs = await self._repo.docs_for_container(container_no)
+    async def docs_for_container(self, container_no: str, *,
+                                 source: Optional[str] = None) -> Dict[str, Any]:
+        docs = await self._repo.docs_for_container(container_no, source=source)
         docs["container_no"] = container_no
         docs["total"] = sum(len(v) for k, v in docs.items() if isinstance(v, list))
         return docs
 
-    async def docs_for_truck(self, truck_no: str) -> Dict[str, Any]:
-        docs = await self._repo.docs_for_truck(truck_no)
+    async def docs_for_truck(self, truck_no: str, *,
+                             source: Optional[str] = None) -> Dict[str, Any]:
+        docs = await self._repo.docs_for_truck(truck_no, source=source)
         docs["truck_no"] = truck_no
         docs["total"] = sum(len(v) for k, v in docs.items() if isinstance(v, list))
         # Terminals touched + measured TATs — the client's hero-truck framing.

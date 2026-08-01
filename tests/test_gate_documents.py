@@ -173,10 +173,12 @@ class _FakeService:
         return {"items": [{"id": 1, "doc_type": doc_type, "filters": filters}],
                 "total": 1, "limit": limit, "offset": offset, "count": 1}
 
-    async def docs_for_container(self, cn):
+    async def docs_for_container(self, cn, *, source=None):
+        self.last_source = source
         return {"container_no": cn, "eir": [{"id": 1}], "pin": [], "form13": [], "total": 1}
 
-    async def docs_for_truck(self, truck):
+    async def docs_for_truck(self, truck, *, source=None):
+        self.last_source = source
         return {"truck_no": truck, "eir": [{"id": 1, "tat_minutes": 165}], "pin": [],
                 "form13": [], "total": 1, "terminals": ["Gateway (GTI)"],
                 "tat_samples": [{"tat_minutes": 165}]}
@@ -323,3 +325,80 @@ def test_rms_selection_query_avoids_unapplied_0102_columns():
     assert "rc.igm_no" not in sql
     assert "r.igm_no" in sql and "core.rms_scan_report" in sql
     assert "rc.id" not in sql          # child table has no id column in production
+
+
+# --------------------------------------------- C1: Form-13 provenance, not exclusion
+def test_form13_reads_are_not_scoped_to_live_only():
+    """Regression: the Form-13 read scope must NOT filter on source_mode.
+
+    Scoping reads to source_mode='live' made `GET /api/gate-docs/container/{cn}`
+    return `form13: []` for a container that HAD a Form-13 on file (the seeded
+    rows in core.gate_capture) — the API reported "no document" when one
+    demonstrably existed. Provenance is returned per row instead."""
+    from services.gate_documents.repository import _FORM13_SCOPE, _form13_scope
+
+    assert "source_mode" not in _FORM13_SCOPE
+    assert _FORM13_SCOPE == "capture_type = 'FORM13'"
+
+    # No filter -> both provenances, no bound parameter.
+    scope, params = _form13_scope(None)
+    assert "source_mode" not in scope and params == {}
+    # Explicit narrowing is still possible, and is parameterised (not inlined).
+    for src in ("live", "sim"):
+        scope, params = _form13_scope(src)
+        assert "source_mode = :form13_source" in scope
+        assert params == {"form13_source": src}
+    # An unknown value must not silently narrow the result set.
+    scope, params = _form13_scope("bogus")
+    assert "source_mode" not in scope and params == {}
+
+
+def test_form13_select_exposes_source_mode():
+    """Every Form-13 row carries its provenance so the caller can judge it."""
+    from services.gate_documents.repository import _FORM13_SELECT
+
+    assert "source_mode" in _FORM13_SELECT
+
+
+def test_router_rejects_an_unknown_source_filter(client):
+    r = client.get("/api/gate-docs/container/MRKU5014206", params={"source": "bogus"})
+    assert r.status_code == 400
+    assert r.json()["detail"]["error"] == "invalid_source"
+
+    # live / sim / all are accepted and reach the service verbatim ("all" -> None).
+    for value, expected in (("live", "live"), ("sim", "sim"), ("all", None)):
+        r = client.get("/api/gate-docs/container/MRKU5014206", params={"source": value})
+        assert r.status_code == 200, value
+        assert client.fake.last_source == expected  # type: ignore[attr-defined]
+
+
+# ------------------------------------------------------- document event audit
+def test_every_import_outcome_is_recordable_in_the_audit_ledger():
+    """Document event audit contract: every terminal status persist() can write
+    must be accepted by the core.gate_doc_import_file CHECK constraint. A new
+    outcome added in code but not in the migration would fail at runtime — on the
+    audit write, i.e. exactly where an unaudited import would slip through."""
+    src = Path("services/gate_documents/repository.py").read_text()
+    emitted = set(re.findall(r"""["']import_status["']\s*:\s*["'](\w+)["']""", src))
+    emitted |= set(re.findall(r"""status\s*=\s*["'](PARTIAL|SUCCESS|FAILED)["']""", src))
+
+    sql = Path("infra/postgres/v3/0112_gate_documents.sql").read_text()
+    allowed = set(re.findall(r"import_status IN \(([^)]*)\)", sql)[0].replace("'", "").split(","))
+
+    assert emitted, "no import outcomes found — the audit write was refactored away"
+    assert emitted <= allowed, f"unauditable outcome(s): {sorted(emitted - allowed)}"
+    # the failure outcomes specifically must be representable, so a rejected
+    # document is still on the record rather than silently dropped
+    assert {"FAILED", "PARTIAL"} <= allowed
+
+
+def test_failed_import_still_writes_actor_and_row_errors():
+    """A failed or partial import must leave an attributable audit row: the
+    uploader, and the per-row reasons in core.gate_doc_import_error."""
+    src = Path("services/gate_documents/repository.py").read_text()
+    assert "uploaded_by" in src
+    assert "INSERT INTO core.gate_doc_import_error" in src
+    # the FAILED path records errors too (not only the happy path)
+    failed_block = src[src.index('"import_status": "FAILED"') - 2000:
+                       src.index('"import_status": "FAILED"')]
+    assert "gate_doc_import_error" in failed_block

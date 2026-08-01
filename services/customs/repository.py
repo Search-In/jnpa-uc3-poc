@@ -189,28 +189,55 @@ class CustomsRepository:
         where, params = self._where(filters, ("igm_no",), alias="v")
         params.update(limit=limit, offset=offset)
         return await self._rows(
-            "SELECT v.id, v.igm_no, v.igm_date, v.vessel_code, v.voyage_no, "
-            "v.line_code AS shipping_line_code, v.port_of_arrival, "
+            "SELECT v.igm_no, v.igm_date, v.customs_house AS customs_house_code, "
+            "v.imo_no AS imo_code, v.vessel_code, v.voyage_no, v.vessel_type, "
+            "v.master_name, v.line_code AS shipping_line_code, "
+            "v.shipping_agent AS shipping_agent_code, v.port_of_arrival, "
+            "v.cargo_brief AS brief_cargo_desc, "
+            "v.terminal_code AS terminal_operator_code, v.lighthouse_dues, "
             "v.declared_lines AS total_no_of_lines, v.eta AS expected_arrival, "
             "v.entry_inward_ts AS entry_inward, "
             "(SELECT count(*) FROM core.igm_line l WHERE l.igm_no = v.igm_no) AS line_count, "
             "(SELECT count(*) FROM core.igm_line_container c "
             "   WHERE c.igm_no = v.igm_no) AS container_count "
             f"FROM core.igm v{where} "
-            "ORDER BY v.id DESC LIMIT :limit OFFSET :offset", params)
+            "ORDER BY v.igm_no DESC LIMIT :limit OFFSET :offset", params)
 
     async def count_igm(self, *, filters: Mapping[str, Any]) -> int:
         where, params = self._where(filters, ("igm_no",))
         return await self._count(f"SELECT count(*) FROM core.igm{where}", params)
 
     async def list_igm_containers(self, *, filters: Mapping[str, Any], limit: int, offset: int) -> list[dict]:
-        where, params = self._where(filters, ("igm_no", "container_no"))
+        """Container lines declared on an IGM, enriched with their parent cargo line
+        (BL, importer, POL/POD, goods description). The LEFT JOIN is by the natural
+        key (igm_no, line_no, subline_no) — the same by-value join the rest of the
+        customs layer uses — so a container whose cargo line is absent still lists."""
+        where, params = self._where(filters, ("igm_no", "container_no"), alias="c")
         params.update(limit=limit, offset=offset)
         return await self._rows(
-            "SELECT id, igm_no, line_no, subline_no, container_no, iso_valid, seal_no, "
-            "status AS container_status, packages AS no_of_packages, "
-            "weight AS container_weight, iso_code AS iso_size_type "
-            f"FROM core.igm_line_container{where} ORDER BY id LIMIT :limit OFFSET :offset", params)
+            "SELECT c.igm_no, c.line_no, c.subline_no, c.container_no, c.seal_no, "
+            "c.agent_code AS container_agent_code, c.status AS container_status, "
+            "c.packages AS no_of_packages, c.weight AS container_weight, "
+            "c.iso_code AS iso_size_type, c.soc_flag, "
+            "l.bl_no, l.bl_date, l.pol AS port_of_loading, l.pod AS port_of_destination, "
+            "l.importer_name, l.nature_of_cargo, l.cargo_movement, "
+            "l.gross_weight, l.weight_unit AS unit_of_weight, l.goods_desc AS goods_description, "
+            "l.selected_scan, "
+            # RMS scanner assignment for this box, when a scanning-division list
+            # selected it. LATERAL + LIMIT 1 so a container on two lists cannot
+            # duplicate the manifest row.
+            "rc.machine_type, rc.scan_location, rc.cfs_name AS scan_cfs_name "
+            "FROM core.igm_line_container c "
+            "LEFT JOIN core.igm_line l "
+            "  ON l.igm_no = c.igm_no AND l.line_no = c.line_no "
+            " AND l.subline_no = c.subline_no "
+            "LEFT JOIN LATERAL ("
+            "  SELECT machine_type, scan_location, cfs_name "
+            "  FROM core.rms_scan_container r WHERE r.container_no = c.container_no LIMIT 1"
+            ") rc ON true"
+            f"{where} "
+            "ORDER BY c.line_no, c.subline_no, c.container_no "
+            "LIMIT :limit OFFSET :offset", params)
 
     async def count_igm_containers(self, *, filters: Mapping[str, Any]) -> int:
         where, params = self._where(filters, ("igm_no", "container_no"))
@@ -220,40 +247,87 @@ class CustomsRepository:
         where, params = self._where(filters, ("bill_of_entry_no", "igm_no", "out_of_charge_no"), alias="o")
         params.update(limit=limit, offset=offset)
         return await self._rows(
-            "SELECT o.id, o.be_no AS bill_of_entry_no, o.be_date AS bill_of_entry_date, "
-            "o.igm_no, o.igm_line_no AS line_no, "
+            "SELECT o.be_no AS bill_of_entry_no, o.be_date AS bill_of_entry_date, "
+            "o.document_type, o.igm_no, o.igm_line_no AS line_no, o.igm_subline_no AS subline_no, "
             "o.ooc_no AS out_of_charge_no, o.ooc_date AS out_of_charge_date, "
             "o.importer_name, o.iec_code AS ie_code, o.cha_code, "
-            "o.duty_paid AS total_customs_duty, "
+            "o.country_of_origin, o.packages AS no_of_packages, "
+            "o.quantity AS quantity_out_of_charged, o.quantity_unit AS unit_of_quantity, "
+            "o.assessable_value, o.cif_value, o.duty_paid AS total_customs_duty, "
             "(SELECT count(DISTINCT c.container_no) FROM core.ooc_item c WHERE c.be_no = o.be_no) AS container_count "
             f"FROM core.bill_of_entry_ooc o{where} "
-            "ORDER BY o.id DESC LIMIT :limit OFFSET :offset", params)
+            "ORDER BY o.be_no DESC LIMIT :limit OFFSET :offset", params)
 
     async def count_ooc(self, *, filters: Mapping[str, Any]) -> int:
         where, params = self._where(filters, ("bill_of_entry_no", "igm_no", "out_of_charge_no"))
         return await self._count(f"SELECT count(*) FROM core.bill_of_entry_ooc{where}", params)
 
+    async def ooc_detail(self, be_no: str) -> dict:
+        """One Bill of Entry with its out-of-charge facts, the containers it covers
+        and every invoice line item.
+
+        core.ooc_item carries BOTH the container and the invoice item on one row
+        (one row per BE + container + invoice + item serial), so the container list
+        is the DISTINCT projection of the same table the items come from — there is
+        no separate container table to join."""
+        # be_no is bigint; bind as int so asyncpg does not reject a str param.
+        try:
+            key = int(str(be_no).strip())
+        except ValueError:
+            return {"bill_of_entry_no": be_no, "ooc": None, "containers": [], "items": []}
+        params = {"be": key}
+        ooc = await self._one(
+            "SELECT be_no AS bill_of_entry_no, be_date AS bill_of_entry_date, document_type, "
+            "igm_no, igm_line_no AS line_no, igm_subline_no AS subline_no, "
+            "ooc_no AS out_of_charge_no, ooc_date AS out_of_charge_date, "
+            "importer_name, importer_addr AS importer_address, importer_city, pincode AS pin_code, "
+            "iec_code AS ie_code, cha_code, country_of_origin, nature_of_cargo, "
+            "packages AS no_of_packages, quantity AS quantity_out_of_charged, "
+            "quantity_unit AS unit_of_quantity, assessable_value, cif_value, "
+            "duty_paid AS total_customs_duty "
+            "FROM core.bill_of_entry_ooc WHERE be_no = :be", params)
+        containers = await self._rows(
+            "SELECT DISTINCT container_no FROM core.ooc_item WHERE be_no = :be "
+            "ORDER BY container_no", params)
+        items = await self._rows(
+            "SELECT container_no, invoice_no AS invoice_number, item_sr_no, "
+            "item_desc AS item_description, hs_code AS hs_classification, "
+            "cif_value, assessable_value "
+            "FROM core.ooc_item WHERE be_no = :be "
+            "ORDER BY container_no, invoice_no, item_sr_no", params)
+        return {"bill_of_entry_no": be_no, "ooc": ooc,
+                "containers": [r["container_no"] for r in containers], "items": items}
+
     async def list_smtp(self, *, filters: Mapping[str, Any], limit: int, offset: int) -> list[dict]:
         where, params = self._where(filters, ("smtp_no", "igm_no", "bond_no"), alias="s")
         params.update(limit=limit, offset=offset)
         return await self._rows(
-            "SELECT s.id, s.smtp_no, s.smtp_date, s.igm_no, "
+            "SELECT s.smtp_no, s.smtp_date, s.igm_no, s.igm_date, "
             "s.destination_icd AS destination_code, s.carrier_code, s.bond_no, "
+            "s.terminal_code AS terminal_operator_code, "
             "(SELECT count(*) FROM core.smtp_container l WHERE l.smtp_no = s.smtp_no) AS line_count "
             f"FROM core.smtp_permit s{where} "
-            "ORDER BY s.id DESC LIMIT :limit OFFSET :offset", params)
+            "ORDER BY s.smtp_no DESC LIMIT :limit OFFSET :offset", params)
 
     async def count_smtp(self, *, filters: Mapping[str, Any]) -> int:
         where, params = self._where(filters, ("smtp_no", "igm_no", "bond_no"))
         return await self._count(f"SELECT count(*) FROM core.smtp_permit{where}", params)
 
     async def list_rms(self, *, filters: Mapping[str, Any], limit: int, offset: int) -> list[dict]:
-        where, params = self._where(filters, ("igm_no",))
+        # selected_count/any_selected are DERIVED from the selection lines rather than
+        # stored on the report — a scan list with no lines is the "No container
+        # selected for scanning" case, which reads as any_selected = false.
+        where, params = self._where(filters, ("igm_no",), alias="r")
         params.update(limit=limit, offset=offset)
         return await self._rows(
-            "SELECT id, igm_no, vessel_name, shipping_line, shipping_agent, "
-            "processing_end AS processing_end_date, any_selected, selected_count, created_at "
-            f"FROM core.rms_scan_report{where} ORDER BY id DESC LIMIT :limit OFFSET :offset", params)
+            "SELECT r.report_id, r.igm_no, r.igm_year, r.vessel_name, r.shipping_line, "
+            "r.agent_pan AS shipping_agent, r.processing_end AS processing_end_date, "
+            "(SELECT count(*) FROM core.rms_scan_container c "
+            "   WHERE c.report_id = r.report_id) AS selected_count, "
+            "EXISTS (SELECT 1 FROM core.rms_scan_container c "
+            "        WHERE c.report_id = r.report_id) AS any_selected "
+            f"FROM core.rms_scan_report r{where} "
+            "ORDER BY r.report_id DESC LIMIT :limit OFFSET :offset", params)
 
     async def count_rms(self, *, filters: Mapping[str, Any]) -> int:
         where, params = self._where(filters, ("igm_no",))
@@ -285,17 +359,48 @@ class CustomsRepository:
             params["container_no"] = str(filters["container_no"]).strip().upper()
         return " WHERE " + " AND ".join(clauses), params
 
+    _RMS_CONT_FROM = ("FROM core.rms_scan_container rc "
+                      "JOIN core.rms_scan_report r ON r.report_id = rc.report_id")
+
+    @staticmethod
+    def _rms_container_where(filters: Mapping[str, Any]) -> tuple[str, dict]:
+        # igm_no must be bound as a real int: asyncpg infers $1's type from the
+        # bigint column and rejects a str regardless of any SQL-level CAST.
+        clauses = ["r.igm_no = :igm_no"]
+        params: dict = {"igm_no": int(str(filters["igm_no"]).strip())}
+        if filters.get("machine_type"):
+            clauses.append("upper(rc.machine_type) = upper(:machine_type)")
+            params["machine_type"] = filters["machine_type"]
+        if filters.get("scan_location"):
+            clauses.append("rc.scan_location ILIKE :scan_location")
+            params["scan_location"] = f"%{filters['scan_location']}%"
+        if filters.get("container_no"):
+            clauses.append("rc.container_no = :container_no")
+            params["container_no"] = filters["container_no"]
+        return " WHERE " + " AND ".join(clauses), params
+
     async def list_rms_containers(self, *, filters: Mapping[str, Any],
                                   limit: int, offset: int) -> list[dict]:
         """The selected containers of an RMS scan list (per IGM), with the scanner
-        machine/location routing facts — previously only reachable per-container."""
+        machine/location routing facts — previously only reachable per-container.
+
+        The selection line carries only report_id, so the IGM number, vessel and
+        agent come from the parent report — the same shape the source .txt list has.
+        An empty result for a known IGM is the real "No container selected for
+        scanning" outcome, not a missing report.
+
+        ``scan_machine``/``goods_desc`` and ``machine_type``/``goods_description``
+        are both emitted: the two names are consumed by different dashboards, and
+        aliasing one column twice is free."""
         where, params = self._rms_container_where(filters)
         params.update(limit=limit, offset=offset)
         return await self._rows(
-            "SELECT rc.report_id, r.igm_no, rc.sl_no, rc.container_no, "
-            "rc.machine_type AS scan_machine, rc.scan_location, "
+            "SELECT rc.report_id, r.igm_no, r.igm_year, rc.sl_no, rc.container_no, "
+            "rc.machine_type AS scan_machine, rc.machine_type, rc.scan_location, "
             "(rc.machine_type || '-' || rc.scan_location) AS machine_code, "
-            "rc.cfs_name, rc.goods_desc "
+            "rc.cfs_name, rc.goods_desc, rc.goods_desc AS goods_description, "
+            "r.vessel_name, r.shipping_line, r.agent_pan AS shipping_agent, "
+            "r.processing_end AS processing_end_date "
             f"{self._RMS_CONT_FROM}{where} "
             "ORDER BY rc.sl_no NULLS LAST LIMIT :limit OFFSET :offset", params)
 
@@ -307,8 +412,8 @@ class CustomsRepository:
         where, params = self._where(filters, ("sb_no",))
         params.update(limit=limit, offset=offset)
         return await self._rows(
-            "SELECT id, sb_no, sb_date, site_id, rotation_no, leo_date, action, created_at "
-            f"FROM core.leo{where} ORDER BY id DESC LIMIT :limit OFFSET :offset", params)
+            "SELECT sb_no, sb_date, site_id, rotation_no, leo_date "
+            f"FROM core.leo{where} ORDER BY sb_no DESC LIMIT :limit OFFSET :offset", params)
 
     async def count_leo(self, *, filters: Mapping[str, Any]) -> int:
         where, params = self._where(filters, ("sb_no",))
@@ -318,8 +423,8 @@ class CustomsRepository:
         where, params = self._where(filters, ("sb_no", "site_id"))
         params.update(limit=limit, offset=offset)
         return await self._rows(
-            "SELECT id, sb_no, sb_date, site_id, action, created_at "
-            f"FROM core.shipping_bill{where} ORDER BY id DESC LIMIT :limit OFFSET :offset", params)
+            "SELECT sb_no, sb_date, site_id "
+            f"FROM core.shipping_bill{where} ORDER BY sb_no DESC LIMIT :limit OFFSET :offset", params)
 
     async def count_shipping_bills(self, *, filters: Mapping[str, Any]) -> int:
         where, params = self._where(filters, ("sb_no", "site_id"))
@@ -332,21 +437,22 @@ class CustomsRepository:
         status = await self._one(
             "SELECT container_no, igm_no, declared_igm, rms_selected, ooc_cleared, smtp_bonded "
             "FROM mart.v_customs_container_status WHERE container_no = :cn", {"cn": container_no})
-        # Vessel/voyage/message-id + IGM timestamps for this box, via the same
-        # container -> cargo_line -> vessel join the ICEGATE adapter uses. One box maps
-        # to one cargo line -> one vessel; ORDER BY id DESC LIMIT 1 picks the latest.
+        # Vessel/voyage + IGM timestamps for this box, via the same container ->
+        # cargo_line -> vessel join the ICEGATE adapter uses. One box maps to one
+        # cargo line -> one vessel; ORDER BY igm_no DESC LIMIT 1 picks the latest.
         vessel = await self._one(
-            "SELECT v.igm_no, v.igm_date, v.vessel_code, v.voyage_no, "
-            "v.line_code AS shipping_line_code, "
+            "SELECT v.igm_no, v.igm_date, v.imo_no AS imo_code, v.vessel_code, v.voyage_no, "
+            "v.line_code AS shipping_line_code, v.terminal_code AS terminal_operator_code, "
             "v.port_of_arrival, v.eta AS expected_arrival, "
-            "v.entry_inward_ts AS entry_inward, v.message_id "
+            "v.entry_inward_ts AS entry_inward "
             "FROM core.igm_line_container c "
             "JOIN core.igm v ON v.igm_no = c.igm_no "
-            "WHERE c.container_no = :cn ORDER BY v.id DESC LIMIT 1", {"cn": container_no})
+            "WHERE c.container_no = :cn ORDER BY v.igm_no DESC LIMIT 1", {"cn": container_no})
         igm = await self._rows(
-            "SELECT igm_no, line_no, container_no, seal_no, "
+            "SELECT igm_no, line_no, container_no, seal_no, agent_code AS container_agent_code, "
             "status AS container_status, iso_code AS iso_size_type "
-            "FROM core.igm_line_container WHERE container_no = :cn ORDER BY id", {"cn": container_no})
+            "FROM core.igm_line_container WHERE container_no = :cn "
+            "ORDER BY igm_no, line_no, subline_no", {"cn": container_no})
         ooc = await self._rows(
             "SELECT DISTINCT o.be_no AS bill_of_entry_no, o.ooc_no AS out_of_charge_no, "
             "o.ooc_date AS out_of_charge_date, o.importer_name "
@@ -356,12 +462,15 @@ class CustomsRepository:
             "SELECT s.smtp_no, s.bond_no, s.destination_icd AS destination_code, "
             "sl.consignee AS consignee_name "
             "FROM core.smtp_container sl JOIN core.smtp_permit s ON s.smtp_no = sl.smtp_no "
-            "WHERE sl.container_no = :cn ORDER BY s.id", {"cn": container_no})
+            "WHERE sl.container_no = :cn ORDER BY s.smtp_no", {"cn": container_no})
+        # The scan-selection line carries only report_id; the IGM number lives on the
+        # parent scan report, so it is joined in rather than read off the line.
         rms = await self._rows(
-            "SELECT igm_no, machine_type AS scan_machine, scan_location, cfs_name "
-            "FROM core.rms_scan_container WHERE container_no = :cn ORDER BY id", {"cn": container_no})
+            "SELECT r.igm_no, c.machine_type AS scan_machine, c.scan_location, c.cfs_name "
+            "FROM core.rms_scan_container c "
+            "JOIN core.rms_scan_report r ON r.report_id = c.report_id "
+            "WHERE c.container_no = :cn ORDER BY c.sl_no", {"cn": container_no})
         return {"container_no": container_no, "status": status, "vessel": vessel,
-                "message_id": (vessel or {}).get("message_id"),
                 "igm": igm, "ooc": ooc, "smtp": smtp, "rms": rms}
 
     async def summary(self) -> dict:

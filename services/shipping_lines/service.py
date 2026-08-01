@@ -213,6 +213,24 @@ class ShippingLinesService:
     async def count_lines(self) -> int:
         return await self._repo.count_lines()
 
+    async def list_edo(self, *, filters, limit, offset):
+        return await self._repo.list_edo(filters=filters, limit=limit, offset=offset)
+
+    async def count_edo(self, *, filters):
+        return await self._repo.count_edo(filters=filters)
+
+    async def edo_detail(self, do_number: str):
+        return await self._repo.edo_detail(do_number)
+
+    async def list_gate_movements(self, *, filters, limit, offset):
+        return await self._repo.list_gate_movements(filters=filters, limit=limit, offset=offset)
+
+    async def count_gate_movements(self, *, filters):
+        return await self._repo.count_gate_movements(filters=filters)
+
+    async def list_gate_numbers(self):
+        return await self._repo.list_gate_numbers()
+
     async def list_delivery_orders(self, *, filters, limit, offset):
         return await self._repo.list_delivery_orders(filters=filters, limit=limit, offset=offset)
 

@@ -171,6 +171,65 @@ async def list_delivery_orders(
     return _page(items, total, limit, offset, response)
 
 
+# --------------------------------------------------------------------- E-DO
+@router.get("/edo", response_model=Page, summary="Electronic Delivery Orders (AGDORD), header-level")
+async def list_edo(
+    response: Response,
+    do_number: Optional[str] = None,
+    igm_no: Optional[str] = Query(None, description="filter to one IGM, e.g. 1194379"),
+    container_no: Optional[str] = None,
+    limit: int = Query(200, ge=1, le=2000),
+    offset: int = Query(0, ge=0),
+    svc: ShippingLinesService = Depends(get_service),
+) -> Page:
+    """One row per delivery order. ``manifest_linked`` says whether any container on
+    the DO also appears on a filed IGM — the one cross-document join that resolves
+    in the current corpus."""
+    filters = {"do_number": do_number, "igm_no": igm_no, "container_no": container_no}
+    items = await svc.list_edo(filters=filters, limit=limit, offset=offset)
+    total = await svc.count_edo(filters=filters)
+    return _page(items, total, limit, offset, response)
+
+
+@router.get("/edo/{do_number}", summary="One delivery order: header + container lines")
+async def edo_detail(do_number: str,
+                     svc: ShippingLinesService = Depends(get_service)) -> Dict[str, Any]:
+    view = await svc.edo_detail(do_number)
+    if view.get("header") is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail={"error": "delivery_order_not_found", "do_number": do_number})
+    return view
+
+
+# ------------------------------------------------------------ gate movements
+@router.get("/gates", summary="Gates that have CODECO gate-out movements (+ counts)")
+async def list_gate_numbers(svc: ShippingLinesService = Depends(get_service)) -> Dict[str, Any]:
+    return {"gates": await svc.list_gate_numbers()}
+
+
+@router.get("/gate-movements", response_model=Page,
+            summary="CODECO gate-out movements (gate pass, vehicle, gate no, dwell)")
+async def list_gate_movements(
+    response: Response,
+    gate_no: Optional[str] = Query(None, description="filter to one gate number, e.g. 1"),
+    terminal_code: Optional[str] = Query(None, description="terminal the gate belongs to, e.g. NSICT"),
+    container_no: Optional[str] = None,
+    vehicle_no: Optional[str] = None,
+    limit: int = Query(200, ge=1, le=2000),
+    offset: int = Query(0, ge=0),
+    svc: ShippingLinesService = Depends(get_service),
+) -> Page:
+    """The container actually leaving the terminal on a truck. ``dwell_hours`` is
+    derived server-side from arrival -> gate pass on the same CODECO message, and
+    ``terminal_code`` is resolved through the vessel call the message cites, so a
+    dashboard gate id (``NSICT-G1``) can be split into terminal + gate number."""
+    filters = {"gate_no": gate_no, "terminal_code": terminal_code,
+               "container_no": container_no, "vehicle_no": vehicle_no}
+    items = await svc.list_gate_movements(filters=filters, limit=limit, offset=offset)
+    total = await svc.count_gate_movements(filters=filters)
+    return _page(items, total, limit, offset, response)
+
+
 # --------------------------------------------------------------- import ledger
 @router.get("/messages", response_model=Page, summary="Import ledger (every imported file)")
 async def list_messages(

@@ -857,3 +857,42 @@ export interface DriverIntel {
   vehicle_no: string | null;
   violations: Record<string, unknown>[];
 }
+
+/** NLDS/LDB truck Port Events payload used by Vehicle Management → Track. */
+export interface LdbTruckEvent {
+  eventName?: string;
+  locName?: string;
+  containerNumber?: string;
+  eventTime?: string | number;
+  eventTimeLabel?: string;
+  dateMarker?: string;
+  transportMode?: string;
+  locLat?: string;
+  locLong?: string;
+}
+
+export interface LdbTruckTracking {
+  truckNumber: string;
+  truckType?: string;
+  alert?: string | null;
+  latest?: LdbTruckEvent | null;
+  events: LdbTruckEvent[];
+  terminals: Array<{ locName: string; events: LdbTruckEvent[] }>;
+  /** In-app vehicle compliance snapshot (no external redirect). */
+  compliance?: {
+    status: "COMPLIANT" | "NON_COMPLIANT" | "UNKNOWN";
+    owner?: string;
+    vehicleClass?: string;
+    fitnessValidUpto?: string;
+    insuranceValidUpto?: string;
+    pucValidUpto?: string;
+    chassisNumber?: string;
+    engineNumber?: string;
+    notes?: string;
+  };
+}
+
+export interface LdbTruckTrackingResponse {
+  source: string;
+  tracking: LdbTruckTracking;
+}

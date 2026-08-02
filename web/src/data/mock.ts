@@ -27,6 +27,8 @@ import type {
   IdentityVerifyResult,
   IdentityEnrollResult,
   KpiResult,
+  LdbTruckTracking,
+  LdbTruckTrackingResponse,
   OperatorBanner,
   ParkingFacility,
   ParkingSummary,
@@ -347,22 +349,136 @@ function mockAssignedVehicles(): Set<string> {
 
 // Mock Vehicle Master — TRK-000001..TRK-000030 seeded ACTIVE, mirroring the
 // gateway's truck-sim migration. Mutable so create/update demo flows persist.
-const MOCK_FLEET: FleetVehicle[] = Array.from({ length: 30 }, (_, i) => {
-  const n = i + 1;
-  return {
-    vehicle_id: `TRK-${String(n).padStart(6, "0")}`,
-    vehicle_number: `MH04${String.fromCharCode(65 + (n % 26))}${String.fromCharCode(
-      65 + ((n * 7) % 26),
-    )}${String((n * 137) % 10000).padStart(4, "0")}`,
+// TRK-000031 is the NLDS demo plate used for LDB truck tracking (Port Events).
+const MOCK_FLEET: FleetVehicle[] = [
+  ...Array.from({ length: 30 }, (_, i) => {
+    const n = i + 1;
+    return {
+      vehicle_id: `TRK-${String(n).padStart(6, "0")}`,
+      vehicle_number: `MH04${String.fromCharCode(65 + (n % 26))}${String.fromCharCode(
+        65 + ((n * 7) % 26),
+      )}${String((n * 137) % 10000).padStart(4, "0")}`,
+      vehicle_type: "Container Truck",
+      chassis_number: null,
+      rfid_fastag_id: null,
+      status: "ACTIVE" as const,
+      created_by: "system:truck-sim",
+      created_at: new Date(NOW).toISOString(),
+      updated_at: new Date(NOW).toISOString(),
+    };
+  }),
+  {
+    vehicle_id: "TRK-000031",
+    vehicle_number: "MH43CQ0554",
     vehicle_type: "Container Truck",
     chassis_number: null,
     rfid_fastag_id: null,
     status: "ACTIVE",
-    created_by: "system:truck-sim",
+    created_by: "system:nlds-demo",
     created_at: new Date(NOW).toISOString(),
     updated_at: new Date(NOW).toISOString(),
+  },
+];
+
+/** Deterministic NLDS-shaped truck Port Events (mirrors /api/ldb/truck MOCK). */
+function buildMockLdbTruck(vehicleNumber: string): LdbTruckTracking {
+  const plate = vehicleNumber.trim().toUpperCase() || "UNKNOWN";
+  // Real NLDS sample for the demo plate captured from ldb.co.in truck/search.
+  if (plate === "MH43CQ0554") {
+    const events = [
+      {
+        eventName: "PORT OUT",
+        locName: "Bharat Mumbai Container Terminals (PSA)",
+        locLat: "18.938916",
+        locLong: "72.939722",
+        containerNumber: "HMMU4963884",
+        transportMode: "TRUCK",
+        eventTime: "1785573715000",
+        eventTimeLabel: "01-08-2026 14:11:55 IST",
+        dateMarker: "01-08-2026",
+      },
+      {
+        eventName: "PORT IN",
+        locName: "Bharat Mumbai Container Terminals (PSA)",
+        locLat: "18.938916",
+        locLong: "72.939722",
+        containerNumber: "HMMU4963884",
+        transportMode: "VESSEL",
+        eventTime: "1785504450000",
+        eventTimeLabel: "31-07-2026 18:57:30 IST",
+        dateMarker: "31-07-2026",
+      },
+    ];
+    return {
+      truckNumber: plate,
+      truckType: "CONTAINERIZED",
+      events,
+      terminals: [{ locName: events[0].locName, events }],
+      latest: events[0],
+      alert: `ALERT! Trailer ${plate} carrying Container No. HMMU4963884`,
+      compliance: {
+        status: "COMPLIANT",
+        owner: "DEMO TRANSPORT LLP",
+        vehicleClass: "Goods Carriage (HMV)",
+        fitnessValidUpto: "31-03-2027",
+        insuranceValidUpto: "15-11-2026",
+        pucValidUpto: "01-02-2027",
+        chassisNumber: "MB1AA12CD3456789",
+        engineNumber: "ENG55CQ054",
+        notes: "In-app compliance snapshot (Vahan-style). No external redirect.",
+      },
+    };
+  }
+
+  const digits = plate.replace(/\D/g, "") || "0000000";
+  const container = `MSMU${digits.slice(-7).padStart(7, "0")}`;
+  const terminal = "Bharat Mumbai Container Terminals (PSA)";
+  const events = [
+    {
+      eventName: "PORT OUT",
+      locName: terminal,
+      locLat: "18.938916",
+      locLong: "72.939722",
+      containerNumber: container,
+      transportMode: "TRUCK",
+      eventTime: String(NOW),
+      eventTimeLabel: new Date(NOW).toLocaleString("en-GB", { timeZone: "Asia/Kolkata" }) + " IST",
+      dateMarker: new Date(NOW).toLocaleDateString("en-GB"),
+    },
+    {
+      eventName: "PORT IN",
+      locName: terminal,
+      locLat: "18.938916",
+      locLong: "72.939722",
+      containerNumber: container,
+      transportMode: "VESSEL",
+      eventTime: String(NOW - 18 * 3600_000),
+      eventTimeLabel:
+        new Date(NOW - 18 * 3600_000).toLocaleString("en-GB", { timeZone: "Asia/Kolkata" }) +
+        " IST",
+      dateMarker: new Date(NOW - 18 * 3600_000).toLocaleDateString("en-GB"),
+    },
+  ];
+  return {
+    truckNumber: plate,
+    truckType: "CONTAINERIZED",
+    events,
+    terminals: [{ locName: terminal, events }],
+    latest: events[0],
+    alert: `ALERT! Trailer ${plate} carrying Container No. ${container}`,
+    compliance: {
+      status: "COMPLIANT",
+      owner: "JNPA DEMO FLEET",
+      vehicleClass: "Goods Carriage (HMV)",
+      fitnessValidUpto: "31-12-2026",
+      insuranceValidUpto: "30-06-2027",
+      pucValidUpto: "31-03-2027",
+      chassisNumber: `CH${digits.slice(-8).padStart(8, "0")}`,
+      engineNumber: `EN${digits.slice(-6).padStart(6, "0")}`,
+      notes: "In-app compliance snapshot. No external redirect.",
+    },
   };
-});
+}
 
 // --------------------------------------------------------------------------
 // KPI strip — mirrors shared/jnpa_shared/kpi.py KPI_TARGETS exactly. Each value
@@ -1666,6 +1782,13 @@ export class MockAdapter implements DataAdapter {
     if (nextStatus) rec.status = nextStatus;
     rec.updated_at = new Date(NOW).toISOString();
     return Promise.resolve({ updated: true, vehicle: { ...rec } });
+  }
+
+  ldbTruck(vehicleNumber: string): Promise<LdbTruckTrackingResponse> {
+    return Promise.resolve({
+      source: "MOCK",
+      tracking: buildMockLdbTruck(vehicleNumber),
+    });
   }
 
   vehicleIdentity(vehicleNumber: string, image: string): Promise<VehicleIdentityResult> {

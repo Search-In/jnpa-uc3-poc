@@ -13,9 +13,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Spinner, EmptyState } from "@/components/ui/misc";
-import { PageContainer, PageHeader, StatGrid, StatCard } from "@/components/ui/dtccc";
+import { Spinner, EmptyState, ErrorState } from "@/components/ui/misc";
+import { PageContainer, PageHeader, StatGrid, StatCard, StatusChip } from "@/components/ui/dtccc";
+import { DecisionPathBadge } from "@/components/DecisionPathBadge";
 import { fmtEta } from "@/lib/utils";
+import { weatherCondition, weatherHumidityPct, weatherRainMm } from "@/lib/weather";
+import {
+  congestionTone,
+  fmtDelay,
+  fmtSpeed,
+  incidentSeverityTone,
+  trafficStatusTone,
+} from "@/lib/traffic";
 import {
   Navigation,
   CheckCircle2,
@@ -24,6 +33,7 @@ import {
   DoorOpen,
   AlertTriangle,
   CloudRain,
+  TrafficCone,
 } from "lucide-react";
 
 const GATES = ["G-NSICT", "G-JNPCT", "G-NSIGT", "G-BMCT"];
@@ -72,12 +82,23 @@ export default function DriverAdvisory() {
   const accidentsLoading = accReported.isLoading || accInvestigating.isLoading;
 
   // --- Weather Advisory (additive) ----------------------------------------
-  // There is no live weather feed. This panel only reflects the existing
-  // traffic/congestion model output; weather advisories surface via the
-  // Monsoon what-if scenario, never from invented weather data.
+  // Live port-area conditions from the Open-Meteo integration
+  // (GET /api/weather/current). The endpoint degrades LIVE → CACHED →
+  // SYNTHETIC instead of failing; the panel always shows which rung served
+  // the data so a synthetic reading is never presented as live.
   const weather = useQuery({
-    queryKey: ["traffic", "predict", "advisory"],
-    queryFn: () => api.trafficPredict(15),
+    queryKey: ["weather-current", "advisory"],
+    queryFn: () => api.weatherCurrent(),
+  });
+
+  // --- Traffic Advisory (additive) ----------------------------------------
+  // Live corridor conditions from the TomTom integration
+  // (GET /api/traffic/current) — real flow + incident data replacing any
+  // static traffic placeholder. Degrades LIVE → CACHED → DATABASE → SYNTHETIC
+  // instead of failing; the panel shows which rung served the data.
+  const traffic = useQuery({
+    queryKey: ["traffic-current", "advisory"],
+    queryFn: () => api.trafficCurrent(),
   });
 
   // Queue depth per gate -> the recommendation steers toward the shortest queue.
@@ -230,7 +251,80 @@ export default function DriverAdvisory() {
         </Card>
       </div>
 
-      {/* Weather Advisory (additive, honest) */}
+      {/* Traffic Advisory — live TomTom corridor conditions with provenance */}
+      <div className="px-4 py-3">
+        <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+          <TrafficCone className="h-4 w-4 text-muted-foreground" />
+          {t("advisory.trafficAdvisory", "Traffic Advisory")}
+        </div>
+        <Card>
+          <CardContent className="space-y-2 p-4 text-sm">
+            {traffic.isLoading ? (
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Spinner /> {t("advisory.loadingTraffic", "Loading corridor traffic…")}
+              </div>
+            ) : traffic.isError || !traffic.data ? (
+              <ErrorState onRetry={() => void traffic.refetch()} />
+            ) : (
+              <>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="inline-flex items-center gap-1.5 font-medium">
+                    {t("advisory.trafficCongestion", "Corridor congestion")}
+                    <StatusChip
+                      label={traffic.data.traffic.congestion_level}
+                      tone={congestionTone(traffic.data.traffic.congestion_level)}
+                    />
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <StatusChip
+                      label={traffic.data.status}
+                      tone={trafficStatusTone(traffic.data.status)}
+                    />
+                    <DecisionPathBadge path={traffic.data.decision_path} />
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums text-foreground">
+                  <span>
+                    {t("advisory.trafficSpeed", "Speed")}:{" "}
+                    {fmtSpeed(traffic.data.traffic.current_speed)}
+                  </span>
+                  <span>
+                    {t("advisory.trafficFreeFlow", "Free flow")}:{" "}
+                    {fmtSpeed(traffic.data.traffic.free_flow_speed)}
+                  </span>
+                  <span>
+                    {t("advisory.trafficDelay", "Delay")}:{" "}
+                    {fmtDelay(traffic.data.traffic.delay_seconds)}
+                  </span>
+                  <span>
+                    {t("advisory.trafficIncidents", "Incidents")}: {traffic.data.incident_count}
+                  </span>
+                </div>
+                {traffic.data.incidents.slice(0, 3).map((inc, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-2 py-1 text-xs"
+                  >
+                    <span className="truncate">
+                      {inc.description ?? inc.type}
+                      {inc.road ? ` · ${inc.road}` : ""}
+                    </span>
+                    <StatusChip label={inc.severity} tone={incidentSeverityTone(inc.severity)} />
+                  </div>
+                ))}
+                <p className="text-xs text-muted-foreground">
+                  {t(
+                    "advisory.trafficCaption",
+                    "Live TomTom feed for the NH-348 JNPA corridor; when the feed is unreachable the last cached reading is shown and labelled.",
+                  )}
+                </p>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Weather Advisory — live Open-Meteo conditions with provenance */}
       <div className="px-4 py-3">
         <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
           <CloudRain className="h-4 w-4 text-muted-foreground" />
@@ -240,20 +334,77 @@ export default function DriverAdvisory() {
           <CardContent className="space-y-2 p-4 text-sm">
             {weather.isLoading ? (
               <div className="flex items-center gap-2 text-muted-foreground">
-                <Spinner /> {t("advisory.loadingWeather", "Loading advisory context…")}
+                <Spinner /> {t("advisory.loadingWeather", "Loading port weather…")}
               </div>
+            ) : weather.isError || !weather.data ? (
+              <ErrorState onRetry={() => void weather.refetch()} />
             ) : (
-              <div className="text-foreground">
-                {t("advisory.weatherModelPath", "Congestion model path")}:{" "}
-                <span className="font-mono text-xs">{weather.data?.decision_path ?? "—"}</span>
-              </div>
+              <>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-medium">
+                    {weatherCondition(weather.data) ??
+                      t("advisory.weatherNoCondition", "Conditions unavailable")}
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <StatusChip
+                      label={weather.data.status}
+                      tone={
+                        weather.data.status === "LIVE"
+                          ? "ok"
+                          : weather.data.status === "DEGRADED"
+                            ? "warn"
+                            : "critical"
+                      }
+                    />
+                    <DecisionPathBadge path={weather.data.decision_path} />
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums text-foreground">
+                  <span>
+                    {t("advisory.weatherTemp", "Temp")}:{" "}
+                    {weather.data.weather.temperature != null
+                      ? `${weather.data.weather.temperature.toFixed(1)} °C`
+                      : "—"}
+                  </span>
+                  <span>
+                    {t("advisory.weatherWind", "Wind")}:{" "}
+                    {weather.data.weather.wind_speed != null
+                      ? `${weather.data.weather.wind_speed.toFixed(0)} km/h`
+                      : "—"}
+                  </span>
+                  <span>
+                    {t("advisory.weatherVisibility", "Visibility")}:{" "}
+                    {weather.data.weather.visibility != null
+                      ? `${(weather.data.weather.visibility / 1000).toFixed(1)} km`
+                      : "—"}
+                  </span>
+                  <span>
+                    {t("advisory.weatherRain", "Rain")}:{" "}
+                    {weatherRainMm(weather.data) != null
+                      ? `${weatherRainMm(weather.data)!.toFixed(1)} mm`
+                      : "—"}
+                  </span>
+                  {weatherHumidityPct(weather.data) != null && (
+                    <span>
+                      {t("advisory.weatherHumidity", "Humidity")}:{" "}
+                      {`${weatherHumidityPct(weather.data)!.toFixed(0)} %`}
+                    </span>
+                  )}
+                  <span>
+                    {t("advisory.weatherWave", "Waves")}:{" "}
+                    {weather.data.marine.wave_height != null
+                      ? `${weather.data.marine.wave_height.toFixed(1)} m`
+                      : "—"}
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {t(
+                    "advisory.weatherCaption",
+                    "Live Open-Meteo + OpenWeather feed for the JNPA port area; when a feed is unreachable the last cached reading is shown and labelled.",
+                  )}
+                </p>
+              </>
             )}
-            <p className="text-xs text-muted-foreground">
-              {t(
-                "advisory.weatherCaption",
-                "Weather advisories surface during the Monsoon what-if scenario; no live weather feed is connected.",
-              )}
-            </p>
           </CardContent>
         </Card>
       </div>

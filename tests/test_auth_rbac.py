@@ -120,6 +120,34 @@ def test_policy_map_scoping():
     assert len(roles_for_path("/api/traffic/snapshots")) == 6
 
 
+def test_method_overlay_locks_writes_without_breaking_reads():
+    """C7: WRITE operations on broadly-readable surfaces are role-restricted;
+    reads and the driver-PWA write paths are untouched."""
+    from gateway.auth import roles_for
+
+    driver = Role.DRIVER.value
+    admin = Role.DTCCC_ADMIN.value
+    # Writes a DRIVER must NOT be able to make:
+    assert driver not in roles_for("/api/zones", "PUT")
+    assert driver not in roles_for("/api/cargo/ABCD1234567/release", "POST")
+    assert driver not in roles_for("/api/workflows/rules", "POST")
+    assert driver not in roles_for("/api/ai/events", "POST")
+    assert driver not in roles_for("/api/rms-tas/seed", "POST")
+    # The same surfaces stay readable by everyone authenticated:
+    assert driver in roles_for("/api/zones", "GET")
+    assert driver in roles_for("/api/cargo/ABCD1234567", "GET")
+    # Control room keeps its writes:
+    assert admin in roles_for("/api/zones", "PUT")
+    assert admin in roles_for("/api/workflows/rules", "POST")
+    # Driver-PWA write paths remain allowed (must never regress):
+    assert driver in roles_for("/api/geo/evaluate", "POST")
+    assert driver in roles_for("/api/parking/allocate", "POST")
+    assert driver in roles_for("/api/alerts/x/ack", "POST")
+    assert driver in roles_for("/api/trucks/TRK-000001/route/ack", "POST")
+    assert driver in roles_for("/api/push/subscribe", "POST")
+    assert driver in roles_for("/api/identity/enrol-request", "POST")
+
+
 # --------------------------------------------------------------------------- disabled
 def test_auth_disabled_lets_everything_through():
     c = _client(enabled=False)

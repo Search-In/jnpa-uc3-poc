@@ -82,6 +82,12 @@ class Router:
             await self._client.aclose()
             self._client = None
 
+    def _redact(self, text: str) -> str:
+        """The HERE key rides in the request URL (``apikey=…``), and httpx
+        exception messages embed that URL — never log them unredacted."""
+        key = self.cfg.here_api_key
+        return text.replace(key, "***") if key else text
+
     async def route(self, origin: LatLon, dest: LatLon) -> Route:
         """Return a route origin->dest, fetching/caching as needed."""
         key = (_round_key(origin), _round_key(dest))
@@ -126,7 +132,8 @@ class Router:
                         ROUTES_FETCHED.labels(provider).inc()
                         return route
                 except Exception as exc:  # noqa: BLE001 - any failure -> next provider
-                    log.debug("route_provider_failed", provider=provider, error=str(exc))
+                    log.debug("route_provider_failed", provider=provider,
+                              error=self._redact(str(exc)))
 
         # Both live providers unavailable: dead reckon along the corridor.
         with ROUTE_FETCH_SECONDS.labels("deadreckon").time():
@@ -198,7 +205,7 @@ class Router:
         try:
             route = await self._here_route(origin, dest)
         except Exception as exc:  # noqa: BLE001
-            log.debug("here_duration_failed", error=str(exc))
+            log.debug("here_duration_failed", error=self._redact(str(exc)))
         return route.duration_s if route else None
 
     # -- dead reckoning -----------------------------------------------------
@@ -245,13 +252,15 @@ def _densify(anchors: List[LatLon], step_km: float) -> List[LatLon]:
 # HERE flexible-polyline decoder (HERE encodes geometry in its own format).
 # Compact port of the reference algorithm; lat/lng only (3rd dim ignored).
 # ---------------------------------------------------------------------------
+# Official flexpolyline table, indexed by ord(ch) - 45 over the alphabet
+# "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+# ('A'->0 .. 'Z'->25, 'a'->26 .. 'z'->51, '0'->52 .. '9'->61, '-'->62, '_'->63).
 _DECODING_TABLE = [
-    62, 63, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    52, 53, 54, 55, 56, 57, 58, 59, 60, 61, -1, -1, -1, -1, -1, -1,
-    -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
-    15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, -1, -1, -1, -1, 63,
-    -1, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
-    41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51,
+    62, -1, -1, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, -1, -1, -1,
+    -1, -1, -1, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+    12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, -1, -1,
+    -1, -1, 63, -1, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37,
+    38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51,
 ]
 
 
@@ -267,7 +276,8 @@ def _decode_flexible_polyline_impl(encoded: str) -> List[LatLon]:
         result = 0
         shift = 0
         for ch in it:
-            val = _DECODING_TABLE[ord(ch) - 45]
+            idx = ord(ch) - 45
+            val = _DECODING_TABLE[idx] if 0 <= idx < len(_DECODING_TABLE) else -1
             if val < 0:
                 raise ValueError("invalid encoding char")
             result |= (val & 0x1F) << shift
@@ -277,6 +287,11 @@ def _decode_flexible_polyline_impl(encoded: str) -> List[LatLon]:
         return result, False
 
     chars = iter(encoded)
+    # Flexpolyline carries TWO header varints: format version, then the
+    # content header (precision | thirdDim << 4 | thirdDimPrecision << 7).
+    version, ok = decode_unsigned(chars)
+    if not ok or version != 1:
+        return []
     header_val, ok = decode_unsigned(chars)
     if not ok:
         return []

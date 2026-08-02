@@ -896,3 +896,285 @@ export interface LdbTruckTrackingResponse {
   source: string;
   tracking: LdbTruckTracking;
 }
+// --- Weather (Open-Meteo weather + marine, /api/weather) ---------------------
+// Mirrors services/weather/service.py's response contract. `status` / `source` /
+// `decision_path` carry the LIVE → CACHED → SYNTHETIC fallback provenance; the
+// endpoint never 5xxes for an upstream outage, it degrades and says so here.
+export interface WeatherBlock {
+  temperature: number | null; // °C
+  wind_speed: number | null; // km/h
+  wind_direction: number | null; // degrees
+  wind_gusts: number | null; // km/h
+  visibility: number | null; // metres
+  precipitation: number | null; // mm
+  weather_code: number | null; // WMO code
+  condition: string | null;
+  observed_at: string | null;
+  synthetic?: boolean;
+}
+export interface MarineBlock {
+  wave_height: number | null; // metres
+  wave_period: number | null; // seconds
+  swell_wave_height: number | null; // metres
+  sea_level_height: number | null; // metres
+  observed_at: string | null;
+  synthetic?: boolean;
+}
+// OpenWeatherMap enrichment (integrations/openweather). `null` on the parent
+// response when the provider is disabled (no OPENWEATHER_API_KEY configured) —
+// the surface then behaves exactly as the Open-Meteo-only build.
+export interface OpenWeatherBlock {
+  temperature: number | null; // °C
+  feels_like: number | null; // °C
+  humidity: number | null; // %
+  pressure: number | null; // hPa
+  rain: number | null; // mm over the last hour (0 = not raining)
+  clouds: number | null; // % cloud cover
+  condition: string | null; // e.g. "Cloudy"
+  condition_id: number | null; // OpenWeatherMap condition code
+  description: string | null; // e.g. "scattered clouds"
+  label: string | null; // operational label: CLEAR/CLOUDY/RAIN/STORM/…
+  wind_speed: number | null; // km/h (converted from m/s)
+  wind_direction: number | null; // degrees
+  visibility: number | null; // metres
+  station: string | null;
+  observed_at: string | null;
+  // Cross-provider temperature validation vs the Open-Meteo block.
+  temperature_delta?: number | null; // °C (openweather − open-meteo)
+  temperature_consistent?: boolean | null; // |delta| within tolerance
+  synthetic?: boolean;
+}
+export interface WeatherForecastHour {
+  time: string;
+  temperature: number | null;
+  wind_speed: number | null;
+  wind_direction: number | null;
+  wind_gusts: number | null;
+  visibility: number | null;
+  precipitation: number | null;
+  weather_code: number | null;
+  condition: string | null;
+}
+export interface WeatherCurrent {
+  status: "LIVE" | "DEGRADED" | "OFFLINE";
+  source: "OPEN_METEO+OPENWEATHER" | "OPEN_METEO" | "OPEN_METEO_CACHE" | "SYNTHETIC";
+  decision_path: "LIVE" | "CACHED" | "SYNTHETIC";
+  location: { latitude: number; longitude: number };
+  weather: WeatherBlock;
+  marine: MarineBlock;
+  // null when OPENWEATHER_API_KEY is not configured (sources.openweather = "DISABLED").
+  openweather: OpenWeatherBlock | null;
+  sources: { weather: string; marine: string; openweather: string };
+  cache_age_s: number | null;
+  units: Record<string, string>;
+  timestamp: string;
+  forecast?: WeatherForecastHour[];
+}
+export interface WeatherHealth {
+  system: string;
+  provider: string; // "OPEN_METEO" | "OPEN_METEO + OPENWEATHER"
+  providers: string[];
+  configured: boolean;
+  api_key_required: boolean;
+  weather_url: string;
+  marine_url: string;
+  timeout_s: number;
+  retries: number;
+  openweather: {
+    configured: boolean;
+    api_key_required: boolean;
+    url: string;
+    timeout_s: number;
+    retries: number;
+  };
+  cache_ttl_s: number;
+  default_location: { latitude: number; longitude: number };
+}
+
+// --- Traffic (TomTom flow + incidents, /api/traffic/current) -----------------
+// Mirrors services/traffic/service.py's response contract. `status` / `source` /
+// `decision_path` carry the LIVE → CACHED → DATABASE → SYNTHETIC fallback
+// provenance; the endpoint never 5xxes for a TomTom outage, it degrades and
+// says so here. Distinct from TrafficSnapshot (per-segment sim map overlay).
+export type CongestionLevel = "LOW" | "MEDIUM" | "HIGH" | "SEVERE" | "UNKNOWN";
+export interface TrafficBlock {
+  current_speed: number | null; // km/h
+  free_flow_speed: number | null; // km/h
+  current_travel_time: number | null; // seconds
+  free_flow_travel_time: number | null; // seconds
+  congestion_level: CongestionLevel;
+  delay_seconds: number | null; // seconds vs free flow
+  road_closure: boolean;
+  confidence: number | null; // 0..1 (TomTom flow confidence)
+  road_class: string | null; // functional road class, e.g. "FRC0"
+  synthetic?: boolean;
+}
+export interface TrafficIncident {
+  type: string; // ACCIDENT / JAM / ROAD_WORKS / ROAD_CLOSED / …
+  description: string | null;
+  severity: string; // MINOR / MODERATE / MAJOR / CLOSURE / UNKNOWN
+  road: string | null;
+  delay: number | null; // seconds
+}
+export interface TrafficCurrent {
+  status: "LIVE" | "DEGRADED" | "OFFLINE";
+  source: "TOMTOM" | "TOMTOM_CACHE" | "TOMTOM_DB" | "SYNTHETIC";
+  decision_path: "LIVE" | "CACHED" | "DATABASE" | "SYNTHETIC";
+  location: { latitude: number; longitude: number };
+  traffic: TrafficBlock;
+  incidents: TrafficIncident[];
+  incident_count: number;
+  sources: { traffic: string; incidents: string };
+  cache_age_s: number | null;
+  units: Record<string, string>;
+  timestamp: string;
+}
+export interface TrafficHealth {
+  system: string; // "TRAFFIC"
+  provider: string; // "TOMTOM"
+  configured: boolean;
+  api_key_required: boolean;
+  flow_url: string;
+  incidents_url: string;
+  timeout_s: number;
+  retries: number;
+  cache_ttl_s: number;
+  default_location: { latitude: number; longitude: number };
+}
+
+// --- Air quality (OpenAQ, /api/air-quality/current) ---------------------------
+// Mirrors services/air_quality/service.py's response contract. `status` /
+// `source` / `decision_path` carry the LIVE → CACHED → DATABASE → SYNTHETIC
+// fallback provenance; the endpoint never 5xxes for an OpenAQ outage, it
+// degrades and says so here. All concentrations are µg/m³.
+export type AqStatus = "GOOD" | "MODERATE" | "UNHEALTHY" | "VERY_UNHEALTHY" | "UNKNOWN";
+export interface AirQualityBlock {
+  pm25: number | null;
+  pm10: number | null;
+  no2: number | null;
+  so2: number | null;
+  co: number | null;
+  o3: number | null;
+  air_quality_status: AqStatus;
+  source: string; // "OPENAQ" | "SYNTHETIC"
+  observed_at: string | null; // newest station timestamp (UTC ISO)
+  stations?: string[]; // contributing OpenAQ station names
+  synthetic?: boolean;
+}
+export interface AirQualityCurrent {
+  status: "LIVE" | "DEGRADED" | "OFFLINE";
+  source: "OPENAQ" | "OPENAQ_CACHE" | "OPENAQ_DB" | "SYNTHETIC";
+  decision_path: "LIVE" | "CACHED" | "DATABASE" | "SYNTHETIC";
+  location: { latitude: number; longitude: number };
+  air_quality: AirQualityBlock;
+  cache_age_s: number | null;
+  units: Record<string, string>;
+  timestamp: string;
+}
+export interface AirQualityHealth {
+  system: string; // "AIR_QUALITY"
+  provider: string; // "OPENAQ"
+  configured: boolean;
+  api_key_required: boolean; // always false — OpenAQ needs no key
+  api_key_present: boolean;
+  base_url: string;
+  timeout_s: number;
+  retries: number;
+  radius_m: number;
+  cache_ttl_s: number;
+  default_location: { latitude: number; longitude: number };
+}
+
+// --- Logistics (ULIP, /api/logistics/*) ---------------------------------------
+// Mirrors services/logistics/service.py's response contract. `status` /
+// `source` / `decision_path` carry the LIVE → CACHED → DATABASE → FALLBACK
+// provenance; the endpoints never 5xx for a ULIP outage — they degrade and say
+// so here. The FALLBACK rung is explicitly EMPTY (data_available: false):
+// the logistics surface never fabricates shipment data.
+export type LogisticsTrackingStatus = "IN_TRANSIT" | "IDLE" | "UNKNOWN";
+export interface LogisticsEvent {
+  ref_type: "VEHICLE" | "CONTAINER";
+  ref_id: string;
+  event_type: string; // "TOLL_CROSSING" | "CONTAINER_MOVEMENT"
+  event_ts: string | null;
+  location: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  source: string; // "ULIP"
+  source_api: string | null; // "FASTAG" | "LDB"
+}
+export interface LogisticsTrackedRef {
+  ref_type: "VEHICLE" | "CONTAINER";
+  ref_id: string;
+  status: LogisticsTrackingStatus;
+  last_event: string | null;
+  last_location: string | null;
+  last_event_ts: string | null;
+  event_count: number;
+  updated_at: string | null;
+}
+export interface LogisticsSummaryBlock {
+  window_h: number;
+  event_count: number;
+  vehicle_count: number;
+  container_count: number;
+  events_by_type: Record<string, number>;
+  last_event_ts: string | null;
+  latest_events: LogisticsEvent[];
+  tracked: LogisticsTrackedRef[];
+  data_available: boolean;
+}
+export interface LogisticsCurrent {
+  status: "LIVE" | "DEGRADED" | "OFFLINE";
+  source: "ULIP" | "ULIP_CACHE" | "ULIP_DB" | "NONE";
+  decision_path: "LIVE" | "CACHED" | "DATABASE" | "FALLBACK";
+  logistics: LogisticsSummaryBlock;
+  ulip: {
+    configured: boolean;
+    last_call_at: string | null;
+    last_call_ok: boolean | null;
+    fresh: boolean;
+  };
+  cache_age_s: number | null;
+  timestamp: string;
+}
+export interface LogisticsTrackingBlock {
+  ref_id: string;
+  ref_type: "VEHICLE" | "CONTAINER";
+  tracking_status: LogisticsTrackingStatus;
+  last_event: string | null;
+  last_location: string | null;
+  last_event_ts: string | null;
+  event_count: number;
+  events: LogisticsEvent[];
+  data_available: boolean;
+}
+export interface LogisticsTracking {
+  status: "LIVE" | "DEGRADED" | "OFFLINE";
+  source: "ULIP" | "ULIP_CACHE" | "ULIP_DB" | "NONE";
+  decision_path: "LIVE" | "CACHED" | "DATABASE" | "FALLBACK";
+  tracking: LogisticsTrackingBlock;
+  cache_age_s: number | null;
+  timestamp: string;
+}
+export interface LogisticsEventsPage {
+  events: LogisticsEvent[];
+  count: number;
+  total: number;
+  limit: number;
+  offset: number;
+}
+export interface LogisticsHealth {
+  system: string; // "LOGISTICS"
+  provider: string; // "ULIP"
+  configured: boolean;
+  auth_mode: "static" | "login" | "none";
+  api_url: string;
+  apis: { vehicle: string; container: string };
+  timeout_s: number;
+  retries: number;
+  cache_ttl_s: number;
+  last_call_at: string | null;
+  last_call_ok: boolean | null;
+  fresh: boolean;
+}

@@ -22,13 +22,14 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from fastapi import (APIRouter, Depends, File, HTTPException, Query, Request, Response,
-                     UploadFile, status)
+from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query, Request,
+                     Response, UploadFile, status)
 from pydantic import BaseModel
 
 from ..auth import CONTROL_ROOM, Role, auth_enabled
 from ..metrics import REQUESTS
 from services.marine import MarineUploadService
+from services.marine.parsers import DocumentTypeMismatch, UnknownDocumentType
 
 router = APIRouter(prefix="/api/marine", tags=["marine"])
 
@@ -71,6 +72,27 @@ async def _read_upload(file: UploadFile) -> bytes:
     return content
 
 
+def _document_type_error(exc: Exception) -> HTTPException:
+    """Map a client-supplied document_type fault onto HTTP 400.
+
+    Same ``{"error": ..., "detail": ...}`` envelope the existing transport guards use
+    (empty_file / file_too_large). Unreachable for a client that omits document_type, so
+    no existing caller can start seeing a 400 it did not see before."""
+    if isinstance(exc, UnknownDocumentType):
+        return HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                             detail={"error": "unknown_document_type",
+                                     "detail": str(exc),
+                                     "document_type": exc.raw,
+                                     "accepted": list(exc.accepted)})
+    assert isinstance(exc, DocumentTypeMismatch)
+    return HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                         detail={"error": "document_type_mismatch",
+                                 "detail": str(exc),
+                                 "document_type": exc.declared,
+                                 "detected_format": exc.detected,
+                                 "expected_formats": list(exc.expected)})
+
+
 class Page(BaseModel):
     items: List[Dict[str, Any]]
     total: int
@@ -97,10 +119,16 @@ async def upload_template(request: Request,
 @router.post("/validate", summary="Validate a Marine CSV upload (dry-run: parse + preview, no import)")
 async def upload_validate(request: Request,
                           file: UploadFile = File(...),
+                          document_type: Optional[str] = Form(default=None),
                           svc: MarineUploadService = Depends(get_upload_service)) -> Dict[str, Any]:
     uploader = require_uploader(request)
     content = await _read_upload(file)
-    res = await svc.validate(content, file.filename or "upload.csv", uploader)
+    try:
+        res = await svc.validate(content, file.filename or "upload.csv", uploader,
+                                 document_type=document_type)
+    except (UnknownDocumentType, DocumentTypeMismatch) as exc:
+        REQUESTS.labels(_API, "error").inc()
+        raise _document_type_error(exc) from exc
     REQUESTS.labels(_API, "ok").inc()
     return res
 
@@ -108,10 +136,16 @@ async def upload_validate(request: Request,
 @router.post("/upload", summary="Import a Marine CSV upload (valid rows upserted; idempotent)")
 async def upload_import(request: Request,
                         file: UploadFile = File(...),
+                        document_type: Optional[str] = Form(default=None),
                         svc: MarineUploadService = Depends(get_upload_service)) -> Dict[str, Any]:
     uploader = require_uploader(request)
     content = await _read_upload(file)
-    res = await svc.import_file(content, file.filename or "upload.csv", uploader)
+    try:
+        res = await svc.import_file(content, file.filename or "upload.csv", uploader,
+                                    document_type=document_type)
+    except (UnknownDocumentType, DocumentTypeMismatch) as exc:
+        REQUESTS.labels(_API, "error").inc()
+        raise _document_type_error(exc) from exc
     REQUESTS.labels(_API, "ok").inc()
     return res
 

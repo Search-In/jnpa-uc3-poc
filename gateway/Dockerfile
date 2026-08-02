@@ -44,6 +44,11 @@ RUN pip install -e /app/empty-container -e /app/carbon -e /app/gate-data \
 # `import gateway.main` fails at the guard below.
 COPY services/ /app/services/
 
+# External-API integration packages (Open-Meteo weather/marine). Plain packages
+# imported as `integrations.openmeteo` via PYTHONPATH=/app; the weather service
+# (services/weather) imports it, so it MUST be present in the image.
+COPY integrations/ /app/integrations/
+
 # Guarantee starlette is intact: the original build landed a half-written
 # starlette (Version: None -> `import starlette.exceptions` fails) which only
 # surfaced at runtime, not at the build import-guard. Force a clean reinstall of
@@ -70,6 +75,10 @@ RUN python -m playwright install chromium || true
 RUN python -c "import starlette.exceptions, fastapi; from starlette.exceptions import HTTPException; print('asgi stack OK', fastapi.__version__)" \
     && python -c "import gateway.main, gateway.fallback, gateway.cache; print('gateway import OK')" \
     && python -c "import services.fastag; from services.fastag import UlipFastagClient, FastagService; print('fastag layer OK')" \
+    && python -c "from integrations.openmeteo import OpenMeteoClient; from services.weather import WeatherService; print('weather layer OK')" \
+    && python -c "from integrations.tomtom import TomTomClient; from services.traffic import TrafficService; print('traffic layer OK')" \
+    && python -c "from integrations.openaq import OpenAQClient; from services.air_quality import AirQualityService; print('air-quality layer OK')" \
+    && python -c "from integrations.ulip import UlipClient; from services.logistics import LogisticsService; print('logistics layer OK')" \
     && python -c "import empty_container.optimizer, carbon.calculator, gate_data.leo, identity.embeddings, parking.facilities; print('capability fallbacks OK')" \
     && python -c "import openpyxl, xlrd; from services.shipping_lines import upload_parsers; print('spreadsheet ingest deps OK', openpyxl.__version__, xlrd.__version__)"
 

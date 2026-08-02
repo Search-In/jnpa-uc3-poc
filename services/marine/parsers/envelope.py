@@ -19,7 +19,7 @@ import json
 import re
 from typing import Literal, Optional
 
-Format = Literal["CSV", "XML", "LOG", "XLSX", "PDF", "SHP"]
+Format = Literal["CSV", "XML", "LOG", "XLSX", "PDF", "SHP", "JSON"]
 
 # A JSON string body for the "XML" key: text between quotes, honouring \" escapes.
 _LOG_XML_RE = re.compile(r'"XML"\s*:\s*"((?:[^"\\]|\\.)*)"')
@@ -71,6 +71,12 @@ def detect_format(filename: Optional[str], content: bytes) -> Format:
     if '"ReqBody"' in text and '"XML"' in text:
         return "LOG"
     stripped = text.lstrip("﻿ \t\r\n")
+    # Canonical bathymetry JSON. Probed AFTER the LOG check on purpose: a VESARR/VESDEP
+    # transmission log is ALSO JSON, and its ReqBody/XML signature must keep winning.
+    # Before this branch a .json upload was misdetected as XML and died with
+    # `xml_parse_error`, so this can only affect uploads that already failed.
+    if name.endswith(".json") or stripped.startswith("{") or stripped.startswith("["):
+        return "JSON"
     if stripped.startswith("<?xml") or stripped.startswith("<"):
         return "XML"
     if name.endswith(".log"):

@@ -185,6 +185,13 @@ async def tas_reschedule(body: Dict[str, Any] = Body(...)) -> dict:
     return {"rescheduled": len(affected), "gate_id": gate_id, "slots": affected}
 
 
+@router.get("/api/tas/deferred-windows")
+async def tas_deferred_windows() -> dict:
+    """Cross-twin proof surface: DeferredArrivalWindow events consumed from
+    ``jnpa.crosstwin.deferred-arrival`` and applied to the TAS slot book."""
+    return {"windows": tas_mock.deferred_windows()}
+
+
 @router.post("/api/tas/restore")
 async def tas_restore(body: Dict[str, Any] = Body(...)) -> dict:
     gate_id = body.get("gate_id")

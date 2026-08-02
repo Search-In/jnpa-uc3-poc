@@ -501,15 +501,18 @@ async def health(
         from jnpa_shared.db import get_engine
 
         async with get_engine(getattr(service, "_dsn", None)).connect() as conn:
-            for t in ("fastag_balance", "fastag_transactions", "toll_enroute"):
+            for t in ("fastag_balance", "fastag_transaction", "toll_enroute"):
                 r = await conn.execute(text("SELECT to_regclass(:t)"), {"t": f"core.{t}"})
                 tables[t] = r.scalar() is not None
     except Exception as exc:  # noqa: BLE001 — health must never raise
         db_status = "unreachable"
         log.warning("fastag.health.db_error", module="fastag", stage="gateway",
                     error=f"{type(exc).__name__}: {exc!s}")
-    ok = db_status == "ok" and bool(tables) and all(tables.values()) and ulip_configured
+    # A missing ULIP credential is a mode (demo), not a fault — health reflects
+    # whether the module itself works, and "mode" tells the operator which rung.
+    ok = db_status == "ok" and bool(tables) and all(tables.values())
     return {
         "module": "fastag", "status": "ok" if ok else "degraded",
+        "mode": "live" if ulip_configured else "demo",
         "ulip_configured": ulip_configured, "db": db_status, "tables": tables,
     }

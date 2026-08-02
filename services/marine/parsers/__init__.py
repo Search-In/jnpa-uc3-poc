@@ -25,8 +25,17 @@ from .calinf import parse_calinf
 from .documents import document_type, safe_fromstring
 from .envelope import detect_format, extract_xml_documents
 from .pcs_common import MarineParseError
+from .registry import (DocumentTypeError, DocumentTypeMismatch, PARSER_REGISTRY,
+                       ParserSpec, UnknownDocumentType, known_document_types,
+                       normalise_document_type, resolve_by_document_type,
+                       resolve_by_format)
 from .vesarr_vesdep import parse_vesarr, parse_vesdep
 from .vespro import parse_vespro
+
+# `document_type` (the <DocumentType> reader) is shadowed by parse_marine's parameter of
+# the same name, so keep an unshadowed alias for internal use. The public export is
+# unchanged — callers importing `document_type` from this package still get the function.
+_document_type_of = document_type
 
 # DocumentType → message parser. Adding a format = adding one entry here.
 REGISTRY: dict[str, Callable[..., list[dict[str, Any]]]] = {
@@ -44,6 +53,16 @@ __all__ = [
     "extract_xml_documents",
     "document_type",
     "ParseResult",
+    # registry (explicit document_type routing)
+    "PARSER_REGISTRY",
+    "ParserSpec",
+    "DocumentTypeError",
+    "UnknownDocumentType",
+    "DocumentTypeMismatch",
+    "known_document_types",
+    "normalise_document_type",
+    "resolve_by_document_type",
+    "resolve_by_format",
 ]
 
 
@@ -56,34 +75,46 @@ def _tag_csv(res: ParseResult) -> ParseResult:
     return res
 
 
-def parse_marine(content: bytes, filename: Optional[str] = None) -> ParseResult:
+def parse_marine(content: bytes, filename: Optional[str] = None,
+                 document_type: Optional[str] = None) -> ParseResult:
     """Parse one uploaded marine file into normalized records (ParseResult).
 
     Format-agnostic: CSV delegates to the existing tabular parser; XML/LOG are routed
     per message type. A single LOG may yield several messages; each unsupported or
     malformed document becomes a typed row error rather than an exception, exactly
     like the CSV path.
+
+    ``document_type`` (optional, additive) selects the parser EXPLICITLY through
+    :data:`registry.PARSER_REGISTRY`. When it is omitted — the historical call shape —
+    routing is unchanged: ``detect_format()`` picks the envelope and the envelope picks
+    the parser, so an existing client sees byte-identical behaviour.
+
+    A declared PCS type (CALINF/BERMAN/VESPRO/VESARR/VESDEP) does NOT bypass per-message
+    routing: one XML/LOG file may carry several message types, so the declaration becomes
+    a per-document ASSERTION and a non-matching document is a typed row error.
+
+    :raises UnknownDocumentType: ``document_type`` is not a registered value.
+    :raises DocumentTypeMismatch: the declared type cannot arrive as the detected envelope.
     """
     fmt = detect_format(filename, content)
 
-    if fmt == "CSV":
-        header, rows = read_rows_from_bytes(content, filename)
-        return _tag_csv(_csv_parse(header, rows, source_file=filename))
+    declared: Optional[ParserSpec] = None
+    if document_type is not None and str(document_type).strip():
+        declared = resolve_by_document_type(document_type)      # -> UnknownDocumentType
+        if fmt not in declared.formats:
+            raise DocumentTypeMismatch(declared.document_type, fmt, declared.formats)
 
-    if fmt == "XLSX":
-        # The only marine XLSX source is the pilot card (INWARD/OUTWARD/SHIFTING).
-        from .pilot_card_xlsx import parse_pilot_card
-        return parse_pilot_card(content, filename)
+    # Whole-file parsers. Explicit declaration wins; otherwise fall back to the envelope
+    # mapping, which reproduces the original per-format branch exactly. `content` is passed
+    # so an envelope with several claimants (today: PDF — PORT_CRAFT + BATHYMETRY) can be
+    # disambiguated by the candidates' sniffs; single-claimant envelopes ignore it.
+    spec = declared if declared is not None else resolve_by_format(fmt, content, filename)
+    if spec is not None and not spec.per_document:
+        return spec.load()(content, filename)
 
-    if fmt == "PDF":
-        # The only marine PDF source is the port-craft fleet register.
-        from .port_craft_pdf import parse_port_craft_pdf
-        return parse_port_craft_pdf(content, filename)
-
-    if fmt == "SHP":
-        # The only marine shapefile source is the JNPA sea-channels bundle.
-        from .sea_channel_shp import parse_sea_channel_shp
-        return parse_sea_channel_shp(content, filename)
+    # XML/LOG: per-message routing (unchanged). `expected` is set only when the client
+    # declared a PCS type, and then acts as an assertion over each document.
+    expected: Optional[str] = declared.document_type if declared is not None else None
 
     res = ParseResult()
     docs = extract_xml_documents(fmt, content)
@@ -101,7 +132,14 @@ def parse_marine(content: bytes, filename: Optional[str] = None) -> ParseResult:
             res.invalid_count += 1
             continue
 
-        msg = document_type(root)
+        msg = _document_type_of(root)
+        if expected is not None and msg != expected:
+            res.err(i, "DocumentType", "document_type_mismatch",
+                    f"declared document_type {expected} but document {i} is "
+                    f"{msg or 'unknown'}", msg)
+            res.invalid_count += 1
+            continue
+
         parser = REGISTRY.get(msg or "")
         if parser is None:
             res.err(i, "DocumentType", "unsupported_message_type",

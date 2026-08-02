@@ -11,7 +11,8 @@
     "operations": "Operations",
     "analytics": "Analytics",
     "administration": "Administration",
-    "completion": "UC-III Completion"
+    "completion": "UC-III Completion",
+    "lifecycle": "Truck & Cargo Lifecycle"
   },
   "navGroup": {
     "traffic": "Traffic Operations",
@@ -50,7 +51,9 @@
     "bottlenecks": "Road Bottlenecks",
     "reefer": "Reefer Availability",
     "integrations": "Integrations",
-    "doubleTrip": "Double Trip"
+    "doubleTrip": "Double Trip",
+    "uc3Lifecycle": "UC-3 Lifecycle",
+    "truckOps": "Truck Operations"
   },
   "followBox": {
     "title": "Follow the Box",
@@ -417,8 +420,14 @@
       "trucks": "Trucks (1:50)",
       "heatmap": "Congestion heatmap",
       "zones": "Geofence zones",
-      "parking": "Parking facilities"
+      "parking": "Parking facilities",
+      "bhuvan": "Bhuvan Satellite Layer"
     },
+    "bhuvanLoading": "loading…",
+    "bhuvanError": "Bhuvan layer failed to load",
+    "bhuvanDisabled": "Bhuvan WMS is not enabled on the gateway",
+    "bhuvanOpacity": "Opacity",
+    "bhuvanSource": "Source: ISRO Bhuvan WMS",
     "legendItem": {
       "freeFlow": "free flow / on-target",
       "moderate": "moderate",

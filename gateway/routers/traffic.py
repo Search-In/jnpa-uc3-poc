@@ -7,18 +7,31 @@
 
 Also exposes ``/api/traffic/snapshots`` reading the latest per-segment
 ``core.traffic_snapshot`` rows for the live map overlay.
+
+ADDITIVE — TomTom live traffic intelligence (same mould as
+gateway/routers/weather.py: a thin router over
+:class:`services.traffic.TrafficService` → integrations/tomtom, key-gated via
+TOMTOM_API_KEY, backend-only, never exposed to the browser; a provider outage
+NEVER breaks this surface — LIVE → CACHED (Redis) → DATABASE → SYNTHETIC):
+
+    GET /api/traffic/current  -> normalised flow + incidents for the corridor
+    GET /api/traffic/health   -> TomTom integration posture
+
+The pre-existing congestion-model endpoints (/predict, /congestion-scan,
+/metrics, /snapshots) are untouched.
 """
 from __future__ import annotations
 
 import hashlib
 import time
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import httpx
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
 from jnpa_shared import corridor
+from jnpa_shared.config import get_settings
 
 from .. import cache
 from ..fallback import SourceState
@@ -26,9 +39,74 @@ from ..logging import get_logger
 from ..metrics import REQUESTS, UPSTREAM_LATENCY
 from ..state import GatewayState, get_state
 
+from services.traffic import TrafficService
+
 log = get_logger("gateway.traffic")
 
 router = APIRouter(prefix="/api/traffic", tags=["traffic"])
+
+_service: Optional[TrafficService] = None
+
+
+def get_service(request: Request) -> TrafficService:
+    global _service
+    if _service is None:
+        cfg = getattr(getattr(request.app.state, "gw", None), "cfg", None)
+        from integrations.tomtom import TomTomClient
+
+        _service = TrafficService(
+            dsn=getattr(cfg, "postgres_dsn", None) or None,
+            # Key empty -> LIVE rung disabled; the surface still answers from
+            # the CACHED/DATABASE/SYNTHETIC rungs and says so in the metadata.
+            client=TomTomClient(
+                api_key=getattr(cfg, "tomtom_api_key", None),
+                flow_url=getattr(cfg, "tomtom_flow_url", "") or None,
+                incidents_url=getattr(cfg, "tomtom_incidents_url", "") or None,
+                routing_url=getattr(cfg, "tomtom_routing_url", "") or None,
+            ),
+            cache_ttl_s=getattr(cfg, "cache_ttl_tomtom_s", None) or 120,
+        )
+    return _service
+
+
+def _default_coords(latitude: Optional[float], longitude: Optional[float]) -> tuple[float, float]:
+    """Fall back to the configured JNPA port coordinates (env-driven, not hardcoded)."""
+    s = get_settings()
+    return (latitude if latitude is not None else s.port_lat,
+            longitude if longitude is not None else s.port_lon)
+
+
+# ------------------------------------------------------------------- current
+@router.get("/current",
+            summary="TomTom traffic flow + incidents for the JNPA corridor")
+async def current_traffic(
+    latitude: Optional[float] = Query(None, ge=-90, le=90),
+    longitude: Optional[float] = Query(None, ge=-180, le=180),
+    svc: TrafficService = Depends(get_service),
+) -> Dict[str, Any]:
+    lat, lon = _default_coords(latitude, longitude)
+    result = await svc.current(lat, lon)
+    REQUESTS.labels("traffic", "ok" if result["status"] == "LIVE" else "error").inc()
+    return result
+
+
+# ------------------------------------------------------------------- health
+@router.get("/health", summary="TomTom traffic integration posture")
+async def traffic_health(svc: TrafficService = Depends(get_service)) -> Dict[str, Any]:
+    s = get_settings()
+    client = svc._client  # noqa: SLF001 - posture only; the key itself is never returned
+    return {
+        "system": "TRAFFIC",
+        "provider": "TOMTOM",
+        "configured": client.configured,
+        "api_key_required": True,
+        "flow_url": client.flow_url,
+        "incidents_url": client.incidents_url,
+        "timeout_s": client.timeout_s,
+        "retries": client.retries,
+        "cache_ttl_s": svc.cache_ttl_s,
+        "default_location": {"latitude": s.port_lat, "longitude": s.port_lon},
+    }
 
 
 def _synthetic_predictions() -> Dict[str, float]:

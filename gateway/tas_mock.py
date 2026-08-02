@@ -107,4 +107,100 @@ def _to_dict(s: Slot) -> dict:
     }
 
 
-__all__ = ["list_slots", "reschedule_gate", "restore_gate", "Slot"]
+# ---------------------------------------------------------------------------
+# Deferred-arrival windows (cross-twin contract XT-2).
+#
+# UC-II publishes DeferredArrivalWindow on `jnpa.crosstwin.deferred-arrival`;
+# the gateway's deferred-arrival pump validates and applies it here: slots that
+# start inside the window flip to RESCHEDULED, and new bookings inside the
+# window are capped at slot_cap (checked by the RMS-TAS /book endpoint).
+# In-memory like the rest of this mock (the gateway is the only service that
+# would talk to a real TAS in production).
+# ---------------------------------------------------------------------------
+_MAX_WINDOWS = 32
+_WINDOWS: List[dict] = []
+
+
+def apply_deferred_window(win) -> dict:
+    """Apply a validated ``DeferredArrivalWindow`` (jnpa_shared.schemas).
+
+    Returns a summary dict {applied_slots, window}. Idempotent per
+    correlation_id: re-applying the same window updates it in place rather
+    than double-counting.
+    """
+    start = win.window_start
+    end = start + timedelta(minutes=win.window_min)
+    with _BOOK.lock:
+        if win.gate_id:
+            _ensure_gate_slots(win.gate_id)
+        affected: List[Slot] = []
+        for s in _BOOK.slots.values():
+            if win.gate_id and s.gate_id != win.gate_id:
+                continue
+            if s.status == "BOOKED" and start <= s.start < end:
+                s.status = "RESCHEDULED"
+                s.rescheduled_to = None
+                affected.append(s)
+        entry = next((w for w in _WINDOWS
+                      if w["correlation_id"] == win.correlation_id), None)
+        if entry is None:
+            entry = {"correlation_id": win.correlation_id, "booked": 0}
+            _WINDOWS.append(entry)
+            del _WINDOWS[:-_MAX_WINDOWS]
+        entry.update({
+            "gate_id": win.gate_id,
+            "window_start": start,
+            "window_end": end,
+            "window_min": win.window_min,
+            "slot_cap": win.slot_cap,
+            "source": win.source,
+            "received_at": _now(),
+            "applied_slots": [s.slot_id for s in affected],
+        })
+        return {"applied_slots": len(affected), "window": _window_dict(entry)}
+
+
+def deferred_windows() -> List[dict]:
+    with _BOOK.lock:
+        return [_window_dict(w) for w in _WINDOWS]
+
+
+def check_booking_allowed(gate_id: str, slot_start: datetime) -> tuple[bool, Optional[dict]]:
+    """Booking guard for the deferred-arrival cap.
+
+    Finds the newest window covering (gate_id, slot_start); if its cap is
+    exhausted the booking is refused, otherwise the window's booked counter is
+    incremented. (True, window|None) = allowed; (False, window) = refused.
+    """
+    if slot_start.tzinfo is None:
+        slot_start = slot_start.replace(tzinfo=timezone.utc)
+    with _BOOK.lock:
+        for w in reversed(_WINDOWS):
+            if w.get("gate_id") not in (None, gate_id):
+                continue
+            if not (w["window_start"] <= slot_start < w["window_end"]):
+                continue
+            if w["booked"] >= w["slot_cap"]:
+                return False, _window_dict(w)
+            w["booked"] += 1
+            return True, _window_dict(w)
+        return True, None
+
+
+def _window_dict(w: dict) -> dict:
+    return {
+        "correlation_id": w["correlation_id"],
+        "gate_id": w.get("gate_id"),
+        "window_start": w["window_start"].isoformat(),
+        "window_end": w["window_end"].isoformat(),
+        "window_min": w["window_min"],
+        "slot_cap": w["slot_cap"],
+        "booked": w["booked"],
+        "applied_slots": w.get("applied_slots", []),
+        "source": w.get("source"),
+        "received_at": w["received_at"].isoformat(),
+    }
+
+
+__all__ = ["list_slots", "reschedule_gate", "restore_gate", "Slot",
+           "apply_deferred_window", "deferred_windows", "check_booking_allowed"]

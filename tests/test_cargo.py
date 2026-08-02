@@ -79,7 +79,7 @@ class FakeCargoRepo:
         self._scan_verifs: list[dict] = []
         self._scan_verif_seq = 0
 
-    async def create(self, row: Mapping[str, Any]) -> dict:
+    async def create(self, row: Mapping[str, Any], *, actor_role=None) -> dict:
         cn = row["container_number"]
         if cn in self._rows:
             raise CargoConflict(cn)
@@ -102,6 +102,11 @@ class FakeCargoRepo:
             "updated_at": _NOW,
         }
         self._rows[cn] = rec
+        # Mirror the real repository: the container's opening audit row is
+        # written as part of create (NULL -> CREATED, action CREATE).
+        await self.record_lifecycle_event(
+            cn, action="CREATE", old_status=None,
+            new_status=rec.get("lifecycle_status") or "CREATED", actor_role=actor_role)
         return dict(rec)
 
     async def get(self, container_number: str) -> Optional[dict]:
@@ -254,6 +259,16 @@ class FakeCargoRepo:
         return dict(rec)
 
     # ----- lifecycle (0023) -----
+    async def record_lifecycle_event(self, container_number, *, action, new_status,
+                                     old_status=None, actor_role=None, note=None,
+                                     conn=None):
+        self._lifecycle_seq += 1
+        self._lifecycle.append({
+            "id": self._lifecycle_seq, "container_number": container_number,
+            "action": action, "old_status": old_status, "new_status": new_status,
+            "actor_role": actor_role, "note": note, "created_at": _NOW})
+
+
     async def transition_lifecycle(self, container_number, *, target, allowed_from,
                                    action, actor_role=None, note=None, strict=True):
         rec = self._rows.get(container_number)
@@ -267,11 +282,9 @@ class FakeCargoRepo:
                 raise CargoTransitionError(container_number, current, target)
             return None
         rec["lifecycle_status"] = target
-        self._lifecycle_seq += 1
-        self._lifecycle.append({
-            "id": self._lifecycle_seq, "container_number": container_number,
-            "action": action, "old_status": current, "new_status": target,
-            "actor_role": actor_role, "note": note, "created_at": _NOW})
+        await self.record_lifecycle_event(
+            container_number, action=action, old_status=current,
+            new_status=target, actor_role=actor_role, note=note)
         out = dict(rec)
         out["_old_status"] = current
         out["_new_status"] = target
@@ -405,6 +418,7 @@ def test_get_one(client):
 
 def test_update(client):
     client.post("/api/cargo", json=_payload())
+    _walk_to_verified(client)   # release is only legal from VERIFIED
     r = client.put(f"/api/cargo/{VALID_CN}",
                    json={"customs_status": "CLEARED", "is_released": True,
                          "yard_block": "B-09"})
@@ -600,6 +614,7 @@ def test_role_scope_overrides_conflicting_filter(client):
 def test_events_emitted_on_lifecycle(client):
     # created
     client.post("/api/cargo", json=_payload(is_released=False, customs_status="PENDING"))
+    _walk_to_verified(client)   # release is only legal from VERIFIED
     # yard_assigned + status_changed + released in one PUT
     client.put(f"/api/cargo/{VALID_CN}",
                json={"customs_status": "CLEARED", "is_released": True, "yard_block": "B-09"})
@@ -627,6 +642,7 @@ def test_events_delete_emits(client):
 
 def test_events_filter_by_type_and_since(client):
     client.post("/api/cargo", json=_payload())
+    _walk_to_verified(client)   # release is only legal from VERIFIED
     client.put(f"/api/cargo/{VALID_CN}", json={"is_released": True})
     all_events = client.get("/api/cargo/events").json()
     # filter by type
@@ -993,12 +1009,38 @@ def test_verify_rejected_does_not_advance(client):
     assert client.post(f"/api/cargo/{VALID_CN}/release").status_code == 409
 
 
-# ---- regression: legacy PUT release stays backward compatible -----------------
-def test_legacy_put_release_syncs_lifecycle(client):
+# ---- the PUT release path obeys the same VERIFY gate as POST /release ---------
+def _walk_to_verified(client, cn=None):
+    """Drive a freshly created container up to VERIFIED, the only state from
+    which a release is legal."""
+    cn = cn or VALID_CN
+    client.post(f"/api/cargo/{cn}/discharge", json={})
+    client.put(f"/api/cargo/{cn}/yard-assignment", json={"yard_block": "A-01"})
+    client.post(f"/api/cargo/{cn}/verify", json={"verified": True})
+
+
+def test_put_release_before_verify_is_rejected(client):
+    """The PUT is_released=true shortcut must not be a way around VERIFY."""
     client.post("/api/cargo", json=_lc_payload())
     up = client.put(f"/api/cargo/{VALID_CN}", json={"is_released": True})
+    assert up.status_code == 409, up.text
+    body = up.json()["detail"]
+    assert body["error"] == "illegal_transition"
+    assert body["current_status"] == "CREATED" and body["attempted_status"] == "RELEASED"
+    # and the refusal left NOTHING behind: the flag and the lifecycle both stand
+    got = client.get(f"/api/cargo/{VALID_CN}").json()
+    assert got["is_released"] is False and got["lifecycle_status"] == "CREATED"
+    assert VALID_CN not in [x["container_number"] for x in
+                            client.get("/api/cargo", params={"status": "RELEASED"}).json()]
+
+
+def test_put_release_after_verify_syncs_lifecycle(client):
+    """Backward compatible where it is legitimate: from VERIFIED the legacy PUT
+    still releases and still drives lifecycle -> RELEASED."""
+    client.post("/api/cargo", json=_lc_payload())
+    _walk_to_verified(client)
+    up = client.put(f"/api/cargo/{VALID_CN}", json={"is_released": True})
     assert up.status_code == 200 and up.json()["is_released"] is True
-    # the legacy path also drives lifecycle -> RELEASED so ?status=RELEASED is consistent
     assert client.get(f"/api/cargo/{VALID_CN}").json()["lifecycle_status"] == "RELEASED"
     assert VALID_CN in [x["container_number"] for x in
                         client.get("/api/cargo", params={"status": "RELEASED"}).json()]
@@ -1121,3 +1163,113 @@ def test_real_db_full_lifecycle():
             c.delete(f"/api/cargo/{cn}")
     finally:
         app.dependency_overrides.pop(cargo_router.get_service, None)
+
+
+# ------------------------------------------------ C2: opening lifecycle audit row
+def test_create_writes_the_opening_lifecycle_audit_row(client):
+    """POST /api/cargo must leave an audit row explaining how the container
+    reached CREATED. Before this the status came from a DB DEFAULT and
+    core.cargo_lifecycle_event stayed empty, so a container existed with no
+    history at all."""
+    cn = "MSCU1234566"
+    assert client.post("/api/cargo", json={"container_number": cn}).status_code == 201
+
+    rows = client.get(f"/api/cargo/{cn}/lifecycle").json()
+    assert len(rows) == 1
+    entry = rows[0]
+    assert entry["action"] == "CREATE"
+    assert entry["old_status"] is None
+    assert entry["new_status"] == "CREATED"
+    assert entry["container_number"] == cn
+
+
+def test_create_audit_row_precedes_later_transitions(client):
+    """The CREATE entry is the FIRST row, and normal transitions keep appending
+    to the same log — the opening row must not disturb the state machine."""
+    cn = "MSCU1234566"
+    client.post("/api/cargo", json={"container_number": cn})
+    assert client.post(f"/api/cargo/{cn}/discharge", json={}).status_code == 200
+
+    rows = client.get(f"/api/cargo/{cn}/lifecycle").json()
+    # newest first
+    assert [r["action"] for r in rows] == ["DISCHARGE", "CREATE"]
+    assert rows[-1]["old_status"] is None and rows[-1]["new_status"] == "CREATED"
+    assert rows[0]["old_status"] == "CREATED" and rows[0]["new_status"] == "VESSEL_DISCHARGED"
+
+
+def test_create_conflict_writes_no_audit_row(client):
+    """A rejected duplicate must not leave an orphan audit row."""
+    cn = "MSCU1234566"
+    client.post("/api/cargo", json={"container_number": cn})
+    assert client.post("/api/cargo", json={"container_number": cn}).status_code == 409
+    assert len(client.get(f"/api/cargo/{cn}/lifecycle").json()) == 1  # still just CREATE
+
+
+def test_create_records_the_actor_role_when_authenticated(client, monkeypatch):
+    """`actor_role` is taken from the authenticated principal. The open dev
+    profile has none, and the column is nullable — so it stays None there."""
+    cn = "MSCU1234566"
+    client.post("/api/cargo", json={"container_number": cn})
+    assert client.get(f"/api/cargo/{cn}/lifecycle").json()[0]["actor_role"] is None
+
+
+def test_repository_has_a_single_lifecycle_writer():
+    """create() and transition_lifecycle() must share one audit-row shape, so the
+    log can never diverge between the opening entry and later moves."""
+    import inspect
+
+    from services.cargo.repository import CargoRepository
+
+    from services.cargo import repository as repo_mod
+
+    # transition_lifecycle no longer carries its own INSERT — it delegates.
+    transition_src = inspect.getsource(CargoRepository.transition_lifecycle)
+    assert "INSERT INTO core.cargo_lifecycle_event" not in transition_src
+    assert "record_lifecycle_event" in transition_src
+
+    # create() delegates to the same recorder rather than hand-writing SQL.
+    create_src = inspect.getsource(CargoRepository.create)
+    assert "INSERT INTO core.cargo_lifecycle_event" not in create_src
+    assert "record_lifecycle_event" in create_src
+
+    # ...and the statement itself is defined exactly once, in one constant.
+    assert repo_mod._LIFECYCLE_EVENT_INSERT.count(
+        "INSERT INTO core.cargo_lifecycle_event") == 1
+    module_src = inspect.getsource(repo_mod)
+    assert module_src.count("INSERT INTO core.cargo_lifecycle_event") == 1
+
+
+def test_no_write_path_forces_release_from_an_arbitrary_state():
+    """Invariant guard for the closed bypass: the permissive predecessor set must
+    not be wired into any transition. If a future change reintroduces it as an
+    `allowed_from`, VERIFY becomes skippable again and this fails."""
+    import inspect
+
+    from services.cargo import service as S
+
+    src = inspect.getsource(S)
+    assert "allowed_from=_ALL_NON_RELEASED" not in src
+    # release is reachable only from VERIFIED
+    assert S.allowed_predecessors(S.LC_RELEASED) == {S.LC_VERIFIED}
+
+
+@pytest.mark.parametrize("steps,expected", [
+    ([], "CREATED"),
+    (["discharge"], "VESSEL_DISCHARGED"),
+    (["discharge", "yard"], "YARD_ASSIGNED"),
+])
+def test_release_gate_holds_for_every_pre_verify_state(client, steps, expected):
+    """No matter how far a container has come, if it has not been VERIFIED the
+    PUT shortcut refuses it."""
+    client.delete(f"/api/cargo/{VALID_CN}")
+    client.post("/api/cargo", json=_lc_payload())
+    for s in steps:
+        if s == "discharge":
+            client.post(f"/api/cargo/{VALID_CN}/discharge", json={})
+        else:
+            client.put(f"/api/cargo/{VALID_CN}/yard-assignment", json={"yard_block": "A-01"})
+    assert client.get(f"/api/cargo/{VALID_CN}").json()["lifecycle_status"] == expected
+
+    r = client.put(f"/api/cargo/{VALID_CN}", json={"is_released": True})
+    assert r.status_code == 409, f"{expected} must not be releasable: {r.text}"
+    assert client.get(f"/api/cargo/{VALID_CN}").json()["is_released"] is False

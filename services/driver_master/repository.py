@@ -43,8 +43,9 @@ _SORTS: Dict[str, str] = {
     "created": "dm.id",
 }
 
-# PDP/validity status derived from licence_valid_to. Partitions cleanly into
-# ACTIVE / EXPIRING / EXPIRED / UNKNOWN.
+# Licence-derived fallback status (used where the PDP join is unavailable —
+# the cheap list/count base query; page rows are then overwritten with the
+# permit-derived truth during enrichment). ACTIVE / EXPIRING / EXPIRED / UNKNOWN.
 _STATUS_EXPR = """
 CASE
   WHEN dm.licence_valid_to IS NULL THEN 'UNKNOWN'
@@ -53,6 +54,35 @@ CASE
   ELSE 'ACTIVE'
 END
 """
+
+# Permit-derived status — the ACTUAL PDP permit (core.pdp.active + valid_until)
+# decides; the licence date is only a fallback when the driver has no permit
+# row at all. A cancelled/inactive permit is EXPIRED regardless of dates.
+# Requires the `pdp` lateral join (_JOINS) to be in scope.
+_PDP_STATUS_EXPR = """
+CASE
+  WHEN pdp.pdp_active IS FALSE THEN 'EXPIRED'
+  WHEN pdp.pdp_active IS TRUE AND pdp.pdp_validity IS NULL THEN 'ACTIVE'
+  WHEN pdp.pdp_validity < current_date THEN 'EXPIRED'
+  WHEN pdp.pdp_validity <= current_date + INTERVAL '30 days' THEN 'EXPIRING'
+  WHEN pdp.pdp_validity IS NOT NULL THEN 'ACTIVE'
+  WHEN dm.licence_valid_to IS NULL THEN 'UNKNOWN'
+  WHEN dm.licence_valid_to < current_date THEN 'EXPIRED'
+  WHEN dm.licence_valid_to <= current_date + INTERVAL '30 days' THEN 'EXPIRING'
+  ELSE 'ACTIVE'
+END
+"""
+
+# Scalar subqueries for permit-aware WHERE filtering (no lateral in WHERE).
+# Probe cost is one index hit per row via idx_pdp_number_accepted (0111).
+_SQ_PDP_ACTIVE = ("(SELECT ph.active FROM core.pdp ph "
+                  "WHERE ph.pdp_number = dm.latest_pdp_number "
+                  "ORDER BY ph.accepted_at DESC NULLS LAST LIMIT 1)")
+_SQ_PDP_VALID = ("(SELECT ph.valid_until FROM core.pdp ph "
+                 "WHERE ph.pdp_number = dm.latest_pdp_number "
+                 "ORDER BY ph.accepted_at DESC NULLS LAST LIMIT 1)")
+# Effective expiry: the permit's valid_until when a permit exists, else licence.
+_EFF_VALID = f"COALESCE({_SQ_PDP_VALID}, dm.licence_valid_to)"
 
 # Enrollment status derived from the existing login tables (READ ONLY).
 _ENROLL_EXPR = """
@@ -110,7 +140,7 @@ _SELECT_FIELDS = f"""
     t.status AS transporter_status,
     dm.photo_file, dm.photo_url, dm.licence_type, dm.licence_valid_to,
     dm.latest_pdp_number, dm.date_of_birth AS dob, dm.status AS master_status,
-    ({_STATUS_EXPR}) AS pdp_status,
+    ({_PDP_STATUS_EXPR}) AS pdp_status,
     pdp.pdp_active, pdp.appl_number, pdp.pdp_validity,
     ({_ENROLL_EXPR}) AS enrollment_status,
     e.driver_id AS enrolled_driver_id, e.driver_status, e.vehicle_no,
@@ -149,14 +179,21 @@ def _build_where(f: Mapping[str, Any]) -> Tuple[str, Dict[str, Any]]:
         where.append("dm.transporter_id = :transporter_id")
         p["transporter_id"] = f["transporter_id"]
     status = (f.get("status") or "").upper()
+    # Permit-aware status filters: the actual PDP permit decides; the licence
+    # date is only the fallback when the driver has no permit row.
     if status == "EXPIRED":
-        where.append("dm.licence_valid_to < current_date")
+        where.append(f"(({_SQ_PDP_ACTIVE}) IS FALSE OR {_EFF_VALID} < current_date)")
     elif status == "EXPIRING":
-        where.append("dm.licence_valid_to >= current_date AND dm.licence_valid_to <= current_date + INTERVAL '30 days'")
+        where.append(
+            f"(({_SQ_PDP_ACTIVE}) IS DISTINCT FROM FALSE AND {_EFF_VALID} >= current_date "
+            f"AND {_EFF_VALID} <= current_date + INTERVAL '30 days')")
     elif status == "ACTIVE":
-        where.append("dm.licence_valid_to > current_date + INTERVAL '30 days'")
+        where.append(
+            f"(({_SQ_PDP_ACTIVE}) IS DISTINCT FROM FALSE AND "
+            f"({_EFF_VALID} > current_date + INTERVAL '30 days' "
+            f" OR (({_SQ_PDP_ACTIVE}) IS TRUE AND ({_SQ_PDP_VALID}) IS NULL)))")
     elif status == "UNKNOWN":
-        where.append("dm.licence_valid_to IS NULL")
+        where.append(f"(({_SQ_PDP_ACTIVE}) IS NULL AND dm.licence_valid_to IS NULL)")
     enrolled = f.get("enrolled")
     if enrolled is True:
         where.append(f"dm.licence_no_norm IN ({_ENROLLED_NORMS})")
@@ -214,9 +251,10 @@ class DriverMasterRepository:
             enrich = await self._fetch_all(
                 f"""SELECT dm.licence_no_norm,
                            ({_ENROLL_EXPR}) AS enrollment_status,
+                           ({_PDP_STATUS_EXPR}) AS pdp_status,
                            e.driver_id AS enrolled_driver_id, e.driver_status, e.vehicle_no,
                            v.verification, v.score AS verification_score, v.verified_at,
-                           pdp.pdp_active
+                           pdp.pdp_active, pdp.pdp_validity
                     {_JOINS}
                     WHERE dm.licence_no_norm = ANY(:norms)""",
                 {"norms": norms},
@@ -279,18 +317,31 @@ class DriverMasterRepository:
                 SELECT DISTINCT regexp_replace(upper(license_no),'[^A-Z0-9]','','g') AS n
                 FROM core.driver_enrollment
                 WHERE coalesce(license_no,'') <> '' AND status IN ('PENDING','REENROLL')
+            ),
+            latest_permit AS (
+                -- The current permit per pdp_number (the ACTUAL PDP record) —
+                -- one index scan over core.pdp via idx_pdp_number_accepted.
+                SELECT DISTINCT ON (ph.pdp_number)
+                       ph.pdp_number, ph.active, ph.valid_until
+                FROM core.pdp ph
+                ORDER BY ph.pdp_number, ph.accepted_at DESC NULLS LAST
             )
             SELECT
               count(*) AS total_drivers,
-              count(*) FILTER (WHERE dm.licence_valid_to > current_date + INTERVAL '30 days') AS active_pdp,
-              count(*) FILTER (WHERE dm.licence_valid_to >= current_date
-                               AND dm.licence_valid_to <= current_date + INTERVAL '30 days') AS expiring_soon,
-              count(*) FILTER (WHERE dm.licence_valid_to < current_date) AS expired_pdp,
+              count(*) FILTER (WHERE lp.active IS DISTINCT FROM FALSE AND (
+                                 coalesce(lp.valid_until, dm.licence_valid_to) > current_date + INTERVAL '30 days'
+                                 OR (lp.active IS TRUE AND lp.valid_until IS NULL))) AS active_pdp,
+              count(*) FILTER (WHERE lp.active IS DISTINCT FROM FALSE
+                               AND coalesce(lp.valid_until, dm.licence_valid_to) >= current_date
+                               AND coalesce(lp.valid_until, dm.licence_valid_to) <= current_date + INTERVAL '30 days') AS expiring_soon,
+              count(*) FILTER (WHERE lp.active IS FALSE
+                               OR coalesce(lp.valid_until, dm.licence_valid_to) < current_date) AS expired_pdp,
               count(DISTINCT lower(coalesce(dm.company_name,''))) FILTER (WHERE coalesce(dm.company_name,'') <> '') AS companies,
               count(*) FILTER (WHERE dm.licence_no_norm IN (SELECT n FROM enrolled_norms)) AS enrolled,
               count(*) FILTER (WHERE dm.licence_no_norm NOT IN (SELECT n FROM enrolled_norms)
                                AND dm.licence_no_norm IN (SELECT n FROM pending_norms)) AS pending_enrollment
             FROM core.driver dm
+            LEFT JOIN latest_permit lp ON lp.pdp_number = dm.latest_pdp_number
             """,
             {},
         )

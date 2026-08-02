@@ -761,10 +761,12 @@ def _transition_409(exc: CargoTransitionError) -> HTTPException:
              responses=_ERROR_RESPONSES, summary="Create a cargo record")
 async def create_cargo(
     body: CargoCreate,
+    request: Request,
     service: CargoService = Depends(get_service),
 ) -> CargoOut:
     try:
-        row = await service.create_cargo(body.model_dump())
+        row = await service.create_cargo(body.model_dump(),
+                                         actor_role=_actor_role(request))
     except CargoConflict:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT,
                             detail={"error": "duplicate_container",
@@ -1023,6 +1025,9 @@ async def update_cargo(
     except CargoNotFound:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "not_found", "container_number": cn})
+    except CargoTransitionError as exc:
+        # is_released=true on a container that has not passed VERIFY.
+        raise _transition_409(exc)
     return _to_out(row)
 
 

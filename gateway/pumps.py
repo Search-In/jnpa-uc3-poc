@@ -88,13 +88,38 @@ class KafkaPump:
             log.warning("pump_persist_failed", topic=self.topic, error=str(exc))
 
     def _run(self) -> None:
-        try:
-            kafka_io.consume(
-                self.topic, self.group, self._handle,
-                timeout=1.0, stop_when=self._stop.is_set,
-            )
-        except Exception as exc:  # noqa: BLE001 - broker absent / transient
-            log.warning("kafka_pump_exit", topic=self.topic, error=str(exc))
+        import time as _time
+
+        # Retry forever (daemon thread): a not-yet-created topic
+        # (UNKNOWN_TOPIC_OR_PART — consumers don't auto-create), a broker
+        # restart, or any transient error must not kill the pump for the
+        # process lifetime. Before this, a topic whose first producer starts
+        # after the gateway (e.g. jnpa.crosstwin.* events) was never consumed.
+        #
+        # Backoff is EXPONENTIAL (5s -> 60s cap): each failed attempt is a full
+        # consumer-group join/leave, and a permanently-missing topic retried at
+        # a fixed short interval churns the group coordinator hard enough to
+        # stall assignments for every other consumer on the broker.
+        delay = 5.0
+        while not self._stop.is_set():
+            try:
+                kafka_io.consume(
+                    self.topic, self.group, self._handle,
+                    timeout=1.0, stop_when=self._stop.is_set,
+                )
+                if self._stop.is_set():
+                    return
+                delay = 5.0  # consume returned normally -> reset backoff
+                log.warning("kafka_pump_ended_retrying", topic=self.topic)
+            except Exception as exc:  # noqa: BLE001 - broker absent / transient
+                log.warning("kafka_pump_retry", topic=self.topic,
+                            retry_in_s=delay, error=str(exc))
+            deadline = _time.monotonic() + delay
+            while _time.monotonic() < deadline:
+                if self._stop.is_set():
+                    return
+                _time.sleep(0.5)
+            delay = min(delay * 2, 60.0)
 
 
 # ---------------------------------------------------------------------------

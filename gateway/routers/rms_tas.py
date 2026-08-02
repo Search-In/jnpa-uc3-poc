@@ -75,6 +75,27 @@ def _slot_code(gate_id: str, date_str: str, hour: int) -> str:
     return f"{gate_id}-{date_str}-{hour:02d}00"
 
 
+def _deferred_window_guard(slot_code: str) -> Optional[dict]:
+    """Return the refusing DeferredArrivalWindow for ``slot_code``, or None.
+
+    slot_code format: ``{gate_id}-YYYY-MM-DD-HH00`` (gate ids themselves
+    contain dashes, so parse from the right). Unparseable codes are left to the
+    DB lookup — this guard must never invent a refusal.
+    """
+    try:
+        parts = slot_code.rsplit("-", 4)
+        if len(parts) != 5:
+            return None
+        gate_id, y, m, d, hhmm = parts
+        slot_start = datetime(int(y), int(m), int(d), int(hhmm[:2]),
+                              tzinfo=timezone.utc)
+    except (ValueError, IndexError):
+        return None
+    from .. import tas_mock
+    allowed, window = tas_mock.check_booking_allowed(gate_id, slot_start)
+    return None if allowed else window
+
+
 # --------------------------------------------------------------------- slots
 @router.get("/slots")
 async def list_slots(gate_id: Optional[str] = Query(default=None),
@@ -162,6 +183,16 @@ async def book_slot(body: Dict[str, Any] = Body(...),
         raise HTTPException(400, "slot_code required")
     if not vehicle_id:
         raise HTTPException(400, "vehicle_id required")
+
+    # Cross-twin deferred-arrival guard (XT-2): when UC-II has metered arrivals
+    # via a DeferredArrivalWindow, bookings inside the window are capped at its
+    # slot_cap — refuse over-cap bookings with the correlation id so the demo
+    # can show WHY ("UC-II asked us to defer").
+    guard = _deferred_window_guard(slot_code)
+    if guard is not None:
+        REQUESTS.labels("rms_tas", "deferred").inc()
+        return {"booked": False, "reason": "deferred_arrival_window",
+                "window": guard}
 
     from sqlalchemy import text
     from jnpa_shared.db import get_engine

@@ -1,7 +1,14 @@
 # Ingest services
 
-Edge/cloud collectors that pull ANPR reads, RFID scans, GPS telemetry, FASTag pings, weather, and live traffic, normalise them to the `jnpa_shared.schemas` models, and publish to Kafka / MQTT.
+Edge/cloud collectors that pull ANPR reads, RFID scans, GPS telemetry, FASTag
+pings, weather, live traffic, and **gate-document OCR**, normalise them to the
+`jnpa_shared.schemas` models (or structured OCR fields), and publish to Kafka /
+MQTT / HTTP.
 
-> Placeholder for a later stage of the JNPA UC-III PoC. The infrastructure
-> skeleton, shared library, and bootstrap self-test in the repo root must be
-> green (`make bootstrap-check` → `BOOTSTRAP OK`) before work starts here.
+| Package | Role |
+| --- | --- |
+| `anpr/` | Clip replay → YOLO → Kafka `anpr.reads` |
+| `rfid/` | Emulator / consumer / correlator |
+| `vahan_sim/` · `vahan_live/` | Parivahan / Surepass KYC |
+| `trucking_app/` | 20k-device GPS fleet sim |
+| `eir_ocr/` | EIR gate-slip OCR (Tesseract) → structured fields (`:8210`) |

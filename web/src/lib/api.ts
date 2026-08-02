@@ -1273,6 +1273,28 @@ export const api = {
   pdpHealth: () => http<any>("/api/pdp/health"),
   ldbContainer: (no: string) => http<any>(`/api/ldb/container/${encodeURIComponent(no)}`),
   ldbMovements: (no: string) => http<any>(`/api/ldb/container/${encodeURIComponent(no)}/movements`),
+  ldbTruck: (vehicleNumber: string) =>
+    http<{
+      source: string;
+      tracking: {
+        truckNumber: string;
+        truckType?: string;
+        alert?: string | null;
+        latest?: any;
+        events: Array<{
+          eventName?: string;
+          locName?: string;
+          containerNumber?: string;
+          eventTime?: string | number;
+          eventTimeLabel?: string;
+          dateMarker?: string;
+          transportMode?: string;
+          locLat?: string;
+          locLong?: string;
+        }>;
+        terminals: Array<{ locName: string; events: any[] }>;
+      };
+    }>(`/api/ldb/truck/${encodeURIComponent(vehicleNumber)}`),
   ldbHealth: () => http<any>("/api/ldb/health"),
   rmsSlots: (params?: { gate_id?: string; date?: string }) => {
     const q = new URLSearchParams();

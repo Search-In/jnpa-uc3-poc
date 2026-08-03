@@ -19,6 +19,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from jnpa_shared import kafka_io
+from jnpa_shared.config import require_dsn
 from jnpa_shared.logging import get_logger
 from jnpa_shared.schemas import Alert
 
@@ -81,7 +82,10 @@ class AlertSink:
         except Exception:  # noqa: BLE001
             return
         try:
-            with psycopg.connect(self.cfg.postgres_dsn_libpq, connect_timeout=3) as conn:
+            with psycopg.connect(
+                require_dsn(self.cfg.postgres_dsn_libpq, "ANOMALY_POSTGRES_DSN"),
+                connect_timeout=3,
+            ) as conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         "INSERT INTO core.alert (id, ts, kind, severity, gate_id, plate, payload, ack)"
@@ -122,7 +126,10 @@ class AlertSink:
         sql += " ORDER BY ts DESC LIMIT %s"
         params.append(limit)
         try:
-            with psycopg.connect(self.cfg.postgres_dsn_libpq, connect_timeout=3) as conn:
+            with psycopg.connect(
+                require_dsn(self.cfg.postgres_dsn_libpq, "ANOMALY_POSTGRES_DSN"),
+                connect_timeout=3,
+            ) as conn:
                 with conn.cursor(row_factory=dict_row) as cur:
                     cur.execute(sql, params)
                     rows = cur.fetchall()

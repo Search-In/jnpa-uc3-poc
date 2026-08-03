@@ -27,6 +27,7 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
+from jnpa_shared.config import require_dsn
 from jnpa_shared.logging import configure_logging, get_logger
 
 from . import metrics as M
@@ -53,7 +54,9 @@ def load_real_tail(cfg: CongestionConfig, graph: CorridorGraph) -> List[HistoryR
         return []
     rows: List[HistoryRow] = []
     try:
-        with psycopg.connect(cfg.postgres_dsn_libpq, connect_timeout=3) as conn:
+        with psycopg.connect(
+            require_dsn(cfg.postgres_dsn_libpq, "CONGESTION_POSTGRES_DSN"), connect_timeout=3
+        ) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """

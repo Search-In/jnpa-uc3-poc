@@ -30,9 +30,19 @@ volumes:
 
 services:
   # --------------------------------------------------------------------------
-  # PostgreSQL + TimescaleDB
+  # PostgreSQL + TimescaleDB — LOCAL DEVELOPMENT ONLY (opt-in).
+  #
+  # The application database is AWS RDS (jnpa_schema_v3); every service reads
+  # its DSN from POSTGRES_DSN / *_POSTGRES_DSN and no service depends on or
+  # connects to this container. It is kept behind the "localdb" profile so it
+  # never starts in a demo/production deployment:
+  #
+  #   docker compose --profile localdb up -d postgres   # dev sandbox only
+  #
+  # (`make psql` / `make seed-*` targets also need that profile enabled.)
   # --------------------------------------------------------------------------
   postgres:
+    profiles: ["localdb"]
     image: timescale/timescaledb-ha:pg15-latest
     container_name: jnpa-postgres
     restart: unless-stopped
@@ -244,6 +254,17 @@ services:
       # default can never ship.
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      # Postgres datasource -> AWS RDS (see infra/grafana/provisioning/
+      # datasources/datasources.yml, which interpolates these). Never the
+      # dev-only local postgres container.
+      GRAFANA_PG_HOST: ${GRAFANA_PG_HOST:-database-1.c5gg8y8cyk0z.ap-south-1.rds.amazonaws.com:5432}
+      GRAFANA_PG_DB: ${GRAFANA_PG_DB:-jnpa_schema_v3}
+      GRAFANA_PG_USER: ${GRAFANA_PG_USER:-postgres}
+      GRAFANA_PG_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set (RDS password, used by the Grafana datasource)}
+      GRAFANA_PG_SSLMODE: ${GRAFANA_PG_SSLMODE:-require}
+      # Query-editor feature hint only (not a connection setting). RDS runs
+      # PostgreSQL 18; 1500 is the highest value older Grafana builds accept.
+      GRAFANA_PG_VERSION: ${GRAFANA_PG_VERSION:-1500}
       GF_USERS_DEFAULT_THEME: dark
       GF_SERVER_HTTP_PORT: "3000"
       TZ: Etc/UTC
@@ -391,12 +412,9 @@ services:
     image: jnpa/vahan-sim:0.1.0
     container_name: jnpa-vahan-sim
     restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
     environment:
       PYTHONPATH: /app/ingest
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       VAHAN_BASE_URL: http://vahan-sim:8201
       VAHAN_SERVICE_NAME: vahan
       VAHAN_SERVICE_KIND: sim
@@ -429,12 +447,9 @@ services:
     image: jnpa/vahan-live:0.1.0
     container_name: jnpa-vahan-live
     restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
     environment:
       PYTHONPATH: /app/ingest
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       VAHAN_BASE_URL: http://vahan-live:8202
       VAHAN_SERVICE_NAME: vahan
       VAHAN_SERVICE_KIND: live
@@ -504,8 +519,6 @@ services:
         condition: service_started
       kafka:
         condition: service_healthy
-      postgres:
-        condition: service_healthy
     command: ["rfid-consumer"]
     environment:
       PYTHONPATH: /app/ingest/rfid
@@ -514,7 +527,7 @@ services:
       KAFKA_BROKERS: kafka:9092
       RFID_TOPIC: rfid.reads
       # asyncpg libpq DSN (no SQLAlchemy "+asyncpg" prefix).
-      POSTGRES_DSN_LIBPQ: ${RFID_POSTGRES_DSN:-postgresql://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN_LIBPQ: ${RFID_POSTGRES_DSN:?RFID_POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       METRICS_PORT: "9102"
       LOG_LEVEL: ${RFID_LOG_LEVEL:-INFO}
       TZ: Etc/UTC
@@ -548,8 +561,6 @@ services:
         condition: service_started
       kafka:
         condition: service_healthy
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
     environment:
@@ -559,7 +570,7 @@ services:
       KAFKA_BROKERS: kafka:9092
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       # asyncpg libpq DSN (no SQLAlchemy "+asyncpg" prefix).
-      POSTGRES_DSN_LIBPQ: ${TRUCK_POSTGRES_DSN:-postgresql://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN_LIBPQ: ${TRUCK_POSTGRES_DSN:?TRUCK_POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       TRUCK_NUM_DEVICES: ${TRUCK_NUM_DEVICES:-20000}
       TRUCK_MAX_DEVICES: ${TRUCK_MAX_DEVICES:-30000}
       TRUCK_ORIGIN_RADIUS_KM: ${TRUCK_ORIGIN_RADIUS_KM:-100}
@@ -604,8 +615,6 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
-      postgres:
-        condition: service_healthy
     command: ["rfid-correlator"]
     environment:
       PYTHONPATH: /app/ingest/rfid
@@ -615,7 +624,7 @@ services:
       CONFIRMED_TOPIC: vehicle.confirmed
       RFID_CORRELATION_WINDOW_S: ${RFID_CORRELATION_WINDOW_S:-5.0}
       RFID_CONFIRM_CONFIDENCE: ${RFID_CONFIRM_CONFIDENCE:-0.97}
-      POSTGRES_DSN_LIBPQ: ${RFID_POSTGRES_DSN:-postgresql://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN_LIBPQ: ${RFID_POSTGRES_DSN:?RFID_POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       METRICS_PORT: "9102"
       LOG_LEVEL: ${RFID_LOG_LEVEL:-INFO}
       TZ: Etc/UTC
@@ -650,8 +659,6 @@ services:
     container_name: jnpa-congestion
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
       minio:
@@ -677,7 +684,7 @@ services:
       CONGESTION_PREDICTIONS_TOPIC: ${CONGESTION_PREDICTIONS_TOPIC:-traffic.predictions}
       CONGESTION_PUBLISH_INTERVAL_S: ${CONGESTION_PUBLISH_INTERVAL_S:-60}
       # asyncpg/psycopg libpq DSN (no SQLAlchemy "+asyncpg" prefix).
-      CONGESTION_POSTGRES_DSN: ${CONGESTION_POSTGRES_DSN:-postgresql://postgres:jnpa_pw@postgres:5432/postgres}
+      CONGESTION_POSTGRES_DSN: ${CONGESTION_POSTGRES_DSN:?CONGESTION_POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       KAFKA_BROKERS: kafka:9092
       MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
@@ -747,8 +754,6 @@ services:
     container_name: jnpa-anomaly
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
       kafka:
@@ -762,7 +767,7 @@ services:
       KAFKA_BROKERS: kafka:9092
       ANOMALY_ALERTS_TOPIC: ${ANOMALY_ALERTS_TOPIC:-alerts}
       # psycopg libpq DSN (no SQLAlchemy "+asyncpg" prefix).
-      ANOMALY_POSTGRES_DSN: ${ANOMALY_POSTGRES_DSN:-postgresql://postgres:jnpa_pw@postgres:5432/postgres}
+      ANOMALY_POSTGRES_DSN: ${ANOMALY_POSTGRES_DSN:?ANOMALY_POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       # Trucking-app control plane for the assigned-route lookup (route-deviation).
       ANOMALY_TRUCK_API_URL: ${ANOMALY_TRUCK_API_URL:-http://truck-sim:8240}
       # Rule thresholds (spec defaults; override per deployment).
@@ -838,8 +843,6 @@ services:
     profiles: ["train"]
     restart: "no"
     depends_on:
-      postgres:
-        condition: service_healthy
       minio:
         condition: service_healthy
     environment: *anomaly-env
@@ -876,8 +879,6 @@ services:
     container_name: jnpa-gateway
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
       kafka:
@@ -1002,7 +1003,7 @@ services:
       ULIP_LDB_API: ${ULIP_LDB_API:-}
       GATEWAY_CACHE_TTL_ULIP_S: ${GATEWAY_CACHE_TTL_ULIP_S:-300}
       # Infra.
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       KAFKA_BROKERS: kafka:9092
       MQTT_HOST: mosquitto
@@ -1102,7 +1103,7 @@ services:
     environment:
       PYTHONPATH: /app
       PORT: "8330"
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       LOG_LEVEL: ${EMPTY_CONTAINER_LOG_LEVEL:-INFO}
       TZ: Etc/UTC
     ports:
@@ -1127,7 +1128,7 @@ services:
     environment:
       PYTHONPATH: /app
       PORT: "8340"
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       LOG_LEVEL: ${CARBON_LOG_LEVEL:-INFO}
       TZ: Etc/UTC
     ports:
@@ -1152,7 +1153,7 @@ services:
     environment:
       PYTHONPATH: /app
       PORT: "8350"
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       LOG_LEVEL: ${GATE_DATA_LOG_LEVEL:-INFO}
       TZ: Etc/UTC
       # Phase 4 — ICEGATE Customs Adapter feature flag. Empty (default) keeps ICEGATE
@@ -1232,7 +1233,7 @@ services:
     environment:
       PYTHONPATH: /app
       PORT: "8370"
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       LOG_LEVEL: ${PARKING_LOG_LEVEL:-INFO}
       TZ: Etc/UTC
     ports:
@@ -1261,8 +1262,6 @@ services:
     container_name: jnpa-scenarios
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
       kafka:
         condition: service_healthy
       gateway:
@@ -1281,7 +1280,7 @@ services:
       SCENARIOS_TRUCK_URL: ${SCENARIOS_TRUCK_URL:-http://truck-sim:8240}
       SCENARIOS_CONGESTION_URL: ${SCENARIOS_CONGESTION_URL:-http://congestion:8311}
       SCENARIOS_ANOMALY_URL: ${SCENARIOS_ANOMALY_URL:-http://anomaly:8321}
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       KAFKA_BROKERS: kafka:9092
       SCENARIOS_FORECAST_ATTEMPTS: ${SCENARIOS_FORECAST_ATTEMPTS:-6}

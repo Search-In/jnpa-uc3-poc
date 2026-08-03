@@ -29,8 +29,8 @@ Usage:
     # Dry-run: parse + clean + classify, no DB writes (needs only openpyxl)
     python scripts/import_transporter_master.py --dry-run
 
-    # Live upsert against the running stack (Postgres on localhost:5433)
-    POSTGRES_DSN='postgresql+asyncpg://postgres:jnpa_pw@localhost:5433/postgres' \
+    # Live upsert against the RDS application database (jnpa_schema_v3)
+    POSTGRES_DSN='postgresql+asyncpg://postgres:$RDS_PW@database-1.c5gg8y8cyk0z.ap-south-1.rds.amazonaws.com:5432/jnpa_schema_v3?ssl=require' \
         .venv/bin/python scripts/import_transporter_master.py
 
 Options: --xlsx PATH, --dsn DSN, --dry-run, --limit N, --report PATH (JSON).
@@ -56,10 +56,9 @@ DEFAULT_XLSX = (
     "/Users/pandurangdhage/Downloads/Digital Twin/Data/"
     "11-Transport Data/TransporterDetails.xlsx"
 )
-DEFAULT_DSN = os.environ.get(
-    "POSTGRES_DSN",
-    "postgresql+asyncpg://postgres:jnpa_pw@localhost:5433/postgres",
-)
+# Application database = AWS RDS (jnpa_schema_v3). No local-postgres fallback:
+# set POSTGRES_DSN (or pass --dsn) or the script refuses to run.
+DEFAULT_DSN = os.environ.get("POSTGRES_DSN", "")
 
 # Source-column -> our field name. Header row of the sheet must contain these.
 _COLUMNS = {
@@ -341,7 +340,13 @@ def print_summary(report: Dict[str, Any], tally: Optional[Dict[str, int]],
 def main() -> int:
     ap = argparse.ArgumentParser(description="Import Transport Master dataset")
     ap.add_argument("--xlsx", default=DEFAULT_XLSX)
-    ap.add_argument("--dsn", default=DEFAULT_DSN)
+    ap.add_argument(
+        "--dsn",
+        default=DEFAULT_DSN,
+        required=not DEFAULT_DSN,
+        help="SQLAlchemy asyncpg DSN for the RDS database "
+             "(defaults to $POSTGRES_DSN; no local fallback)",
+    )
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--report", default=None, help="write full report JSON here")

@@ -6,10 +6,18 @@
 //   page -> worker: { cmd: "connect", url, deviceId } | { cmd: "close" }
 //   worker -> page: { kind: "status", status } | { kind: "frame", frame }
 //
-// The worker filters truck_position frames to the paired device_id (those are
-// high-volume and 1-in-50 sampled by the gateway); all other frame types pass
-// through and the page decides relevance. It auto-reconnects with capped
-// backoff and pings to keep the socket alive.
+// On open the worker sends {cmd:"identify", device_id} so the gateway can bind
+// this socket to the paired device and stop sending it other drivers' advisories
+// (the gateway also reads ?device= from the URL, which binds without the
+// round-trip; identify covers a reconnect that raced the query param).
+//
+// It then drops any frame ADDRESSED to a different device — truck_position,
+// reroute, alert, everything. A frame is "addressed" when payload.device_id is
+// set; a frame with audience:"broadcast" is for every driver and always passes.
+// This is the transport-level half of the isolation fix; RealtimeContext applies
+// the same rule again before raising a notification.
+
+import { isForOtherDevice } from "@/lib/addressing";
 
 let ws: WebSocket | null = null;
 let deviceId = "";
@@ -35,6 +43,14 @@ function connect() {
   ws.onopen = () => {
     retry = 0;
     post({ kind: "status", status: "open" });
+    // Bind this socket to our device so the gateway can address frames to it.
+    if (deviceId) {
+      try {
+        ws?.send(JSON.stringify({ cmd: "identify", device_id: deviceId }));
+      } catch {
+        /* socket raced closed — the ?device= query param already bound it */
+      }
+    }
     pingTimer = setInterval(() => {
       if (ws && ws.readyState === WebSocket.OPEN) ws.send("ping");
     }, 25_000);
@@ -47,15 +63,8 @@ function connect() {
     } catch {
       return;
     }
-    // Drop other devices' position spam; keep everything else.
-    if (
-      frame?.type === "truck_position" &&
-      deviceId &&
-      frame.payload?.device_id &&
-      frame.payload.device_id !== deviceId
-    ) {
-      return;
-    }
+    // Drop anything addressed to a different device before it reaches the page.
+    if (isForOtherDevice(frame?.payload, deviceId)) return;
     post({ kind: "frame", frame });
   };
 

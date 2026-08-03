@@ -23,6 +23,22 @@ The client de-dupes across transports (mobile-pwa/src/lib/notify.ts keys on a
 stable ``tag``), so sending over all three is safe: the driver sees one banner.
 
 ``dispatch()`` returns a per-channel :class:`DispatchResult` for evidence/tests.
+
+Targeting / audience
+--------------------
+Every advisory is stamped with an explicit ``audience``:
+
+* ``"driver"``    — meant for exactly one driver. The WS frame is ADDRESSED
+  (``ws.broadcast(..., device_id=…)``), so only the control room and that
+  driver's socket receive it; the PWA additionally requires the address to match
+  before it raises a notification.
+* ``"broadcast"`` — genuinely meant for every driver (e.g. corridor congestion).
+  The WS frame is unaddressed and the PWA accepts it from anyone.
+
+Before this the WS leg was an unconditional fan-out to every socket while the
+device legs were correctly targeted, so driver B saw driver A's advisory. The
+``audience`` field is what lets the client tell "not addressed to me" apart from
+"addressed to everyone" — it must never be inferred from a missing field.
 """
 from __future__ import annotations
 
@@ -34,6 +50,9 @@ from .routers import push
 from .state import GatewayState
 
 log = get_logger("gateway.dispatch")
+
+AUDIENCE_DRIVER = "driver"
+AUDIENCE_BROADCAST = "broadcast"
 
 
 @dataclass
@@ -55,6 +74,7 @@ async def dispatch(
     ws: bool = True,
     webpush: bool = True,
     fcm: bool = True,
+    audience: str = AUDIENCE_DRIVER,
 ) -> DispatchResult:
     """Fan one advisory out to a specific driver over every enabled transport.
 
@@ -62,12 +82,25 @@ async def dispatch(
     ``href``/…). ``ws_type`` is the WebSocket frame type (e.g. ``reroute``,
     ``alert``). Each leg is independently guarded — one failing transport never
     blocks the others.
+
+    ``audience`` controls WS targeting. The default ``"driver"`` addresses the
+    frame to ``device_id`` so no other driver's socket receives it. Pass
+    ``"broadcast"`` only for advisories that genuinely apply to every driver.
     """
     result = DispatchResult()
 
+    # Stamp the envelope so the PWA can distinguish "addressed to someone else"
+    # from "addressed to everyone" without guessing from absent fields.
+    payload.setdefault("audience", audience)
+    if device_id:
+        payload.setdefault("device_id", device_id)
+
     if ws:
+        # Addressed unless this is a real all-driver broadcast. `device_id=None`
+        # preserves the historical fan-out for the broadcast case.
+        ws_target = device_id if audience == AUDIENCE_DRIVER else None
         try:
-            await gw.ws.broadcast(ws_type, payload)
+            await gw.ws.broadcast(ws_type, payload, device_id=ws_target)
             result.ws = True
         except Exception as exc:  # noqa: BLE001
             log.warning("dispatch_ws_failed", device_id=device_id, error=str(exc))
@@ -98,6 +131,7 @@ async def dispatch_alert(
     category: Optional[str] = None,
     extra: Optional[Dict[str, Any]] = None,
     ws: bool = True,
+    audience: str = AUDIENCE_DRIVER,
 ) -> Optional[DispatchResult]:
     """Convenience wrapper for the alert engine (congestion / parking / geofence /
     customs / emergency). Builds the standard advisory envelope and dispatches it
@@ -120,12 +154,23 @@ async def dispatch_alert(
         "body": body,
         "device_id": device_id,
         "category": category or "info",
+        "audience": audience,
     }
     if href:
         payload["href"] = href
     if extra:
         payload.update(extra)
-    return await dispatch(gw, device_id, payload, ws_type="alert", ws=ws)
+        # `extra` must not be able to re-point or widen the audience of an
+        # advisory that was resolved to a specific driver.
+        payload["device_id"] = device_id
+        payload["audience"] = audience
+    return await dispatch(gw, device_id, payload, ws_type="alert", ws=ws, audience=audience)
 
 
-__all__ = ["dispatch", "dispatch_alert", "DispatchResult"]
+__all__ = [
+    "dispatch",
+    "dispatch_alert",
+    "DispatchResult",
+    "AUDIENCE_DRIVER",
+    "AUDIENCE_BROADCAST",
+]

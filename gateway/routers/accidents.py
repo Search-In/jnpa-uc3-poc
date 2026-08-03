@@ -143,11 +143,26 @@ async def report_accident(body: Dict[str, Any] = Body(...),
     except Exception as exc:  # noqa: BLE001
         log.debug("accident_alert_persist_failed", error=str(exc))
     # Push the assigned driver when severe (best-effort; no-op if no device).
+    # The vehicle_id is NOT a device_id — it must be resolved through the
+    # push-registration mapping first. Passing it straight in bound the advisory
+    # to a device that does not exist, so the device legs silently no-op'd while
+    # the WS leg broadcast the accident to every connected driver.
     if severity in _ALERT_SEVERITY and row.get("vehicle_id"):
         try:
-            await dispatch_alert(state, row.get("vehicle_id"), kind="accident",
-                                 title=payload["title"], body=payload["body"],
-                                 category="emergency", extra={"accident_ref": ref})
+            from . import push
+
+            device_id = await push.resolve_device(
+                state, driver_id=row.get("driver_id"), vehicle_id=row.get("vehicle_id"),
+            )
+            if device_id:
+                await dispatch_alert(state, device_id, kind="accident",
+                                     title=payload["title"], body=payload["body"],
+                                     category="emergency",
+                                     extra={"accident_ref": ref,
+                                            "plate": row.get("plate"),
+                                            "vehicle_id": row.get("vehicle_id")})
+            else:
+                log.debug("accident_dispatch_no_device", vehicle_id=row.get("vehicle_id"))
         except Exception as exc:  # noqa: BLE001
             log.debug("accident_dispatch_failed", error=str(exc))
 

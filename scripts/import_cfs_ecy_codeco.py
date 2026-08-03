@@ -21,7 +21,7 @@ unique constraint via ON CONFLICT DO NOTHING (idempotent re-runs).
 
 Usage:
     python scripts/import_cfs_ecy_codeco.py --dry-run          # parse+validate, no DB
-    POSTGRES_DSN='postgresql+asyncpg://postgres:TempPass123!@localhost:5433/postgres' \
+    POSTGRES_DSN='postgresql+asyncpg://postgres:$RDS_PW@database-1.c5gg8y8cyk0z.ap-south-1.rds.amazonaws.com:5432/jnpa_schema_v3?ssl=require' \
         .venv/bin/python scripts/import_cfs_ecy_codeco.py      # live upsert (+ ensures schema)
 Options: --data-dir PATH, --dsn, --dry-run, --limit N, --no-ensure.
 """
@@ -43,10 +43,9 @@ sys.path.insert(0, str(_ROOT / "shared"))
 from jnpa_shared.iso6346 import is_valid_container_no  # noqa: E402
 
 DEFAULT_DATA_DIR = "/Users/pandurangdhage/Downloads/Digital Twin/Data/13-CFS-ECY"
-DEFAULT_DSN = os.environ.get(
-    "POSTGRES_DSN",
-    "postgresql+asyncpg://postgres:TempPass123!@localhost:5433/postgres",
-)
+# Application database = AWS RDS (jnpa_schema_v3). No local-postgres fallback:
+# set POSTGRES_DSN (or pass --dsn) or the script refuses to run.
+DEFAULT_DSN = os.environ.get("POSTGRES_DSN", "")
 BATCH = 500
 
 # JNPA operates in IST. The CODECO timestamps carry no timezone; we stamp them as
@@ -203,7 +202,13 @@ def build_report(data_dir: str, limit: Optional[int]) -> Dict[str, Any]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data-dir", default=DEFAULT_DATA_DIR)
-    ap.add_argument("--dsn", default=DEFAULT_DSN)
+    ap.add_argument(
+        "--dsn",
+        default=DEFAULT_DSN,
+        required=not DEFAULT_DSN,
+        help="SQLAlchemy asyncpg DSN for the RDS database "
+             "(defaults to $POSTGRES_DSN; no local fallback)",
+    )
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--no-ensure", action="store_true",

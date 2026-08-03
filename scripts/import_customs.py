@@ -22,7 +22,7 @@ Usage:
     .venv/bin/python scripts/import_customs.py --dry-run
 
     # live import (ensures schema first)
-    POSTGRES_DSN='postgresql+asyncpg://postgres:TempPass123!@localhost:5433/postgres' \
+    POSTGRES_DSN='postgresql+asyncpg://postgres:$RDS_PW@database-1.c5gg8y8cyk0z.ap-south-1.rds.amazonaws.com:5432/jnpa_schema_v3?ssl=require' \
         .venv/bin/python scripts/import_customs.py
 
 Options: --data-dir PATH (else $CUSTOMS_DATA_DIR), --dsn, --dry-run, --no-ensure.
@@ -42,9 +42,9 @@ sys.path.insert(0, str(_ROOT / "shared"))
 DEFAULT_DATA_DIR = os.environ.get(
     "CUSTOMS_DATA_DIR",
     os.path.expanduser("~/Downloads/Digital Twin/data/5- Customs"))
-DEFAULT_DSN = os.environ.get(
-    "POSTGRES_DSN",
-    "postgresql+asyncpg://postgres:TempPass123!@localhost:5433/postgres")
+# Application database = AWS RDS (jnpa_schema_v3). No local-postgres fallback:
+# set POSTGRES_DSN (or pass --dsn) or the script refuses to run.
+DEFAULT_DSN = os.environ.get("POSTGRES_DSN", "")
 
 
 async def _run(data_dir: str, dsn: str, *, dry_run: bool, ensure: bool,
@@ -103,7 +103,13 @@ async def _run(data_dir: str, dsn: str, *, dry_run: bool, ensure: bool,
 def main() -> int:
     ap = argparse.ArgumentParser(description="Import official JNPA customs files (module 5).")
     ap.add_argument("--data-dir", default=DEFAULT_DATA_DIR)
-    ap.add_argument("--dsn", default=DEFAULT_DSN)
+    ap.add_argument(
+        "--dsn",
+        default=DEFAULT_DSN,
+        required=not DEFAULT_DSN,
+        help="SQLAlchemy asyncpg DSN for the RDS database "
+             "(defaults to $POSTGRES_DSN; no local fallback)",
+    )
     ap.add_argument("--dry-run", action="store_true", help="parse + validate only, no DB")
     ap.add_argument("--no-ensure", action="store_true", help="skip ensure_customs_schema")
     ap.add_argument("--reconcile", action="store_true",

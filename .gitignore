@@ -2,6 +2,15 @@
 .env
 .env.local
 *.env.local
+# Runtime env files and the rolling backups/temp files written by
+# deploy/aws/use-rds.sh — these carry the live RDS password.
+.env.prod
+.env.tmp
+.env*.bak*
+*.env.prod
+# Database dumps (deploy/jnpa-uc3.sh backup writes here)
+backups/
+*.sql.gz
 
 # Firebase Admin service-account keys (never commit — load via
 # FIREBASE_SERVICE_ACCOUNT_PATH / GOOGLE_APPLICATION_CREDENTIALS instead).

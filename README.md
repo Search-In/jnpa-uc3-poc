@@ -46,9 +46,13 @@ BOOTSTRAP OK
   bootstrap-check`; if you prefer your own environment, run
   `pip install -e "shared[dev]"` there instead.
 
-> **Host port note:** the container Postgres is published on host **5433**
-> (not 5432) to avoid clashing with a Postgres you may already run locally.
-> Containers on the `jnpa` network still use `postgres:5432`.
+> **Database:** the application database is **AWS RDS PostgreSQL**
+> (`database-1.…ap-south-1.rds.amazonaws.com:5432/jnpa_schema_v3`) in every
+> environment. Set `POSTGRES_DSN` + `RFID_/TRUCK_/CONGESTION_/ANOMALY_POSTGRES_DSN`
+> in `.env.local` (see `.env.local.example`); there is no local-postgres
+> fallback — a missing DSN fails the container/compose run instead.
+> A local sandbox DB is still available for offline work, opt-in only:
+> `docker compose --profile localdb up -d postgres` (published on host 5433).
 
 ---
 
@@ -218,7 +222,8 @@ route browser traffic through the proxy so bearer tokens never traverse plain HT
 
 | Service              | Image                                   | Host port(s)        | Inspect at                                      |
 | -------------------- | --------------------------------------- | ------------------- | ----------------------------------------------- |
-| Postgres / Timescale | `timescale/timescaledb-ha:pg15-latest`  | `5433` → 5432       | `make psql`                                     |
+| Postgres (AWS RDS)   | managed — `jnpa_schema_v3`              | remote `5432` (TLS) | `make psql`                                     |
+| Postgres (dev sandbox, opt-in) | `timescale/timescaledb-ha:pg15-latest` | `5433` → 5432 (profile `localdb`) | `docker compose --profile localdb up -d postgres` |
 | Redis                | `redis:7-alpine`                        | `6379`              | `make redis-cli`                                |
 | Zookeeper            | `confluentinc/cp-zookeeper:7.6.0`       | (internal)          | —                                               |
 | Kafka                | `confluentinc/cp-kafka:7.6.0`           | `9092` (int), `29092` (host) | via Kafka-UI                           |
@@ -618,7 +623,7 @@ so the next `make up` serves instantly without retraining. For a full teardown
 | `make down`             | `docker compose down -v` (removes volumes)      |
 | `make logs`             | tail all service logs                           |
 | `make ps`               | container status                                |
-| `make psql`             | open `psql` in the Postgres container           |
+| `make psql`             | open `psql` against the RDS database             |
 | `make redis-cli`        | open `redis-cli` in the Redis container         |
 | `make install-shared`   | `pip install -e shared`                         |
 | `make test`             | `pytest -x shared tests`                        |

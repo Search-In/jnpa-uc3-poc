@@ -16,6 +16,12 @@
 # the script mints a token via /api/auth/dev-token, else falls back to
 # /api/auth/login with LOGIN_USER/LOGIN_PASS. If auth is off, no token needed.
 #
+# Database: the stack is AWS RDS-only (jnpa_schema_v3) and runs NO postgres
+# container, so section 0b asserts that instead — no local postgres running, no
+# service configured against one, and a live encrypted connection to RDS opened
+# from the gateway. Override the expected target with RDS_HOST_EXPECT /
+# RDS_DB_EXPECT.
+#
 # Status classification:
 #   200/201/204 = PASS         401/403 = AUTH ISSUE
 #   404         = ROUTE/DATA   422/400 = PAYLOAD ISSUE
@@ -137,7 +143,6 @@ for probe in \
   "parking|jnpa-parking|8370" \
   "scenarios|jnpa-scenarios|8400" \
   "truck-sim|jnpa-truck-sim|8240" \
-  "postgres|jnpa-postgres|5433" \
   "redis|jnpa-redis|6379" \
   "kafka|jnpa-kafka|9092" \
   "minio|jnpa-minio|9000" ; do
@@ -164,6 +169,76 @@ done
 if [ "$HAVE_DOCKER" = 1 ]; then
   echo; echo "${CYN}docker containers:${RST}"
   docker ps --format 'table {{.Names}}\t{{.Status}}' 2>/dev/null | grep -i jnpa || echo "  (none)"
+fi
+
+# =============================================================================
+section "0b. DATABASE — AWS RDS ONLY"
+# The application database is AWS RDS (jnpa_schema_v3). This stack runs NO
+# postgres container: the compose service lives behind the dev-only "localdb"
+# profile. So instead of probing a local database we assert three things —
+#   (1) no local postgres container is running,
+#   (2) no running service is configured against a local postgres,
+#   (3) the gateway can actually open an encrypted connection to RDS.
+RDS_HOST_EXPECT="${RDS_HOST_EXPECT:-database-1.c5gg8y8cyk0z.ap-south-1.rds.amazonaws.com}"
+RDS_DB_EXPECT="${RDS_DB_EXPECT:-jnpa_schema_v3}"
+
+if [ "$HAVE_DOCKER" = 1 ]; then
+  # (1) no local postgres container
+  if [ -n "$(docker ps -q --filter 'name=jnpa-postgres' 2>/dev/null)" ]; then
+    classify "503" "CHK" "local postgres container is RUNNING (must not be: RDS-only)" || true
+  else
+    classify "200" "CHK" "no local postgres container (RDS-only)" || true
+  fi
+
+  # (2) every running service must be pointed at RDS, never a local database
+  bad_dsn=0; checked=0
+  for c in $(docker ps --filter 'name=jnpa-' --format '{{.Names}}' 2>/dev/null); do
+    while IFS= read -r e; do
+      [ -z "$e" ] && continue
+      checked=$((checked+1))
+      case "$e" in
+        *"$RDS_HOST_EXPECT"*"/$RDS_DB_EXPECT"*) : ;;
+        *) bad_dsn=$((bad_dsn+1))
+           echo "  ${RED}NOT-RDS${RST} $c -> $(printf '%s' "$e" | sed -E 's/:[^:@/]*@/:****@/')" ;;
+      esac
+    done <<< "$(docker exec "$c" env 2>/dev/null | grep -E '^(POSTGRES_DSN|POSTGRES_DSN_LIBPQ|CONGESTION_POSTGRES_DSN|ANOMALY_POSTGRES_DSN)=' || true)"
+  done
+  if [ "$checked" -eq 0 ]; then
+    classify "503" "CHK" "no container exposes a POSTGRES_DSN (stack down?)" || true
+  elif [ "$bad_dsn" -gt 0 ]; then
+    classify "500" "CHK" "$bad_dsn service DSN(s) not pointing at RDS/$RDS_DB_EXPECT" || true
+  else
+    classify "200" "CHK" "all $checked service DSN(s) -> RDS/$RDS_DB_EXPECT" || true
+  fi
+
+  # (3) live RDS connection from the gateway (proves creds + SSL + database name)
+  db_out="$(docker exec -i jnpa-gateway python - <<'PY' 2>/dev/null
+import asyncio, os
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
+
+async def main():
+    engine = create_async_engine(os.environ["POSTGRES_DSN"])
+    async with engine.connect() as conn:
+        row = (await conn.execute(text(
+            "SELECT current_database() AS db,"
+            "       (SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()) AS ssl,"
+            "       split_part(version(), ' ', 2) AS ver"
+        ))).mappings().one()
+    await engine.dispose()
+    print(f"db={row['db']} ssl={row['ssl']} server={row['ver']}")
+
+asyncio.run(main())
+PY
+)"
+  if printf '%s' "$db_out" | grep -q "db=${RDS_DB_EXPECT}"; then
+    classify "200" "CHK" "RDS reachable from gateway ($db_out)" || true
+  else
+    classify "503" "CHK" "RDS NOT reachable from gateway (${db_out:-no output})" || true
+  fi
+else
+  echo "  (docker unavailable — RDS checks need the box; gateway HTTP checks below still apply)"
+  WARN=$((WARN+1))
 fi
 
 # =============================================================================

@@ -172,9 +172,7 @@ export default function TruckTrackDialog({ open, vehicleNumber, onClose }: Props
               <button
                 type="button"
                 className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[11px] font-semibold hover:bg-muted ${
-                  panel === "map"
-                    ? "border-primary bg-primary/10 text-primary"
-                    : "border-border"
+                  panel === "map" ? "border-primary bg-primary/10 text-primary" : "border-border"
                 }`}
                 onClick={() => togglePanel("map")}
                 disabled={!tracking}
@@ -352,7 +350,10 @@ export default function TruckTrackDialog({ open, vehicleNumber, onClose }: Props
                     <div className="absolute bottom-2 left-[11px] top-2 w-0.5 bg-orange-500/80" />
 
                     {terminals.map((term) => (
-                      <div key={term.locName} className="relative grid grid-cols-1 gap-3 md:grid-cols-2">
+                      <div
+                        key={term.locName}
+                        className="relative grid grid-cols-1 gap-3 md:grid-cols-2"
+                      >
                         <div className="relative rounded-md border border-border bg-card shadow-sm">
                           <div className="absolute -left-[7px] top-5 h-3.5 w-3.5 rounded-full border-2 border-white bg-[#1e4b8e] shadow" />
                           <div className="rounded-t-md bg-[#1e4b8e] px-3 py-1.5 text-[12px] font-semibold text-white">

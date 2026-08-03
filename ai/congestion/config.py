@@ -100,8 +100,10 @@ class CongestionConfig:
     minio_secure: bool = False
 
     # --- Postgres (feature backfill source + store) ---
-    # libpq DSN (no SQLAlchemy "+asyncpg" prefix) for asyncpg.
-    postgres_dsn_libpq: str = "postgresql://postgres:jnpa_pw@postgres:5432/postgres"
+    # libpq DSN (no SQLAlchemy "+asyncpg" prefix) for asyncpg. Empty by
+    # default: CONGESTION_POSTGRES_DSN must point at RDS (jnpa_schema_v3);
+    # there is no local-postgres fallback.
+    postgres_dsn_libpq: str = ""
 
     # --- Redis (external-source speed cache) ---
     redis_url: str = "redis://redis:6379/0"
@@ -166,10 +168,7 @@ class CongestionConfig:
             minio_bucket=os.environ.get("CONGESTION_MODEL_BUCKET", "models"),
             minio_prefix=os.environ.get("CONGESTION_MODEL_PREFIX", "congestion/"),
             minio_secure=_as_bool(os.environ.get("MINIO_SECURE"), False),
-            postgres_dsn_libpq=os.environ.get(
-                "CONGESTION_POSTGRES_DSN",
-                "postgresql://postgres:jnpa_pw@postgres:5432/postgres",
-            ),
+            postgres_dsn_libpq=os.environ.get("CONGESTION_POSTGRES_DSN", ""),
             redis_url=os.environ.get("REDIS_URL", "redis://redis:6379/0"),
             kafka_brokers=os.environ.get("KAFKA_BROKERS", "kafka:9092"),
             predictions_topic=os.environ.get("CONGESTION_PREDICTIONS_TOPIC", "traffic.predictions"),

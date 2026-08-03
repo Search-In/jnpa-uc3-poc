@@ -9,17 +9,31 @@ datasources:
     isDefault: true
     editable: true
 
+  # Application database = AWS RDS (jnpa_schema_v3). Connection details come
+  # from the environment handed to the grafana container by docker-compose.yml
+  # (GRAFANA_PG_*), so this file never hard-codes a host or password and never
+  # points at the dev-only local postgres container.
+  #
+  # The datasource NAME is kept as "TimescaleDB" on purpose — existing dashboards
+  # and saved panels resolve the datasource by name; renaming it would orphan
+  # them. The engine behind it is plain managed PostgreSQL:
+  #   * timescaledb: false — the extension is NOT available on this RDS instance
+  #     (verified: pg_available_extensions has no timescaledb row). Leaving it
+  #     true makes Grafana offer time_bucket()/hypertable helpers that error.
+  #   * postgresVersion — feature-detection hint for the query editor only; it
+  #     does not affect connectivity. RDS currently runs PostgreSQL 18; set
+  #     GRAFANA_PG_VERSION to the highest value your Grafana build accepts.
+  #   * sslmode stays `require` (GRAFANA_PG_SSLMODE default) — TLS to RDS.
   - name: TimescaleDB
     type: postgres
     access: proxy
-    url: postgres:5432
-    database: postgres
-    user: postgres
-    # Set via env in a real deployment; PoC uses the seeded password.
+    url: ${GRAFANA_PG_HOST}
+    database: ${GRAFANA_PG_DB}
+    user: ${GRAFANA_PG_USER}
     secureJsonData:
-      password: jnpa_pw
+      password: ${GRAFANA_PG_PASSWORD}
     jsonData:
-      sslmode: disable
-      postgresVersion: 1500
-      timescaledb: true
+      sslmode: ${GRAFANA_PG_SSLMODE}
+      postgresVersion: ${GRAFANA_PG_VERSION}
+      timescaledb: false
     editable: true

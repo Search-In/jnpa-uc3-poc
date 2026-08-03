@@ -17,7 +17,7 @@ A record is INVALID (not imported) only if it lacks a licence number or name.
 
 Usage:
     python scripts/import_driver_master.py --dry-run          # parse+clean, no DB
-    POSTGRES_DSN='postgresql+asyncpg://postgres:TempPass123!@localhost:5433/postgres' \
+    POSTGRES_DSN='postgresql+asyncpg://postgres:$RDS_PW@database-1.c5gg8y8cyk0z.ap-south-1.rds.amazonaws.com:5432/jnpa_schema_v3?ssl=require' \
         .venv/bin/python scripts/import_driver_master.py      # live upsert
 Options: --xlsx PATH, --dsn, --dry-run, --limit N, --report PATH, --skip-pdp.
 """
@@ -40,10 +40,9 @@ sys.path.insert(0, str(_ROOT / "shared"))
 DEFAULT_XLSX = (
     "/Users/pandurangdhage/Downloads/Digital Twin/Data/11-Transport Data/PDP Details.xlsx"
 )
-DEFAULT_DSN = os.environ.get(
-    "POSTGRES_DSN",
-    "postgresql+asyncpg://postgres:TempPass123!@localhost:5433/postgres",
-)
+# Application database = AWS RDS (jnpa_schema_v3). No local-postgres fallback:
+# set POSTGRES_DSN (or pass --dsn) or the script refuses to run.
+DEFAULT_DSN = os.environ.get("POSTGRES_DSN", "")
 PDP_BATCH = 2000
 DRIVER_BATCH = 1000
 
@@ -302,7 +301,13 @@ def build_driver_report(raw_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--xlsx", default=DEFAULT_XLSX)
-    ap.add_argument("--dsn", default=DEFAULT_DSN)
+    ap.add_argument(
+        "--dsn",
+        default=DEFAULT_DSN,
+        required=not DEFAULT_DSN,
+        help="SQLAlchemy asyncpg DSN for the RDS database "
+             "(defaults to $POSTGRES_DSN; no local fallback)",
+    )
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--skip-pdp", action="store_true")

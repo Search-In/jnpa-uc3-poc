@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from .config import get_settings
+from .config import get_settings, require_dsn
 
 
 # Registry of live engines so dispose_all() can close them cleanly.
@@ -28,7 +28,7 @@ _ENGINES: list[AsyncEngine] = []
 @lru_cache(maxsize=4)
 def get_engine(dsn: Optional[str] = None, echo: bool = False) -> AsyncEngine:
     """Return a cached async engine for the given DSN (defaults to settings)."""
-    dsn = dsn or get_settings().postgres_dsn
+    dsn = require_dsn(dsn or get_settings().postgres_dsn)
     engine = create_async_engine(
         dsn,
         echo=echo,

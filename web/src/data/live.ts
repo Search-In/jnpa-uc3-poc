@@ -246,6 +246,11 @@ export class LiveAdapter implements DataAdapter {
       input,
     );
 
+  ldbTruck = (vehicleNumber: string) =>
+    getJson<import("@/lib/types").LdbTruckTrackingResponse>(
+      `/api/ldb/truck/${encodeURIComponent(vehicleNumber.trim().toUpperCase())}`,
+    );
+
   // --- Vehicle Intelligence Identity & Detection ---
   vehicleIdentity = (vehicleNumber: string, image: string) =>
     sendJson<VehicleIdentityResult>(

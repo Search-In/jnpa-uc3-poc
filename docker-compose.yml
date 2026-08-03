@@ -435,6 +435,34 @@ services:
       - jnpa
 
   # --------------------------------------------------------------------------
+  # EIR / gate-slip OCR (Tesseract) — host 8210.
+  # Structured field extraction for terminal EIR photos. Optional; gateway/UI
+  # wiring is a follow-up (POST http://eir-ocr:8210/infer).
+  # --------------------------------------------------------------------------
+  eir-ocr:
+    build:
+      context: .
+      dockerfile: ingest/eir_ocr/Dockerfile
+    image: jnpa/eir-ocr:0.1.0
+    container_name: jnpa-eir-ocr
+    restart: unless-stopped
+    environment:
+      PYTHONPATH: /app/ingest
+      PORT: "8210"
+      EIR_OCR_CACHE_SIZE: ${EIR_OCR_CACHE_SIZE:-64}
+      EIR_IMAGES_DIR: /data/eir
+      LOG_LEVEL: ${EIR_OCR_LOG_LEVEL:-INFO}
+      TZ: Etc/UTC
+    ports:
+      - "8210:8210"
+    volumes:
+      - ./ingest/eir_ocr:/app/ingest/eir_ocr:ro
+      # Workspace EIR photos (outside this repo) — override host path via EIR_HOST_DIR.
+      - ${EIR_HOST_DIR:-../EIR}:/data/eir:ro
+    networks:
+      - jnpa
+
+  # --------------------------------------------------------------------------
   # Vahan live adapter — proxies the same surface to Surepass's commercial KYC
   # API. FastAPI on host 8202. Returns 503 {"error":"live_disabled"} unless
   # SUREPASS_API_TOKEN is set; never falls back to the simulator (that is the

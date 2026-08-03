@@ -474,6 +474,12 @@ def _parse_row(res: ParseResult, rn: dict, i: int, doc_type: str,
             leg = 1
         rec = {
             "pin_number": pin,
+            # The ticket's own transaction/visit reference and the shipping line it
+            # belongs to — both printed on the pickup ticket. NOT part of the row
+            # hash: they are attributes of the same physical ticket, so adding them
+            # to an already-imported row must not create a second row.
+            "transaction_no": _pick(rn, doc_type, "transaction_no"),
+            "line_code": _pick(rn, doc_type, "line_code"),
             "ticket_type": _pick(rn, doc_type, "ticket_type"),
             "terminal": _pick(rn, doc_type, "terminal"),
             "truck_no": truck,

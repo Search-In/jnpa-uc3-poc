@@ -15,6 +15,19 @@ else
 PY := python3
 endif
 
+# Interpreter used to *create* .venv (see the venv target). Every package pins
+# requires-python >=3.11 and the service images are python:3.11-slim, so a bare
+# `python3` that resolves to 3.10 fails every install with "Package
+# 'jnpa-shared' requires a different Python". Probe for a >=3.11 interpreter
+# instead of assuming `python3` is one. 3.11/3.12 come first on purpose:
+# ai/anpr pins numpy>=1.26,<2 and numpy 1.26 ships no cp313+ wheels, so 3.13+
+# falls back to a source build. Override with `make venv PYTHON=/path/to/python`.
+PYTHON ?= $(shell for p in python3.11 python3.12 python3.13 python3; do \
+		command -v $$p >/dev/null 2>&1 \
+			&& $$p -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null \
+			&& { echo $$p; break; }; \
+	done)
+
 # Tell docker compose to use .env.local for ${...} interpolation when present
 # (compose reads .env by default, not .env.local).
 ENV_FILE := $(wildcard .env.local)
@@ -75,7 +88,15 @@ redis-cli: ## Open redis-cli inside the redis container
 	$(COMPOSE) exec redis redis-cli
 
 venv: ## Create .venv and install shared + vahan + rfid services (host-side, for tests)
-	python3 -m venv .venv
+	@if [ -z "$(PYTHON)" ]; then \
+		echo "ERROR: no Python >=3.11 found on PATH."; \
+		echo "       Every package here pins requires-python >=3.11 (images are python:3.11-slim);"; \
+		echo "       a 3.10 interpreter fails with \"requires a different Python\"."; \
+		echo "       Fix: brew install python@3.12   (or: make venv PYTHON=/path/to/python3.11)"; \
+		exit 1; \
+	fi
+	@echo "==> creating .venv with $$($(PYTHON) -V) from $$(command -v $(PYTHON))"
+	$(PYTHON) -m venv --clear .venv
 	.venv/bin/python -m pip install --upgrade pip
 	.venv/bin/python -m pip install -e "shared[dev]"
 	.venv/bin/python -m pip install -e "ingest/vahan_sim[dev]" -e "ingest/vahan_live[dev]"
@@ -85,6 +106,9 @@ venv: ## Create .venv and install shared + vahan + rfid services (host-side, for
 	.venv/bin/python -m pip install -e "ai/congestion[dev]"
 	.venv/bin/python -m pip install -e "ai/anomaly[dev]"
 	.venv/bin/python -m pip install -e "gateway[dev]"
+	# shared/test_empty_container.py and tests/test_gate_data.py import these
+	# packages directly, so `make test` fails collection without them.
+	.venv/bin/python -m pip install -e "empty-container[dev]" -e "gate-data[dev]"
 
 install-shared: ## pip install -e the shared + vahan + rfid + trucking packages into the active interpreter
 	$(PY) -m pip install -e "shared[dev]"

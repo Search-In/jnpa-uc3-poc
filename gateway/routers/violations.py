@@ -628,9 +628,27 @@ async def enforce(
         "alert_ids": res["alert_ids"],
         "ts": ts.isoformat(),
     }
+    # Resolve the offending driver's device BEFORE the WS fan-out so the frame can
+    # be ADDRESSED. Without this the frame carried the plate, driver name, fine and
+    # challan number of one driver to every connected PWA socket: the payload has
+    # no device_id, so the client-side `isForOtherDevice` filter cannot drop it and
+    # the data arrives even though no notification is raised.
+    device_id = None
+    try:
+        from . import push
+
+        device_id = await push.resolve_device(state, driver_id=driver_id, vehicle_id=plate)
+    except Exception as exc:  # noqa: BLE001 — resolution failure must not block enforcement
+        log.debug("violations_device_resolve_failed", case_id=case_id, error=str(exc))
+    if device_id:
+        notification["device_id"] = device_id
+
     notified = False
     try:
-        await state.ws.broadcast("violation_enforced", notification)
+        # Addressed when we know the driver: control room + that driver only.
+        # Unaddressed (control-room-wide) when the vehicle has no paired device —
+        # the dashboard behaviour every enforcement console relies on is unchanged.
+        await state.ws.broadcast("violation_enforced", notification, device_id=device_id)
         notified = True
     except Exception as exc:  # noqa: BLE001 — notification is non-critical
         log.warning("violations_notify_failed", case_id=case_id, error=str(exc))
@@ -640,9 +658,7 @@ async def enforce(
     # duplicated). Best-effort — a driver with no registered device is a no-op.
     try:
         from .. import notifications
-        from . import push
 
-        device_id = await push.resolve_device(state, driver_id=driver_id, vehicle_id=plate)
         if device_id:
             fine = res["case_total"]
             challan_no = (challan or {}).get("challan_no")

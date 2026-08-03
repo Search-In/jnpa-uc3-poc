@@ -526,6 +526,70 @@ class CustomsRepository:
             inspect = [r[0] for r in res.fetchall()]
         return {"cleared": cleared, "under_inspection": inspect}
 
+    async def materialize_cargo_from_igm(
+        self, *, igm_no: Optional[str] = None, limit: int = 5000,
+    ) -> dict:
+        """Create core.cargo rows for manifest containers that have none.
+
+        The audit's largest data-lifecycle gap: core.igm_line_container held
+        12,235 real manifested containers while core.cargo held 19 rows, so the
+        import chain (IGM -> Container -> Cargo -> ... -> Release) was severed at
+        step two and /api/customs/reconcile — which only ever UPDATES containers
+        already present in cargo — could never bind more than those 19.
+
+        This creates the missing rows and nothing else:
+          * INSERT ... ON CONFLICT DO NOTHING keyed on the container number, so
+            running it twice is a no-op and an existing cargo row is never
+            overwritten (a box already moving through the yard keeps its state);
+          * every new row starts at lifecycle_status 'CREATED' /
+            customs_status 'PENDING' — the state machine still has to be walked,
+            nothing is fast-forwarded;
+          * `direction` = 'IMPORT' and `source_igm_no` record provenance (0115).
+
+        Only ISO-6346-shaped container numbers are admitted, so manifest noise
+        (blank cells, 'POWERPACK1' pseudo-containers) cannot enter the lifecycle.
+        Returns {created, skipped_existing, candidates}.
+        """
+        where = "WHERE c.container_no ~ '^[A-Z]{4}[0-9]{7}$'"
+        params: dict[str, Any] = {"lim": int(limit)}
+        if igm_no:
+            where += " AND c.igm_no = :igm"
+            params["igm"] = str(igm_no)
+        sql = f"""
+            WITH candidate AS (
+                SELECT DISTINCT ON (c.container_no)
+                       c.container_no, c.igm_no, l.eta
+                  FROM core.igm_line_container c
+                  LEFT JOIN core.igm l ON l.igm_no = c.igm_no
+                  {where}
+                 ORDER BY c.container_no, c.igm_no DESC
+                 LIMIT :lim
+            ), ins AS (
+                INSERT INTO core.cargo
+                    (container_number, customs_status, is_released,
+                     lifecycle_status, direction, source_igm_no, eta)
+                SELECT container_no, 'PENDING', false, 'CREATED', 'IMPORT',
+                       igm_no, eta
+                  FROM candidate
+                ON CONFLICT (container_number) DO NOTHING
+                RETURNING container_number
+            )
+            SELECT (SELECT count(*) FROM candidate)          AS candidates,
+                   (SELECT count(*) FROM ins)                AS created,
+                   (SELECT array_agg(container_number)
+                      FROM (SELECT container_number FROM ins LIMIT 50) s) AS sample
+        """
+        async with get_engine(self._dsn).begin() as conn:
+            row = (await conn.execute(text(sql), params)).mappings().first() or {}
+        candidates = int(row.get("candidates") or 0)
+        created = int(row.get("created") or 0)
+        return {
+            "candidates": candidates,
+            "created": created,
+            "skipped_existing": candidates - created,
+            "sample": list(row.get("sample") or [])[:50],
+        }
+
     async def create_cargo_notification(self, container_number: str, *,
                                         notification_type: str, severity: str,
                                         message: str) -> None:

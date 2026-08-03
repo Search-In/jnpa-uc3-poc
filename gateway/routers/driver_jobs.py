@@ -54,16 +54,29 @@ async def _scope(request: Request, svc: ContainerJobService) -> Dict[str, Any]:
 
     DRIVER  -> the vehicle bound to the token's device_id (own jobs only).
     Support -> may pass ?vehicle_id= / ?driver_id= explicitly.
-    Auth off (dev/demo) -> unscoped, so the PWA works in the demo profile."""
+
+    Auth off (the demo profile, ``AUTH_ENABLED=false``) used to return ``{}``
+    here, i.e. UNSCOPED — so on the demo build any PWA could list and act on every
+    other driver's jobs over REST, which is the same leak the WebSocket isolation
+    fix closed on the push side. The PWA always knows its paired device, so we now
+    accept an ``X-Device-Id`` header (or ``?device_id=``) as an UNVERIFIED binding
+    when there is no token. It can only ever NARROW what the caller sees — exactly
+    the rule gateway/ws.py applies to its ``identify`` frame — and a verified JWT
+    binding always wins.
+    """
     p = _principal(request)
-    if p is None or not auth_enabled():
+    if p is not None and auth_enabled():
+        if getattr(p, "role", None) == Role.DRIVER.value:
+            device = getattr(p, "device_id", None)
+            if not device:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                    detail={"error": "driver_token_unbound",
+                                            "detail": "token carries no device binding"})
+            return {"vehicle_id": device, "vehicle_plate": normalize_plate(device)}
         return {}
-    if getattr(p, "role", None) == Role.DRIVER.value:
-        device = getattr(p, "device_id", None)
-        if not device:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
-                                detail={"error": "driver_token_unbound",
-                                        "detail": "token carries no device binding"})
+    device = (request.headers.get("X-Device-Id")
+              or request.query_params.get("device_id") or "").strip()
+    if device:
         return {"vehicle_id": device, "vehicle_plate": normalize_plate(device)}
     return {}
 

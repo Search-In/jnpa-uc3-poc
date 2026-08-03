@@ -10,7 +10,7 @@ import type {
   TruckEnvelope,
   VahanEnvelope,
 } from "./types";
-import { getToken, setToken, tokenNeedsRefresh } from "./device";
+import { getPairing, getToken, setToken, tokenNeedsRefresh } from "./device";
 
 // Gateway base URL. Empty by default (same-origin: the Vite dev proxy or the
 // web/ nginx at /pwa forwards /api -> gateway). Set VITE_GATEWAY_URL at build
@@ -21,10 +21,16 @@ export const API_BASE = (import.meta.env.VITE_GATEWAY_URL || "").replace(/\/$/, 
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getToken();
+  // Send the paired device on every request. With AUTH_ENABLED=true the JWT's
+  // device_id claim wins and this is ignored; with auth OFF (the demo profile)
+  // it is what scopes /api/driver/* to THIS driver — without it the gateway had
+  // no way to tell one driver's PWA from another's and returned everyone's jobs.
+  const deviceId = getPairing()?.deviceId;
   const res = await fetch(API_BASE + path, {
     headers: {
       "content-type": "application/json",
       ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(deviceId ? { "X-Device-Id": deviceId } : {}),
       ...(init?.headers || {}),
     },
     ...init,

@@ -205,6 +205,26 @@ class CustomsService:
         return await self.import_directory(root)
 
     # --------------------------------------------------- cargo binding (workflow)
+    async def materialize_cargo(self, *, igm_no: Optional[str] = None,
+                                limit: int = 5000, reconcile: bool = True) -> dict:
+        """Materialise manifest containers into the cargo lifecycle, then bind
+        their customs facts.
+
+        This is the missing IGM -> Cargo step. It runs the creation pass and then
+        (unless ``reconcile=False``) the EXISTING reconcile pass, so a single call
+        takes a freshly imported IGM all the way to correct customs_status. Each
+        pass is independently idempotent, so re-running changes nothing.
+        """
+        t0 = perf_counter()
+        created = await self._repo.materialize_cargo_from_igm(igm_no=igm_no, limit=limit)
+        for cn in created["sample"]:
+            await self._safe_event("cargo.materialized", container_no=cn,
+                                   payload={"source": "IGM", "igm_no": igm_no})
+        bound = await self.reconcile_cargo() if reconcile else None
+        log.info("customs.materialize", igm_no=igm_no, created=created["created"],
+                 candidates=created["candidates"], latency_ms=self._ms(t0))
+        return {**created, "reconciled": bound}
+
     async def reconcile_cargo(self) -> dict:
         """Apply the customs → cargo workflow: drive core.cargo.customs_status from the
         imported customs documents (Out-Of-Charge -> CLEARED; RMS scan selection ->

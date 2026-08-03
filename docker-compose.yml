@@ -693,6 +693,10 @@ services:
       HERE_API_KEY: ${HERE_API_KEY:-}
       TOMTOM_API_KEY: ${TOMTOM_API_KEY:-}
       # Training / target knobs.
+      # Per-source live-fetch budget for the google->here->tomtom cascade.
+      # Default 1 s is tighter than a cold TLS handshake on slow networks —
+      # override (e.g. 3) in .env.local when live keys are set.
+      CONGESTION_SOURCE_TIMEOUT_S: ${CONGESTION_SOURCE_TIMEOUT_S:-1.0}
       CONGESTION_HISTORY_DAYS: ${CONGESTION_HISTORY_DAYS:-14}
       CONGESTION_EPOCHS: ${CONGESTION_EPOCHS:-50}
       CONGESTION_TARGET_F1: ${CONGESTION_TARGET_F1:-0.85}
@@ -956,6 +960,75 @@ services:
       FASTAG_ULIP_RETRIES: ${FASTAG_ULIP_RETRIES:-2}
       # Surepass token drives the LIVE_PRIMARY vahan rung (empty -> LIVE_FALLBACK).
       SUREPASS_API_TOKEN: ${SUREPASS_API_TOKEN:-}
+      # Open-Meteo Weather + Marine (/api/weather). Free public APIs — no account,
+      # no API key. Empty -> the client's public defaults (api.open-meteo.com /
+      # marine-api.open-meteo.com); set to point at a proxy or self-hosted stack.
+      # Failure never breaks the API: LIVE -> CACHED (Redis/DB) -> SYNTHETIC.
+      OPEN_METEO_WEATHER_URL: ${OPEN_METEO_WEATHER_URL:-}
+      OPEN_METEO_MARINE_URL: ${OPEN_METEO_MARINE_URL:-}
+      OPEN_METEO_TIMEOUT_S: ${OPEN_METEO_TIMEOUT_S:-5}
+      OPEN_METEO_RETRIES: ${OPEN_METEO_RETRIES:-2}
+      # OpenWeatherMap enrichment for /api/weather (openweather block). The key
+      # is BACKEND-ONLY (never a VITE_ variable, never called from the browser).
+      # Empty key -> provider disabled and /api/weather serves Open-Meteo alone;
+      # an OpenWeather outage degrades only its block, never the API.
+      OPENWEATHER_API_KEY: ${OPENWEATHER_API_KEY:-}
+      OPENWEATHER_URL: ${OPENWEATHER_URL:-}
+      OPENWEATHER_TIMEOUT_S: ${OPENWEATHER_TIMEOUT_S:-5}
+      OPENWEATHER_RETRIES: ${OPENWEATHER_RETRIES:-2}
+      # WorldTides tide block for /api/weather (tide heights + next high/low).
+      # The key is BACKEND-ONLY (never a VITE_ variable, never called from the
+      # browser). Empty key -> the WorldTides LIVE rung is disabled and the
+      # tide block degrades through Open-Meteo marine sea level -> CACHED ->
+      # ANALYTIC (clearly-tagged model); an outage never breaks the API.
+      WORLDTIDES_API_KEY: ${WORLDTIDES_API_KEY:-}
+      WORLDTIDES_BASE_URL: ${WORLDTIDES_BASE_URL:-}
+      WORLDTIDES_TIMEOUT_S: ${WORLDTIDES_TIMEOUT_S:-5}
+      WORLDTIDES_RETRIES: ${WORLDTIDES_RETRIES:-2}
+      GATEWAY_CACHE_TTL_WEATHER_S: ${GATEWAY_CACHE_TTL_WEATHER_S:-600}
+      # TomTom Traffic Flow + Incidents for /api/traffic/current. The key is
+      # BACKEND-ONLY (never a VITE_ variable, never called from the browser).
+      # Empty key -> LIVE rung disabled and the surface degrades through
+      # CACHED (Redis) -> DATABASE -> SYNTHETIC; an outage never breaks the API.
+      TOMTOM_API_KEY: ${TOMTOM_API_KEY:-}
+      TOMTOM_FLOW_URL: ${TOMTOM_FLOW_URL:-}
+      TOMTOM_INCIDENTS_URL: ${TOMTOM_INCIDENTS_URL:-}
+      TOMTOM_ROUTING_URL: ${TOMTOM_ROUTING_URL:-}
+      TOMTOM_TIMEOUT_S: ${TOMTOM_TIMEOUT_S:-5}
+      TOMTOM_RETRIES: ${TOMTOM_RETRIES:-2}
+      GATEWAY_CACHE_TTL_TOMTOM_S: ${GATEWAY_CACHE_TTL_TOMTOM_S:-120}
+      # OpenAQ Air Quality (backend-only, /api/air-quality/* surfaces). NO key
+      # required — OPENAQ_API_KEY is optional and only raises the platform
+      # rate limit; an outage degrades LIVE -> CACHED -> DATABASE -> SYNTHETIC.
+      OPENAQ_API_URL: ${OPENAQ_API_URL:-https://api.openaq.org/v3}
+      OPENAQ_API_KEY: ${OPENAQ_API_KEY:-}
+      OPENAQ_TIMEOUT_S: ${OPENAQ_TIMEOUT_S:-5}
+      OPENAQ_RETRIES: ${OPENAQ_RETRIES:-2}
+      GATEWAY_CACHE_TTL_OPENAQ_S: ${GATEWAY_CACHE_TTL_OPENAQ_S:-300}
+      # Bhuvan WMS (ISRO/NRSC geospatial layer, /api/bhuvan). NO key required —
+      # the gateway is control-plane only (GetCapabilities + layer config); the
+      # browser renders the WMS tiles directly. BHUVAN_ENABLED=false hides the
+      # layer from the frontend without touching code.
+      BHUVAN_WMS_URL: ${BHUVAN_WMS_URL:-https://bhuvan-vec1.nrsc.gov.in/bhuvan/wms}
+      BHUVAN_LAYER: ${BHUVAN_LAYER:-india3}
+      BHUVAN_ENABLED: ${BHUVAN_ENABLED:-true}
+      BHUVAN_TIMEOUT_S: ${BHUVAN_TIMEOUT_S:-5}
+      BHUVAN_RETRIES: ${BHUVAN_RETRIES:-2}
+      # ULIP Logistics Intelligence (/api/logistics/*). Credentials are
+      # BACKEND-ONLY (never a VITE_ variable, never called from the browser).
+      # Auth: ULIP_CLIENT_ID + ULIP_CLIENT_SECRET (login-token flow) or the
+      # pre-issued ULIP_API_KEY above. No credential -> LIVE rung disabled and
+      # the surfaces degrade through CACHED (Redis) -> DATABASE -> FALLBACK
+      # (explicitly empty, clearly tagged); an outage never breaks the API.
+      ULIP_API_URL: ${ULIP_API_URL:-}
+      ULIP_CLIENT_ID: ${ULIP_CLIENT_ID:-}
+      ULIP_CLIENT_SECRET: ${ULIP_CLIENT_SECRET:-}
+      ULIP_TIMEOUT_S: ${ULIP_TIMEOUT_S:-5}
+      ULIP_RETRIES: ${ULIP_RETRIES:-2}
+      ULIP_TOKEN_TTL_S: ${ULIP_TOKEN_TTL_S:-1800}
+      ULIP_FASTAG_API: ${ULIP_FASTAG_API:-}
+      ULIP_LDB_API: ${ULIP_LDB_API:-}
+      GATEWAY_CACHE_TTL_ULIP_S: ${GATEWAY_CACHE_TTL_ULIP_S:-300}
       # Infra.
       POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
@@ -1030,6 +1103,9 @@ services:
       # FASTag integration layer — imported by the /api/fastag router. Mounted
       # read-only so local edits are picked up (matches the ./gateway mount).
       - ./services:/app/services:ro
+      # External-API integration packages (Open-Meteo) — imported by
+      # services.weather via PYTHONPATH=/app (matches the ./services mount).
+      - ./integrations:/app/integrations:ro
       # Firebase Admin-SDK service-account key(s). Host dir (gitignored `secrets/`,
       # override with FIREBASE_SECRETS_DIR) mounted read-only at /run/secrets/firebase.
       # Drop the JSON in there and set FIREBASE_SERVICE_ACCOUNT_PATH to its container

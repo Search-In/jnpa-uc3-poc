@@ -138,12 +138,29 @@ file documents where to obtain each key:
 | `HERE_API_KEY`          | https://platform.here.com/                        |
 | `TOMTOM_API_KEY`        | https://developer.tomtom.com/                     |
 | `OPENWEATHER_API_KEY`   | https://openweathermap.org/api                    |
+| `WORLDTIDES_API_KEY`    | https://www.worldtides.info/developer             |
 | `SUREPASS_API_TOKEN`    | https://surepass.io/ (Vahan / FASTag / RC)        |
 | `ULIP_API_KEY`          | https://www.ulip.dpiit.gov.in/                    |
 | `BHUVAN_API_KEY`        | https://bhuvan.nrsc.gov.in/                        |
 
 The skeleton runs fully without any external keys — they are only needed once
 the ingest/AI services start calling live providers in later PoC stages.
+
+### HERE (Traffic Flow v7 + Routing v8) activation
+
+Setting `HERE_API_KEY=<value>` in `.env.local` is sufficient — no code change:
+
+- **congestion service** — the `google → here → tomtom → stale → synthetic`
+  cascade automatically promotes configured (live-capable) providers ahead of
+  keyless ones, so HERE goes live for segment speeds immediately.
+- **truck-sim** — HERE Routing v8 becomes the route/ETA fallback behind OSRM.
+
+If live fetches time out on a slow network, raise the cascade's per-source
+budget (default 1 s): `CONGESTION_SOURCE_TIMEOUT_S=3`. Apply with
+`make up` (compose reads `--env-file .env.local`), or restart just the two
+consumers: `docker compose --env-file .env.local up -d congestion truck-sim`.
+The key is backend-only; never put it in a `VITE_*` variable, and note that
+adapters redact it from all logs and error text.
 
 ---
 

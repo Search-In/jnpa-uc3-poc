@@ -54,14 +54,79 @@ _ADV_REL = """(
     LEFT JOIN core.advance_list_dg dg ON dg.al_id = a.al_id AND dg.slot = 1
 ) adv"""
 
+# Delivery orders over the CANONICAL v3 model (schema.sql is the source of truth).
+#
+# The legacy `jnpa.sl_delivery_orders` table was ONE flat row per container carrying
+# the AGDORD header, the line detail and the CODECO gate event together. v3 normalises
+# that into three tables, so this projection reassembles the legacy row shape from
+# them and the response contract is preserved key-for-key:
+#
+#   core.delivery_order       parent  — AGDORD header, keyed by do_number
+#   core.delivery_order_line  child   — container detail, PK (do_number, line_no)
+#   core.codeco_movement      event   — terminal gate in/out (gate pass, vehicle,
+#                                       equipment status, arrival/receipt)
+#
+# Every column below exists in schema.sql. In particular this projection does NOT
+# depend on the columns added by infra/postgres/v3/0102_arch_extensions.sql, so it
+# works against a database built from schema.sql alone.
+#
+# The CODECO join is a soft by-value join (container_no + vcn), consistent with the
+# rest of this schema, and is collapsed with DISTINCT ON to the LATEST movement per
+# container. Without that collapse a container with several gate movements would
+# multiply its delivery-order line into several rows and inflate `total`.
 _DO_REL = """(
-    SELECT l.id, l.common_ref_number, l.container_no, l.iso_code,
-           l.container_valid_iso, l.equipment_status, l.shipping_agent_code,
-           l.vcn, l.imo_number, l.pol AS loading_port, l.pod AS dest_port,
-           l.final_pod, l.arrival_ts, l.receipt_date, l.delivery_mode,
-           l.gate_pass_no, l.gate_pass_ts, l.vehicle_no,
-           l.gate_number, l.issued_ts, l.created_at
-    FROM core.delivery_order_line l
+    SELECT
+        -- The canonical line table has a COMPOSITE primary key (do_number, line_no)
+        -- and no surrogate integer. `id` is therefore a positional row number, kept
+        -- because the response contract has always carried it and clients use it as a
+        -- list key. Ordered oldest-first so the existing `ORDER BY id DESC` still
+        -- yields newest-first. Nothing looks a row up by this value — no by-id
+        -- delivery-order endpoint exists. `do_number` and `line_no` are exposed
+        -- alongside it as the real, stable identity.
+        row_number() OVER (ORDER BY hdr.do_date NULLS FIRST, hdr.do_number, ln.line_no) AS id,
+        hdr.do_number,
+        ln.line_no,
+        -- The importer stores the CODECO common reference in the header's payload
+        -- jsonb (there is no canonical column); fall back to the DO number itself.
+        coalesce(hdr.payload->>'common_ref_number', hdr.do_number) AS common_ref_number,
+        ln.container_no,
+        ln.iso_code,
+        -- No canonical column: the legacy boolean was the parser's ISO-checksum
+        -- verdict, which v3 does not persist. NULL rather than a guess derived from
+        -- the ISO code being non-empty, which would assert a validation never run.
+        NULL::boolean AS container_valid_iso,
+        cdc.equipment_status,
+        -- The importer writes the agent code into the header's agency_name.
+        hdr.agency_name AS shipping_agent_code,
+        hdr.vcn,
+        hdr.imo_no AS imo_number,
+        ln.pol AS loading_port,
+        ln.pod AS dest_port,
+        cdc.final_pod,
+        cdc.arrival_ts,
+        cdc.receipt_date,
+        coalesce(cdc.delivery_mode, hdr.delivery_type) AS delivery_mode,
+        cdc.gate_pass_no,
+        cdc.gate_pass_ts,
+        cdc.vehicle_no,
+        cdc.gate_no AS gate_number,
+        -- v3 keeps only a DATE for the AGDORD issue; the legacy shape had a
+        -- timestamp. Widened back to timestamptz so the JSON type is unchanged.
+        hdr.do_date::timestamptz AS issued_ts,
+        hdr.do_date::timestamptz AS created_at
+    FROM core.delivery_order hdr
+    JOIN core.delivery_order_line ln ON ln.do_number = hdr.do_number
+    LEFT JOIN (
+        SELECT DISTINCT ON (container_no, coalesce(vcn, ''))
+               container_no, vcn, equipment_status, final_pod, arrival_ts,
+               receipt_date, delivery_mode, gate_pass_no, gate_pass_ts, vehicle_no,
+               gate_no
+        FROM core.codeco_movement
+        ORDER BY container_no, coalesce(vcn, ''),
+                 coalesce(gate_pass_ts, arrival_ts) DESC NULLS LAST, id DESC
+    ) cdc
+      ON cdc.container_no = ln.container_no
+     AND coalesce(cdc.vcn, '') = coalesce(hdr.vcn, '')
 ) sdo"""
 
 _CONTAINER_COLS: tuple[str, ...] = (
@@ -140,6 +205,152 @@ class ShippingLinesRepository:
         return await self._rows(
             "SELECT id, event, module, reference, container_no, payload, created_at "
             f"FROM core.sl_event{clause} ORDER BY id DESC LIMIT :limit OFFSET :offset", params)
+
+    # ----------------------------------------------- E-DO (delivery orders)
+    #
+    # The shipping line's Electronic Delivery Order (AGDORD): the authority to
+    # release the box to the consignee. Exposed header-first (one row per DO)
+    # rather than through the flattened container view, because the facts that
+    # identify a DO — validity, agency, consignee, BL, IGM — live on the header
+    # and its lines, not on the CODECO join.
+    #
+    # `manifest_linked` reports whether any container on the DO also appears on a
+    # filed IGM. This is the ONE cross-document join that actually resolves in the
+    # current corpus, so it is surfaced rather than left for the caller to derive.
+    _EDO_HDR_COLS = (
+        "d.do_number, d.do_date, d.valid_upto, d.vcn, d.imo_no, d.voyage_no, "
+        "d.igm_no, d.igm_date, d.agency_name, d.custodian_code, d.delivery_type, "
+        "d.notify_email, d.total_weight, d.weight_unit, "
+        "(SELECT count(*) FROM core.delivery_order_line l "
+        "   WHERE l.do_number = d.do_number) AS container_count, "
+        "EXISTS (SELECT 1 FROM core.delivery_order_line l "
+        "        JOIN core.igm_line_container ic ON ic.container_no = l.container_no "
+        "        WHERE l.do_number = d.do_number) AS manifest_linked"
+    )
+
+    @staticmethod
+    def _edo_where(filters: Mapping[str, Any]) -> tuple[str, dict]:
+        clauses, params = [], {}
+        if filters.get("do_number"):
+            clauses.append("d.do_number = :do_number")
+            params["do_number"] = str(filters["do_number"]).strip()
+        if filters.get("igm_no"):
+            # igm_no is bigint — bind as int so asyncpg accepts it.
+            try:
+                params["igm_no"] = int(str(filters["igm_no"]).strip())
+                clauses.append("d.igm_no = :igm_no")
+            except ValueError:
+                clauses.append("false")
+        if filters.get("container_no"):
+            clauses.append(
+                "EXISTS (SELECT 1 FROM core.delivery_order_line l "
+                "        WHERE l.do_number = d.do_number AND l.container_no = :container_no)")
+            params["container_no"] = str(filters["container_no"]).strip().upper()
+        return ((" WHERE " + " AND ".join(clauses)) if clauses else ""), params
+
+    async def list_edo(self, *, filters: Mapping[str, Any], limit: int, offset: int) -> list[dict]:
+        where, params = self._edo_where(filters)
+        params.update(limit=limit, offset=offset)
+        return await self._rows(
+            f"SELECT {self._EDO_HDR_COLS} FROM core.delivery_order d{where} "
+            "ORDER BY d.do_date DESC NULLS LAST, d.do_number DESC "
+            "LIMIT :limit OFFSET :offset", params)
+
+    async def count_edo(self, *, filters: Mapping[str, Any]) -> int:
+        where, params = self._edo_where(filters)
+        return await self._count(f"SELECT count(*) FROM core.delivery_order d{where}", params)
+
+    async def edo_detail(self, do_number: str) -> dict:
+        """One delivery order: header + every container line, each line carrying the
+        IGM line it was manifested on when that manifest is on file."""
+        params = {"do": str(do_number).strip()}
+        header = await self._one(
+            f"SELECT {self._EDO_HDR_COLS} FROM core.delivery_order d WHERE d.do_number = :do",
+            params)
+        lines = await self._rows(
+            "SELECT l.line_no, l.container_no, l.seal_no, l.iso_code, l.bl_no, l.bl_date, "
+            "l.consignee_name, l.consignee_addr, l.cargo_desc, l.packages, l.package_code, "
+            "l.gross_weight, l.pol, l.pod, l.return_empty_by, "
+            "l.igm_line_no, l.igm_subline_no, "
+            # Did this exact container turn up on a filed manifest? Hero C is the
+            # only case in the corpus where it does.
+            "ic.igm_no AS manifest_igm_no, ic.line_no AS manifest_line_no "
+            "FROM core.delivery_order_line l "
+            "LEFT JOIN core.igm_line_container ic ON ic.container_no = l.container_no "
+            "WHERE l.do_number = :do ORDER BY l.line_no", params)
+        return {"do_number": do_number, "header": header, "lines": lines}
+
+    # ------------------------------------------------- CODECO gate movements
+    #
+    # The terminal's gate-out message: the container actually leaving on a truck
+    # (gate pass, vehicle, gate number) plus the vessel arrival timestamp the same
+    # message carries. Exposed directly rather than through the delivery-order
+    # join, because a box can be gated out with NO delivery order on file — the
+    # E-DO and CODECO document sets do not fully overlap in this corpus.
+    #
+    # ``dwell_hours`` is DERIVED here (arrival -> gate pass) so every consumer
+    # reports the same number instead of each re-deriving it from timestamps.
+    # The CODECO message names a gate NUMBER but not the terminal. The terminal is
+    # recovered from the vessel call the same message cites:
+    #     codeco.vcn -> core.vessel_call.terminal_id -> core.ref_terminal.code
+    # That is what lets a dashboard gate id like "NSICT-G1" (terminal code + gate
+    # number) select the movements that actually belong to it.
+    _GATE_MOVE_FROM = (
+        "FROM core.codeco_movement cm "
+        "LEFT JOIN core.vessel_call vc ON vc.vcn = cm.vcn "
+        "LEFT JOIN core.ref_terminal rt ON rt.terminal_id = vc.terminal_id"
+    )
+    _GATE_MOVE_COLS = (
+        "cm.id, cm.container_no, cm.vcn, cm.imo_no, cm.agent_code, cm.equipment_status, "
+        "cm.cargo_type, cm.iso_code, cm.pol, cm.final_pod, cm.receipt_date, cm.arrival_ts, "
+        "cm.gate_pass_no, cm.gate_pass_ts, cm.vehicle_no, cm.gate_no, cm.delivery_mode, "
+        "cm.seal_status, rt.code AS terminal_code, rt.pcs_code AS terminal_pcs_code, "
+        "EXTRACT(EPOCH FROM (cm.gate_pass_ts - cm.arrival_ts)) / 3600.0 AS dwell_hours"
+    )
+
+    @staticmethod
+    def _gate_move_where(filters: Mapping[str, Any]) -> tuple[str, dict]:
+        clauses, params = [], {}
+        # gate_no is text in the schema, so compare as text and trim the input.
+        if filters.get("gate_no"):
+            clauses.append("cm.gate_no = :gate_no")
+            params["gate_no"] = str(filters["gate_no"]).strip()
+        if filters.get("terminal_code"):
+            clauses.append("upper(rt.code) = upper(:terminal_code)")
+            params["terminal_code"] = str(filters["terminal_code"]).strip()
+        if filters.get("container_no"):
+            clauses.append("cm.container_no = :container_no")
+            params["container_no"] = str(filters["container_no"]).strip().upper()
+        if filters.get("vehicle_no"):
+            clauses.append("cm.vehicle_no = :vehicle_no")
+            params["vehicle_no"] = str(filters["vehicle_no"]).strip().upper()
+        return ((" WHERE " + " AND ".join(clauses)) if clauses else ""), params
+
+    async def list_gate_movements(self, *, filters: Mapping[str, Any],
+                                  limit: int, offset: int) -> list[dict]:
+        where, params = self._gate_move_where(filters)
+        params.update(limit=limit, offset=offset)
+        return await self._rows(
+            f"SELECT {self._GATE_MOVE_COLS} {self._GATE_MOVE_FROM}{where} "
+            "ORDER BY cm.gate_pass_ts DESC NULLS LAST, cm.id DESC "
+            "LIMIT :limit OFFSET :offset", params)
+
+    async def count_gate_movements(self, *, filters: Mapping[str, Any]) -> int:
+        where, params = self._gate_move_where(filters)
+        return await self._count(f"SELECT count(*) {self._GATE_MOVE_FROM}{where}", params)
+
+    async def list_gate_numbers(self) -> list[dict]:
+        """Gates that actually have gate-out movements, resolved to their terminal —
+        drives the gate filter without hardcoding gate ids. ``gate_id`` is the
+        dashboard-shaped identifier (``NSICT-G1``) so a UI gate row can match
+        directly instead of guessing."""
+        return await self._rows(
+            "SELECT rt.code AS terminal_code, cm.gate_no, "
+            "       rt.code || '-G' || cm.gate_no AS gate_id, "
+            "       count(*) AS movements "
+            f"{self._GATE_MOVE_FROM} "
+            "WHERE cm.gate_no IS NOT NULL "
+            "GROUP BY rt.code, cm.gate_no ORDER BY rt.code NULLS LAST, cm.gate_no", {})
 
     async def find_file_by_sha(self, sha256: str) -> Optional[dict]:
         return await self._one(
@@ -250,14 +461,14 @@ class ShippingLinesRepository:
             row = {k: o.get(k) for k in _DO_COLS}
             row["import_file_id"] = file_id
             rows.append(row)
-        before = await self._scalar(
-            conn, "SELECT count(*) FROM core.delivery_order_line WHERE import_file_id = :id",
-            {"id": file_id})
+        # `core.delivery_order_line` has no import_file_id in the canonical schema, so
+        # the inserted count is a whole-table before/after delta instead of a per-file
+        # one. Equivalent here: this runs inside the single import transaction and is
+        # its only writer of the table, so the delta is exactly this batch's rows.
+        before = await self._scalar(conn, "SELECT count(*) FROM core.delivery_order_line", {})
         await conn.execute(text(_DO_HEADER_INSERT), rows)
         await conn.execute(text(_DO_INSERT), rows)
-        after = await self._scalar(
-            conn, "SELECT count(*) FROM core.delivery_order_line WHERE import_file_id = :id",
-            {"id": file_id})
+        after = await self._scalar(conn, "SELECT count(*) FROM core.delivery_order_line", {})
         return after - before
 
     async def _record_failure(self, envelope: Mapping[str, Any], detail: str) -> dict:

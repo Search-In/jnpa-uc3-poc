@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict
 
 from ..auth import CONTROL_ROOM, Role, auth_enabled
 from ..metrics import REQUESTS
-from services.cfs_ecy import CfsEcyService, CfsEcyUploadService
+from services.cfs_ecy import CfsEcyService, CfsEcyUploadService, EcyCfsChainService
 
 router = APIRouter(prefix="/api/cfs-ecy", tags=["cfs-ecy"])
 
@@ -37,6 +37,15 @@ _UPLOADER_ROLES = CONTROL_ROOM | {Role.CUSTOMS.value}
 
 _service: Optional[CfsEcyService] = None
 _upload_service: Optional[CfsEcyUploadService] = None
+_chain_service: Optional[EcyCfsChainService] = None
+
+
+def get_chain_service(request: Request) -> EcyCfsChainService:
+    global _chain_service
+    if _chain_service is None:
+        cfg = getattr(getattr(request.app.state, "gw", None), "cfg", None)
+        _chain_service = EcyCfsChainService(dsn=getattr(cfg, "postgres_dsn", None) or None)
+    return _chain_service
 
 
 def get_service(request: Request) -> CfsEcyService:
@@ -255,6 +264,57 @@ async def container_timeline(container_number: str,
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "container_not_found",
                                     "container_number": container_number})
+    REQUESTS.labels("cfs_ecy", "ok").inc()
+    return res
+
+
+# ==================================================== ECY→CFS chain (F-Y1 lifecycle)
+# The empty-repositioning chain materialised into core.ecy_cfs_chain (migration
+# 0114): ECY gate-out -> road shuttle -> CFS gate-in -> dwell -> CFS gate-out,
+# with transit/cycle durations and anomaly flags. Before this the chain existed
+# only in the operator's head — the dwell view groups BY facility, so an ECY leg
+# and a CFS leg could never combine.
+@router.post("/chains/rebuild", summary="Rebuild the ECY→CFS chains from CODECO movements")
+async def rebuild_chains(request: Request,
+                         svc: EcyCfsChainService = Depends(get_chain_service)) -> Dict[str, Any]:
+    require_uploader(request)          # a write action: same gate as the uploads
+    res = await svc.rebuild()
+    REQUESTS.labels("cfs_ecy", "ok").inc()
+    return res
+
+
+@router.get("/chains", response_model=Page, summary="ECY→CFS repositioning chains")
+async def list_chains(
+    response: Response,
+    container: Optional[str] = None,
+    chain_status: Optional[str] = Query(None, description="COMPLETE | PARTIAL | ORPHAN"),
+    anomaly_only: bool = False,
+    anomaly_code: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    svc: EcyCfsChainService = Depends(get_chain_service),
+) -> Page:
+    filters = {"container_number": container, "chain_status": chain_status,
+               "anomaly_only": anomaly_only, "anomaly_code": anomaly_code}
+    res = await svc.list_chains(filters, limit=limit, offset=offset)
+    REQUESTS.labels("cfs_ecy", "ok").inc()
+    return _page(res["items"], res["total"], limit, offset, response)
+
+
+@router.get("/chains/stats", summary="Chain KPIs: completeness, transit/dwell/cycle, anomalies")
+async def chain_stats(svc: EcyCfsChainService = Depends(get_chain_service)) -> Dict[str, Any]:
+    REQUESTS.labels("cfs_ecy", "ok").inc()
+    return await svc.stats()
+
+
+@router.get("/chains/{container_number}", summary="One container's full repositioning chain")
+async def get_chain(container_number: str,
+                    svc: EcyCfsChainService = Depends(get_chain_service)) -> Dict[str, Any]:
+    res = await svc.get_chain(container_number)
+    if res is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail={"error": "chain_not_found",
+                                    "container_number": container_number.strip().upper()})
     REQUESTS.labels("cfs_ecy", "ok").inc()
     return res
 

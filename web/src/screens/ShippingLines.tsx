@@ -419,9 +419,13 @@ export default function ShippingLines() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
-                    {rows.map((r) => (
+                    {/* `id` is NULL for every advance-list row on the deployed
+                        schema, so keying on it gave all rows the same React key
+                        (28 duplicate-key warnings + broken row reconciliation).
+                        Key on the row's natural identity instead. */}
+                    {rows.map((r, i) => (
                       <tr
-                        key={r.id}
+                        key={`${r.container_no ?? "?"}-${r.bill_of_lading ?? ""}-${i}`}
                         onClick={() => setSelected(r.container_no)}
                         className="cursor-pointer hover:bg-muted/40"
                       >

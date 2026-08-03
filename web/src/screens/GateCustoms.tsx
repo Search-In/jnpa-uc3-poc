@@ -5,7 +5,7 @@
 // cards, tabbed searchable tables). Per-source provider mode (SIM|LIVE) is shown
 // as a badge so the operator sees which sources are wired to a real endpoint.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ShieldCheck,
@@ -18,6 +18,7 @@ import {
   Camera,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { useIncomingSearch } from "@/lib/searchStore";
 import { Card } from "@/components/ui/card";
 import {
   PageContainer,
@@ -56,6 +57,13 @@ export default function GateCustoms() {
   const [captureType, setCaptureType] = useState<string>("ESEAL");
   // Container selected for the ICEGATE customs details drawer (null = closed).
   const [selectedContainer, setSelectedContainer] = useState<string | null>(null);
+
+  // Header Global Search hand-off. The omnibox routes a CONTAINER query here;
+  // before this the query was dropped and the operator landed unfiltered.
+  const incomingSearch = useIncomingSearch(["container", "vehicle"]);
+  useEffect(() => {
+    if (incomingSearch) setTab("captures");
+  }, [incomingSearch]);
 
   const providersQ = useQuery({ queryKey: ["gate-providers"], queryFn: () => api.gateProviders() });
   const capturesQ = useQuery({
@@ -181,6 +189,7 @@ export default function GateCustoms() {
               onRetry={() => capturesQ.refetch()}
               type={captureType}
               onRowClick={(c) => c.container_no && setSelectedContainer(c.container_no)}
+              initialSearch={incomingSearch}
             />
           </Card>
         )}
@@ -220,12 +229,14 @@ function CapturesTable({
   onRetry,
   type,
   onRowClick,
+  initialSearch,
 }: {
   rows: GateCapture[];
   status: any;
   onRetry: () => void;
   type: string;
   onRowClick?: (c: GateCapture) => void;
+  initialSearch?: string;
 }) {
   const columns: Column<GateCapture>[] = useMemo(
     () => [
@@ -271,6 +282,7 @@ function CapturesTable({
           .includes(q)
       }
       searchPlaceholder="Search container / vehicle…"
+      initialSearch={initialSearch}
       pageSize={10}
     />
   );

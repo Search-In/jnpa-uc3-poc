@@ -4,6 +4,7 @@
 // Query surfaces the error state.
 
 import { getToken } from "./auth";
+import type { AvailableVehicle } from "./types";
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   // Attach the bearer token when a session exists (auth-enabled builds). When
@@ -27,6 +28,48 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+// The gateway reports refusals as `{detail: {error, detail, ...extra}}` with a
+// machine-readable `error` code (e.g. "pdp_expired", "no_gate_document"), but
+// http() flattens that into an Error message so TanStack Query can surface it.
+// This reads the structure back out so a caller can render the precise reason
+// instead of a raw "400 Bad Request — {...}" string.
+export interface ApiErrorInfo {
+  status: number | null;
+  code: string | null;
+  detail: string;
+  extra: Record<string, unknown>;
+}
+
+export function apiError(err: unknown): ApiErrorInfo {
+  const message = err instanceof Error ? err.message : String(err ?? "");
+  const status = Number.parseInt(message, 10);
+  const sep = message.indexOf(" — ");
+  const out: ApiErrorInfo = {
+    status: Number.isNaN(status) ? null : status,
+    code: null,
+    detail: message,
+    extra: {},
+  };
+  if (sep === -1) return out;
+  try {
+    const body = JSON.parse(message.slice(sep + 3)) as { detail?: unknown };
+    const d = body?.detail;
+    if (typeof d === "string") return { ...out, detail: d };
+    if (d && typeof d === "object") {
+      const { error, detail, ...extra } = d as Record<string, unknown>;
+      return {
+        ...out,
+        code: typeof error === "string" ? error : null,
+        detail: typeof detail === "string" ? detail : out.detail,
+        extra,
+      };
+    }
+  } catch {
+    /* non-JSON error body — keep the raw message */
+  }
+  return out;
 }
 
 // Authenticated file download. A plain <a href>/new-tab navigation can NOT carry
@@ -253,6 +296,9 @@ export const api = {
     http<{ slots: import("./types").TasSlot[] }>(
       `/api/tas/slots${gateId ? `?gate_id=${encodeURIComponent(gateId)}` : ""}`,
     ),
+  // Cross-twin XT-2: DeferredArrivalWindow events consumed from UC-II via
+  // jnpa.crosstwin.deferred-arrival and applied to the TAS slot book.
+  tasDeferredWindows: () => http<{ windows: any[] }>(`/api/tas/deferred-windows`),
 
   health: () => http<{ status: string; ws_clients: number }>("/healthz"),
 
@@ -595,6 +641,229 @@ export const api = {
     );
   },
   cfsEcyUploadDetail: (fileId: number) => http<any>(`/api/cfs-ecy/uploads/${fileId}`),
+
+  // --- ECY→CFS repositioning chains (F-Y1 lifecycle, migration 0114) ---
+  ecyCfsChains: (params?: {
+    container?: string;
+    chain_status?: string;
+    anomaly_only?: boolean;
+    anomaly_code?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{
+      items: EcyCfsChain[];
+      total: number;
+      limit: number;
+      offset: number;
+      count: number;
+    }>(`/api/cfs-ecy/chains${qs.toString() ? `?${qs}` : ""}`);
+  },
+  ecyCfsChain: (containerNumber: string) =>
+    http<EcyCfsChain>(`/api/cfs-ecy/chains/${encodeURIComponent(containerNumber)}`),
+  ecyCfsChainStats: () => http<EcyCfsChainStats>("/api/cfs-ecy/chains/stats"),
+  ecyCfsChainRebuild: () =>
+    http<{ chains: number; complete: number; anomalies: number; ms: number }>(
+      "/api/cfs-ecy/chains/rebuild",
+      { method: "POST" },
+    ),
+
+  // --- UC-III gate documents (EIR / PIN ticket / Form-13) ---
+  gateDocSummary: () => http<GateDocSummary>("/api/gate-docs/summary"),
+  gateDocList: (
+    docType: "eir" | "pin" | "form13",
+    params?: {
+      container?: string;
+      truck?: string;
+      vehicle?: string;
+      pin?: string;
+      visit_id?: string;
+      terminal?: string;
+      limit?: number;
+      offset?: number;
+    },
+  ) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/gate-docs/${docType}${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  gateDocsForContainer: (containerNo: string) =>
+    http<GateDocBundle>(`/api/gate-docs/container/${encodeURIComponent(containerNo)}`),
+  gateDocsForTruck: (truckNo: string) =>
+    http<GateDocBundle>(`/api/gate-docs/truck/${encodeURIComponent(truckNo)}`),
+  gateDocTat: (terminal?: string) =>
+    http<GateDocTat>(
+      `/api/gate-docs/tat${terminal ? `?terminal=${encodeURIComponent(terminal)}` : ""}`,
+    ),
+  gateDocDownloadTemplate: (docType: string) =>
+    downloadFile(
+      `/api/gate-docs/templates/${docType}`,
+      `gate_doc_${docType.toLowerCase()}_template.csv`,
+    ),
+  gateDocUploadValidate: (docType: string, file: File) => {
+    const f = new FormData();
+    f.append("file", file);
+    f.append("doc_type", docType);
+    return postForm<any>("/api/gate-docs/validate", f);
+  },
+  gateDocUpload: (docType: string, file: File) => {
+    const f = new FormData();
+    f.append("file", file);
+    f.append("doc_type", docType);
+    return postForm<any>("/api/gate-docs/upload", f);
+  },
+  gateDocUploads: (params?: { doc_type?: string; status?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && qs.set(k, String(v)));
+    return http<{ items: any[]; total: number; count: number }>(
+      `/api/gate-docs/uploads${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  gateDocUploadDetail: (fileId: number) => http<any>(`/api/gate-docs/uploads/${fileId}`),
+
+  // --- UC-III job spine: assignment + gate / yard / scan events ---
+  jobs: (params?: {
+    container?: string;
+    vehicle_id?: string;
+    driver_id?: string;
+    status?: string;
+    open_only?: boolean;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{
+      items: ContainerJob[];
+      total: number;
+      limit: number;
+      offset: number;
+      count: number;
+    }>(`/api/jobs${qs.toString() ? `?${qs}` : ""}`);
+  },
+  job: (jobId: number) => http<ContainerJob & { events: JobEvent[] }>(`/api/jobs/${jobId}`),
+  jobValidate: (body: JobAssignInput) =>
+    http<{ ok: boolean; checks: JobCheck[]; vehicle: any; permit: any }>("/api/jobs/validate", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  jobAssign: (body: JobAssignInput) =>
+    http<{ job: ContainerJob; checks: JobCheck[] }>("/api/jobs", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  jobAccept: (jobId: number) =>
+    http<{ job: ContainerJob }>(`/api/jobs/${jobId}/accept`, { method: "POST" }),
+  jobComplete: (jobId: number, notes?: string) =>
+    http<{ job: ContainerJob }>(`/api/jobs/${jobId}/complete`, {
+      method: "POST",
+      body: JSON.stringify({ notes }),
+    }),
+  jobCancel: (jobId: number, reason: string) =>
+    http<{ job: ContainerJob }>(`/api/jobs/${jobId}/cancel`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    }),
+  jobForContainer: (containerNo: string) =>
+    http<ContainerJob & { events: JobEvent[] }>(
+      `/api/cargo-jobs/container/${encodeURIComponent(containerNo)}`,
+    ),
+
+  // --- assignment dropdown sources ------------------------------------------
+  // The two masters a job is raised against. Both resolve to the SAME tables the
+  // assignment validator checks (core.vehicle / core.driver_identity), so a
+  // selected option's id is always a valid vehicle_id / driver_id.
+  // NOTE: these two live under a stricter RBAC policy than /api/jobs itself
+  // (CUSTOMS + DTCCC_ADMIN only) — callers must handle 403 (see JobAssignPanel).
+  availableVehicles: (q?: string, limit = 50) => {
+    const qs = new URLSearchParams({ limit: String(limit) });
+    if (q) qs.set("q", q);
+    return http<{ vehicles: AvailableVehicle[]; count: number }>(
+      `/api/vehicles/available?${qs.toString()}`,
+    );
+  },
+  activeDrivers: () => http<{ drivers: ActiveDriver[]; count: number }>("/api/identity/drivers"),
+
+  gateEventCreate: (body: {
+    event_type: string;
+    plate: string;
+    gate_id?: string;
+    job_id?: number;
+    container_number?: string;
+    bat_lane?: string;
+    document_type?: string;
+    document_reference?: string;
+  }) =>
+    http<{ gate_event: any; job: ContainerJob | null }>("/api/gate/events", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  gateEvents: (params?: {
+    plate?: string;
+    container?: string;
+    job_id?: number;
+    limit?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; count: number }>(
+      `/api/gate/events${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+
+  yardMovementCreate: (body: {
+    movement_type: string;
+    job_id?: number;
+    container_number?: string;
+    yard_location?: string;
+    from_location?: string;
+    terminal?: string;
+  }) =>
+    http<{ movement: any; job: ContainerJob | null }>("/api/yard/movements", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  yardMovements: (params?: { container?: string; job_id?: number; limit?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; count: number }>(
+      `/api/yard/movements${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+
+  scanMachines: () => http<{ items: ScannerMachine[]; count: number }>("/api/scan/machines"),
+  scanStatus: (containerNo: string) =>
+    http<ScanStatus>(`/api/scan/status/${encodeURIComponent(containerNo)}`),
+  scanRecord: (body: {
+    container_number: string;
+    result: string;
+    machine_code?: string;
+    job_id?: number;
+    remarks?: string;
+  }) => http<{ scan: any }>("/api/scan/events", { method: "POST", body: JSON.stringify(body) }),
+  scanEvents: (params?: { container?: string; result?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; count: number }>(
+      `/api/scan/events${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
 
   // --- Berthing Reports (module 7) — vessel calls + lifecycle + Data Upload ---
   berthingReports: (params?: {
@@ -1004,6 +1273,28 @@ export const api = {
   pdpHealth: () => http<any>("/api/pdp/health"),
   ldbContainer: (no: string) => http<any>(`/api/ldb/container/${encodeURIComponent(no)}`),
   ldbMovements: (no: string) => http<any>(`/api/ldb/container/${encodeURIComponent(no)}/movements`),
+  ldbTruck: (vehicleNumber: string) =>
+    http<{
+      source: string;
+      tracking: {
+        truckNumber: string;
+        truckType?: string;
+        alert?: string | null;
+        latest?: any;
+        events: Array<{
+          eventName?: string;
+          locName?: string;
+          containerNumber?: string;
+          eventTime?: string | number;
+          eventTimeLabel?: string;
+          dateMarker?: string;
+          transportMode?: string;
+          locLat?: string;
+          locLong?: string;
+        }>;
+        terminals: Array<{ locName: string; events: any[] }>;
+      };
+    }>(`/api/ldb/truck/${encodeURIComponent(vehicleNumber)}`),
   ldbHealth: () => http<any>("/api/ldb/health"),
   rmsSlots: (params?: { gate_id?: string; date?: string }) => {
     const q = new URLSearchParams();
@@ -1013,6 +1304,79 @@ export const api = {
     );
   },
   rmsHealth: () => http<any>("/api/rms-tas/health"),
+
+  // --- Weather (Open-Meteo weather + marine, LIVE→CACHED→SYNTHETIC) ---
+  // Coordinates default to the configured JNPA port location on the backend, so
+  // callers normally pass no params. The endpoint degrades instead of failing:
+  // read `status` / `source` / `decision_path` for provenance.
+  weatherCurrent: (params?: { latitude?: number; longitude?: number; forecast_hours?: number }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<import("./types").WeatherCurrent>(
+      `/api/weather/current${q.toString() ? `?${q}` : ""}`,
+    );
+  },
+  weatherHealth: () => http<import("./types").WeatherHealth>("/api/weather/health"),
+
+  // --- Traffic (TomTom flow + incidents, LIVE→CACHED→DATABASE→SYNTHETIC) ---
+  // Coordinates default to the configured JNPA port location on the backend, so
+  // callers normally pass no params. The endpoint degrades instead of failing:
+  // read `status` / `source` / `decision_path` for provenance. The TomTom key
+  // stays backend-only — the browser only ever talks to the gateway.
+  trafficCurrent: (params?: { latitude?: number; longitude?: number }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<import("./types").TrafficCurrent>(
+      `/api/traffic/current${q.toString() ? `?${q}` : ""}`,
+    );
+  },
+  trafficHealth: () => http<import("./types").TrafficHealth>("/api/traffic/health"),
+
+  // --- Air quality (OpenAQ, LIVE→CACHED→DATABASE→SYNTHETIC) ---
+  // Coordinates default to the configured JNPA port location on the backend, so
+  // callers normally pass no params. The endpoint degrades instead of failing:
+  // read `status` / `source` / `decision_path` for provenance. The browser
+  // only ever talks to the gateway — never to api.openaq.org.
+  airQualityCurrent: (params?: { latitude?: number; longitude?: number }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<import("./types").AirQualityCurrent>(
+      `/api/air-quality/current${q.toString() ? `?${q}` : ""}`,
+    );
+  },
+  airQualityHealth: () => http<import("./types").AirQualityHealth>("/api/air-quality/health"),
+
+  // --- Logistics (ULIP, LIVE→CACHED→DATABASE→FALLBACK) ---
+  // The endpoints degrade instead of failing: read `status` / `source` /
+  // `decision_path` for provenance. The FALLBACK rung is explicitly empty
+  // (data_available: false) — the surface never fabricates shipment data.
+  // The browser only ever talks to the gateway — never to the ULIP platform.
+  logisticsCurrent: () => http<import("./types").LogisticsCurrent>("/api/logistics/current"),
+  logisticsTracking: (refId: string) =>
+    http<import("./types").LogisticsTracking>(
+      `/api/logistics/tracking/${encodeURIComponent(refId)}`,
+    ),
+  logisticsEvents: (params?: {
+    ref_id?: string;
+    event_type?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<import("./types").LogisticsEventsPage>(
+      `/api/logistics/events${q.toString() ? `?${q}` : ""}`,
+    );
+  },
+  logisticsHealth: () => http<import("./types").LogisticsHealth>("/api/logistics/health"),
+
+  // --- Bhuvan WMS (ISRO/NRSC geospatial layer, control-plane only) ---
+  // The gateway never proxies imagery: /layers returns the WMS endpoint +
+  // named layers (validated server-side via GetCapabilities) and the ArcGIS
+  // WMSLayer renders GetMap tiles from the Bhuvan server directly. The raw
+  // answer is validated by map/bhuvan.parseBhuvanConfig before use.
+  bhuvanHealth: () => http<import("@/map/bhuvan").BhuvanHealth>("/api/bhuvan/health"),
+  bhuvanLayers: () => http<unknown>("/api/bhuvan/layers"),
   rmsSeed: (body: Record<string, any>) =>
     http<any>("/api/rms-tas/seed", { method: "POST", body: JSON.stringify(body) }),
   rmsBook: (body: Record<string, any>) =>
@@ -1180,4 +1544,180 @@ export interface WfExecution {
   event: Record<string, unknown>;
   results: WfExecutionResult[];
   matched_count: number;
+}
+
+// ===================================================================== UC-III
+// Types for the UC-III lifecycle surface (gate documents, job spine, ECY→CFS
+// chains). Kept next to the helpers above so the screens import one module.
+
+export interface EcyCfsChainLeg {
+  seq: number;
+  leg: string;
+  label: string;
+  ts: string | null;
+  duration_hours?: number | null;
+  present: boolean;
+  note?: string;
+}
+export interface EcyCfsChain {
+  id: number;
+  container_number: string;
+  ecy_out_ts: string | null;
+  cfs_in_ts: string | null;
+  cfs_out_ts: string | null;
+  ecy_in_ts: string | null;
+  transit_hours: number | null;
+  dwell_hours: number | null;
+  cycle_hours: number | null;
+  chain_status: "COMPLETE" | "PARTIAL" | "ORPHAN";
+  legs_present: number;
+  event_count: number;
+  has_anomaly: boolean;
+  anomaly_codes: string[];
+  anomaly_labels?: string[];
+  anomaly_detail: Record<string, unknown>;
+  legs?: EcyCfsChainLeg[];
+}
+export interface EcyCfsChainStats {
+  chains: number;
+  complete_chains: number;
+  partial_chains: number;
+  anomaly_chains: number;
+  avg_transit_hours: number | null;
+  avg_dwell_hours: number | null;
+  avg_cycle_hours: number | null;
+  median_cycle_hours: number | null;
+  by_anomaly: { code: string; chains: number }[];
+  anomaly_labels: Record<string, string>;
+  last_rebuilt_at: string | null;
+}
+
+export interface GateDocSummary {
+  eir: number;
+  pin_tickets: number;
+  pin_legs: number;
+  dual_move_tickets: number;
+  form13: number;
+  containerless_docs: number;
+  eir_with_tat: number;
+  files: number;
+}
+export interface GateDocBundle {
+  container_no?: string;
+  truck_no?: string;
+  eir: any[];
+  pin: any[];
+  form13: any[];
+  total: number;
+  terminals?: string[];
+  tat_samples?: {
+    eir_no: string | null;
+    terminal: string | null;
+    container_number: string | null;
+    truck_in_time: string | null;
+    truck_out_time: string | null;
+    tat_minutes: number | null;
+  }[];
+}
+export interface GateDocTat {
+  samples: number;
+  avg_tat_min: number | null;
+  median_tat_min: number | null;
+  min_tat_min: number | null;
+  max_tat_min: number | null;
+  source: string;
+  by_terminal: { terminal: string; samples: number; avg_tat_min: number }[];
+}
+
+export type JobStatus =
+  | "ASSIGNED"
+  | "ACCEPTED"
+  | "AT_GATE"
+  | "IN_YARD"
+  | "PICKED_UP"
+  | "DROPPED"
+  | "COMPLETED"
+  | "CANCELLED";
+export interface ContainerJob {
+  id: number;
+  container_number: string | null;
+  group_code: string | null;
+  transporter_id: number | null;
+  vehicle_id: string;
+  vehicle_no: string | null;
+  driver_id: string | null;
+  driver_licence: string | null;
+  move_type: string;
+  document_type: string | null;
+  document_reference: string | null;
+  terminal: string | null;
+  gate: string | null;
+  status: JobStatus;
+  assigned_by: string | null;
+  assigned_at: string;
+  accepted_at: string | null;
+  completed_at: string | null;
+  cancelled_reason: string | null;
+  notes: string | null;
+}
+export interface JobEvent {
+  id: number;
+  event: string;
+  old_status: string | null;
+  new_status: string | null;
+  actor: string | null;
+  actor_role: string | null;
+  detail: Record<string, unknown>;
+  created_at: string;
+}
+export interface JobCheck {
+  check: string;
+  ok: boolean;
+  detail: string;
+  [k: string]: unknown;
+}
+// An enrolled driver from core.driver_identity (GET /api/identity/drivers).
+// `license_no` is what the PDP permit check is resolved through, so a driver
+// without one can never clear validation.
+export interface ActiveDriver {
+  driver_id: string;
+  name?: string | null;
+  license_no?: string | null;
+  photo_url?: string | null;
+}
+export interface JobAssignInput {
+  container_number?: string;
+  group_code?: string;
+  vehicle_id?: string;
+  vehicle_no?: string;
+  driver_id?: string;
+  driver_licence?: string;
+  move_type: string;
+  document_type?: string;
+  document_reference?: string;
+  terminal?: string;
+  gate?: string;
+  notes?: string;
+}
+
+export interface ScannerMachine {
+  machine_code: string;
+  machine_class: "DRIVE_THROUGH" | "MOBILE" | "FIXED";
+  machine_type: string | null;
+  location_code: string | null;
+  customs_house: string | null;
+  terminal: string | null;
+  lane: string | null;
+  active: boolean;
+}
+export interface ScanStatus {
+  container_number: string;
+  scan_required: boolean;
+  rms_selection: Record<string, unknown> | null;
+  machine_code: string | null;
+  machine_class: string | null;
+  latest_scan: Record<string, unknown> | null;
+  result: string | null;
+  cleared: boolean;
+  job_id: number | null;
 }

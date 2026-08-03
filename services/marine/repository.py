@@ -280,6 +280,23 @@ class VesselCallRepository:
                 "row_sha256": rec.get("row_sha256"), "import_file_id": fid}
 
     @staticmethod
+    def _bathymetry_sounding_params(rec: Mapping[str, Any], survey_id: int, fid: int) -> dict:
+        """Canonical sounding record -> bind params.
+
+        Positional fields are passed through as-is (already coerced to float-or-None by the
+        canonical model), so an ungeoreferenced chart writes NULL easting/northing/lat/lon
+        and keeps only its page coordinates — that is valid data, not a defect.
+        """
+        p = {k: rec.get(k) for k in (
+            "easting_m", "northing_m", "lat", "lon", "depth_m",
+            "page_x_pt", "page_y_pt")}
+        p["above_design"] = bool(rec.get("above_design"))
+        p["row_sha256"] = rec.get("row_sha256")
+        p["survey_id"] = survey_id
+        p["import_file_id"] = fid
+        return p
+
+    @staticmethod
     def _port_craft_params(rec: Mapping[str, Any], fid: int) -> dict:
         p = {k: rec.get(k) for k in (
             "name", "craft_type", "owned_or_hired", "owner_name", "year_built",
@@ -362,7 +379,14 @@ class VesselCallRepository:
                     "uploaded_by": uploaded_by, "total_rows": len(records), "source": source}
 
         def _target(r: Mapping[str, Any]) -> str:
-            return r.get("_target") or "vessel_call"
+            """The record's routing target, or "" when absent.
+
+            Deliberately NOT defaulted to "vessel_call": that fallback silently filed an
+            untagged record into the vessel-call spine, and because the unknown-target
+            check runs on this value, a MISSING tag could never be reported. An empty
+            string matches no partition, so it falls into `unknown` and becomes a typed
+            validation error — a parser that forgets to tag its records now fails loudly."""
+            return r.get("_target") or ""
 
         vessels = [r for r in records if _target(r) == "vessel"]
         calls_pre = [r for r in records if _target(r) == "vessel_call" and not r.get("vcn")]
@@ -372,8 +396,9 @@ class VesselCallRepository:
         pilotages = [r for r in records if _target(r) == "pilotage"]
         port_crafts = [r for r in records if _target(r) == "port_craft"]
         sea_channels = [r for r in records if _target(r) == "sea_channel"]
+        bathy_soundings = [r for r in records if _target(r) == "bathymetry_sounding"]
         _KNOWN = ("vessel", "vessel_call", "vessel_call_event", "pilot", "pilotage",
-                  "port_craft", "sea_channel")
+                  "port_craft", "sea_channel", "bathymetry_sounding")
         unknown = [r for r in records if _target(r) not in _KNOWN]
 
         ins = upd = dup = 0
@@ -462,11 +487,58 @@ class VesselCallRepository:
                     else:
                         dup += 1  # ON CONFLICT (row_sha256) DO NOTHING
 
+                # 9. BATHYMETRY soundings (resolve survey_id from drawing_no; unresolved →
+                #    error, never a stub survey). Row-hash idempotent, inserted in batches
+                #    of _BATHYMETRY_BATCH: one chart is 15k-30k soundings, so a per-row
+                #    execute would make an import take hours.
+                survey_ids: dict[str, Optional[int]] = {}
+                pending: list[dict] = []
+                for bs in bathy_soundings:
+                    dn = bs.get("drawing_no")
+                    if dn not in survey_ids:
+                        survey_ids[dn] = (await conn.execute(
+                            text(_RESOLVE_SURVEY_BY_DRAWING), {"drawing_no": dn})).scalar()
+                    sid = survey_ids[dn]
+                    if sid is None:
+                        repo_errors.append({
+                            "row_number": None, "column_name": "drawing_no",
+                            "error_code": "unresolved_survey",
+                            "error_detail": (f"no core.bathymetry_survey with drawing_no "
+                                             f"{dn!r}; register the survey before importing "
+                                             f"its soundings"),
+                            "raw_value": dn})
+                        continue
+                    pending.append(self._bathymetry_sounding_params(bs, sid, fid))
+
+                # Hashes already written by an EARLIER batch of this same transaction are
+                # invisible to the pre-filter SELECT, so track them here too — otherwise a
+                # payload repeating a sounding across batches would be counted twice.
+                seen_hashes: set[str] = set()
+                for start in range(0, len(pending), _BATHYMETRY_BATCH):
+                    chunk = pending[start:start + _BATHYMETRY_BATCH]
+                    hashes = [p["row_sha256"] for p in chunk]
+                    existing = set((await conn.execute(
+                        text(_BATHYMETRY_EXISTING_HASHES), {"hashes": hashes})).scalars().all())
+                    fresh: list[dict] = []
+                    for p in chunk:
+                        h = p["row_sha256"]
+                        if h in existing or h in seen_hashes:
+                            dup += 1
+                            continue
+                        seen_hashes.add(h)
+                        fresh.append(p)
+                    if fresh:
+                        # One round trip for the whole chunk.
+                        await conn.execute(text(_BATHYMETRY_SOUNDING_INSERT), fresh)
+                        ins += len(fresh)
+
                 for u in unknown:
+                    raw = u.get("_target")
+                    detail = (f"unknown record target: {raw}" if raw
+                              else "record has no _target: cannot route to a table")
                     repo_errors.append({
                         "row_number": None, "column_name": "_target", "error_code": "unknown_target",
-                        "error_detail": f"unknown record target: {u.get('_target')}",
-                        "raw_value": u.get("_target")})
+                        "error_detail": detail, "raw_value": raw})
 
                 all_errors = parse_errors + repo_errors
                 if all_errors:
@@ -760,6 +832,46 @@ VALUES
 ON CONFLICT (row_sha256) DO NOTHING
 RETURNING channel_id
 """
+
+# --------------------------------------------------------------------------- bathymetry
+# Soundings arrive keyed by the survey's NATURAL key (drawing_no) — survey_id is a
+# per-database identity surrogate and never crosses the wire. Resolve-or-error, the same
+# posture as vessel_call_event: a sounding whose survey is unknown becomes a typed row
+# error, never a stub survey.
+_RESOLVE_SURVEY_BY_DRAWING = (
+    "SELECT survey_id FROM core.bathymetry_survey WHERE drawing_no = :drawing_no LIMIT 1"
+)
+
+# Idempotent on the content hash (uq_bathymetry_sounding_row): a sounding has no natural
+# key, so this follows core.sea_channel rather than the port_craft natural-key upsert.
+# The hash is computed in the canonical model, so a sounding ingested from the chart PDF
+# and the same sounding ingested from the JSON API collide correctly.
+#
+# Executed with executemany (one round trip per _BATHYMETRY_BATCH rows) because a single
+# chart carries 15k-30k soundings and a per-row execute makes an import take hours. That is
+# why there is NO `RETURNING` here: a multi-parameter execute cannot return rows, so the
+# insert/duplicate split is established by _BATHYMETRY_EXISTING_HASHES below instead of by
+# counting returned ids. ON CONFLICT DO NOTHING is retained as the concurrency backstop —
+# the pre-filter answers "how many were new", the conflict clause guarantees correctness if
+# a competing import inserts the same hash between the SELECT and the INSERT.
+_BATHYMETRY_SOUNDING_INSERT = """
+INSERT INTO core.bathymetry_sounding
+    (survey_id, easting_m, northing_m, lat, lon, depth_m, above_design,
+     page_x_pt, page_y_pt, import_file_id, row_sha256)
+VALUES
+    (:survey_id, :easting_m, :northing_m, :lat, :lon, :depth_m, :above_design,
+     :page_x_pt, :page_y_pt, :import_file_id, :row_sha256)
+ON CONFLICT (row_sha256) DO NOTHING
+"""
+
+# Which of this batch's hashes are already stored. Indexed lookup on uq_bathymetry_sounding_row.
+_BATHYMETRY_EXISTING_HASHES = (
+    "SELECT row_sha256 FROM core.bathymetry_sounding WHERE row_sha256 = ANY(:hashes)"
+)
+
+#: Rows per executemany round trip. Large enough that a 30k-sounding chart is ~6 round
+#: trips, small enough to keep the parameter payload well inside asyncpg's limits.
+_BATHYMETRY_BATCH = 5000
 
 # --------------------------------------------------------------------------- port craft
 # Fleet-register upsert on the natural key `name`. All particulars are COALESCE-enriched

@@ -146,6 +146,18 @@ export default function ReeferAvailability() {
   const facilities: any[] = availQ.data?.facilities ?? [];
   const slots: any[] = slotsQ.data?.slots ?? [];
 
+  // "No reefer slots provisioned" and "every slot is taken" are different
+  // operational states that both rendered as five zeros — the second is an
+  // alarm. The API reports an unprovisioned estate as zero totals with NO
+  // facilities (it does NOT omit the totals object), so key off that and render
+  // "—" rather than a 0 the operator would read as a capacity emergency.
+  const notConfigured =
+    !availQ.isLoading &&
+    !availQ.isError &&
+    facilities.length === 0 &&
+    Number(totals.total ?? 0) === 0;
+  const dash = (n: number) => (notConfigured ? "—" : n);
+
   const total = Number(totals.total ?? 0);
   const available = Number(totals.available ?? 0);
   const poweredAvailable = Number(totals.powered_available ?? 0);
@@ -210,35 +222,35 @@ export default function ReeferAvailability() {
           <StatCard
             icon={Container}
             label="Total Slots"
-            value={total}
+            value={dash(total)}
             tone="info"
             loading={availQ.isLoading}
           />
           <StatCard
             icon={CheckCircle2}
             label="Available"
-            value={available}
+            value={dash(available)}
             tone="ok"
             loading={availQ.isLoading}
           />
           <StatCard
             icon={Zap}
             label="Powered Available"
-            value={poweredAvailable}
+            value={dash(poweredAvailable)}
             tone="info"
             loading={availQ.isLoading}
           />
           <StatCard
             icon={Snowflake}
             label="Occupied"
-            value={occupied}
+            value={dash(occupied)}
             tone="warn"
             loading={availQ.isLoading}
           />
           <StatCard
             icon={TriangleAlert}
             label="Fault"
-            value={fault}
+            value={dash(fault)}
             tone={fault > 0 ? "critical" : "ok"}
             loading={availQ.isLoading}
           />

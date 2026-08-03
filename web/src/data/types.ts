@@ -34,6 +34,7 @@ import type {
   IdentityVerifyResult,
   IdentityEnrollResult,
   KpiResult,
+  LdbTruckTrackingResponse,
   ParkingFacility,
   ParkingSummary,
   PoliceIncident,
@@ -271,6 +272,9 @@ export interface DataAdapter {
     vehicleId: string,
     input: UpdateVehicleInput,
   ): Promise<{ updated: boolean; vehicle: FleetVehicle }>;
+
+  /** NLDS/LDB truck port-events by plate (Vehicle Management → Track). */
+  ldbTruck(vehicleNumber: string): Promise<LdbTruckTrackingResponse>;
 
   // --- Vehicle Intelligence Identity & Detection (camera workflows) ---
   vehicleIdentity(vehicleNumber: string, image: string): Promise<VehicleIdentityResult>;

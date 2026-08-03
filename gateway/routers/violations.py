@@ -711,6 +711,24 @@ async def get_case(case_id: str, state: GatewayState = Depends(get_state)) -> di
     return bundle
 
 
+@router.get("/cases/{case_id}/verify-chain")
+async def verify_chain(case_id: str, state: GatewayState = Depends(get_state)) -> dict:
+    """Recompute the case's append-only audit hash chain and report integrity.
+
+    The committee-facing "offer to verify the chain" beat: recomputes every
+    row's hash from the canonical writer function; any tampered/forked row is
+    named via ``broken_at``.
+    """
+    dsn = state.cfg.postgres_dsn
+    try:
+        result = await enforcement.verify_chain(dsn, case_id)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("violations_verify_failed", case_id=case_id, error=str(exc))
+        raise HTTPException(status_code=503, detail={"error": "case_store_unavailable"})
+    REQUESTS.labels("violations", "ok").inc()
+    return {"case_id": case_id, **result}
+
+
 @router.post("/cases/{case_id}/transition")
 async def transition(
     case_id: str,

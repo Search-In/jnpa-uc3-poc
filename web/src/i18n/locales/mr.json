@@ -10,7 +10,8 @@
   "navSection": {
     "operations": "कामकाज",
     "analytics": "विश्लेषण",
-    "administration": "प्रशासन"
+    "administration": "प्रशासन",
+    "lifecycle": "ट्रक व कार्गो जीवनचक्र"
   },
   "navGroup": {
     "traffic": "वाहतूक कामकाज",
@@ -35,7 +36,9 @@
     "simulator": "सिम्युलेटर",
     "demo": "डेमो कन्सोल",
     "enrollments": "चालक नोंदणी",
-    "vehicles": "वाहन व्यवस्थापन"
+    "vehicles": "वाहन व्यवस्थापन",
+    "uc3Lifecycle": "UC-3 जीवनचक्र",
+    "truckOps": "ट्रक ऑपरेशन्स"
   },
   "followBox": {
     "title": "फॉलो द बॉक्स",
@@ -401,8 +404,14 @@
       "trucks": "ट्रक (1:50)",
       "heatmap": "गर्दी हीटमॅप",
       "zones": "जिओफेन्स झोन",
-      "parking": "पार्किंग सुविधा"
+      "parking": "पार्किंग सुविधा",
+      "bhuvan": "भुवन उपग्रह स्तर"
     },
+    "bhuvanLoading": "लोड होत आहे…",
+    "bhuvanError": "भुवन स्तर लोड होऊ शकला नाही",
+    "bhuvanDisabled": "गेटवेवर भुवन WMS सक्षम नाही",
+    "bhuvanOpacity": "अपारदर्शकता",
+    "bhuvanSource": "स्रोत: ISRO भुवन WMS",
     "legendItem": {
       "freeFlow": "मुक्त प्रवाह / लक्ष्यावर",
       "moderate": "मध्यम",

@@ -172,7 +172,15 @@ class CustomsService:
             "records": sum(r["record_count"] for r in results),
             "imported": sum(r["imported_count"] for r in results),
         }
-        return {"root": root, "totals": totals, "results": results}
+        # Auto-reconcile: without this the imported customs facts (OOC/RMS) never
+        # reach core.cargo.customs_status in a running system (manual-only before).
+        reconcile: Optional[dict] = None
+        if totals["succeeded"]:
+            try:
+                reconcile = await self.reconcile_cargo()
+            except Exception as exc:  # noqa: BLE001 — reconcile must never fail an import
+                log.warning("customs.auto_reconcile_failed", error=str(exc))
+        return {"root": root, "totals": totals, "results": results, "reconcile": reconcile}
 
     @staticmethod
     def _discover(root: str) -> list[str]:
@@ -304,6 +312,9 @@ class CustomsService:
     async def count_ooc(self, *, filters):
         return await self._repo.count_ooc(filters=filters)
 
+    async def ooc_detail(self, be_no: str):
+        return await self._repo.ooc_detail(be_no)
+
     async def list_smtp(self, *, filters, limit, offset):
         return await self._repo.list_smtp(filters=filters, limit=limit, offset=offset)
 
@@ -315,6 +326,12 @@ class CustomsService:
 
     async def count_rms(self, *, filters):
         return await self._repo.count_rms(filters=filters)
+
+    async def list_rms_containers(self, *, filters, limit, offset):
+        return await self._repo.list_rms_containers(filters=filters, limit=limit, offset=offset)
+
+    async def count_rms_containers(self, *, filters):
+        return await self._repo.count_rms_containers(filters=filters)
 
     async def list_leo(self, *, filters, limit, offset):
         return await self._repo.list_leo(filters=filters, limit=limit, offset=offset)

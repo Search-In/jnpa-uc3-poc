@@ -13,8 +13,10 @@ Reactive chain:
      the Vahan adapter chain (shows the fallback rung) and returns a fake
      echallan_id + PDF url.
   4. We stamp echallan_id + echallan_pdf_url back onto the alert payload.
-  5. (Dashboard) plays the last-10s evidence MP4 from the frame bus in the alert
-     drawer — we attach an ``evidence_mp4_url`` the dashboard renders.
+  5. (Dashboard) renders the REAL evidence frame the anomaly service persisted
+     to MinIO (``evidence/{alert_id}.jpg``, SHA-256 stamped on the payload),
+     served through the gateway's ``/api/evidence`` proxy. No clip/URL is ever
+     fabricated: if no frame was captured the step reports ``degraded``.
 
 reset(): mark the synthetic alert resolved, remove injected telemetry tag.
 """
@@ -42,6 +44,11 @@ WRONG_WAY_HEADING = 315.0
 SYNTH_PLATE = "MH04WW1234"
 PING_COUNT = 6
 PING_DT_S = 0.6  # 6 pings * 0.6s ~= 3s span > the 2s wrong-way hold window
+
+
+def stub_cleanup(handle_id: str) -> Dict[str, Any]:
+    """Cleanup dict for a post-restart stub reset (same keys ``run()`` sets)."""
+    return {"plate": SYNTH_PLATE, "device_id": f"SYN-TFC2-{handle_id}"}
 
 
 async def run(params: Dict[str, Any], handle_id: str | None = None) -> ScenarioHandle:
@@ -88,13 +95,15 @@ async def run(params: Dict[str, Any], handle_id: str | None = None) -> ScenarioH
             )
 
             # --- Step 4: stamp echallan onto the alert payload ---
-            mp4_url = None
+            evidence_url = _evidence_proxy_url(alert)
+            evidence_sha = ((alert or {}).get("payload") or {}).get("evidence_sha256")
             if alert and challan:
-                mp4_url = _evidence_mp4_url(cfg, camera_id)
                 await _enrich_alert(cfg, alert["id"], {
                     "echallan_id": challan.get("echallan_id"),
                     "echallan_pdf_url": challan.get("echallan_pdf_url"),
-                    "evidence_mp4_url": mp4_url,
+                    # Re-point evidence_url at the gateway proxy (off-box safe);
+                    # the frame + hash themselves come from the anomaly service.
+                    **({"evidence_url": evidence_url} if evidence_url else {}),
                     "scenario": h.handle_id,
                 })
             await h.step(
@@ -105,11 +114,14 @@ async def run(params: Dict[str, Any], handle_id: str | None = None) -> ScenarioH
                         "echallan_pdf_url": (challan or {}).get("echallan_pdf_url")},
             )
 
-            # --- Step 5: evidence MP4 for the dashboard drawer ---
+            # --- Step 5: hash-verified evidence frame for the dashboard drawer ---
             await h.step(
-                "Evidence clip (last 10 s) available for the alert drawer",
+                "Evidence frame (SHA-256 verified) available in the alert drawer"
+                + ("" if evidence_url else " (no frame captured — MinIO/frame-bus unavailable)"),
                 trigger="frame-bus",
-                detail={"evidence_mp4_url": mp4_url or _evidence_mp4_url(cfg, camera_id),
+                status="ok" if evidence_url else "degraded",
+                detail={"evidence_url": evidence_url,
+                        "evidence_sha256": evidence_sha,
                         "camera_id": camera_id},
             )
 
@@ -186,9 +198,18 @@ async def _await_alert(up: Upstreams, *, plate: str, device_id: str,
     return None
 
 
-def _evidence_mp4_url(cfg: ScenarioConfig, camera_id: str) -> str:
-    """URL the dashboard uses to play the last-10s evidence clip (MinIO)."""
-    return f"http://localhost:9000/evidence/{camera_id}-last10s.mp4"
+def _evidence_proxy_url(alert: Optional[dict]) -> Optional[str]:
+    """Gateway-proxied URL for the alert's REAL evidence frame, if one exists.
+
+    The anomaly service persists the offending frame to MinIO as
+    ``evidence/{alert_id}.jpg`` and stamps ``evidence_object`` (+ sha256) onto
+    the alert payload. We route playback through the gateway's ``/api/evidence``
+    proxy (relative URL) so it works off-box — never a raw ``localhost:9000``
+    link, and never a fabricated object name.
+    """
+    payload = (alert or {}).get("payload") or {}
+    obj = payload.get("evidence_object")
+    return f"/api/evidence/{obj}" if obj else payload.get("evidence_url")
 
 
 async def _enrich_alert(cfg: ScenarioConfig, alert_id: str, extra: Dict[str, Any]) -> None:

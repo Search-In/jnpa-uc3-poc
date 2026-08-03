@@ -150,6 +150,37 @@ export const api = {
     }
   },
 
+  // --- UC-III assigned jobs (driver-scoped: the gateway resolves "mine" from the
+  // device binding on the token, never from client input) ---
+  myJobs: (includeClosed = false) =>
+    http<{ items: DriverJob[]; count: number; total: number; scope: string }>(
+      `/api/driver/jobs?include_closed=${includeClosed ? "true" : "false"}`,
+    ),
+  myJob: (jobId: number) =>
+    http<DriverJob & { events: DriverJobEvent[] }>(`/api/driver/jobs/${jobId}`),
+  jobAccept: (jobId: number) =>
+    http<{ job: DriverJob }>(`/api/driver/jobs/${jobId}/accept`, { method: "POST" }),
+  jobGateArrival: (jobId: number, gateId?: string) =>
+    http<{ gate_event: unknown; job: DriverJob | null }>(`/api/driver/jobs/${jobId}/gate-arrival`, {
+      method: "POST",
+      body: JSON.stringify({ gate_id: gateId }),
+    }),
+  jobPickup: (jobId: number, yardLocation?: string) =>
+    http<{ movement: unknown; job: DriverJob | null }>(`/api/driver/jobs/${jobId}/pickup`, {
+      method: "POST",
+      body: JSON.stringify({ yard_location: yardLocation }),
+    }),
+  jobDrop: (jobId: number, yardLocation?: string) =>
+    http<{ movement: unknown; job: DriverJob | null }>(`/api/driver/jobs/${jobId}/drop`, {
+      method: "POST",
+      body: JSON.stringify({ yard_location: yardLocation }),
+    }),
+  jobComplete: (jobId: number, notes?: string) =>
+    http<{ job: DriverJob }>(`/api/driver/jobs/${jobId}/complete`, {
+      method: "POST",
+      body: JSON.stringify({ notes }),
+    }),
+
   // --- geometry for the mini-map ---
   gates: () => http<{ gates: Gate[] }>("/api/gates"),
   corridor: () => http<CorridorGeometry>("/api/corridor"),
@@ -320,3 +351,41 @@ export const api = {
       },
     ),
 };
+
+// ---------------------------------------------------------------- UC-III jobs
+export type DriverJobStatus =
+  | "ASSIGNED"
+  | "ACCEPTED"
+  | "AT_GATE"
+  | "IN_YARD"
+  | "PICKED_UP"
+  | "DROPPED"
+  | "COMPLETED"
+  | "CANCELLED";
+
+export interface DriverJob {
+  id: number;
+  container_number: string | null;
+  group_code: string | null;
+  vehicle_id: string;
+  vehicle_no: string | null;
+  driver_id: string | null;
+  move_type: string;
+  document_type: string | null;
+  document_reference: string | null;
+  terminal: string | null;
+  gate: string | null;
+  status: DriverJobStatus;
+  assigned_at: string;
+  accepted_at: string | null;
+  completed_at: string | null;
+  notes: string | null;
+}
+
+export interface DriverJobEvent {
+  id: number;
+  event: string;
+  old_status: string | null;
+  new_status: string | null;
+  created_at: string;
+}

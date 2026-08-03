@@ -76,6 +76,65 @@ class GatewayConfig:
     cache_ttl_anpr_s: int = 60               # last 60 s of frames (spec)
     cache_ttl_traffic_s: int = 90
     cache_ttl_default_s: int = 300
+    cache_ttl_weather_s: int = 600           # Open-Meteo CACHED fallback rung
+
+    # --- Open-Meteo Weather + Marine (/api/weather) ---
+    # Free public APIs — no account, no API key. Empty -> the client's public
+    # defaults (api.open-meteo.com / marine-api.open-meteo.com); set to point at
+    # a proxy / self-hosted instance. NO hardcoded vendor URL in business code.
+    open_meteo_weather_url: str = ""
+    open_meteo_marine_url: str = ""
+
+    # --- OpenWeatherMap (/api/weather openweather block) ---
+    # BACKEND-ONLY credential: read from the environment, sent only to
+    # api.openweathermap.org — never exposed to the frontend (no VITE_ var, no
+    # browser call). Empty key -> provider disabled and the weather surface
+    # behaves exactly as the Open-Meteo-only build. URL empty -> the client's
+    # official default (api.openweathermap.org/data/2.5/weather); set to point
+    # at a proxy. NO hardcoded vendor URL in business code.
+    openweather_api_key: str = ""
+    openweather_url: str = ""
+
+    # --- TomTom Traffic (/api/traffic/current) ---
+    # BACKEND-ONLY credential: read from the environment, sent only to
+    # api.tomtom.com — never exposed to the frontend (no VITE_ var, no browser
+    # call). Empty key -> provider disabled and /api/traffic/current degrades
+    # through its CACHED/DATABASE/SYNTHETIC rungs. URLs empty -> the client's
+    # official defaults (traffic flowSegmentData v4 / incidentDetails v5 /
+    # routing v1); set to point at a proxy. NO hardcoded vendor URL in
+    # business code.
+    tomtom_api_key: str = ""
+    tomtom_flow_url: str = ""
+    tomtom_incidents_url: str = ""
+    tomtom_routing_url: str = ""
+    cache_ttl_tomtom_s: int = 120            # TomTom CACHED fallback rung
+
+    # --- Bhuvan WMS (ISRO/NRSC geospatial layer, /api/bhuvan) ---
+    # OGC WMS map service — NO API key required. The gateway is control-plane
+    # only: it validates availability (GetCapabilities) and serves the layer
+    # configuration; the browser renders the WMS tiles directly on the ArcGIS
+    # map. Empty URL/layer -> the client's official defaults
+    # (bhuvan-vec1.nrsc.gov.in/bhuvan/wms, layer "india3"); set to point at a
+    # proxy or a different Bhuvan layer. BHUVAN_ENABLED=false hides the layer
+    # from the frontend without touching code.
+    bhuvan_wms_url: str = ""
+    bhuvan_layer: str = ""
+    bhuvan_enabled: bool = True
+
+    # --- ULIP Logistics Intelligence (/api/logistics/*) ---
+    # BACKEND-ONLY credentials: read from the environment, sent only to the
+    # ULIP platform (DPIIT) — never exposed to the frontend (no VITE_ var, no
+    # browser call). Auth: either ULIP_CLIENT_ID + ULIP_CLIENT_SECRET (POST
+    # /user/login token flow) or the pre-issued static ULIP_API_KEY above
+    # (shared with the trucking-app relay). No credential -> LIVE rung
+    # disabled and /api/logistics/* degrades through its CACHED/DATABASE/
+    # FALLBACK rungs. URL empty -> the client's official default
+    # (www.ulip.dpiit.gov.in/ulip/v1.0.0); set to point at staging or a
+    # proxy. NO hardcoded vendor URL in business code.
+    ulip_api_url: str = ""
+    ulip_client_id: str = ""
+    ulip_client_secret: str = ""
+    cache_ttl_ulip_s: int = 300              # ULIP CACHED fallback rung
 
     # --- Provisional vehicle flow ---
     provisional_window_h: int = 24           # 24-hour cure window (spec)
@@ -153,6 +212,25 @@ class GatewayConfig:
             cache_ttl_vahan_s=_as_int(os.environ.get("GATEWAY_CACHE_TTL_VAHAN_S"), 12 * 3600),
             cache_ttl_anpr_s=_as_int(os.environ.get("GATEWAY_CACHE_TTL_ANPR_S"), 60),
             cache_ttl_traffic_s=_as_int(os.environ.get("GATEWAY_CACHE_TTL_TRAFFIC_S"), 90),
+            cache_ttl_weather_s=_as_int(os.environ.get("GATEWAY_CACHE_TTL_WEATHER_S"), 600),
+            open_meteo_weather_url=os.environ.get("OPEN_METEO_WEATHER_URL", "").strip(),
+            open_meteo_marine_url=os.environ.get("OPEN_METEO_MARINE_URL", "").strip(),
+            openweather_api_key=os.environ.get(
+                "OPENWEATHER_API_KEY", shared.openweather_api_key).strip(),
+            openweather_url=os.environ.get("OPENWEATHER_URL", "").strip(),
+            tomtom_api_key=os.environ.get(
+                "TOMTOM_API_KEY", shared.tomtom_api_key).strip(),
+            tomtom_flow_url=os.environ.get("TOMTOM_FLOW_URL", "").strip(),
+            tomtom_incidents_url=os.environ.get("TOMTOM_INCIDENTS_URL", "").strip(),
+            tomtom_routing_url=os.environ.get("TOMTOM_ROUTING_URL", "").strip(),
+            cache_ttl_tomtom_s=_as_int(os.environ.get("GATEWAY_CACHE_TTL_TOMTOM_S"), 120),
+            bhuvan_wms_url=os.environ.get("BHUVAN_WMS_URL", "").strip(),
+            bhuvan_layer=os.environ.get("BHUVAN_LAYER", "").strip(),
+            bhuvan_enabled=_as_bool(os.environ.get("BHUVAN_ENABLED"), True),
+            ulip_api_url=os.environ.get("ULIP_API_URL", "").strip(),
+            ulip_client_id=os.environ.get("ULIP_CLIENT_ID", "").strip(),
+            ulip_client_secret=os.environ.get("ULIP_CLIENT_SECRET", "").strip(),
+            cache_ttl_ulip_s=_as_int(os.environ.get("GATEWAY_CACHE_TTL_ULIP_S"), 300),
             provisional_window_h=_as_int(os.environ.get("GATEWAY_PROVISIONAL_WINDOW_H"), 24),
             require_driver_profile=_as_bool(os.environ.get("REQUIRE_DRIVER_PROFILE"), False),
             gate_boom_delay_s=_as_int(os.environ.get("GATEWAY_GATE_BOOM_DELAY_S"), 5),
@@ -166,6 +244,26 @@ class GatewayConfig:
             firebase_service_account_path=os.environ.get("FIREBASE_SERVICE_ACCOUNT_PATH", ""),
             log_level=os.environ.get("LOG_LEVEL", "INFO"),
         )
+
+    @property
+    def openweather_enabled(self) -> bool:
+        """True if an OpenWeatherMap API key is configured (enables the
+        openweather block on /api/weather/current)."""
+        return bool(self.openweather_api_key.strip())
+
+    @property
+    def tomtom_enabled(self) -> bool:
+        """True if a TomTom API key is configured (enables the LIVE rung on
+        /api/traffic/current)."""
+        return bool(self.tomtom_api_key.strip())
+
+    @property
+    def ulip_logistics_enabled(self) -> bool:
+        """True if a ULIP credential is configured (enables the LIVE rung on
+        /api/logistics/*): either the login pair or a static key."""
+        return bool(self.ulip_api_key.strip()
+                    or (self.ulip_client_id.strip()
+                        and self.ulip_client_secret.strip()))
 
     @property
     def surepass_enabled(self) -> bool:

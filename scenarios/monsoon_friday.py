@@ -25,7 +25,8 @@ from typing import Any, Dict, List
 from jnpa_shared import tracing
 from jnpa_shared.logging import get_logger
 
-from .base import Upstreams, clear_nudge, nudge_segments, poll_forecaster
+from .base import (Upstreams, clear_nudge, nudge_segments, poll_forecaster,
+                   resolve_scenario_alerts)
 from .config import ScenarioConfig
 from .handle import ScenarioHandle, new_handle_id
 
@@ -39,6 +40,15 @@ PRIMARY_GATE = "G-NSICT"
 SPILLOVER_GATES = ["G-JNPCT", "G-NSIGT", "G-BMCT"]
 DEMAND_SURGE = 120     # extra EN_ROUTE_TO_PORT trucks (Friday-peak arrival wave)
 GATE_QUEUE = 90        # AT_GATE_QUEUE build-up at the primary gate
+
+
+def stub_cleanup(handle_id: str) -> Dict[str, Any]:
+    """Cleanup dict for a post-restart stub reset — SAME tags run() mints
+    (``MONSOON:demand:{id}`` / ``MONSOON:queue:{id}``)."""
+    return {"gate_id": PRIMARY_GATE,
+            "demand_tag": f"MONSOON:demand:{handle_id}",
+            "queue_tag": f"MONSOON:queue:{handle_id}",
+            "spillover_gates": SPILLOVER_GATES}
 
 
 async def run(params: Dict[str, Any], handle_id: str | None = None) -> ScenarioHandle:
@@ -223,14 +233,9 @@ async def _reroute_inbound(up: Upstreams, h: ScenarioHandle, gate_id: str) -> Li
 
 
 async def _resolve_alerts(cfg: ScenarioConfig, handle_id: str) -> None:
-    from jnpa_shared.db import execute
-    try:
-        await execute(
-            "UPDATE core.alert SET ack = true WHERE payload->>'scenario' = :hid",
-            {"hid": handle_id}, dsn=cfg.postgres_dsn,
-        )
-    except Exception as exc:  # noqa: BLE001
-        log.debug("resolve_alerts_failed", error=str(exc))
+    # Shared helper also acks the untagged TRAFFIC_CONGESTION alerts our
+    # segment nudges caused the gateway to auto-raise (reset must not leak).
+    await resolve_scenario_alerts(cfg, handle_id, segment_ids=RAIN_SEGMENTS)
 
 
 # Rain-intensity -> impact multipliers for the simulated shortage propagation.

@@ -18,6 +18,7 @@ import Home from "@/screens/Home";
 import Trip from "@/screens/Trip";
 import Reroute from "@/screens/Reroute";
 import Inbox from "@/screens/Inbox";
+import Jobs from "./screens/Jobs";
 import Profile from "@/screens/Profile";
 import Enroll from "@/screens/Enroll";
 import Parking from "@/screens/Parking";
@@ -51,6 +52,7 @@ function TabBar() {
       Icon: IconBell,
       badge: unread,
     },
+    { to: "/jobs", label: t("tabs.jobs", { defaultValue: "Jobs" }), Icon: IconTruck },
     { to: "/parking", label: t("tabs.parking"), Icon: IconParking },
     { to: "/profile", label: t("tabs.vehicle"), Icon: IconTruck },
   ];
@@ -142,6 +144,7 @@ function PairedApp({ deviceId, plate }: { deviceId: string; plate?: string | nul
                 <Route path="/zones" element={<Zones deviceId={deviceId} plate={plate} />} />
                 <Route path="/reroute" element={<Reroute />} />
                 <Route path="/inbox" element={<Inbox />} />
+                <Route path="/jobs" element={<Jobs />} />
                 <Route path="/enroll" element={<Enroll deviceId={deviceId} plate={plate} />} />
                 <Route path="/profile" element={<Profile deviceId={deviceId} plate={plate} />} />
                 <Route path="*" element={<Navigate to="/home" replace />} />

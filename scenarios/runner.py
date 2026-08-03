@@ -41,12 +41,41 @@ tracing.instrument_httpx()
 # context for the current process. The timeline endpoint reads Postgres, so a
 # restart still serves history (just can't reset a pre-restart run's resources).
 _HANDLES: Dict[str, ScenarioHandle] = {}
+# Runs submitted but not yet completed (handle_id -> name). _HANDLES is only
+# populated when run() finishes, so without this a reset-by-name mid-run 404s.
+_PENDING: Dict[str, str] = {}
+
+
+def _stub_cleanup(module: Any, name: str, handle_id: str) -> Dict[str, Any]:
+    """Cleanup dict for a stub reset (post-restart or mid-run).
+
+    Prefer the scenario module's own ``stub_cleanup`` so the tags match what
+    ``run()`` actually minted (e.g. ``TFC-1:{id}``, ``MONSOON:demand:{id}``).
+    The generic ``{NAME.upper()}:{id}`` fallback matched nothing for every
+    shipped scenario, so stub resets silently removed zero trucks.
+    """
+    stub_fn = getattr(module, "stub_cleanup", None)
+    if callable(stub_fn):
+        return stub_fn(handle_id)
+    return {"truck_tag": f"{name.upper()}:{handle_id}"}
 
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
+    # Cross-twin bridge: consume cargo.dpd_release for real (TFC-3 correlation
+    # events + autonomous external UC-II pushes). Best-effort — a dead broker
+    # must never block the runner; TFC-3 then uses its inline fallback.
+    from . import uc2_bridge
+    try:
+        await uc2_bridge.start_listener()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("uc2_bridge_listener_failed", error=str(exc))
     log.info("scenarios_runner_ready", port=cfg.port, scenarios=scenario_names())
     yield
+    try:
+        await uc2_bridge.stop_listener()
+    except Exception:  # noqa: BLE001 - shutdown best-effort
+        pass
 
 
 app = FastAPI(title="JNPA UC-III Scenarios Runner", version="0.1.0", lifespan=_lifespan)
@@ -88,7 +117,10 @@ async def run_scenario(name: str, params: Dict[str, Any] = Body(default_factory=
             _HANDLES[handle.handle_id] = handle
         except Exception as exc:  # noqa: BLE001 - background task must not crash the loop
             log.warning("scenario_run_failed", name=name, handle_id=handle_id, error=str(exc))
+        finally:
+            _PENDING.pop(handle_id, None)
 
+    _PENDING[handle_id] = name.lower()
     asyncio.create_task(_execute())
     return {"handle_id": handle_id, "name": name, "status": "RUNNING", "steps": 0}
 
@@ -102,16 +134,23 @@ async def reset_scenario(
     handle_id = body.get("handle_id")
     handle = _resolve_handle(name, handle_id)
     if handle is None:
-        # Nothing live to reset (e.g. after a runner restart). Best-effort: try a
-        # fresh module reset against a synthetic handle so DB/sim cleanup by tag
-        # still runs if the caller passes a handle_id.
+        # Nothing completed to reset. Two recoverable cases:
+        #   * mid-run: run() hasn't finished so _HANDLES is empty, but the
+        #     submit was recorded in _PENDING — resolve the newest pending id;
+        #   * post-restart: the caller passes the handle_id explicitly.
+        # Either way, build the stub cleanup from the scenario module's own
+        # stub_cleanup() so the tags match what run() minted.
+        if not handle_id:
+            pending = [hid for hid, n in _PENDING.items() if n == name.lower()]
+            handle_id = pending[-1] if pending else None
         if handle_id:
             module = get_scenario(name)
             if module is not None:
                 stub = ScenarioHandle(handle_id=handle_id, name=name, params={}, cfg=cfg,
-                                      cleanup={"truck_tag": f"{name.upper()}:{handle_id}"})
+                                      cleanup=_stub_cleanup(module, name, handle_id))
                 await module.reset(stub)
-                return {"ok": True, "handle_id": handle_id, "note": "reset via stub (post-restart)"}
+                return {"ok": True, "handle_id": handle_id,
+                        "note": "reset via stub (mid-run or post-restart)"}
         raise HTTPException(status_code=404,
                             detail={"error": "no_running_handle", "name": name})
     module = get_scenario(name)

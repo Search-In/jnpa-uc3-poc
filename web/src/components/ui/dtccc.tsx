@@ -10,7 +10,7 @@
 // Pure presentation — no data fetching, no backend coupling. Colours come from
 // tokens.ts only.
 
-import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ChevronLeft, ChevronRight, RefreshCw, Search, type LucideIcon } from "lucide-react";
@@ -323,6 +323,7 @@ export function DataTable<T>({
   onRowClick,
   isRowActive,
   maxHeight,
+  initialSearch,
 }: {
   columns: Column<T>[];
   rows: T[];
@@ -333,6 +334,9 @@ export function DataTable<T>({
   /** Enables the search box; return true to keep the row for query `q`. */
   search?: (row: T, q: string) => boolean;
   searchPlaceholder?: string;
+  /** Seeds the search box — used by the header Global Search hand-off so a
+   *  screen opened with `?q=…` lands already filtered instead of unfiltered. */
+  initialSearch?: string;
   /** Extra filter controls rendered in the toolbar (right of search). */
   toolbar?: ReactNode;
   pageSize?: number;
@@ -343,8 +347,17 @@ export function DataTable<T>({
   maxHeight?: string;
 }) {
   const { t } = useTranslation();
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(initialSearch ?? "");
   const [page, setPage] = useState(0);
+
+  // Re-seed when the caller's query changes (a second Global Search hand-off to
+  // the same screen must re-filter, not sit on the previous query).
+  useEffect(() => {
+    if (initialSearch !== undefined) {
+      setQ(initialSearch);
+      setPage(0);
+    }
+  }, [initialSearch]);
 
   const filtered = useMemo(() => {
     if (!search || !q.trim()) return rows;

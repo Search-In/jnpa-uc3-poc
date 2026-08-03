@@ -60,13 +60,24 @@ class DriverMasterService:
         row = await self._repo.get_driver(ln)
         if not row:
             return None
+        # pdp_status is permit-derived (_PDP_STATUS_EXPR): the ACTUAL PDP record
+        # (core.pdp.active + valid_until) decides; licence date is fallback only.
         pdp_status = row.get("pdp_status")
+        pdp_active = row.get("pdp_active")
+        pdp_validity = row.get("pdp_validity")
+        pdp_valid: Optional[bool] = None
+        if pdp_active is not None:
+            from datetime import date
+            pdp_valid = bool(pdp_active) and (pdp_validity is None or pdp_validity >= date.today())
         return {
             "licence": row.get("licence_no"),
             "driver_name": row.get("name"),
             "licence_valid": pdp_status in ("ACTIVE", "EXPIRING"),
             "expired": pdp_status == "EXPIRED",
             "pdp_status": pdp_status,
+            "pdp_valid": pdp_valid,
+            "pdp_active": pdp_active,
+            "pdp_validity": pdp_validity,
             "licence_valid_to": row.get("licence_valid_to"),
             "transporter": {
                 "id": row.get("transporter_id"),

@@ -13,7 +13,8 @@ import PoliceReports from "@/screens/PoliceReports";
 import Fastag from "@/screens/Fastag";
 import GateCustoms from "@/screens/GateCustoms";
 import Intelligence from "@/screens/Intelligence";
-import FollowTheBox from "@/screens/FollowTheBox";
+import Uc3Lifecycle from "@/screens/Uc3Lifecycle";
+import TruckOperations from "@/screens/TruckOperations";
 import ParkingManagement from "@/screens/ParkingManagement";
 import SystemHealth from "@/screens/SystemHealth";
 import WhatIfConsole from "@/screens/WhatIfConsole";
@@ -168,13 +169,24 @@ function DashboardShell({
             }
           />
           <Route
-            path="/follow-the-box"
+            path="/truck-ops"
             element={
-              <Guard path="/follow-the-box">
-                <FollowTheBox />
+              <Guard path="/truck-ops">
+                <TruckOperations />
               </Guard>
             }
           />
+          <Route
+            path="/uc3-lifecycle"
+            element={
+              <Guard path="/uc3-lifecycle">
+                <Uc3Lifecycle />
+              </Guard>
+            }
+          />
+          {/* Follow-The-Box is out of scope (client clarification); its former
+              route now resolves to the UC-3 Lifecycle console. */}
+          <Route path="/follow-the-box" element={<Navigate to="/uc3-lifecycle" replace />} />
           <Route
             path="/parking"
             element={
@@ -288,14 +300,27 @@ function DashboardShell({
             path="/transporters"
             element={<Navigate to="/vehicles?tab=transporters" replace />}
           />
-          <Route path="/camera-ai" element={<Navigate to="/gate-customs" replace />} />
-          <Route path="/document-ocr" element={<Navigate to="/follow-the-box" replace />} />
-          <Route path="/nvr" element={<Navigate to="/health" replace />} />
-          <Route path="/trt" element={<Navigate to="/live?tab=trt" replace />} />
-          <Route path="/bottlenecks" element={<Navigate to="/geofencing" replace />} />
-          <Route path="/reefer" element={<Navigate to="/parking" replace />} />
-          <Route path="/integrations" element={<Navigate to="/health" replace />} />
-          <Route path="/double-trip" element={<Navigate to="/live?tab=double-trip" replace />} />
+          <Route path="/camera-ai" element={<Navigate to="/gate-customs?tab=camera" replace />} />
+          {/* Document OCR is hosted by Reports & Enforcement, not UC-3 Lifecycle. */}
+          <Route
+            path="/document-ocr"
+            element={<Navigate to="/reports?tab=document_ocr" replace />}
+          />
+          <Route path="/nvr" element={<Navigate to="/health?tab=nvr" replace />} />
+          <Route path="/trt" element={<Navigate to="/truck-ops?tab=trt" replace />} />
+          <Route
+            path="/bottlenecks"
+            element={<Navigate to="/geofencing?tab=bottlenecks" replace />}
+          />
+          <Route path="/reefer" element={<Navigate to="/parking?tab=reefer" replace />} />
+          <Route
+            path="/integrations"
+            element={<Navigate to="/health?tab=integrations" replace />}
+          />
+          <Route
+            path="/double-trip"
+            element={<Navigate to="/truck-ops?tab=double-trip" replace />}
+          />
           <Route path="*" element={<Navigate to="/command-center" replace />} />
         </Routes>
       </main>

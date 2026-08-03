@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Info, Radio, RefreshCw, Truck as TruckIcon, X } from "lucide-react";
 import type MapView from "@arcgis/core/views/MapView";
@@ -15,6 +14,10 @@ import { Card, CardContent } from "@/components/ui/card";
 import { ThroughputChart } from "@/components/ThroughputChart";
 import { KpiStrip } from "@/components/panels/KpiStrip";
 import { CarbonTile } from "@/components/panels/CarbonTile";
+import { WeatherTile } from "@/components/panels/WeatherTile";
+import { TrafficTile } from "@/components/panels/TrafficTile";
+import { AirQualityTile } from "@/components/panels/AirQualityTile";
+import { LogisticsTile } from "@/components/panels/LogisticsTile";
 import { EmptyContainerBoard } from "@/components/panels/EmptyContainerBoard";
 import { TasWidget } from "@/components/panels/TasWidget";
 import { ParkingBoard } from "@/components/panels/ParkingBoard";
@@ -28,12 +31,8 @@ import {
   SearchInput,
   FilterSelect,
   StatusChip,
-  SegmentedTabs,
-  Embedded,
   type Tone,
 } from "@/components/ui/dtccc";
-import EcyTrt from "@/screens/EcyTrt";
-import DoubleTrip from "@/screens/DoubleTrip";
 import { useSocket } from "@/hooks/SocketContext";
 import { useRefresh } from "@/lib/refresh";
 import { severityColour } from "@/lib/palette";
@@ -269,47 +268,12 @@ export default function LiveOperations() {
   const mapHighlights = useMemo(() => [...spotlight, ...simHighlights], [spotlight, simHighlights]);
   const effectiveFocus = focusPoint ?? selectedFocus ?? simFocusPoint;
 
-  // Additive top-level tabs: the live map/ops view stays the default, with ECY
-  // TRT and Double-Trip monitoring folded in as sibling tabs. The live content
-  // is always mounted (hidden via CSS) so the map/WebSocket never unmount on a
-  // tab switch; embedded screens mount only when their tab is active.
-  const [params, setParams] = useSearchParams();
-  const tabParam = params.get("tab");
-  const active: "live" | "trt" | "double-trip" =
-    tabParam === "trt" ? "trt" : tabParam === "double-trip" ? "double-trip" : "live";
-  const setActive = (key: "live" | "trt" | "double-trip") => {
-    const next = new URLSearchParams(params);
-    if (key === "live") next.delete("tab");
-    else next.set("tab", key);
-    setParams(next, { replace: true });
-  };
-
+  // ECY TRT and Double Trip moved OUT of this screen to /truck-ops: they are
+  // truck turn-round metrics, not corridor traffic. Legacy ?tab=trt /
+  // ?tab=double-trip links are redirected there so old bookmarks still resolve.
   return (
     <PageContainer>
-      <div className="border-b border-border px-4 py-2.5">
-        <SegmentedTabs
-          value={active}
-          onChange={setActive}
-          tabs={[
-            { key: "live", label: t("navGroup.traffic") },
-            { key: "trt", label: "ECY TRT" },
-            { key: "double-trip", label: "Double Trip" },
-          ]}
-        />
-      </div>
-
-      {active === "trt" && (
-        <Embedded>
-          <EcyTrt />
-        </Embedded>
-      )}
-      {active === "double-trip" && (
-        <Embedded>
-          <DoubleTrip />
-        </Embedded>
-      )}
-
-      <div className={active === "live" ? "" : "hidden"}>
+      <div>
         <PageHeader
           icon={TruckIcon}
           title={t("navGroup.traffic")}
@@ -435,8 +399,12 @@ export default function LiveOperations() {
           </div>
         )}
 
-        {/* Appendix-C capability tiles (DTCCC view). */}
+        {/* Appendix-C capability tiles (DTCCC view) + live port weather/traffic. */}
         <div className="grid grid-cols-1 gap-2.5 border-t border-border px-4 py-2.5 md:grid-cols-2 lg:grid-cols-3">
+          <WeatherTile />
+          <TrafficTile />
+          <AirQualityTile />
+          <LogisticsTile />
           <CarbonTile />
           <ParkingBoard />
           <EmptyContainerBoard />

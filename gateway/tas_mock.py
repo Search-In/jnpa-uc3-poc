@@ -160,6 +160,29 @@ def apply_deferred_window(win) -> dict:
         return {"applied_slots": len(affected), "window": _window_dict(entry)}
 
 
+def restore_deferred_window(entry: dict) -> None:
+    """Re-seat a window persisted in core.deferred_arrival_window (0115).
+
+    Used only by ``gateway.crosstwin.restore`` at startup. Unlike
+    ``apply_deferred_window`` this does NOT re-reschedule slots — the slot book is
+    rebuilt from scratch on boot and re-flipping would fabricate history. It
+    restores the metering CAP, which is the part that must survive a restart.
+    """
+    entry = dict(entry)
+    if not entry.get("received_at"):
+        entry["received_at"] = _now()
+    entry["booked"] = int(entry.get("booked") or 0)
+    entry["applied_slots"] = list(entry.get("applied_slots") or [])
+    with _BOOK.lock:
+        existing = next((w for w in _WINDOWS
+                         if w["correlation_id"] == entry["correlation_id"]), None)
+        if existing is not None:
+            existing.update(entry)
+            return
+        _WINDOWS.append(entry)
+        del _WINDOWS[:-_MAX_WINDOWS]
+
+
 def deferred_windows() -> List[dict]:
     with _BOOK.lock:
         return [_window_dict(w) for w in _WINDOWS]

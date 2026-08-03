@@ -92,6 +92,7 @@ from .routers import (
     document_ocr,
     double_trip,
     driver_jobs,
+    export_lifecycle,
     gate_documents,
     ldb,
     logistics,
@@ -430,16 +431,15 @@ async def _lifespan(app: FastAPI):
     # events and apply them to the TAS slot book. Also broadcast on WS as
     # type=tas so both frontends see the re-slot live.
     async def _apply_deferred(value) -> None:
-        from . import tas_mock
+        from . import crosstwin
         try:
             win = DeferredArrivalWindow(**value)
         except Exception as exc:  # noqa: BLE001 - reject malformed, keep pump alive
             log.warning("deferred_arrival_invalid", error=str(exc))
             return
-        result = tas_mock.apply_deferred_window(win)
-        log.info("deferred_arrival_applied", correlation_id=win.correlation_id,
-                 gate_id=win.gate_id, applied_slots=result["applied_slots"],
-                 slot_cap=win.slot_cap)
+        # One applier for both transports: persists to RDS, fans out to the
+        # dashboard, and pushes the drivers whose slots moved.
+        await crosstwin.apply(app.state.gw, win, transport="KAFKA")
 
     deferred_pump = KafkaPump(
         state, loop, TOPIC_DEFERRED_ARRIVAL, "tas", "jnpa-gateway-tas",
@@ -450,6 +450,14 @@ async def _lifespan(app: FastAPI):
     traffic_pump.start()
     anpr_pump.start()
     deferred_pump.start()
+
+    # Replay persisted cross-twin windows into the in-memory slot book so a
+    # restart does not silently drop UC-II's metering (migration 0115).
+    try:
+        from . import crosstwin
+        await crosstwin.restore(app.state.gw)
+    except Exception as exc:  # noqa: BLE001 - boot must never depend on this
+        log.warning("crosstwin_restore_failed", error=str(exc))
 
     # MQTT truck-position pump (async task) — best-effort.
     mqtt_task = asyncio.create_task(mqtt_truck_pump(state, stop), name="mqtt-truck-pump")
@@ -615,6 +623,7 @@ app.include_router(customs.router)           # Customs docs (module 5: IGM/OOC/S
 app.include_router(gate_documents.router)    # UC-III gate documents (EIR / PIN ticket / Form-13 + TAT)
 app.include_router(container_job.router)     # UC-III job spine: assignment + gate/yard/scan events
 app.include_router(driver_jobs.router)       # DRIVER-scoped job surface for the mobile PWA
+app.include_router(export_lifecycle.router)  # export leg: booking -> Form13 -> VGM -> LEO -> COPRAR -> loaded
 app.include_router(shipping_lines.router)     # Shipping Lines (module 4: IAL/EAL/EDO, read-only + import)
 app.include_router(berthing.router)          # Berthing Reports (module 7: per-terminal vessel calls + upload)
 app.include_router(marine_calls.router)         # UC-I Marine vessel-call spine (module: marine, read-only)

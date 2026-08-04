@@ -262,6 +262,41 @@ jobs:
             fi
             echo "Database posture OK: all five DSNs -> RDS jnpa_schema_v3 (no local fallback)."
 
+            # 1b-GRAFANA. Grafana's Postgres datasource points at the SAME RDS
+            #     instance, so DERIVE it from the values just resolved rather
+            #     than carrying a second copy of the endpoint in another secret
+            #     that can silently drift out of sync.
+            #
+            #     Why this block exists: docker-compose.yml declares
+            #     GRAFANA_PG_HOST as ${GRAFANA_PG_HOST:?} (required, no default).
+            #     Nothing wrote it — not .env.aws.example, not ensure_key, not
+            #     this workflow — so compose aborted the WHOLE stack on
+            #     "required variable GRAFANA_PG_HOST is missing a value".
+            #     Compose interpolation is evaluated for every service before any
+            #     container starts, so one unset monitoring variable took down all
+            #     30 services.
+            #
+            #     set_key (not ensure_key): these must be REWRITTEN every deploy.
+            #     ensure_key only appends when absent, which would pin a stale
+            #     endpoint or user after a rotation.
+            set_key() {
+              local key="$1" val="$2"
+              # Drop any existing assignment, then append the current value.
+              grep -v "^${key}=" .env > .env.tmp && mv .env.tmp .env
+              echo "${key}=${val}" >> .env
+              chmod 600 .env
+            }
+            set_key GRAFANA_PG_HOST "${RDS_ENDPOINT}:5432"
+            set_key GRAFANA_PG_DB "jnpa_schema_v3"
+            # Same least-privilege role the application uses. Grafana only reads.
+            set_key GRAFANA_PG_USER "${RDS_APP_USER}"
+            set_key GRAFANA_PG_SSLMODE "require"
+            # NOTE: compose reads the datasource PASSWORD from POSTGRES_PASSWORD
+            # (already written by use-rds.sh), not from a GRAFANA_PG_PASSWORD
+            # variable — see the grafana service in docker-compose.yml. A
+            # GRAFANA_PG_PASSWORD secret would be silently ignored.
+            echo "Grafana datasource -> ${RDS_ENDPOINT}:5432/jnpa_schema_v3 as ${RDS_APP_USER}"
+
             # 1c. Fail the deploy fast if the auth posture is unsafe. This mirrors
             #     gateway/auth.validate_auth_config() so a misconfigured .env is
             #     caught here (clear CI failure) rather than as a crash-loop.

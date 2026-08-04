@@ -17,7 +17,9 @@
 # =============================================================================
 set -euo pipefail
 
-RDS_HOST="${RDS_HOST:-database-1.c5gg8y8cyk0z.ap-south-1.rds.amazonaws.com}"
+# RDS_HOST is REQUIRED — the endpoint is deliberately not committed (see
+# docs/RDS_SECURITY.md). Export it, or pass it inline:  RDS_HOST=... rds-preflight.sh
+RDS_HOST="${RDS_HOST:?RDS_HOST is required — export the RDS endpoint (see docs/RDS_SECURITY.md)}"
 RDS_PORT="${RDS_PORT:-5432}"
 RDS_DB="${RDS_DB:-jnpa_schema_v3}"
 RDS_USER="${RDS_USER:-postgres}"

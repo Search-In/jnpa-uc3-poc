@@ -6,15 +6,66 @@
 import { getToken } from "./auth";
 import type { AvailableVehicle } from "./types";
 
-async function http<T>(path: string, init?: RequestInit): Promise<T> {
+// Request budget. Without one, `fetch` waits indefinitely: the 2026-08-04 audit
+// measured /api/kpi at 81s against RDS and the panel simply hung — no spinner
+// resolution, no error state, nothing for the operator to act on. A bounded wait
+// that surfaces a clear failure is always better than an unbounded one.
+export const DEFAULT_TIMEOUT_MS = 15_000;
+
+// Uploads/downloads move megabytes over venue wifi; they get a longer budget.
+export const UPLOAD_TIMEOUT_MS = 120_000;
+
+// Marker used on the thrown Error so apiError() can classify a timeout without
+// depending on the browser's DOMException wording (which differs across engines).
+const TIMEOUT_MARKER = "ETIMEDOUT";
+
+/** AbortSignal that fires after `ms`, combined with any caller-supplied signal. */
+function timeoutSignal(ms: number, existing?: AbortSignal | null): AbortSignal {
+  // AbortSignal.any is not in every target browser yet; fall back to the plain
+  // timeout signal when the caller passed none (the overwhelming majority).
+  const timeout = AbortSignal.timeout(ms);
+  if (!existing) return timeout;
+  const anyOf = (AbortSignal as { any?: (s: AbortSignal[]) => AbortSignal }).any;
+  return anyOf ? anyOf([existing, timeout]) : timeout;
+}
+
+/** True when `err` is an abort raised by our own timeout (not a user cancel). */
+function isTimeout(err: unknown): boolean {
+  return err instanceof DOMException && err.name === "TimeoutError";
+}
+
+async function http<T>(
+  path: string,
+  init?: RequestInit,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+): Promise<T> {
   // Attach the bearer token when a session exists (auth-enabled builds). When
   // auth is disabled there is no token and the header is simply omitted.
   const token = getToken();
   const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
-  const res = await fetch(path, {
-    headers: { "content-type": "application/json", ...authHeader, ...(init?.headers || {}) },
-    ...init,
-  });
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      headers: { "content-type": "application/json", ...authHeader, ...(init?.headers || {}) },
+      ...init,
+      signal: timeoutSignal(timeoutMs, init?.signal),
+    });
+  } catch (err) {
+    if (isTimeout(err)) {
+      // Shaped like the HTTP errors below so apiError() parses it uniformly and
+      // panels can render one consistent failure state.
+      throw new Error(
+        `408 Request Timeout — ${JSON.stringify({
+          detail: {
+            error: TIMEOUT_MARKER,
+            detail: `The server did not respond within ${Math.round(timeoutMs / 1000)}s.`,
+            path,
+          },
+        })}`,
+      );
+    }
+    throw err;
+  }
   if (!res.ok) {
     let detail: any = undefined;
     try {
@@ -40,6 +91,13 @@ export interface ApiErrorInfo {
   code: string | null;
   detail: string;
   extra: Record<string, unknown>;
+  /** True when the request exceeded its client-side budget (see http()). */
+  timedOut: boolean;
+}
+
+/** Convenience for panels: "did this fail because the server was too slow?" */
+export function isTimeoutError(err: unknown): boolean {
+  return apiError(err).code === TIMEOUT_MARKER;
 }
 
 export function apiError(err: unknown): ApiErrorInfo {
@@ -51,6 +109,7 @@ export function apiError(err: unknown): ApiErrorInfo {
     code: null,
     detail: message,
     extra: {},
+    timedOut: false,
   };
   if (sep === -1) return out;
   try {
@@ -59,11 +118,13 @@ export function apiError(err: unknown): ApiErrorInfo {
     if (typeof d === "string") return { ...out, detail: d };
     if (d && typeof d === "object") {
       const { error, detail, ...extra } = d as Record<string, unknown>;
+      const code = typeof error === "string" ? error : null;
       return {
         ...out,
-        code: typeof error === "string" ? error : null,
+        code,
         detail: typeof detail === "string" ? detail : out.detail,
         extra,
+        timedOut: code === TIMEOUT_MARKER,
       };
     }
   } catch {
@@ -79,7 +140,10 @@ export function apiError(err: unknown): ApiErrorInfo {
 async function downloadFile(path: string, filename: string): Promise<void> {
   const token = getToken();
   const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
-  const res = await fetch(path, { headers: { ...authHeader } });
+  const res = await fetch(path, {
+    headers: { ...authHeader },
+    signal: timeoutSignal(UPLOAD_TIMEOUT_MS),
+  });
   if (!res.ok) {
     let detail: any = undefined;
     try {
@@ -107,7 +171,12 @@ async function downloadFile(path: string, filename: string): Promise<void> {
 async function postForm<T>(path: string, form: FormData): Promise<T> {
   const token = getToken();
   const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
-  const res = await fetch(path, { method: "POST", headers: { ...authHeader }, body: form });
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { ...authHeader },
+    body: form,
+    signal: timeoutSignal(UPLOAD_TIMEOUT_MS),
+  });
   if (!res.ok) {
     let detail: any = undefined;
     try {

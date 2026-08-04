@@ -22,7 +22,7 @@ Usage:
     .venv/bin/python scripts/import_customs.py --dry-run
 
     # live import (ensures schema first)
-    POSTGRES_DSN='postgresql+asyncpg://postgres:$RDS_PW@database-1.c5gg8y8cyk0z.ap-south-1.rds.amazonaws.com:5432/jnpa_schema_v3?ssl=require' \
+    POSTGRES_DSN='postgresql+asyncpg://postgres:$RDS_PW@__RDS_HOST__:5432/jnpa_schema_v3?ssl=require' \
         .venv/bin/python scripts/import_customs.py
 
 Options: --data-dir PATH (else $CUSTOMS_DATA_DIR), --dsn, --dry-run, --no-ensure.

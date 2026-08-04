@@ -13,7 +13,7 @@ rows land in each of the five tables. Proves the acceptance criteria:
 Run against the running stack. POSTGRES_DSN is REQUIRED (AWS RDS,
 jnpa_schema_v3) — there is no local-postgres fallback:
 
-    POSTGRES_DSN='postgresql+asyncpg://postgres:<pw>@database-1.c5gg8y8cyk0z.\
+    POSTGRES_DSN='postgresql+asyncpg://postgres:<pw>@database-1.__RDS_HOST__\
 ap-south-1.rds.amazonaws.com:5432/jnpa_schema_v3?ssl=require' \
         .venv/bin/python scripts/validate_audit_persistence.py
 

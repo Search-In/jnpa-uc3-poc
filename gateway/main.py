@@ -33,6 +33,7 @@ from .mode import ProductionSafetyError, mode_name, production_mode
 from jnpa_shared.schemas import (TOPIC_ALERTS, TOPIC_ANPR, TOPIC_DEFERRED_ARRIVAL,
                                  TOPIC_TRAFFIC, DeferredArrivalWindow)
 from jnpa_shared import tracing
+from jnpa_shared.kafka_io import broker_configured as kafka_configured
 
 from . import audit
 from .config import GatewayConfig
@@ -127,6 +128,48 @@ log = get_logger("gateway")
 # correctly configured deployment and for local development. Raising here aborts
 # process startup with a clear, actionable message.
 validate_auth_config()
+
+
+def _validate_environment() -> None:
+    """Report environment misconfiguration at BOOT, not at first request.
+
+    Complements ``validate_auth_config`` (which owns the fail-fast auth rules)
+    with the broader required-variable sweep from ``scripts/check_env.py`` — the
+    audit found nine variables the stack needs that nothing validated, including
+    ``PWA_PAIRING_SECRET``, whose absence silently 401s every driver login.
+
+    Warnings are LOGGED, never fatal: this must not become a new way for the
+    gateway to refuse to start. The genuinely fatal cases are already covered by
+    ``validate_auth_config`` above. Import failures are swallowed so the gateway
+    still boots in a stripped image that has no scripts/ directory.
+    """
+    try:
+        import pathlib
+        import sys as _sys
+
+        _root = str(pathlib.Path(__file__).resolve().parents[1])
+        if _root not in _sys.path:
+            _sys.path.insert(0, _root)
+        from scripts.check_env import env_source, validate  # type: ignore
+
+        errors, warnings = validate(env_source())
+        for e in errors:
+            log.error("env_config_error", detail=e)
+        for w in warnings:
+            log.warning("env_config_warning", detail=w)
+        if errors:
+            log.error(
+                "env_config_incomplete",
+                errors=len(errors),
+                hint="run `make env-check` for the full report",
+            )
+        else:
+            log.info("env_config_ok", warnings=len(warnings))
+    except Exception as exc:  # noqa: BLE001 — diagnostics must never block boot
+        log.debug("env_validation_skipped", error=str(exc))
+
+
+_validate_environment()
 
 # OpenTelemetry: export spans to Jaeger (no-op if otel deps / endpoint absent).
 # instrument_httpx() makes the gateway's outbound proxy calls continue the trace
@@ -446,10 +489,30 @@ async def _lifespan(app: FastAPI):
         persist=_apply_deferred,
     )
 
-    alert_pump.start()
-    traffic_pump.start()
-    anpr_pump.start()
-    deferred_pump.start()
+    # Start the pumps ONLY when a broker is actually configured — the same guard
+    # services/lifecycle_bus.py applies to its producer, for the same reason.
+    #
+    # Each KafkaPump runs a daemon thread that retries forever, and every retry
+    # builds a fresh librdkafka Consumer, which itself spawns several internal
+    # threads. In a process with no broker that is pure waste; in the TEST SUITE
+    # it is fatal. Each TestClient(app) triggers this startup, so a whole-suite
+    # run accumulated four leaking pumps per client across ~80 test files until
+    # the process died with "RuntimeError: can't start new thread" — 20 failures
+    # and 36 errors that all passed when the same files ran in isolation.
+    #
+    # The pumps are unconditionally started in every real deployment, because
+    # compose and the prod env-file always set KAFKA_BROKERS.
+    _pumps = (alert_pump, traffic_pump, anpr_pump, deferred_pump)
+    if kafka_configured():
+        for _p in _pumps:
+            _p.start()
+        log.info("kafka_pumps_started", count=len(_pumps))
+    else:
+        log.info(
+            "kafka_pumps_skipped",
+            reason="no KAFKA_BROKERS configured",
+            detail="set KAFKA_BROKERS to enable the alert/traffic/anpr/tas pumps",
+        )
 
     # Replay persisted cross-twin windows into the in-memory slot book so a
     # restart does not silently drop UC-II's metering (migration 0115).

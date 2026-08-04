@@ -28,8 +28,11 @@ from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query, Reque
                      Response, UploadFile, status)
 from pydantic import BaseModel
 
+from jnpa_shared.pii import mask_payload
+
 from ..auth import CONTROL_ROOM, Role, auth_enabled
 from ..metrics import REQUESTS
+from ..pii import mask_for_request
 from services.gate_documents import GateDocumentService
 from services.gate_documents.repository import FORM13_SOURCES
 from services.gate_documents.upload_parsers import DOC_TYPES, doc_type_ok
@@ -124,14 +127,29 @@ async def summary(svc: GateDocumentService = Depends(get_service)) -> Dict[str, 
 
 # --------------------------------------------------------------------- lists
 async def _list(svc: GateDocumentService, doc_type: str, response: Response,
-                filters: dict, limit: int, offset: int) -> Page:
+                filters: dict, limit: int, offset: int,
+                request: Optional[Request] = None) -> Page:
+    """Shared list path for EIR / PIN / Form-13.
+
+    Gate documents carry ``driver_licence`` (a real DL number transcribed off the
+    physical slip), so the page is routed through the PII gate before it is
+    serialised. ``request`` is optional so any existing in-process caller that
+    does not pass one still works — but then nothing is unmasked, which is the
+    safe direction.
+    """
     res = await svc.list_docs(doc_type, filters=filters, limit=limit, offset=offset)
     REQUESTS.labels("gate_docs", "ok").inc()
-    return _page(res["items"], res["total"], limit, offset, response)
+    items = res["items"]
+    if request is not None:
+        items = mask_for_request(request, items, surface=f"gate_docs.{doc_type.lower()}")
+    else:
+        items = mask_payload(items)
+    return _page(items, res["total"], limit, offset, response)
 
 
 @router.get("/eir", response_model=Page, summary="Equipment Interchange Reports")
 async def list_eir(
+    request: Request,
     response: Response,
     container: Optional[str] = None,
     truck: Optional[str] = None,
@@ -142,11 +160,12 @@ async def list_eir(
 ) -> Page:
     filters = {"container_number": container,
                "truck_no": _norm_plate(truck) if truck else None, "terminal": terminal}
-    return await _list(svc, "EIR", response, filters, limit, offset)
+    return await _list(svc, "EIR", response, filters, limit, offset, request)
 
 
 @router.get("/pin", response_model=Page, summary="PIN tickets (one row per move leg)")
 async def list_pin(
+    request: Request,
     response: Response,
     pin: Optional[str] = None,
     container: Optional[str] = None,
@@ -158,11 +177,12 @@ async def list_pin(
 ) -> Page:
     filters = {"pin_number": pin, "container_number": container,
                "truck_no": _norm_plate(truck) if truck else None, "terminal": terminal}
-    return await _list(svc, "PIN", response, filters, limit, offset)
+    return await _list(svc, "PIN", response, filters, limit, offset, request)
 
 
 @router.get("/form13", response_model=Page, summary="Form 13 gate documents")
 async def list_form13(
+    request: Request,
     response: Response,
     visit_id: Optional[str] = None,
     container: Optional[str] = None,
@@ -176,12 +196,13 @@ async def list_form13(
     filters = {"visit_id": visit_id, "container_number": container,
                "truck_no": _norm_plate(vehicle) if vehicle else None, "terminal": terminal,
                "source": _check_source(source)}
-    return await _list(svc, "FORM13", response, filters, limit, offset)
+    return await _list(svc, "FORM13", response, filters, limit, offset, request)
 
 
 # ------------------------------------------------------------ cross-doc views
 @router.get("/container/{container_no}", summary="Every gate document for one container")
 async def docs_for_container(
+    request: Request,
     container_no: str,
     source: Optional[str] = Query(None, description="Form-13 provenance filter: live | sim | all (default all)"),
     svc: GateDocumentService = Depends(get_service),
@@ -189,18 +210,19 @@ async def docs_for_container(
     res = await svc.docs_for_container(container_no.strip().upper(),
                                        source=_check_source(source))
     REQUESTS.labels("gate_docs", "ok").inc()
-    return res
+    return mask_for_request(request, res, surface="gate_docs.container")
 
 
 @router.get("/truck/{truck_no}", summary="Every gate document for one truck (incl. containerless)")
 async def docs_for_truck(
+    request: Request,
     truck_no: str,
     source: Optional[str] = Query(None, description="Form-13 provenance filter: live | sim | all (default all)"),
     svc: GateDocumentService = Depends(get_service),
 ) -> Dict[str, Any]:
     res = await svc.docs_for_truck(_norm_plate(truck_no), source=_check_source(source))
     REQUESTS.labels("gate_docs", "ok").inc()
-    return res
+    return mask_for_request(request, res, surface="gate_docs.truck")
 
 
 @router.get("/tat", summary="Document-derived truck turnaround time (EIR TruckIn -> TruckOut)")

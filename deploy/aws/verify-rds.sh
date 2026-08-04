@@ -16,7 +16,9 @@
 set -uo pipefail
 
 ENV_FILE="${1:-.env}"
-RDS_HOST="${RDS_HOST:-database-1.c5gg8y8cyk0z.ap-south-1.rds.amazonaws.com}"
+# RDS_HOST is REQUIRED — the endpoint is deliberately not committed (see
+# docs/RDS_SECURITY.md). Export it, or pass it inline:  RDS_HOST=... verify-rds.sh
+RDS_HOST="${RDS_HOST:?RDS_HOST is required — export the RDS endpoint (see docs/RDS_SECURITY.md)}"
 RDS_DB="${RDS_DB:-jnpa_schema_v3}"
 COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.aws.yml)
 fail=0

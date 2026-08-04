@@ -23,7 +23,7 @@ Expected rows ARE serial/vessel-anchored and import cleanly.
 
 Usage:
     python scripts/import_berthing_reports.py --dry-run        # parse only, no DB
-    POSTGRES_DSN='postgresql+asyncpg://postgres:$RDS_PW@database-1.c5gg8y8cyk0z.ap-south-1.rds.amazonaws.com:5432/jnpa_schema_v3?ssl=require' \
+    POSTGRES_DSN='postgresql+asyncpg://postgres:$RDS_PW@__RDS_HOST__:5432/jnpa_schema_v3?ssl=require' \
         .venv/bin/python scripts/import_berthing_reports.py    # live upsert (+ ensures schema)
 Options: --data-dir PATH, --dsn, --dry-run, --no-ensure.
 """

@@ -16,16 +16,24 @@ identity are untouched.
 
 RBAC: /api/drivers (customs + admin) — see gateway/auth.py._POLICY (longest-prefix
 wins over the DRIVER-scoped /api/driver self-profile rule).
+
+PII (DPDP): this registry holds ~31.8k REAL driving licence numbers and dates of
+birth. Every response passes through ``gateway.pii.mask_for_request``, which
+serves cleartext only to a principal whose role is in ``PII_UNMASK_ROLES``
+(default DTCCC_ADMIN + CUSTOMS) and masks for everyone else — including an
+unauthenticated caller on an ``AUTH_ENABLED=false`` build, which is the demo
+default. Field shapes are preserved, so no client breaks.
 """
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict
 
 from ..metrics import REQUESTS
+from ..pii import mask_for_request
 from services.driver_master import DriverMasterService
 
 router = APIRouter(prefix="/api/drivers/master", tags=["driver-master"])
@@ -57,7 +65,10 @@ class DriverListItem(BaseModel):
     licence_type: Optional[str] = None
     licence_valid_to: Optional[date] = None
     latest_pdp_number: Optional[str] = None
-    dob: Optional[date] = None
+    # PII: a masked dob is the birth YEAR only ("1994-**-**"), which is no longer
+    # a valid ``date``. Widened to accept both so the same DTO serves the
+    # entitled (date) and masked (str) paths without a second response model.
+    dob: Optional[Union[date, str]] = None
     pdp_status: Optional[str] = None
     pdp_active: Optional[bool] = None
     enrollment_status: Optional[str] = None
@@ -89,6 +100,7 @@ class DriverStats(BaseModel):
 # ------------------------------------------------------------------- endpoints
 @router.get("", response_model=DriverListResponse, summary="List / search the driver registry")
 async def list_drivers(
+    request: Request,
     q: Optional[str] = Query(default=None, description="search licence/name/company/PDP/transporter"),
     company: Optional[str] = Query(default=None),
     status_: Optional[str] = Query(default=None, alias="status",
@@ -114,7 +126,7 @@ async def list_drivers(
     res = await service.list_drivers(filters, sort=sort, direction=direction,
                                      limit=limit, offset=offset)
     REQUESTS.labels("drivers_master", "ok").inc()
-    return DriverListResponse(**res)
+    return DriverListResponse(**mask_for_request(request, res, surface="drivers_master.list"))
 
 
 @router.get("/stats", response_model=DriverStats, summary="Driver Master KPI aggregates")
@@ -124,18 +136,20 @@ async def stats(service: DriverMasterService = Depends(get_service)) -> DriverSt
 
 
 @router.get("/validate/{licence}", summary="Validate a driver's licence / PDP / enrollment")
-async def validate_licence(licence: str,
+async def validate_licence(request: Request, licence: str,
                            service: DriverMasterService = Depends(get_service)) -> Dict[str, Any]:
     res = await service.validate(licence)
     if res is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "driver_not_found", "licence": licence})
     REQUESTS.labels("drivers_master", "ok").inc()
-    return res
+    # The ALLOW/REVIEW decision and every status flag stay in cleartext — only the
+    # identifying licence echo is masked, so the gate flow is unaffected.
+    return mask_for_request(request, res, surface="drivers_master.validate")
 
 
 @router.get("/{licence}/pdp-history", summary="Paginated PDP history (lineage) for a driver")
-async def pdp_history(licence: str,
+async def pdp_history(request: Request, licence: str,
                       limit: int = Query(default=25, ge=1, le=200),
                       offset: int = Query(default=0, ge=0),
                       service: DriverMasterService = Depends(get_service)) -> Dict[str, Any]:
@@ -144,15 +158,15 @@ async def pdp_history(licence: str,
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "driver_not_found", "licence": licence})
     REQUESTS.labels("drivers_master", "ok").inc()
-    return res
+    return mask_for_request(request, res, surface="drivers_master.pdp_history")
 
 
 @router.get("/{licence}", summary="Full driver profile")
-async def driver_profile(licence: str,
+async def driver_profile(request: Request, licence: str,
                          service: DriverMasterService = Depends(get_service)) -> Dict[str, Any]:
     res = await service.get_profile(licence)
     if res is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "driver_not_found", "licence": licence})
     REQUESTS.labels("drivers_master", "ok").inc()
-    return res
+    return mask_for_request(request, res, surface="drivers_master.profile")

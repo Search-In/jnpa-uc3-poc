@@ -80,6 +80,71 @@ def load_plates(n: int) -> Tuple[List[str], str]:
     return _generated_plates(n), "generated"
 
 
+#: Human-readable remediation per missing component. Kept next to the readiness
+#: check so the operator answer and the code cannot drift apart.
+_REMEDIATION = {
+    "detector": (
+        "YOLO plate detector weights are missing. Run "
+        "`scripts/download_anpr_weights.sh` (writes ai/anpr/resources/*.pt)."
+    ),
+    "recogniser": (
+        "PaddleOCR (PP-OCRv4) is not importable, so plate TEXT is read by the "
+        "deterministic template-matching fallback. paddlepaddle 2.6 publishes no "
+        "linux/arm64 wheel, so an image built on Apple Silicon is degraded by "
+        "construction — ai/anpr/Dockerfile tolerates the failed install on "
+        "purpose. Build the ANPR image with `--platform linux/amd64`, or run the "
+        "service on an x86_64 host."
+    ),
+}
+
+
+def describe_capability(readiness: Dict) -> Dict:
+    """Turn the raw readiness flags into an explicit, presentable status.
+
+    The 2026-08-04 audit found the Demo Console rendering **0.0% against a 95%
+    target** — a true number, honestly plumbed, but framed as if the system had
+    been measured and failed. It had not been measured at all: the recogniser was
+    never loaded. This block makes the difference explicit rather than leaving it
+    to be inferred from a `degraded: true` flag that the UI ignored.
+
+    Returns FULL (numbers are a real measurement of the bid stack) or DEGRADED
+    (numbers describe the fallback and must not be presented as accuracy).
+    """
+    missing: List[str] = []
+    if not readiness.get("detector_ml"):
+        missing.append("detector")
+    if not readiness.get("ocr_ml"):
+        missing.append("recogniser")
+
+    if not missing:
+        return {
+            "status": "FULL",
+            "engine": "paddle+yolo",
+            "missing": [],
+            "headline": "ANPR running the full YOLO + PP-OCRv4 stack.",
+            "reason": None,
+            "remediation": [],
+        }
+
+    return {
+        "status": "DEGRADED",
+        "engine": "fallback",
+        "missing": missing,
+        "headline": "ANPR DEGRADED — accuracy not measurable on this host.",
+        "reason": (
+            "The evaluated pipeline is not the bid stack: "
+            + " and ".join(
+                {"detector": "the plate DETECTOR is not loaded",
+                 "recogniser": "plate TEXT is read by the template-matching fallback"}[m]
+                for m in missing
+            )
+            + ". Accuracy figures below describe the fallback, not the "
+              "YOLO + PP-OCRv4 system, and must not be quoted as a result."
+        ),
+        "remediation": [_REMEDIATION[m] for m in missing],
+    }
+
+
 def run_eval(
     pipeline: AnprPipeline,
     cfg: AnprAiConfig,
@@ -136,6 +201,7 @@ def run_eval(
 
     combined = combined_weighted_accuracy(slice_metrics)
     target_met = combined >= cfg.eval_target_pct
+    capability = describe_capability(readiness)
 
     # Per-slice gate checks from the spec.
     by_name = {sm.name: sm for sm in slice_metrics}
@@ -158,6 +224,13 @@ def run_eval(
         "target_pct": cfg.eval_target_pct,
         "gates": gates,
         "OCR_TARGET_MET": target_met,
+        # --- honesty envelope (see describe_capability) -------------------
+        # A number produced by the template-matching fallback is NOT a
+        # measurement of the system being bid. `accuracy_reportable` tells every
+        # consumer (dashboard, evidence pack) whether the accuracy figures above
+        # may be presented as a result at all.
+        "capability": capability,
+        "accuracy_reportable": capability["status"] == "FULL",
     }
 
 

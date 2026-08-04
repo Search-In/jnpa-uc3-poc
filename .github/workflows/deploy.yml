@@ -221,9 +221,22 @@ jobs:
               echo "  URL-encode any of  : / ? # [ ] @  before storing it." >&2
               exit 1
             fi
+            # The endpoint and application user are secrets too — publishing the
+            # hostname next to a superuser name reduced the whole PII corpus to one
+            # guessed password. See docs/RDS_SECURITY.md.
+            RDS_ENDPOINT='${{ secrets.RDS_HOST }}'
+            if [ -z "${RDS_ENDPOINT}" ]; then
+              echo "DEPLOY ABORTED: repository secret RDS_HOST is not set." >&2
+              echo "  Add the RDS endpoint under Settings > Secrets and variables > Actions." >&2
+              exit 1
+            fi
+            # RDS_USER defaults to the least-privilege application role, NOT the
+            # postgres superuser (docs/RDS_SECURITY.md §3).
+            RDS_APP_USER='${{ secrets.RDS_USER }}'
+            RDS_APP_USER="${RDS_APP_USER:-jnpa_app}"
             RDS_PASSWORD="${RDS_PW}" \
-            RDS_HOST="database-1.c5gg8y8cyk0z.ap-south-1.rds.amazonaws.com" \
-            RDS_PORT="5432" RDS_DB="jnpa_schema_v3" RDS_USER="postgres" \
+            RDS_HOST="${RDS_ENDPOINT}" \
+            RDS_PORT="5432" RDS_DB="jnpa_schema_v3" RDS_USER="${RDS_APP_USER}" \
               bash deploy/aws/use-rds.sh .env
             unset RDS_PW
 
@@ -233,7 +246,7 @@ jobs:
                      CONGESTION_POSTGRES_DSN ANOMALY_POSTGRES_DSN; do
               line="$(grep -E "^${v}=" .env | tail -n1 || true)"
               case "${line}" in
-                *"database-1.c5gg8y8cyk0z.ap-south-1.rds.amazonaws.com"*"/jnpa_schema_v3"*) : ;;
+                *"${RDS_ENDPOINT}"*"/jnpa_schema_v3"*) : ;;
                 *) echo "DEPLOY ABORTED: ${v} does not point at RDS/jnpa_schema_v3." >&2; exit 1 ;;
               esac
             done

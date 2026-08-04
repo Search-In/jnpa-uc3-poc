@@ -1,6 +1,6 @@
 # UC-3 Lifecycle — Deployment & Validation Report
 
-**Date:** 2026-08-01 · **Target:** AWS RDS PostgreSQL 18.3 · `database-1.c5gg8y8cyk0z.ap-south-1.rds.amazonaws.com:5432/jnpa_schema_v3`
+**Date:** 2026-08-01 · **Target:** AWS RDS PostgreSQL 18.3 · `__RDS_HOST__:5432/jnpa_schema_v3`
 **Branch:** `migrate-schema-v3` · **Baseline:** `docs/UC3_LIFECYCLE_IMPLEMENTATION.md`
 
 **Overall: DEPLOYED — no BLOCKERS.** 4 migrations applied, 8 tables verified, all pre-existing data preserved exactly. **4 production-only defects were found by this validation and fixed**; every fix is re-verified against the live database.

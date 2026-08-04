@@ -82,7 +82,8 @@ def _warn(msg: str) -> None:
 def collect_ocr_accuracy() -> Dict[str, Optional[float]]:
     """clean / dust / night exact-match from ANPR /eval (source of truth)."""
     out = {"ocr_clean_accuracy": None, "ocr_dust_accuracy": None, "ocr_night_accuracy": None,
-           "ocr_target_met": None, "ocr_combined_pct": None, "ocr_engine": None}
+           "ocr_target_met": None, "ocr_combined_pct": None, "ocr_engine": None,
+           "ocr_capability": None, "ocr_accuracy_reportable": None}
     try:
         m = httpx.get(f"{ANPR_AI}/eval", timeout=180).json()
     except Exception as exc:  # noqa: BLE001
@@ -95,6 +96,22 @@ def collect_ocr_accuracy() -> Dict[str, Optional[float]]:
     out["ocr_target_met"] = m.get("OCR_TARGET_MET")
     out["ocr_combined_pct"] = m.get("combined_weighted_accuracy_pct")
     out["ocr_engine"] = m.get("engine")
+    # Carry the capability envelope into the evidence pack. A 0.0 accuracy with
+    # no explanation reads as "we tested and scored zero"; the truth is that the
+    # bid stack was never loaded on this host. The evidence bundle must say which.
+    cap = m.get("capability")
+    out["ocr_capability"] = cap
+    out["ocr_accuracy_reportable"] = m.get(
+        "accuracy_reportable",
+        None if cap is None else cap.get("status") == "FULL",
+    )
+    if out["ocr_accuracy_reportable"] is False:
+        _warn(
+            "ANPR is DEGRADED — the OCR accuracy figures describe the "
+            "template-matching fallback, NOT the YOLO + PP-OCRv4 bid stack. "
+            "They are recorded but flagged non-reportable. "
+            + "; ".join((cap or {}).get("remediation", []))
+        )
     return out
 
 
@@ -370,6 +387,10 @@ def build_metrics(handles: List[str]) -> Dict[str, Any]:
             "ocr_target_met": ocr["ocr_target_met"],
             "ocr_combined_weighted_accuracy_pct": ocr["ocr_combined_pct"],
             "ocr_engine": ocr["ocr_engine"],
+            # Whether the three ocr_* figures above may be quoted as a result.
+            # False => they measure the fallback engine, not the bid stack.
+            "ocr_accuracy_reportable": ocr["ocr_accuracy_reportable"],
+            "ocr_capability": ocr["ocr_capability"],
             "congestion_precision": cong["congestion_precision"],
             "congestion_recall": cong["congestion_recall"],
             "congestion_target_met": cong["congestion_target_met"],

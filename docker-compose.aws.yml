@@ -16,7 +16,7 @@
 #   overlay never enables that profile, so `up` here starts no database. Every
 #   service reads POSTGRES_DSN / RFID_ / TRUCK_ / CONGESTION_ / ANOMALY_
 #   *_POSTGRES_DSN from the env file and those must point at
-#   database-1.c5gg8y8cyk0z.ap-south-1.rds.amazonaws.com:5432/jnpa_schema_v3.
+#   __RDS_HOST__:5432/jnpa_schema_v3.
 #   The compose vars use the `${VAR:?…}` form, so a missing DSN aborts the
 #   deployment instead of silently falling back to a local database.
 # ============================================================================

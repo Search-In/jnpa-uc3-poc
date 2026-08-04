@@ -87,7 +87,21 @@ async def apply(gw, win, *, transport: str = "KAFKA") -> dict:
     result = tas_mock.apply_deferred_window(win)
     window = result["window"]
 
-    persisted = await _repo(gw).upsert(window, transport=transport)
+    # Persistence is BEST-EFFORT, like the WS and push legs below. Without this
+    # guard an unreachable RDS raised straight out of apply(), so a UC-II
+    # metering window that had ALREADY been applied to the slot book was lost:
+    # the Kafka pump saw an exception and the HTTP inject route 500'd, even
+    # though the meter was in force. The window is re-persisted on the next
+    # delivery (correlation_id is the idempotency key), and `persisted: False`
+    # tells the caller the durability leg did not complete rather than implying
+    # it did.
+    try:
+        persisted = await _repo(gw).upsert(window, transport=transport)
+    except Exception as exc:  # noqa: BLE001 — metering must not depend on RDS
+        persisted = False
+        log.warning("crosstwin.persist_failed",
+                    correlation_id=window.get("correlation_id"),
+                    transport=transport, error=str(exc))
 
     # Dashboard: an addressed-to-nobody frame, i.e. the control-room view. The
     # PWA ignores type=tas, so this leaks nothing to drivers.

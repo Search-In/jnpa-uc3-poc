@@ -30,7 +30,7 @@ Usage:
     python scripts/import_transporter_master.py --dry-run
 
     # Live upsert against the RDS application database (jnpa_schema_v3)
-    POSTGRES_DSN='postgresql+asyncpg://postgres:$RDS_PW@database-1.c5gg8y8cyk0z.ap-south-1.rds.amazonaws.com:5432/jnpa_schema_v3?ssl=require' \
+    POSTGRES_DSN='postgresql+asyncpg://postgres:$RDS_PW@__RDS_HOST__:5432/jnpa_schema_v3?ssl=require' \
         .venv/bin/python scripts/import_transporter_master.py
 
 Options: --xlsx PATH, --dsn DSN, --dry-run, --limit N, --report PATH (JSON).

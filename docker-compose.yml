@@ -257,7 +257,10 @@ services:
       # Postgres datasource -> AWS RDS (see infra/grafana/provisioning/
       # datasources/datasources.yml, which interpolates these). Never the
       # dev-only local postgres container.
-      GRAFANA_PG_HOST: ${GRAFANA_PG_HOST:-database-1.c5gg8y8cyk0z.ap-south-1.rds.amazonaws.com:5432}
+      # Grafana's Postgres datasource host:port. REQUIRED — the RDS endpoint is
+      # deliberately not committed (docs/RDS_SECURITY.md); set GRAFANA_PG_HOST in
+      # .env.local rather than restoring a literal default here.
+      GRAFANA_PG_HOST: ${GRAFANA_PG_HOST:?set GRAFANA_PG_HOST (see docs/RDS_SECURITY.md)}
       GRAFANA_PG_DB: ${GRAFANA_PG_DB:-jnpa_schema_v3}
       GRAFANA_PG_USER: ${GRAFANA_PG_USER:-postgres}
       GRAFANA_PG_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set (RDS password, used by the Grafana datasource)}
@@ -365,7 +368,26 @@ services:
   # CPU-only; degrades to a classical detector + template OCR if paddle/weights
   # are unavailable (the /eval `engine` field reports which path ran).
   # --------------------------------------------------------------------------
+  # --------------------------------------------------------------------------
+  # ANPR (YOLOv8 detector + PaddleOCR PP-OCRv4 recogniser) — host 8301.
+  #
+  # PLATFORM (read before demoing accuracy): paddlepaddle 2.6 publishes NO
+  # linux/arm64 wheel, and ai/anpr/Dockerfile deliberately tolerates the failed
+  # install ("will run degraded"). An image BUILT ON APPLE SILICON therefore ships
+  # without a recogniser and reports 0.0 accuracy — a true number about the
+  # template-matching fallback, not a measurement of this stack.
+  #
+  # To get real accuracy, build for amd64 (Rosetta emulation, slower but works):
+  #     docker compose build --build-arg BUILDKIT_INLINE_CACHE=1 anpr
+  #     # or explicitly:
+  #     docker buildx build --platform linux/amd64 -f ai/anpr/Dockerfile -t jnpa/anpr-ai:0.1.0 .
+  # or run this one service on an x86_64 host.
+  #
+  # Set ANPR_PLATFORM=linux/amd64 in .env.local to force it here.
+  # Check which engine is live:  curl :8301/eval | jq .capability
+  # --------------------------------------------------------------------------
   anpr:
+    platform: ${ANPR_PLATFORM:-}
     build:
       context: .
       dockerfile: ai/anpr/Dockerfile
@@ -436,8 +458,12 @@ services:
 
   # --------------------------------------------------------------------------
   # EIR / gate-slip OCR (Tesseract) — host 8210.
-  # Structured field extraction for terminal EIR photos. Optional; gateway/UI
-  # wiring is a follow-up (POST http://eir-ocr:8210/infer).
+  # Structured field extraction for terminal EIR photos. WIRED as of 2026-08-04:
+  # the gateway POSTs image uploads with doc_type=EIR|GATE_SLIP to
+  # http://eir-ocr:8210/infer (GATEWAY_EIR_OCR_URL) and uses the returned fields,
+  # falling back to its own reader when this service is unavailable. Still
+  # optional — /api/ocr keeps working without it, just at a lower rung.
+  # Check which rung is live with: GET /api/ocr/health -> active_rung.
   # --------------------------------------------------------------------------
   eir-ocr:
     build:
@@ -936,6 +962,11 @@ services:
       GATEWAY_GATE_DATA_URL: ${GATEWAY_GATE_DATA_URL:-http://gate-data:8350}
       GATEWAY_IDENTITY_URL: ${GATEWAY_IDENTITY_URL:-http://identity:8360}
       GATEWAY_PARKING_URL: ${GATEWAY_PARKING_URL:-http://parking:8370}
+      # EIR / gate-slip OCR sidecar. POST /api/ocr/document with doc_type=EIR now
+      # routes here for a REAL structured field read (validated against the four
+      # WhatsApp gate slips) and falls back to the local reader when it is down.
+      # Set empty to disable the LIVE rung entirely.
+      GATEWAY_EIR_OCR_URL: ${GATEWAY_EIR_OCR_URL:-http://eir-ocr:8210}
       # ULIP relay — empty -> mock relay used for the SECONDARY truck rung.
       GATEWAY_ULIP_URL: ${GATEWAY_ULIP_URL:-}
       ULIP_API_KEY: ${ULIP_API_KEY:-}
@@ -1065,9 +1096,17 @@ services:
       # Dev-only resilience fallbacks (in-memory store / base64 photo / synthetic
       # identity). Production forces strict regardless; set false belt-and-braces.
       ALLOW_FALLBACK: ${ALLOW_FALLBACK:-true}
-      AUTH_ENABLED: ${AUTH_ENABLED:-false}
+      # Enforcement ON by default. This defaulted to `false`, which meant a
+      # plain `make up` served the whole driver registry (~31.8k real licence
+      # numbers + dates of birth) to any unauthenticated caller. Turning it off
+      # is now the deliberate act, not the accident.
+      AUTH_ENABLED: ${AUTH_ENABLED:-true}
       AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-}
       AUTH_DEV_TOKENS: ${AUTH_DEV_TOKENS:-true}
+      # DPDP PII masking (gateway/pii.py). Opt-OUT and fails closed: with no
+      # principal every response is masked. Only these roles see cleartext.
+      PII_MASKING_ENABLED: ${PII_MASKING_ENABLED:-true}
+      PII_UNMASK_ROLES: ${PII_UNMASK_ROLES:-DTCCC_ADMIN,CUSTOMS}
       AUTH_RATE_LIMIT_PER_MIN: ${AUTH_RATE_LIMIT_PER_MIN:-600}
       AUTH_USERS: ${AUTH_USERS:-}
       # Shared secret accepted from trusted internal services (the scenarios-runner)

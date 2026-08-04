@@ -15,10 +15,34 @@ bootstrap self-test that prints `BOOTSTRAP OK`.
 
 ---
 
-## One-command bring-up
+## Bring-up on a fresh machine
 
 ```bash
-cp .env.local.example .env.local && make venv && make up && make bootstrap-check
+make env-init                 # .env.local + generated secrets (never overwrites)
+#   -> then fill __RDS_HOST__ / __RDS_USER__ / __RDS_PASSWORD__ by hand.
+#      Read docs/RDS_SECURITY.md FIRST — the endpoint is not committed, and the
+#      app must not connect as the postgres superuser.
+make env-check                # validates every required var + the auth posture
+make venv                     # host virtualenv (once)
+make migrate                  # apply infra/postgres/v3 migrations (idempotent)
+make up                       # start the stack
+make bootstrap-check          # end-to-end self-test
+```
+
+`make env-init` replaces the old `cp .env.local.example .env.local`: the example
+now ships `__GENERATE_ME__` placeholders for `AUTH_JWT_SECRET` and
+`PWA_PAIRING_SECRET`, and a copied-but-unfilled file leaves the gateway refusing
+to start and every driver unable to log in. `make env-check` reports exactly
+which values are still missing, and is also run automatically at gateway boot
+(warnings are logged, never fatal).
+
+On a database that was migrated BY HAND before the runner existed, adopt it once
+instead of re-running the backfills:
+
+```bash
+make migrate-status                     # see what the ledger thinks
+make migrate-baseline VERSION=0203      # record 0101..0203 as applied
+make migrate                            # then apply only what is genuinely new
 ```
 
 `make up` starts the stack in the background; give it ~25 s to become healthy

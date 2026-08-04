@@ -179,7 +179,9 @@ section "0b. DATABASE — AWS RDS ONLY"
 #   (1) no local postgres container is running,
 #   (2) no running service is configured against a local postgres,
 #   (3) the gateway can actually open an encrypted connection to RDS.
-RDS_HOST_EXPECT="${RDS_HOST_EXPECT:-database-1.c5gg8y8cyk0z.ap-south-1.rds.amazonaws.com}"
+# Expected endpoint for the DSN assertion. Not committed (docs/RDS_SECURITY.md);
+# when unset the host check is SKIPPED rather than compared to a placeholder.
+RDS_HOST_EXPECT="${RDS_HOST_EXPECT:-}"
 RDS_DB_EXPECT="${RDS_DB_EXPECT:-jnpa_schema_v3}"
 
 if [ "$HAVE_DOCKER" = 1 ]; then

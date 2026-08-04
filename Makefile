@@ -1,8 +1,11 @@
 # ============================================================================
 # JNPA UC-III PoC — developer Makefile
 # ----------------------------------------------------------------------------
-# One-command bring-up:
-#   cp .env.local.example .env.local && make up && make bootstrap-check
+# Bring-up on a fresh machine (see README "Bring-up on a fresh machine"):
+#   make env-init      # .env.local + generated secrets; then fill the RDS values
+#   make env-check     # validate before anything starts
+#   make migrate       # apply infra/postgres/v3 (idempotent, ledgered)
+#   make up && make bootstrap-check
 # ============================================================================
 
 SHELL := /bin/bash
@@ -62,7 +65,7 @@ check-dsn:
 
 .DEFAULT_GOAL := help
 
-.PHONY: check-dsn help venv up down logs ps psql redis-cli test bootstrap-check install-shared vahan-seed vahan-verify rfid-verify truck-verify anpr-verify anpr-bench anpr-eval-real anpr-eval-selftest congestion-train congestion-verify anomaly-train anomaly-verify gateway-verify dev-web web-build web-build-mock web-verify-live web-verify web-e2e scenarios-verify tfc1 tfc2 tfc3 vapid-keys dev-pwa pwa-build pwa-verify pwa-e2e preflight e2e demo demo-record evidence demo-reset
+.PHONY: check-dsn help venv up down logs ps psql redis-cli test bootstrap-check env-init env-check migrate migrate-status migrate-dry-run migrate-baseline install-shared vahan-seed vahan-verify rfid-verify truck-verify anpr-verify anpr-bench anpr-eval-real anpr-eval-selftest congestion-train congestion-verify anomaly-train anomaly-verify gateway-verify dev-web web-build web-build-mock web-verify-live web-verify web-e2e scenarios-verify tfc1 tfc2 tfc3 vapid-keys dev-pwa pwa-build pwa-verify pwa-e2e preflight e2e demo demo-record evidence demo-reset
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -123,6 +126,36 @@ install-shared: ## pip install -e the shared + vahan + rfid + trucking packages 
 
 test: ## Run pytest -x in shared/ and tests/
 	$(PY) -m pytest -x shared tests
+
+env-init: ## Create .env.local from the example, generating the required secrets
+	$(PY) scripts/check_env.py --init
+
+env-check: ## Validate .env.local (required vars, placeholders, auth posture)
+	$(PY) scripts/check_env.py
+
+# ============================================================================
+# Schema migrations (infra/postgres/v3) — see scripts/migrate.py
+# ----------------------------------------------------------------------------
+# The v3 SQL used to be applied BY HAND with no ledger, so a fresh machine could
+# not tell which of 0100..0116 its database was at. These targets make the state
+# explicit and the run idempotent (core.schema_migrations).
+#
+# Migrations need DDL rights, which the least-privilege app role deliberately
+# does NOT have (docs/RDS_SECURITY.md §3). Pass the superuser DSN for the run:
+#     make migrate MIGRATE_DSN='postgresql://postgres:...@host:5432/jnpa_schema_v3?sslmode=require'
+# ============================================================================
+migrate: ## Apply pending infra/postgres/v3 migrations (idempotent, ledgered)
+	$(PY) scripts/migrate.py $(if $(MIGRATE_DSN),--dsn "$(MIGRATE_DSN)",)
+
+migrate-status: ## Show applied / pending migrations (applies nothing)
+	$(PY) scripts/migrate.py --status $(if $(MIGRATE_DSN),--dsn "$(MIGRATE_DSN)",)
+
+migrate-dry-run: ## Print the migration plan (applies nothing)
+	$(PY) scripts/migrate.py --dry-run $(if $(MIGRATE_DSN),--dsn "$(MIGRATE_DSN)",)
+
+migrate-baseline: ## Adopt a hand-migrated DB: record up to VERSION as applied (runs nothing)
+	@test -n "$(VERSION)" || { echo "usage: make migrate-baseline VERSION=0203"; exit 1; }
+	$(PY) scripts/migrate.py --baseline "$(VERSION)" $(if $(MIGRATE_DSN),--dsn "$(MIGRATE_DSN)",)
 
 bootstrap-check: ## Run the end-to-end bootstrap self-test
 	$(PY) scripts/bootstrap_check.py

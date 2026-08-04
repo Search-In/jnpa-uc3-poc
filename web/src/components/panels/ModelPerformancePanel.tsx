@@ -76,6 +76,10 @@ function Metric({
 
 function AnprBlock({ e }: { e: OcrEval }) {
   const met = e.target_met;
+  // When the bid stack is not loaded, these numbers measure the fallback. Show
+  // them (they are real, and hiding them would be its own dishonesty) but strip
+  // the target comparison, which is what turns a diagnostic into a false claim.
+  const reportable = e.accuracy_reportable !== false;
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
@@ -84,12 +88,25 @@ function AnprBlock({ e }: { e: OcrEval }) {
         <ModeBadge mode={e.data_mode} />
         <SynthBadge synthetic={e.metrics_synthetic ?? e.degraded} />
       </div>
+      {!reportable && (
+        <div
+          className="rounded-md border px-2 py-1.5 text-[11px] leading-snug"
+          style={{ borderColor: STATUS.warning, backgroundColor: STATUS.warning + "14" }}
+        >
+          <span className="font-semibold" style={{ color: STATUS.warning }}>
+            {e.capability?.headline ?? "ANPR DEGRADED — accuracy not measurable on this host."}
+          </span>
+          {e.capability?.reason ? (
+            <span className="text-muted-foreground"> {e.capability.reason}</span>
+          ) : null}
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <Metric
-          label="Accuracy"
+          label={reportable ? "Accuracy" : "Fallback accuracy"}
           value={pct(e.accuracy ?? e.clear_accuracy)}
-          target={pct(e.target)}
-          met={met}
+          target={reportable ? pct(e.target) : undefined}
+          met={reportable ? met : undefined}
         />
         <Metric label="Precision" value={pct(e.precision)} />
         <Metric label="Detect recall" value={pct(e.recall)} />

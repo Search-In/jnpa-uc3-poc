@@ -66,6 +66,14 @@ REQUIRED: tuple[Var, ...] = (
     Var("MINIO_ENDPOINT", "evidence / model / document object store"),
     Var("MINIO_ACCESS_KEY", "compose refuses to start the ANPR service without it"),
     Var("MINIO_SECRET_KEY", "compose refuses to start the ANPR service without it"),
+    # --- compose hard-requirements (${VAR:?}) -------------------------------
+    # These abort `docker compose up` for the WHOLE stack when unset, because
+    # compose interpolates every service before starting any of them. A missing
+    # monitoring variable therefore takes down all 30 services — which is exactly
+    # how GRAFANA_PG_HOST surfaced in production.
+    Var("GRAFANA_ADMIN_PASSWORD", "compose ${VAR:?} — aborts the whole stack if unset"),
+    Var("GRAFANA_PG_HOST",
+        "compose ${VAR:?} — aborts the WHOLE stack if unset; RDS endpoint as host:5432"),
 )
 
 #: Needed by a specific screen or flow; absence degrades rather than breaks.

@@ -970,6 +970,11 @@ services:
       # ULIP relay — empty -> mock relay used for the SECONDARY truck rung.
       GATEWAY_ULIP_URL: ${GATEWAY_ULIP_URL:-}
       ULIP_API_KEY: ${ULIP_API_KEY:-}
+      # LDB / NLDS (Logistics Data Bank) adapter behind /api/ldb. Set =>
+      # POST {LDB_BASE_URL}/truck/search runs LIVE; empty => deterministic MOCK
+      # (gateway/integrations.py picks the rung and audits either way).
+      LDB_BASE_URL: ${LDB_BASE_URL:-}
+      LDB_API_KEY: ${LDB_API_KEY:-}
       # FASTag ULIP APIs (/api/fastag/*). All env-driven — NO hardcoded vendor URL.
       # Empty FASTAG_ULIP_URL -> demo fallback (below) when FASTAG_DEMO_MODE=true,
       # else a config error (HTTP 500). Paths + auth scheme stay configurable

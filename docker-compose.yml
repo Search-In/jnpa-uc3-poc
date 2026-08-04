@@ -970,11 +970,10 @@ services:
       # ULIP relay — empty -> mock relay used for the SECONDARY truck rung.
       GATEWAY_ULIP_URL: ${GATEWAY_ULIP_URL:-}
       ULIP_API_KEY: ${ULIP_API_KEY:-}
-      # LDB / NLDS (Logistics Data Bank) adapter behind /api/ldb. Set =>
-      # POST {LDB_BASE_URL}/truck/search runs LIVE; empty => deterministic MOCK
-      # (gateway/integrations.py picks the rung and audits either way).
-      LDB_BASE_URL: ${LDB_BASE_URL:-}
-      LDB_API_KEY: ${LDB_API_KEY:-}
+      # NOTE: LDB_BASE_URL / LDB_API_KEY are declared ONCE, further down with the
+      # other ULIP/LDB integration vars. They used to be declared here too (two
+      # branches added the same pair independently and the merge kept both),
+      # which made compose fail to parse: duplicate mapping key.
       # FASTag ULIP APIs (/api/fastag/*). All env-driven — NO hardcoded vendor URL.
       # Empty FASTAG_ULIP_URL -> demo fallback (below) when FASTAG_DEMO_MODE=true,
       # else a config error (HTTP 500). Paths + auth scheme stay configurable
@@ -1065,7 +1064,11 @@ services:
       ULIP_TOKEN_TTL_S: ${ULIP_TOKEN_TTL_S:-1800}
       ULIP_FASTAG_API: ${ULIP_FASTAG_API:-}
       ULIP_LDB_API: ${ULIP_LDB_API:-}
-      # Logistics Data Bank (LDB) (/api/ldb/*). Empty -> gateway falls back to MOCK.
+      # Logistics Data Bank / NLDS adapter behind /api/ldb/*. The SOLE definition
+      # of this pair — do not re-declare it in this mapping (duplicate YAML keys
+      # make `docker compose` refuse to parse the file at all).
+      # Set => POST {LDB_BASE_URL}/truck/search runs LIVE; empty => deterministic
+      # MOCK (gateway/integrations.py picks the rung and audits either way).
       LDB_BASE_URL: ${LDB_BASE_URL:-}
       LDB_API_KEY: ${LDB_API_KEY:-}
       # Local/dev: allow gateway modules to self-apply idempotent DDL when the

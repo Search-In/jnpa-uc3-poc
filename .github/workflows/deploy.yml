@@ -205,6 +205,13 @@ jobs:
             # Both services read INTERNAL_SERVICE_TOKEN from this same .env, so one
             # backfilled value keeps them in lockstep.
             ensure_key INTERNAL_SERVICE_TOKEN "$(openssl rand -hex 32)"
+            # LDB / NLDS (Logistics Data Bank) base URL for /api/ldb/*. Compose
+            # declares it as ${LDB_BASE_URL:-} (optional, empty => MOCK), so an
+            # unset value does NOT abort the deploy — it silently downgrades the
+            # LDB rung to mock data. .env.aws.example carries the real endpoint,
+            # but that template is only copied when .env does not yet exist, so an
+            # .env from an earlier deploy would never gain the key. Backfill it.
+            ensure_key LDB_BASE_URL "https://ldb.co.in/api/ldbv2"
 
             # 1b-RDS. AWS RDS (jnpa_schema_v3) is the ONLY application database —
             #     this stack starts no postgres container (it lives behind the

@@ -374,6 +374,10 @@ async def ldb_truck(vehicle_number: str,
     LIVE: ``POST {LDB_BASE_URL}/truck/search`` with ``{"vehiclenumber": "..."}``
     (same contract as https://ldb.co.in/api/ldbv2/truck/search). MOCK when
     ``LDB_BASE_URL`` is unset.
+
+    Note: NLDS answers "Truck Details Not Found" with HTTP 500 + body
+    ``{status:NOT_FOUND, code:404}``. That is a real LIVE answer (empty events),
+    not a reason to invent MOCK port-events.
     """
     plate = (vehicle_number or "").strip().upper()
     if not plate:
@@ -391,14 +395,17 @@ async def ldb_truck(vehicle_number: str,
         dsn=state.cfg.postgres_dsn,
         method="POST",
         http_client=state.http,
+        # LDB uses HTTP 500 for application-level NOT_FOUND — still LIVE JSON.
+        accept_json_error_bodies=True,
     )
     raw = result.get("data") or {}
     if result["source"] == "LIVE" and isinstance(raw, dict):
         if raw.get("code") not in (None, "SUC013", "200", 200) and not raw.get("responseBody"):
-            log.warning("ldb_truck_live_unsuccessful", plate=plate, payload=str(raw)[:400])
+            log.info("ldb_truck_live_empty", plate=plate, code=raw.get("code"),
+                     status=raw.get("status"))
             tracking = _normalize_truck_payload({}, plate)
-            REQUESTS.labels("ldb", "error").inc()
-            return {"source": result["source"], "tracking": tracking, "raw": raw}
+            REQUESTS.labels("ldb", "ok").inc()
+            return {"source": "LIVE", "tracking": tracking, "raw": raw}
         tracking = _normalize_truck_payload(raw, plate)
     else:
         tracking = _normalize_truck_payload(raw if isinstance(raw, dict) else {}, plate)

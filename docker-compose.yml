@@ -1028,6 +1028,13 @@ services:
       ULIP_TOKEN_TTL_S: ${ULIP_TOKEN_TTL_S:-1800}
       ULIP_FASTAG_API: ${ULIP_FASTAG_API:-}
       ULIP_LDB_API: ${ULIP_LDB_API:-}
+      # Logistics Data Bank (LDB) (/api/ldb/*). Empty -> gateway falls back to MOCK.
+      LDB_BASE_URL: ${LDB_BASE_URL:-}
+      LDB_API_KEY: ${LDB_API_KEY:-}
+      # Local/dev: allow gateway modules to self-apply idempotent DDL when the
+      # volume has only init.sql (jnpa.*) and not the schema-v3 core.* migrations.
+      # Keep unset / 0 on RDS/schema-v3 where infra/postgres/v3 owns DDL.
+      JNPA_RUNTIME_DDL: ${JNPA_RUNTIME_DDL:-1}
       GATEWAY_CACHE_TTL_ULIP_S: ${GATEWAY_CACHE_TTL_ULIP_S:-300}
       # Infra.
       POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}

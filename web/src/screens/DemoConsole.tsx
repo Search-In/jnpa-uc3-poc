@@ -266,17 +266,30 @@ export default function DemoConsole() {
           subtitle="Model realism probes (RDS-backed metrics)"
         >
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <Probe
-              label={t("demo.ocrAccuracyClear")}
-              loading={ocrQ.isLoading}
-              value={ocrQ.data ? `${(ocrQ.data.clear_accuracy * 100).toFixed(1)}%` : null}
-              met={
-                ocrQ.data
-                  ? (ocrQ.data.target_met ?? ocrQ.data.clear_accuracy >= (ocrQ.data.target ?? 0.95))
-                  : undefined
-              }
-              target={`≥${((ocrQ.data?.target ?? 0.95) * 100).toFixed(0)}%`}
-            />
+            {/*
+              When the ANPR engine is degraded (PaddleOCR absent — the default on
+              an arm64-built image) the accuracy figures measure the
+              template-matching fallback, not the bid stack. Rendering them as
+              "0.0% against a ≥95% target" states that the system was tested and
+              failed; it was never tested. Show the capability instead, and say
+              exactly what is missing.
+            */}
+            {ocrQ.data && ocrQ.data.accuracy_reportable === false ? (
+              <DegradedProbe label={t("demo.ocrAccuracyClear")} capability={ocrQ.data.capability} />
+            ) : (
+              <Probe
+                label={t("demo.ocrAccuracyClear")}
+                loading={ocrQ.isLoading}
+                value={ocrQ.data ? `${(ocrQ.data.clear_accuracy * 100).toFixed(1)}%` : null}
+                met={
+                  ocrQ.data
+                    ? (ocrQ.data.target_met ??
+                      ocrQ.data.clear_accuracy >= (ocrQ.data.target ?? 0.95))
+                    : undefined
+                }
+                target={`≥${((ocrQ.data?.target ?? 0.95) * 100).toFixed(0)}%`}
+              />
+            )}
             <Probe
               label={t("demo.f1ForecastLabel")}
               loading={f1Q.isLoading}
@@ -421,6 +434,48 @@ export default function DemoConsole() {
         <KpiStrip />
       </div>
     </PageContainer>
+  );
+}
+
+/**
+ * Capability tile shown INSTEAD of an accuracy number when the ANPR engine is
+ * degraded.
+ *
+ * The honest position is "not measured on this host", not "0.0%". This states
+ * which component is missing and what fixes it, so the presenter has a real
+ * answer to "where is your ANPR accuracy?" rather than a number to defend.
+ */
+function DegradedProbe({
+  label,
+  capability,
+}: {
+  label: string;
+  capability?: import("@/data/types").AnprCapability;
+}) {
+  return (
+    <div
+      className="rounded-lg border p-3"
+      style={{ borderColor: STATUS.warning, backgroundColor: STATUS.warning + "14" }}
+    >
+      <div className="text-base font-bold" style={{ color: STATUS.warning }}>
+        DEGRADED
+      </div>
+      <div className="mt-0.5 text-[11px] text-muted-foreground">{label}</div>
+      <div className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
+        {capability?.reason ??
+          "The evaluated pipeline is not the production stack — accuracy is not measurable on this host."}
+      </div>
+      {capability?.remediation?.length ? (
+        <ul className="mt-1.5 list-disc space-y-0.5 pl-4 text-[10px] leading-snug text-muted-foreground">
+          {capability.remediation.map((r) => (
+            <li key={r}>{r}</li>
+          ))}
+        </ul>
+      ) : null}
+      <div className="mt-1.5">
+        <StatusChip label="accuracy not reported" tone="warn" />
+      </div>
+    </div>
   );
 }
 

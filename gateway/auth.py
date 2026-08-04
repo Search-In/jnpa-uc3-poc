@@ -132,6 +132,10 @@ _POLICY: tuple[tuple[str, frozenset[str]], ...] = (
     ("/api/gate/", CONTROL_ROOM | {Role.CUSTOMS.value}),
     ("/api/yard", CONTROL_ROOM | {Role.CUSTOMS.value}),
     ("/api/scan", CONTROL_ROOM | {Role.CUSTOMS.value}),
+    # Export leg (booking -> Form13 -> gate-in -> VGM -> LEO -> COPRAR -> loaded).
+    # Same audience as the import job spine it mirrors: LEO and the shipping bill
+    # are customs facts, the gate and load steps are control-room ones.
+    ("/api/export", CONTROL_ROOM | {Role.CUSTOMS.value}),
     # Driver Master & Intelligence (read-only registry) — same audience as the
     # enrollment/identity admin surface it complements. Longest-prefix wins over
     # the DRIVER-scoped /api/driver rule above for /api/drivers/*.

@@ -30,6 +30,7 @@ from ..dpdp import audit_identity_access, enforce_dpdp
 from ..logging import get_logger
 from ..mode import allow_base64_image_fallback, allow_synthetic_identity
 from ..metrics import REQUESTS, UPSTREAM_LATENCY
+from ..pii import mask_for_request
 from ..state import GatewayState, get_state
 
 
@@ -351,17 +352,27 @@ async def _merge_enrolled(state: GatewayState, drivers: list) -> list:
 
 
 @router.get("/gallery")
-async def gallery(state: GatewayState = Depends(get_state)) -> dict:
+async def gallery(request: Request, state: GatewayState = Depends(get_state)) -> dict:
+    """Enrolled-driver gallery.
+
+    ``_merge_enrolled`` folds REAL enrolled drivers (core.driver_identity, which
+    carries ``license_no``) into the synthetic gallery, so the payload goes
+    through the PII gate — masked unless the caller holds an entitled role.
+    """
     data = await _upstream(state, "GET", "/gallery")
     if data is not None:
         drivers = await _merge_enrolled(state, list(data.get("drivers", [])))
         REQUESTS.labels("identity", "ok").inc()
-        return {"decision_path": "LIVE", **data, "drivers": drivers, "count": len(drivers)}
+        return mask_for_request(
+            request, {"decision_path": "LIVE", **data, "drivers": drivers, "count": len(drivers)},
+            surface="identity.gallery")
     from identity import gallery as gal_mod  # type: ignore
     drivers = await _merge_enrolled(state, [d.public() for d in gal_mod.generate_gallery().values()])
     REQUESTS.labels("identity", "ok").inc()
-    return {"decision_path": "SYNTHETIC", "synthetic": True,
-            "drivers": drivers, "count": len(drivers)}
+    return mask_for_request(
+        request, {"decision_path": "SYNTHETIC", "synthetic": True,
+                  "drivers": drivers, "count": len(drivers)},
+        surface="identity.gallery")
 
 
 # --------------------------------------------------------------------------- enrollment workflow

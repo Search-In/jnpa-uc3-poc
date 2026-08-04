@@ -1,26 +1,37 @@
 """/api/ocr — Document OCR & structured field extraction (Feature 6).
 
-Turns an uploaded document (LR / invoice / e-way bill / permit) into a stored,
-searchable record with extracted key-value fields. RDS-backed
+Turns an uploaded document (EIR / gate slip / LR / invoice / e-way bill / permit)
+into a stored, searchable record with extracted key-value fields. RDS-backed
 (core.document_ocr). Additive — no existing endpoint/table is touched.
 
-The OCR engine is optional and degrades gracefully. ``_extract`` first TRIES a
-real read (pytesseract + PIL over the uploaded image bytes); if the optional
-deps are absent, or the bytes carry no readable text layer, it falls back to a
-DETERMINISTIC MOCK extraction that returns plausible fields per doc_type and is
-clearly tagged ``source="MOCK"`` so a demo never crashes on a missing engine.
+Extraction is a three-rung LIVE -> LOCAL -> MOCK chain (``_extract_async``):
+
+  1. **LIVE** — POST the image to the dedicated EIR OCR service
+     (``ingest/eir_ocr``, Tesseract, host 8210) and use its STRUCTURED fields.
+     This service is validated against the four real WhatsApp gate slips and
+     returns real values (e.g. EIRNo 4339869, LICNo MH43BX1488, ContainerNo
+     MSMU1908508). Until 2026-08-04 it was built by compose but nothing ever
+     called it: the dashboard mirrored `_mock_fields()` under a "field parsing
+     TODO", so a working capability looked fabricated.
+  2. **LOCAL** — in-process pytesseract + PIL. Yields real ``raw_text``; fields
+     are parsed with the same extractors the service uses when importable.
+  3. **MOCK** — deterministic per-doc_type stand-in so a demo never crashes on a
+     missing engine. Tagged ``source="MOCK"`` and never presented as a real read.
+
+Every rung is tagged in ``source`` so the UI can never mistake one for another.
 
     POST /api/ocr/document                 -> upload + OCR + persist (EXTRACTED)
     GET  /api/ocr/documents                 -> recent docs (no raw_text in list)
     GET  /api/ocr/documents/{id}            -> one full record (incl raw_text)
     POST /api/ocr/documents/{id}/verify     -> mark VERIFIED (+ optional field fixes)
-    GET  /api/ocr/health                    -> {engine, configured}
+    GET  /api/ocr/health                    -> {engine, configured, upstream}
 """
 from __future__ import annotations
 
 import hashlib
 import io
 import json
+import re
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -35,8 +46,18 @@ log = get_logger("gateway.document_ocr")
 router = APIRouter(prefix="/api/ocr", tags=["ocr"])
 
 # Recognised document types (anything else is accepted as UNKNOWN).
-_DOC_TYPES = {"LR", "INVOICE", "EWAYBILL", "PERMIT", "UNKNOWN"}
+# EIR and GATE_SLIP route to the dedicated OCR service; the rest use the local
+# text read. Both are additive — "UNKNOWN" still accepts anything.
+_DOC_TYPES = {"LR", "INVOICE", "EWAYBILL", "PERMIT", "EIR", "GATE_SLIP", "UNKNOWN"}
 _STATUS = {"UPLOADED", "EXTRACTED", "VERIFIED", "FAILED"}
+
+#: doc_types the dedicated EIR OCR service understands.
+_EIR_DOC_TYPES = {"EIR", "GATE_SLIP"}
+
+#: Upstream call budget. The service runs several preprocessing variants with an
+#: early exit; ~8s is comfortably above its p99 on the real slips while keeping a
+#: hung sidecar from stalling an operator's upload.
+_EIR_OCR_TIMEOUT_S = 8.0
 
 
 def _iso(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -93,36 +114,184 @@ def _mock_fields(doc_type: str, seed: str) -> Dict[str, Any]:
     return {}
 
 
-def _extract(raw_bytes: bytes, content_type: Optional[str], doc_type: str) -> Dict[str, Any]:
-    """Extract ``raw_text`` + structured ``fields`` from the uploaded bytes.
+def _flatten_fields(raw: Any) -> tuple[Dict[str, Any], Dict[str, float]]:
+    """Normalise an eir_ocr field map to ``({name: value}, {name: confidence})``.
 
-    Tries a REAL OCR read first (pytesseract over the image via PIL). Falls back
-    to a deterministic MOCK extraction when the deps are unavailable OR the image
-    yields no readable text. Never raises for a missing engine — always returns a
-    usable result, tagging ``source`` as "OCR" (real) or "MOCK" (fallback).
+    Both ``eir_ocr.extract.fields_as_dict`` and the service's ``POST /infer``
+    return the RICH shape ``{"EIRNo": {"value": ..., "conf": ..., "evidence": ...}}``.
+    The stored ``core.document_ocr.fields`` column and every existing consumer
+    expect flat ``{name: value}`` scalars, so flatten here — once — and keep the
+    per-field confidences alongside rather than discarding them.
+
+    Tolerates the flat shape too, so a future service version that returns plain
+    scalars needs no change here. Blank sentinels are dropped: ``__BLANK__`` means
+    "this slip genuinely has no such field" (e.g. eir2_dpworld_nsict has no
+    container number), which is different from "not read".
     """
-    seed = hashlib.sha256(raw_bytes or (doc_type.encode())).hexdigest()
+    values: Dict[str, Any] = {}
+    confidences: Dict[str, float] = {}
+    for key, item in (raw or {}).items():
+        if isinstance(item, dict):
+            value = item.get("value")
+            conf = item.get("conf")
+            if isinstance(conf, (int, float)):
+                confidences[key] = float(conf)
+        else:
+            value = item
+        if value in (None, "", "__BLANK__"):
+            continue
+        values[key] = value
+    return values, confidences
+
+
+def _parse_fields_from_text(text: str, doc_type: str) -> Dict[str, Any]:
+    """Parse structured fields out of OCR text using the eir_ocr extractors.
+
+    Reuses ``ingest/eir_ocr``'s regex extractors when that package is importable
+    in-process, so the LOCAL rung produces the SAME field names as the LIVE rung
+    rather than mirroring mock values (the bug this replaces). Returns ``{}`` when
+    the package is absent — an empty dict is honest; invented fields are not.
+    """
+    if not text:
+        return {}
+    try:
+        from eir_ocr.extract import extract_eir_fields, fields_as_dict  # type: ignore
+
+        # extract_eir_fields returns Dict[str, FieldValue] — a dict, but of
+        # dataclasses, not JSON-serialisable scalars. fields_as_dict flattens it
+        # to {name: value}, so it must ALWAYS be applied (an isinstance(dict)
+        # short-circuit here would leak FieldValue objects into the response).
+        parsed = extract_eir_fields(text, doc_type="EIR" if doc_type in _EIR_DOC_TYPES else doc_type)
+        values, _conf = _flatten_fields(fields_as_dict(parsed))
+        return values
+    except Exception as exc:  # noqa: BLE001 — extractor is optional in-process
+        log.debug("ocr_local_field_parse_unavailable", doc_type=doc_type, error=str(exc))
+        return {}
+
+
+# High-value identifiers a caller can validate a real read against. Deliberately
+# narrow: an ISO 6346 container number, an Indian plate, and a numeric EIR no.
+_VALIDATORS = {
+    "ContainerNo": re.compile(r"^[A-Z]{4}\d{7}$"),
+    "LICNo": re.compile(r"^[A-Z]{2}\d{1,2}[A-Z]{0,3}\d{1,4}$"),
+    "EIRNo": re.compile(r"^\d{4,10}$"),
+}
+
+
+def _validate_fields(fields: Dict[str, Any]) -> Dict[str, Any]:
+    """Per-field format verdicts for the high-value identifiers.
+
+    Reported alongside the fields (never used to DROP a value) so an operator can
+    see at a glance which reads are trustworthy and which need the verify step.
+    """
+    out: Dict[str, Any] = {}
+    for key, pattern in _VALIDATORS.items():
+        raw = fields.get(key)
+        if raw in (None, "", "__BLANK__"):
+            continue
+        normalised = re.sub(r"[^A-Z0-9]", "", str(raw).upper())
+        out[key] = {
+            "value": raw,
+            "normalised": normalised,
+            "valid": bool(pattern.match(normalised)),
+        }
+    return out
+
+
+async def _extract_via_service(state: GatewayState, raw_bytes: bytes,
+                               content_type: Optional[str], doc_type: str,
+                               filename: str) -> Optional[Dict[str, Any]]:
+    """Rung 1 — POST the image to the dedicated EIR OCR service.
+
+    Returns ``None`` (never raises) when the service is unconfigured,
+    unreachable, non-2xx, or produced no usable fields — the caller then falls
+    through to the local read. That "no usable fields" case matters: a reachable
+    service that returned an empty extraction is not a better answer than a local
+    text read, so we do not let it short-circuit the chain.
+    """
+    base = (getattr(state.cfg, "eir_ocr_url", "") or "").strip()
+    if not base or not raw_bytes:
+        return None
+    url = base.rstrip("/") + "/infer"
+    try:
+        resp = await state.http.post(
+            url,
+            files={"file": (filename or "upload.jpg", raw_bytes,
+                            content_type or "application/octet-stream")},
+            data={"doc_type": doc_type},
+            timeout=_EIR_OCR_TIMEOUT_S,
+        )
+    except Exception as exc:  # noqa: BLE001 — sidecar down is expected offline
+        log.info("eir_ocr_unreachable", url=url, doc_type=doc_type, error=str(exc))
+        return None
+    if resp.status_code != 200:
+        log.info("eir_ocr_non_200", url=url, status=resp.status_code)
+        return None
+    try:
+        data = resp.json()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("eir_ocr_bad_json", url=url, error=str(exc))
+        return None
+
+    # The service returns the RICH shape {name: {value, conf, evidence}} (it
+    # serialises eir_ocr's FieldValue dataclasses). Flatten to scalars for the
+    # jsonb column and existing clients; keep the per-field confidences.
+    fields, field_conf = _flatten_fields(data.get("fields"))
+    if not fields:
+        log.info("eir_ocr_no_fields", doc_type=doc_type,
+                 engine_ready=data.get("engine_ready"))
+        return None
+
+    log.info("eir_ocr_live", doc_type=doc_type, fields=len(fields),
+             confidence=data.get("confidence"), sha256=data.get("sha256"))
+    return {
+        "raw_text": data.get("raw_text") or "",
+        "fields": fields,
+        "confidence": data.get("confidence"),
+        "source": "OCR_SERVICE",
+        "validation": _validate_fields(fields),
+        "field_confidence": field_conf,
+        "engine": {
+            "service": "eir-ocr",
+            "ready": data.get("engine_ready"),
+            "tesseract_version": data.get("tesseract_version"),
+            "variants_run": data.get("variants_run"),
+            "sha256": data.get("sha256"),
+        },
+    }
+
+
+def _extract_local(raw_bytes: bytes, content_type: Optional[str],
+                   doc_type: str) -> Optional[Dict[str, Any]]:
+    """Rung 2 — in-process pytesseract read. ``None`` when unavailable/empty."""
     ctype = (content_type or "").lower()
+    if not raw_bytes or not ctype.startswith("image/"):
+        return None
+    try:
+        import pytesseract
+        from PIL import Image
 
-    # Attempt a real read only for image payloads with the optional stack present.
-    if raw_bytes and ctype.startswith("image/"):
-        try:
-            import pytesseract
-            from PIL import Image
-
-            img = Image.open(io.BytesIO(raw_bytes))
-            text = (pytesseract.image_to_string(img) or "").strip()
-            if text:
-                return {
-                    "raw_text": text,
-                    "fields": _mock_fields(doc_type, seed),  # field parsing TODO — mirror text for now
-                    "confidence": 0.9,
-                    "source": "OCR",
-                }
+        img = Image.open(io.BytesIO(raw_bytes))
+        text = (pytesseract.image_to_string(img) or "").strip()
+        if not text:
             log.info("ocr_empty_text_layer", doc_type=doc_type)
-        except Exception as exc:  # noqa: BLE001 — degrade to MOCK, never crash
-            log.info("ocr_real_read_failed", doc_type=doc_type, error=str(exc))
+            return None
+        fields = _parse_fields_from_text(text, doc_type)
+        return {
+            "raw_text": text,
+            "fields": fields,
+            "confidence": 0.9 if fields else 0.6,
+            "source": "OCR",
+            "validation": _validate_fields(fields),
+        }
+    except Exception as exc:  # noqa: BLE001 — degrade, never crash
+        log.info("ocr_real_read_failed", doc_type=doc_type, error=str(exc))
+        return None
 
+
+def _extract_mock(raw_bytes: bytes, doc_type: str) -> Dict[str, Any]:
+    """Rung 3 — deterministic stand-in, unmistakably tagged MOCK."""
+    seed = hashlib.sha256(raw_bytes or (doc_type.encode())).hexdigest()
     fields = _mock_fields(doc_type, seed)
     raw_text = f"[MOCK OCR] {doc_type} document\n" + "\n".join(
         f"{k}: {v}" for k, v in fields.items()
@@ -132,7 +301,36 @@ def _extract(raw_bytes: bytes, content_type: Optional[str], doc_type: str) -> Di
         "fields": fields,
         "confidence": 0.75,
         "source": "MOCK",
+        "validation": {},
     }
+
+
+async def _extract_async(state: GatewayState, raw_bytes: bytes,
+                         content_type: Optional[str], doc_type: str,
+                         filename: str = "") -> Dict[str, Any]:
+    """LIVE -> LOCAL -> MOCK. Always returns a usable result; never raises."""
+    if doc_type in _EIR_DOC_TYPES:
+        via_service = await _extract_via_service(
+            state, raw_bytes, content_type, doc_type, filename)
+        if via_service is not None:
+            return via_service
+    local = _extract_local(raw_bytes, content_type, doc_type)
+    if local is not None:
+        return local
+    return _extract_mock(raw_bytes, doc_type)
+
+
+def _extract(raw_bytes: bytes, content_type: Optional[str], doc_type: str) -> Dict[str, Any]:
+    """Synchronous LOCAL -> MOCK extraction.
+
+    Retained unchanged in behaviour for any in-process caller that has no
+    GatewayState (and for the existing tests). The upload route uses
+    ``_extract_async``, which adds the LIVE rung in front of these two.
+    """
+    local = _extract_local(raw_bytes, content_type, doc_type)
+    if local is not None:
+        return local
+    return _extract_mock(raw_bytes, doc_type)
 
 
 def _store_document(object_name: str, raw_bytes: bytes, content_type: Optional[str]) -> Optional[str]:
@@ -194,14 +392,19 @@ async def upload_document(
     object_name = f"ocr/{uuid.uuid4()}.{ext}"
     storage_url = _store_document(object_name, raw_bytes, file.content_type)
 
+    validation: Dict[str, Any] = {}
+    engine_info: Dict[str, Any] = {}
     try:
-        result = _extract(raw_bytes, file.content_type, dtype)
+        result = await _extract_async(state, raw_bytes, file.content_type, dtype,
+                                      file.filename or "")
         status = "EXTRACTED"
         raw_text = result["raw_text"]
         fields = result["fields"]
         confidence = result["confidence"]
         source = result["source"]
-    except Exception as exc:  # noqa: BLE001 — _extract should never raise, but be safe
+        validation = result.get("validation") or {}
+        engine_info = result.get("engine") or {}
+    except Exception as exc:  # noqa: BLE001 — the chain should never raise, but be safe
         log.warning("ocr_extract_failed", doc_type=dtype, error=str(exc))
         status = "FAILED"
         raw_text = None
@@ -225,7 +428,16 @@ async def upload_document(
         REQUESTS.labels("document_ocr", "error").inc()
         raise HTTPException(500, "insert_failed")
     REQUESTS.labels("document_ocr", "ok").inc()
-    return _iso(dict(row))
+    out = _iso(dict(row))
+    # Additive response keys — the persisted columns are unchanged, so no
+    # migration and no existing client breaks. `validation` lets the operator see
+    # which high-value identifiers parsed cleanly; `engine` says WHICH rung read
+    # the document, so a MOCK can never be mistaken for a real read.
+    if validation:
+        out["validation"] = validation
+    if engine_info:
+        out["engine"] = engine_info
+    return out
 
 
 @router.get("/documents")
@@ -312,9 +524,41 @@ async def verify_document(
 
 @router.get("/health")
 async def ocr_health(state: GatewayState = Depends(get_state)) -> dict:
-    """Report the active OCR engine and whether a DB is configured."""
+    """Report which extraction rung is actually available.
+
+    Probes the dedicated EIR OCR service so the operator can tell — before the
+    demo, not during it — whether an EIR upload will produce REAL fields or fall
+    back. ``engine`` keeps its original values for backward compatibility; the
+    new ``upstream`` / ``active_rung`` keys are additive.
+    """
     available = _tesseract_available()
+    base = (getattr(state.cfg, "eir_ocr_url", "") or "").strip()
+    upstream: Dict[str, Any] = {"url": base or None, "reachable": False}
+    if base:
+        try:
+            resp = await state.http.get(base.rstrip("/") + "/healthz", timeout=3.0)
+            if resp.status_code == 200:
+                body = resp.json()
+                upstream.update({
+                    "reachable": True,
+                    "status": body.get("status"),
+                    "engine_ready": body.get("engine_ready"),
+                    "tesseract_version": body.get("tesseract_version"),
+                })
+        except Exception as exc:  # noqa: BLE001 — an absent sidecar is not an error
+            upstream["error"] = str(exc)
+
+    if upstream.get("engine_ready"):
+        active = "OCR_SERVICE"
+    elif available:
+        active = "OCR"
+    else:
+        active = "MOCK"
+
     return {
         "engine": "tesseract" if available else "mock",
         "configured": bool(state.cfg.postgres_dsn),
+        "upstream": upstream,
+        "active_rung": active,
+        "eir_doc_types": sorted(_EIR_DOC_TYPES),
     }

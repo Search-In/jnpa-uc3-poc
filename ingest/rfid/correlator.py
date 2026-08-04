@@ -34,6 +34,7 @@ from datetime import datetime, timezone
 from typing import Deque, Dict, Optional, Tuple
 
 from jnpa_shared import kafka_io
+from jnpa_shared.config import require_dsn
 from jnpa_shared.logging import configure_logging, get_logger
 
 from rfid_ingest.config import RfidConfig
@@ -100,7 +101,9 @@ class Correlator:
             import asyncio
 
             async def _load():
-                conn = await asyncpg.connect(dsn=self.cfg.postgres_dsn)
+                conn = await asyncpg.connect(
+                    dsn=require_dsn(self.cfg.postgres_dsn, "POSTGRES_DSN_LIBPQ")
+                )
                 try:
                     rows = await conn.fetch(
                         "SELECT id, gate_id FROM core.camera WHERE gate_id IS NOT NULL"

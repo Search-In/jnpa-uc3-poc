@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { apiError } from "./api";
+import { DEFAULT_TIMEOUT_MS, UPLOAD_TIMEOUT_MS, apiError, isTimeoutError } from "./api";
 
 /** Reproduces exactly what http() throws for a non-2xx response. */
 function thrown(status: number, statusText: string, body: unknown): Error {
@@ -54,5 +54,52 @@ describe("apiError", () => {
     expect(apiError("weird").detail).toBe("weird");
     // null is what TanStack Query holds when a query has NOT failed
     expect(apiError(null).status).toBeNull();
+  });
+});
+
+// The audit measured /api/kpi at 81s against RDS. `fetch` has no default
+// timeout, so the panel hung forever with no error state. http() now aborts at
+// DEFAULT_TIMEOUT_MS and shapes the failure like any other API error.
+describe("request timeout", () => {
+  /** Exactly what http() throws when AbortSignal.timeout fires. */
+  function timedOut(path = "/api/kpi", ms = DEFAULT_TIMEOUT_MS): Error {
+    return new Error(
+      `408 Request Timeout — ${JSON.stringify({
+        detail: {
+          error: "ETIMEDOUT",
+          detail: `The server did not respond within ${Math.round(ms / 1000)}s.`,
+          path,
+        },
+      })}`,
+    );
+  }
+
+  it("has a bounded default budget, and a longer one for transfers", () => {
+    expect(DEFAULT_TIMEOUT_MS).toBeGreaterThan(0);
+    expect(DEFAULT_TIMEOUT_MS).toBeLessThanOrEqual(30_000);
+    expect(UPLOAD_TIMEOUT_MS).toBeGreaterThan(DEFAULT_TIMEOUT_MS);
+  });
+
+  it("parses a timeout into the same shape as any other API error", () => {
+    const e = apiError(timedOut());
+    expect(e.status).toBe(408);
+    expect(e.code).toBe("ETIMEDOUT");
+    expect(e.timedOut).toBe(true);
+    expect(e.detail).toContain("did not respond");
+    expect(e.extra.path).toBe("/api/kpi");
+  });
+
+  it("isTimeoutError distinguishes a slow server from a refusal", () => {
+    expect(isTimeoutError(timedOut())).toBe(true);
+    expect(isTimeoutError(thrown(403, "Forbidden", { detail: "role not permitted" }))).toBe(false);
+    expect(isTimeoutError(thrown(400, "Bad Request", { detail: { error: "pdp_expired" } }))).toBe(
+      false,
+    );
+    expect(isTimeoutError(null)).toBe(false);
+  });
+
+  it("does not mark ordinary errors as timeouts", () => {
+    expect(apiError(thrown(500, "Server Error", { detail: "boom" })).timedOut).toBe(false);
+    expect(apiError(new Error("boom")).timedOut).toBe(false);
   });
 });

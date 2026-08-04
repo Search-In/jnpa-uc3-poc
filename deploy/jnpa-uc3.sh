@@ -100,8 +100,19 @@ case "$cmd" in
     ts="$(date -u +%Y%m%dT%H%M%SZ)"
     out="backups/${ts}"
     mkdir -p "$out"
-    echo ">> Dumping Postgres -> ${out}/postgres.sql.gz"
-    compose exec -T postgres pg_dump -U postgres postgres | gzip > "${out}/postgres.sql.gz"
+    echo ">> Dumping the RDS application database -> ${out}/postgres.sql.gz"
+    # No local postgres container exists any more (it is dev-only, behind the
+    # "localdb" compose profile), so dump RDS with a throwaway psql client image
+    # using the libpq DSN from the env file.
+    dump_dsn="$(grep -E '^RFID_POSTGRES_DSN=' "$ENV_FILE" | tail -1 | cut -d= -f2-)"
+    if [[ -z "$dump_dsn" ]]; then
+      echo "   ERROR: RFID_POSTGRES_DSN (libpq form) not found in $ENV_FILE — cannot dump." >&2
+      exit 1
+    fi
+    # pg_dump REFUSES a server newer than itself, and RDS runs PostgreSQL 18 —
+    # so the client image major must be >= 18 (override with PSQL_IMAGE).
+    docker run --rm -e PGDSN="$dump_dsn" "${PSQL_IMAGE:-postgres:18-alpine}" \
+      sh -c 'pg_dump "$PGDSN"' | gzip > "${out}/postgres.sql.gz"
     echo ">> Snapshotting MinIO data volume -> ${out}/minio-data.tar.gz"
     # mc mirror would need creds; a volume tar is simpler and self-contained.
     docker run --rm \

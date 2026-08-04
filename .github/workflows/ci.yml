@@ -73,6 +73,9 @@ jobs:
           python -m pip install -e "ingest/vahan_sim[dev]" -e "ingest/vahan_live[dev]"
           python -m pip install -e "ingest/rfid[dev]"
           python -m pip install -e "ingest/trucking_app[dev]"
+          # EIR / gate-slip OCR (tests/test_eir_ocr.py imports `eir_ocr`; the
+          # tesseract-dependent cases are marked `integration` and skip here).
+          python -m pip install -e "ingest/eir_ocr[dev]"
           python -m pip install -e "ai/anpr[dev]"
           python -m pip install -e "ai/congestion[dev]"
           python -m pip install -e "ai/anomaly[dev]"

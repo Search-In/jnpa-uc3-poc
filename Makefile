@@ -1,8 +1,11 @@
 # ============================================================================
 # JNPA UC-III PoC — developer Makefile
 # ----------------------------------------------------------------------------
-# One-command bring-up:
-#   cp .env.local.example .env.local && make up && make bootstrap-check
+# Bring-up on a fresh machine (see README "Bring-up on a fresh machine"):
+#   make env-init      # .env.local + generated secrets; then fill the RDS values
+#   make env-check     # validate before anything starts
+#   make migrate       # apply infra/postgres/v3 (idempotent, ledgered)
+#   make up && make bootstrap-check
 # ============================================================================
 
 SHELL := /bin/bash
@@ -44,9 +47,25 @@ include .env.local
 export
 endif
 
+# psql against the APPLICATION DATABASE — AWS RDS (jnpa_schema_v3). There is no
+# local postgres container in the default stack (it is dev-only, behind the
+# "localdb" compose profile), so host-side SQL goes through a throwaway client
+# image using the libpq DSN from .env.local.
+PSQL_DSN := $(RFID_POSTGRES_DSN)
+# Client major must be >= the RDS server major (currently PostgreSQL 18):
+# psql tolerates a newer server with a warning, but pg_dump REFUSES one.
+PSQL_IMAGE := postgres:18-alpine
+PSQL := docker run --rm -i $(PSQL_IMAGE) psql "$(PSQL_DSN)"
+PSQL_IT := docker run --rm -it $(PSQL_IMAGE) psql "$(PSQL_DSN)"
+check-dsn:
+	@test -n "$(PSQL_DSN)" || { \
+		echo "ERROR: RFID_POSTGRES_DSN (libpq DSN for RDS) is not set in .env.local."; \
+		echo "       There is no local-postgres fallback. See .env.local.example."; \
+		exit 1; }
+
 .DEFAULT_GOAL := help
 
-.PHONY: help venv up down logs ps psql redis-cli test bootstrap-check install-shared vahan-seed vahan-verify rfid-verify truck-verify anpr-verify anpr-bench anpr-eval-real anpr-eval-selftest congestion-train congestion-verify anomaly-train anomaly-verify gateway-verify dev-web web-build web-build-mock web-verify-live web-verify web-e2e scenarios-verify tfc1 tfc2 tfc3 vapid-keys dev-pwa pwa-build pwa-verify pwa-e2e preflight e2e demo demo-record evidence demo-reset
+.PHONY: check-dsn help venv up down logs ps psql redis-cli test bootstrap-check env-init env-check migrate migrate-status migrate-dry-run migrate-baseline install-shared vahan-seed vahan-verify rfid-verify truck-verify anpr-verify anpr-bench anpr-eval-real anpr-eval-selftest congestion-train congestion-verify anomaly-train anomaly-verify gateway-verify dev-web web-build web-build-mock web-verify-live web-verify web-e2e scenarios-verify tfc1 tfc2 tfc3 vapid-keys dev-pwa pwa-build pwa-verify pwa-e2e preflight e2e demo demo-record evidence demo-reset
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -65,8 +84,8 @@ logs: ## Tail logs from all services
 ps: ## Show container status
 	$(COMPOSE) ps
 
-psql: ## Open psql inside the postgres container
-	$(COMPOSE) exec postgres psql -U postgres -d postgres
+psql: check-dsn ## Open psql against the RDS application database
+	$(PSQL_IT)
 
 redis-cli: ## Open redis-cli inside the redis container
 	$(COMPOSE) exec redis redis-cli
@@ -108,6 +127,36 @@ install-shared: ## pip install -e the shared + vahan + rfid + trucking packages 
 test: ## Run pytest -x in shared/ and tests/
 	$(PY) -m pytest -x shared tests
 
+env-init: ## Create .env.local from the example, generating the required secrets
+	$(PY) scripts/check_env.py --init
+
+env-check: ## Validate .env.local (required vars, placeholders, auth posture)
+	$(PY) scripts/check_env.py
+
+# ============================================================================
+# Schema migrations (infra/postgres/v3) — see scripts/migrate.py
+# ----------------------------------------------------------------------------
+# The v3 SQL used to be applied BY HAND with no ledger, so a fresh machine could
+# not tell which of 0100..0116 its database was at. These targets make the state
+# explicit and the run idempotent (core.schema_migrations).
+#
+# Migrations need DDL rights, which the least-privilege app role deliberately
+# does NOT have (docs/RDS_SECURITY.md §3). Pass the superuser DSN for the run:
+#     make migrate MIGRATE_DSN='postgresql://postgres:...@host:5432/jnpa_schema_v3?sslmode=require'
+# ============================================================================
+migrate: ## Apply pending infra/postgres/v3 migrations (idempotent, ledgered)
+	$(PY) scripts/migrate.py $(if $(MIGRATE_DSN),--dsn "$(MIGRATE_DSN)",)
+
+migrate-status: ## Show applied / pending migrations (applies nothing)
+	$(PY) scripts/migrate.py --status $(if $(MIGRATE_DSN),--dsn "$(MIGRATE_DSN)",)
+
+migrate-dry-run: ## Print the migration plan (applies nothing)
+	$(PY) scripts/migrate.py --dry-run $(if $(MIGRATE_DSN),--dsn "$(MIGRATE_DSN)",)
+
+migrate-baseline: ## Adopt a hand-migrated DB: record up to VERSION as applied (runs nothing)
+	@test -n "$(VERSION)" || { echo "usage: make migrate-baseline VERSION=0203"; exit 1; }
+	$(PY) scripts/migrate.py --baseline "$(VERSION)" $(if $(MIGRATE_DSN),--dsn "$(MIGRATE_DSN)",)
+
 bootstrap-check: ## Run the end-to-end bootstrap self-test
 	$(PY) scripts/bootstrap_check.py
 
@@ -120,12 +169,12 @@ vahan-verify: ## Smoke-test the Vahan simulator + live adapter (stack must be up
 	@echo "== live (expect 503 without token) ==" \
 		&& curl -s -o /dev/null -w 'HTTP %{http_code}\n' http://localhost:8202/vahan/rc/MH04AB1234 || true
 	@echo "== vehicle_master count ==" \
-		&& $(COMPOSE) exec -T postgres psql -U postgres -d postgres \
+		&& $(PSQL) \
 		-c "select count(*) from jnpa.vehicle_master;" || true
 
 rfid-verify: ## Verify RFID reads landed + a vehicle.confirmed fired (stack must be up)
 	@echo "== busiest readers (rfid_reads) ==" \
-		&& $(COMPOSE) exec -T postgres psql -U postgres -d postgres \
+		&& $(PSQL) \
 		-c "select reader_id, count(*) from jnpa.rfid_reads group by 1 order by 2 desc limit 5;" || true
 	@echo "== waiting (<=30s) for a vehicle.confirmed in the correlator log ==" \
 		&& ($(COMPOSE) logs --since 2m rfid-correlator 2>/dev/null | grep -m1 vehicle.confirmed \
@@ -137,7 +186,7 @@ truck-verify: ## Verify the trucking-app sim: population + a few live MQTT pings
 		&& (timeout 15 $(COMPOSE) exec -T mosquitto mosquitto_sub -t 'trucks/+/telemetry' -C 5 \
 			|| echo "  none yet — give the sim a few seconds to warm up") || true
 	@echo "== rows in jnpa.truck_telemetry ==" \
-		&& $(COMPOSE) exec -T postgres psql -U postgres -d postgres \
+		&& $(PSQL) \
 		-c "select count(*) from jnpa.truck_telemetry;" || true
 
 anpr-verify: ## Smoke-test the ANPR+OCR service: /infer on the sample + /eval (stack must be up)
@@ -182,7 +231,7 @@ anomaly-verify: ## Smoke-test the anomaly detector: /alerts/recent length + /hea
 		&& curl -s 'http://localhost:8321/alerts/recent?since=PT1H' \
 		| $(PY) -c "import sys,json; print('alerts=%d' % len(json.load(sys.stdin)))" || true
 	@echo "== alerts by kind (jnpa.alerts) ==" \
-		&& $(COMPOSE) exec -T postgres psql -U postgres -d postgres \
+		&& $(PSQL) \
 		-c "select kind, severity, count(*) from jnpa.alerts group by 1,2 order by 3 desc;" || true
 
 gateway-verify: ## Smoke-test the API gateway: orchestrated RC lookup + decision evidence (stack must be up)
@@ -195,7 +244,7 @@ gateway-verify: ## Smoke-test the API gateway: orchestrated RC lookup + decision
 	@echo "== System-Health sources (/api/kpi/sources) ==" \
 		&& curl -s http://localhost:8000/api/kpi/sources | $(PY) -m json.tool || true
 	@echo "== provisional vehicles still in cure window ==" \
-		&& $(COMPOSE) exec -T postgres psql -U postgres -d postgres \
+		&& $(PSQL) \
 		-c "select plate, provisional_until from jnpa.vehicle_master where provisional = true and provisional_until > now();" || true
 
 dev-web: ## Run the dashboard dev server on :5173 (Vite, proxies /api -> :8000)

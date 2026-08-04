@@ -8,10 +8,17 @@
 #   ./deploy/aws/manage.sh logs      # follow gateway + web logs
 #   ./deploy/aws/manage.sh ps        # status
 #   ./deploy/aws/manage.sh update    # git pull + rebuild changed images + up
-#   ./deploy/aws/manage.sh nuke      # down + remove volumes (DESTROYS DB/minio)
+#   ./deploy/aws/manage.sh nuke      # down + remove volumes (DESTROYS minio etc.)
+#
+# DATABASE: AWS RDS only (jnpa_schema_v3). The env file (default .env, override
+# with ENV_FILE=…) must define POSTGRES_DSN + the four libpq DSNs; compose uses
+# ${VAR:?…} so a missing one aborts instead of falling back to a local database.
+#   RDS_PASSWORD=… bash deploy/aws/use-rds.sh .env     # write the RDS values
+#   bash deploy/aws/verify-rds.sh .env                 # prove RDS-only
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-DC=(docker compose -f docker-compose.yml -f docker-compose.aws.yml)
+ENV_FILE="${ENV_FILE:-.env}"
+DC=(docker compose --env-file "$ENV_FILE" -f docker-compose.yml -f docker-compose.aws.yml)
 
 case "${1:-up}" in
   up)       "${DC[@]}" up -d --build ;;

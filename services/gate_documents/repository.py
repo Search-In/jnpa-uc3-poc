@@ -342,12 +342,41 @@ class GateDocumentRepository:
             p["visit"] = str(f["visit_id"]).strip()
         return ((" WHERE " + " AND ".join(clauses)) if clauses else ""), p
 
+    # The `terminal` printed on a gate document is free text and spelled a dozen
+    # ways ("Nhava Sheva IGT", "DP World Nhava Sheva ICT", "PSA Mumbai BMCT"...).
+    # core.ref_terminal_alias already maps every observed spelling to a canonical
+    # terminal, so resolve through it rather than string-matching a code inside
+    # the label — "Nhava Sheva IGT" contains no "NSIGT", and a bare "GTI" alias
+    # belongs to APMT, so substring matching gets both wrong.
+    #
+    # Exact alias match first; longest-contained alias as a fallback for spellings
+    # not yet in the table. LATERAL + LIMIT 1 keeps it one row per document.
+    _TERMINAL_CODE = (
+        "LEFT JOIN LATERAL ("
+        "  SELECT rt.code"
+        "  FROM core.ref_terminal_alias a"
+        "  JOIN core.ref_terminal rt ON rt.terminal_id = a.terminal_id"
+        "  WHERE upper(btrim(d.terminal)) = upper(a.alias)"
+        "     OR upper(btrim(d.terminal)) LIKE '%' || upper(a.alias) || '%'"
+        "  ORDER BY (upper(btrim(d.terminal)) = upper(a.alias)) DESC,"
+        "           length(a.alias) DESC"
+        "  LIMIT 1"
+        ") term ON true"
+    )
+
     async def list_docs(self, doc_type: str, *, filters: Mapping[str, Any],
                         limit: int, offset: int) -> list[dict]:
         where, p = self._doc_where(doc_type, filters)
         p.update(limit=limit, offset=offset)
-        select = _FORM13_SELECT if doc_type == "FORM13" else f"SELECT * FROM {TABLES[doc_type]}"
-        return await self._rows(f"{select}{where} ORDER BY id DESC LIMIT :limit OFFSET :offset", p)
+        if doc_type == "FORM13":
+            return await self._rows(
+                f"{_FORM13_SELECT}{where} ORDER BY id DESC LIMIT :limit OFFSET :offset", p)
+        # EIR / PIN: carry the resolved canonical terminal alongside the raw label,
+        # so a dashboard gate id (NSIGT-G1) can match on code instead of spelling.
+        return await self._rows(
+            f"SELECT d.*, term.code AS terminal_code "
+            f"FROM {TABLES[doc_type]} d {self._TERMINAL_CODE}"
+            f"{where} ORDER BY d.id DESC LIMIT :limit OFFSET :offset", p)
 
     async def count_docs(self, doc_type: str, *, filters: Mapping[str, Any]) -> int:
         where, p = self._doc_where(doc_type, filters)

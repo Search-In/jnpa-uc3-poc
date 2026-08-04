@@ -21,6 +21,12 @@ when present (best-effort) so existing read paths stay consistent.
     POST /api/transporters/{id}/lift              -> lift active blacklist
     GET  /api/transporters/validate/vehicle/{plate}
     GET  /api/transporters/validate/driver/{driver_id}
+
+PII (DPDP): core.transporter carries ~2.2k real contact emails, mobile numbers and
+postal addresses. The read endpoints route their payloads through
+``gateway.pii.mask_for_request`` — cleartext only for a principal whose role is in
+``PII_UNMASK_ROLES`` (default DTCCC_ADMIN + CUSTOMS), masked otherwise. The
+blacklist decision fields are never masked, so enforcement behaviour is unchanged.
 """
 from __future__ import annotations
 
@@ -28,11 +34,12 @@ import json
 import re
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
 from ..logging import get_logger
 from ..metrics import REQUESTS
 from ..notifications import dispatch_alert
+from ..pii import mask_for_request
 from ..state import GatewayState, get_state
 
 log = get_logger("gateway.transporters")
@@ -111,7 +118,8 @@ async def create_transporter(body: Dict[str, Any] = Body(...),
 
 
 @router.get("")
-async def list_transporters(q: Optional[str] = Query(default=None),
+async def list_transporters(request: Request,
+                            q: Optional[str] = Query(default=None),
                             status: Optional[str] = Query(default=None),
                             limit: int = Query(default=100, ge=1, le=1000),
                             state: GatewayState = Depends(get_state)) -> dict:
@@ -143,7 +151,9 @@ async def list_transporters(q: Optional[str] = Query(default=None),
             ORDER BY t.created_at DESC LIMIT :limit""",
         params, dsn=dsn)
     REQUESTS.labels("transporters", "ok").inc()
-    return {"count": len(rows), "transporters": [_iso(dict(r)) for r in rows]}
+    return mask_for_request(
+        request, {"count": len(rows), "transporters": [_iso(dict(r)) for r in rows]},
+        surface="transporters.list")
 
 
 @router.get("/blacklist")
@@ -221,7 +231,8 @@ async def validate_driver(driver_id: str, state: GatewayState = Depends(get_stat
 
 
 @router.get("/{transporter_id}")
-async def get_transporter(transporter_id: int, state: GatewayState = Depends(get_state)) -> dict:
+async def get_transporter(request: Request, transporter_id: int,
+                          state: GatewayState = Depends(get_state)) -> dict:
     dsn = state.cfg.postgres_dsn
     if not dsn:
         raise HTTPException(503, "database_unavailable")
@@ -236,9 +247,12 @@ async def get_transporter(transporter_id: int, state: GatewayState = Depends(get
     blacklist = await fetch_all(
         "SELECT * FROM core.transporter_blacklist WHERE transporter_id = :id ORDER BY blacklisted_at DESC",
         {"id": transporter_id}, dsn=dsn)
-    return {"transporter": _iso(dict(row)),
-            "vehicles": [_iso(dict(v)) for v in vehicles],
-            "blacklist_history": [_iso(dict(b)) for b in blacklist]}
+    return mask_for_request(
+        request,
+        {"transporter": _iso(dict(row)),
+         "vehicles": [_iso(dict(v)) for v in vehicles],
+         "blacklist_history": [_iso(dict(b)) for b in blacklist]},
+        surface="transporters.detail")
 
 
 @router.post("/{transporter_id}/vehicles")

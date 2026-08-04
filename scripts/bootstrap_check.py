@@ -62,14 +62,24 @@ for k, v in _env.items():
 
 # Host-facing overrides: container hostnames -> localhost:<published port>.
 # These take precedence over whatever .env.local set, so we overwrite.
-# Postgres is published on 5433 (not 5432) to avoid clashing with a local
-# Postgres that may already own host 5432.
+#
+# POSTGRES_DSN is deliberately NOT rewritten: the application database is AWS
+# RDS (jnpa_schema_v3) and the same DSN works from host and container. Set
+# BOOTSTRAP_PG_LOCAL=1 to aim the check at the dev-only local container instead
+# (compose profile "localdb", published on host port 5433).
 HOST = os.environ.get("BOOTSTRAP_HOST", "localhost")
-PG_HOST_PORT = os.environ.get("PG_HOST_PORT", "5433")
-os.environ["POSTGRES_DSN"] = (
-    f"postgresql+asyncpg://postgres:"
-    f"{os.environ.get('POSTGRES_PASSWORD', 'jnpa_pw')}@{HOST}:{PG_HOST_PORT}/postgres"
-)
+if os.environ.get("BOOTSTRAP_PG_LOCAL"):
+    PG_HOST_PORT = os.environ.get("PG_HOST_PORT", "5433")
+    os.environ["POSTGRES_DSN"] = (
+        f"postgresql+asyncpg://postgres:"
+        f"{os.environ.get('POSTGRES_PASSWORD', 'jnpa_pw')}@{HOST}:{PG_HOST_PORT}/postgres"
+    )
+elif not os.environ.get("POSTGRES_DSN", "").strip():
+    _fail(
+        "POSTGRES_DSN is not set.\n"
+        "  Point it at the RDS database (jnpa_schema_v3) in .env.local, or run the\n"
+        "  dev sandbox with:  BOOTSTRAP_PG_LOCAL=1 python scripts/bootstrap_check.py"
+    )
 os.environ["REDIS_URL"] = f"redis://{HOST}:6379/0"
 os.environ["KAFKA_BROKERS"] = f"{HOST}:29092"   # EXTERNAL listener
 os.environ["MQTT_BROKER"] = f"{HOST}:1883"

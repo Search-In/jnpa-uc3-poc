@@ -30,9 +30,19 @@ volumes:
 
 services:
   # --------------------------------------------------------------------------
-  # PostgreSQL + TimescaleDB
+  # PostgreSQL + TimescaleDB — LOCAL DEVELOPMENT ONLY (opt-in).
+  #
+  # The application database is AWS RDS (jnpa_schema_v3); every service reads
+  # its DSN from POSTGRES_DSN / *_POSTGRES_DSN and no service depends on or
+  # connects to this container. It is kept behind the "localdb" profile so it
+  # never starts in a demo/production deployment:
+  #
+  #   docker compose --profile localdb up -d postgres   # dev sandbox only
+  #
+  # (`make psql` / `make seed-*` targets also need that profile enabled.)
   # --------------------------------------------------------------------------
   postgres:
+    profiles: ["localdb"]
     image: timescale/timescaledb-ha:pg15-latest
     container_name: jnpa-postgres
     restart: unless-stopped
@@ -244,6 +254,20 @@ services:
       # default can never ship.
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      # Postgres datasource -> AWS RDS (see infra/grafana/provisioning/
+      # datasources/datasources.yml, which interpolates these). Never the
+      # dev-only local postgres container.
+      # Grafana's Postgres datasource host:port. REQUIRED — the RDS endpoint is
+      # deliberately not committed (docs/RDS_SECURITY.md); set GRAFANA_PG_HOST in
+      # .env.local rather than restoring a literal default here.
+      GRAFANA_PG_HOST: ${GRAFANA_PG_HOST:?set GRAFANA_PG_HOST (see docs/RDS_SECURITY.md)}
+      GRAFANA_PG_DB: ${GRAFANA_PG_DB:-jnpa_schema_v3}
+      GRAFANA_PG_USER: ${GRAFANA_PG_USER:-postgres}
+      GRAFANA_PG_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set (RDS password, used by the Grafana datasource)}
+      GRAFANA_PG_SSLMODE: ${GRAFANA_PG_SSLMODE:-require}
+      # Query-editor feature hint only (not a connection setting). RDS runs
+      # PostgreSQL 18; 1500 is the highest value older Grafana builds accept.
+      GRAFANA_PG_VERSION: ${GRAFANA_PG_VERSION:-1500}
       GF_USERS_DEFAULT_THEME: dark
       GF_SERVER_HTTP_PORT: "3000"
       TZ: Etc/UTC
@@ -344,7 +368,26 @@ services:
   # CPU-only; degrades to a classical detector + template OCR if paddle/weights
   # are unavailable (the /eval `engine` field reports which path ran).
   # --------------------------------------------------------------------------
+  # --------------------------------------------------------------------------
+  # ANPR (YOLOv8 detector + PaddleOCR PP-OCRv4 recogniser) — host 8301.
+  #
+  # PLATFORM (read before demoing accuracy): paddlepaddle 2.6 publishes NO
+  # linux/arm64 wheel, and ai/anpr/Dockerfile deliberately tolerates the failed
+  # install ("will run degraded"). An image BUILT ON APPLE SILICON therefore ships
+  # without a recogniser and reports 0.0 accuracy — a true number about the
+  # template-matching fallback, not a measurement of this stack.
+  #
+  # To get real accuracy, build for amd64 (Rosetta emulation, slower but works):
+  #     docker compose build --build-arg BUILDKIT_INLINE_CACHE=1 anpr
+  #     # or explicitly:
+  #     docker buildx build --platform linux/amd64 -f ai/anpr/Dockerfile -t jnpa/anpr-ai:0.1.0 .
+  # or run this one service on an x86_64 host.
+  #
+  # Set ANPR_PLATFORM=linux/amd64 in .env.local to force it here.
+  # Check which engine is live:  curl :8301/eval | jq .capability
+  # --------------------------------------------------------------------------
   anpr:
+    platform: ${ANPR_PLATFORM:-}
     build:
       context: .
       dockerfile: ai/anpr/Dockerfile
@@ -391,12 +434,9 @@ services:
     image: jnpa/vahan-sim:0.1.0
     container_name: jnpa-vahan-sim
     restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
     environment:
       PYTHONPATH: /app/ingest
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       VAHAN_BASE_URL: http://vahan-sim:8201
       VAHAN_SERVICE_NAME: vahan
       VAHAN_SERVICE_KIND: sim
@@ -418,8 +458,12 @@ services:
 
   # --------------------------------------------------------------------------
   # EIR / gate-slip OCR (Tesseract) — host 8210.
-  # Structured field extraction for terminal EIR photos. Optional; gateway/UI
-  # wiring is a follow-up (POST http://eir-ocr:8210/infer).
+  # Structured field extraction for terminal EIR photos. WIRED as of 2026-08-04:
+  # the gateway POSTs image uploads with doc_type=EIR|GATE_SLIP to
+  # http://eir-ocr:8210/infer (GATEWAY_EIR_OCR_URL) and uses the returned fields,
+  # falling back to its own reader when this service is unavailable. Still
+  # optional — /api/ocr keeps working without it, just at a lower rung.
+  # Check which rung is live with: GET /api/ocr/health -> active_rung.
   # --------------------------------------------------------------------------
   eir-ocr:
     build:
@@ -457,12 +501,9 @@ services:
     image: jnpa/vahan-live:0.1.0
     container_name: jnpa-vahan-live
     restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
     environment:
       PYTHONPATH: /app/ingest
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       VAHAN_BASE_URL: http://vahan-live:8202
       VAHAN_SERVICE_NAME: vahan
       VAHAN_SERVICE_KIND: live
@@ -532,8 +573,6 @@ services:
         condition: service_started
       kafka:
         condition: service_healthy
-      postgres:
-        condition: service_healthy
     command: ["rfid-consumer"]
     environment:
       PYTHONPATH: /app/ingest/rfid
@@ -542,7 +581,7 @@ services:
       KAFKA_BROKERS: kafka:9092
       RFID_TOPIC: rfid.reads
       # asyncpg libpq DSN (no SQLAlchemy "+asyncpg" prefix).
-      POSTGRES_DSN_LIBPQ: ${RFID_POSTGRES_DSN:-postgresql://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN_LIBPQ: ${RFID_POSTGRES_DSN:?RFID_POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       METRICS_PORT: "9102"
       LOG_LEVEL: ${RFID_LOG_LEVEL:-INFO}
       TZ: Etc/UTC
@@ -576,8 +615,6 @@ services:
         condition: service_started
       kafka:
         condition: service_healthy
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
     environment:
@@ -587,7 +624,7 @@ services:
       KAFKA_BROKERS: kafka:9092
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       # asyncpg libpq DSN (no SQLAlchemy "+asyncpg" prefix).
-      POSTGRES_DSN_LIBPQ: ${TRUCK_POSTGRES_DSN:-postgresql://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN_LIBPQ: ${TRUCK_POSTGRES_DSN:?TRUCK_POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       TRUCK_NUM_DEVICES: ${TRUCK_NUM_DEVICES:-20000}
       TRUCK_MAX_DEVICES: ${TRUCK_MAX_DEVICES:-30000}
       TRUCK_ORIGIN_RADIUS_KM: ${TRUCK_ORIGIN_RADIUS_KM:-100}
@@ -632,8 +669,6 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
-      postgres:
-        condition: service_healthy
     command: ["rfid-correlator"]
     environment:
       PYTHONPATH: /app/ingest/rfid
@@ -643,7 +678,7 @@ services:
       CONFIRMED_TOPIC: vehicle.confirmed
       RFID_CORRELATION_WINDOW_S: ${RFID_CORRELATION_WINDOW_S:-5.0}
       RFID_CONFIRM_CONFIDENCE: ${RFID_CONFIRM_CONFIDENCE:-0.97}
-      POSTGRES_DSN_LIBPQ: ${RFID_POSTGRES_DSN:-postgresql://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN_LIBPQ: ${RFID_POSTGRES_DSN:?RFID_POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       METRICS_PORT: "9102"
       LOG_LEVEL: ${RFID_LOG_LEVEL:-INFO}
       TZ: Etc/UTC
@@ -678,8 +713,6 @@ services:
     container_name: jnpa-congestion
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
       minio:
@@ -705,7 +738,7 @@ services:
       CONGESTION_PREDICTIONS_TOPIC: ${CONGESTION_PREDICTIONS_TOPIC:-traffic.predictions}
       CONGESTION_PUBLISH_INTERVAL_S: ${CONGESTION_PUBLISH_INTERVAL_S:-60}
       # asyncpg/psycopg libpq DSN (no SQLAlchemy "+asyncpg" prefix).
-      CONGESTION_POSTGRES_DSN: ${CONGESTION_POSTGRES_DSN:-postgresql://postgres:jnpa_pw@postgres:5432/postgres}
+      CONGESTION_POSTGRES_DSN: ${CONGESTION_POSTGRES_DSN:?CONGESTION_POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       KAFKA_BROKERS: kafka:9092
       MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
@@ -775,8 +808,6 @@ services:
     container_name: jnpa-anomaly
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
       kafka:
@@ -790,7 +821,7 @@ services:
       KAFKA_BROKERS: kafka:9092
       ANOMALY_ALERTS_TOPIC: ${ANOMALY_ALERTS_TOPIC:-alerts}
       # psycopg libpq DSN (no SQLAlchemy "+asyncpg" prefix).
-      ANOMALY_POSTGRES_DSN: ${ANOMALY_POSTGRES_DSN:-postgresql://postgres:jnpa_pw@postgres:5432/postgres}
+      ANOMALY_POSTGRES_DSN: ${ANOMALY_POSTGRES_DSN:?ANOMALY_POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       # Trucking-app control plane for the assigned-route lookup (route-deviation).
       ANOMALY_TRUCK_API_URL: ${ANOMALY_TRUCK_API_URL:-http://truck-sim:8240}
       # Rule thresholds (spec defaults; override per deployment).
@@ -866,8 +897,6 @@ services:
     profiles: ["train"]
     restart: "no"
     depends_on:
-      postgres:
-        condition: service_healthy
       minio:
         condition: service_healthy
     environment: *anomaly-env
@@ -904,8 +933,6 @@ services:
     container_name: jnpa-gateway
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
       kafka:
@@ -935,9 +962,18 @@ services:
       GATEWAY_GATE_DATA_URL: ${GATEWAY_GATE_DATA_URL:-http://gate-data:8350}
       GATEWAY_IDENTITY_URL: ${GATEWAY_IDENTITY_URL:-http://identity:8360}
       GATEWAY_PARKING_URL: ${GATEWAY_PARKING_URL:-http://parking:8370}
+      # EIR / gate-slip OCR sidecar. POST /api/ocr/document with doc_type=EIR now
+      # routes here for a REAL structured field read (validated against the four
+      # WhatsApp gate slips) and falls back to the local reader when it is down.
+      # Set empty to disable the LIVE rung entirely.
+      GATEWAY_EIR_OCR_URL: ${GATEWAY_EIR_OCR_URL:-http://eir-ocr:8210}
       # ULIP relay — empty -> mock relay used for the SECONDARY truck rung.
       GATEWAY_ULIP_URL: ${GATEWAY_ULIP_URL:-}
       ULIP_API_KEY: ${ULIP_API_KEY:-}
+      # NOTE: LDB_BASE_URL / LDB_API_KEY are declared ONCE, further down with the
+      # other ULIP/LDB integration vars. They used to be declared here too (two
+      # branches added the same pair independently and the merge kept both),
+      # which made compose fail to parse: duplicate mapping key.
       # FASTag ULIP APIs (/api/fastag/*). All env-driven — NO hardcoded vendor URL.
       # Empty FASTAG_ULIP_URL -> demo fallback (below) when FASTAG_DEMO_MODE=true,
       # else a config error (HTTP 500). Paths + auth scheme stay configurable
@@ -1028,9 +1064,20 @@ services:
       ULIP_TOKEN_TTL_S: ${ULIP_TOKEN_TTL_S:-1800}
       ULIP_FASTAG_API: ${ULIP_FASTAG_API:-}
       ULIP_LDB_API: ${ULIP_LDB_API:-}
+      # Logistics Data Bank / NLDS adapter behind /api/ldb/*. The SOLE definition
+      # of this pair — do not re-declare it in this mapping (duplicate YAML keys
+      # make `docker compose` refuse to parse the file at all).
+      # Set => POST {LDB_BASE_URL}/truck/search runs LIVE; empty => deterministic
+      # MOCK (gateway/integrations.py picks the rung and audits either way).
+      LDB_BASE_URL: ${LDB_BASE_URL:-}
+      LDB_API_KEY: ${LDB_API_KEY:-}
+      # Local/dev: allow gateway modules to self-apply idempotent DDL when the
+      # volume has only init.sql (jnpa.*) and not the schema-v3 core.* migrations.
+      # Keep unset / 0 on RDS/schema-v3 where infra/postgres/v3 owns DDL.
+      JNPA_RUNTIME_DDL: ${JNPA_RUNTIME_DDL:-1}
       GATEWAY_CACHE_TTL_ULIP_S: ${GATEWAY_CACHE_TTL_ULIP_S:-300}
       # Infra.
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       KAFKA_BROKERS: kafka:9092
       MQTT_HOST: mosquitto
@@ -1057,9 +1104,17 @@ services:
       # Dev-only resilience fallbacks (in-memory store / base64 photo / synthetic
       # identity). Production forces strict regardless; set false belt-and-braces.
       ALLOW_FALLBACK: ${ALLOW_FALLBACK:-true}
-      AUTH_ENABLED: ${AUTH_ENABLED:-false}
+      # Enforcement ON by default. This defaulted to `false`, which meant a
+      # plain `make up` served the whole driver registry (~31.8k real licence
+      # numbers + dates of birth) to any unauthenticated caller. Turning it off
+      # is now the deliberate act, not the accident.
+      AUTH_ENABLED: ${AUTH_ENABLED:-true}
       AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-}
       AUTH_DEV_TOKENS: ${AUTH_DEV_TOKENS:-true}
+      # DPDP PII masking (gateway/pii.py). Opt-OUT and fails closed: with no
+      # principal every response is masked. Only these roles see cleartext.
+      PII_MASKING_ENABLED: ${PII_MASKING_ENABLED:-true}
+      PII_UNMASK_ROLES: ${PII_UNMASK_ROLES:-DTCCC_ADMIN,CUSTOMS}
       AUTH_RATE_LIMIT_PER_MIN: ${AUTH_RATE_LIMIT_PER_MIN:-600}
       AUTH_USERS: ${AUTH_USERS:-}
       # Shared secret accepted from trusted internal services (the scenarios-runner)
@@ -1130,7 +1185,7 @@ services:
     environment:
       PYTHONPATH: /app
       PORT: "8330"
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       LOG_LEVEL: ${EMPTY_CONTAINER_LOG_LEVEL:-INFO}
       TZ: Etc/UTC
     ports:
@@ -1155,7 +1210,7 @@ services:
     environment:
       PYTHONPATH: /app
       PORT: "8340"
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       LOG_LEVEL: ${CARBON_LOG_LEVEL:-INFO}
       TZ: Etc/UTC
     ports:
@@ -1180,7 +1235,7 @@ services:
     environment:
       PYTHONPATH: /app
       PORT: "8350"
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       LOG_LEVEL: ${GATE_DATA_LOG_LEVEL:-INFO}
       TZ: Etc/UTC
       # Phase 4 — ICEGATE Customs Adapter feature flag. Empty (default) keeps ICEGATE
@@ -1260,7 +1315,7 @@ services:
     environment:
       PYTHONPATH: /app
       PORT: "8370"
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       LOG_LEVEL: ${PARKING_LOG_LEVEL:-INFO}
       TZ: Etc/UTC
     ports:
@@ -1289,8 +1344,6 @@ services:
     container_name: jnpa-scenarios
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
       kafka:
         condition: service_healthy
       gateway:
@@ -1309,7 +1362,7 @@ services:
       SCENARIOS_TRUCK_URL: ${SCENARIOS_TRUCK_URL:-http://truck-sim:8240}
       SCENARIOS_CONGESTION_URL: ${SCENARIOS_CONGESTION_URL:-http://congestion:8311}
       SCENARIOS_ANOMALY_URL: ${SCENARIOS_ANOMALY_URL:-http://anomaly:8321}
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       KAFKA_BROKERS: kafka:9092
       SCENARIOS_FORECAST_ATTEMPTS: ${SCENARIOS_FORECAST_ATTEMPTS:-6}

@@ -14,6 +14,10 @@ WebSocket to:
     GET  /api/tas/slots               -> TAS slot book (gateway/tas_mock.py).
     POST /api/tas/reschedule          -> mark a gate's slots RESCHEDULED (TFC-1).
     POST /api/tas/restore             -> restore a gate's slots (reset).
+    GET  /api/tas/deferred-windows    -> XT-2 windows consumed from UC-II.
+    POST /api/tas/deferred-windows    -> apply an XT-2 window over HTTP, i.e. the
+                                         same contract without needing the UC-II
+                                         Kafka producer to be reachable.
     POST /api/scenario_step           -> fan a scenario_step frame to dashboard
                                          WS clients (the scenarios-runner posts
                                          here so the storyline paints live).
@@ -24,7 +28,10 @@ import hashlib
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body, Depends, HTTPException, status
+from pydantic import ValidationError
+
+from jnpa_shared.schemas import DeferredArrivalWindow
 
 from .. import tas_mock
 from ..logging import get_logger
@@ -186,10 +193,61 @@ async def tas_reschedule(body: Dict[str, Any] = Body(...)) -> dict:
 
 
 @router.get("/api/tas/deferred-windows")
-async def tas_deferred_windows() -> dict:
+async def tas_deferred_windows(state: GatewayState = Depends(get_state)) -> dict:
     """Cross-twin proof surface: DeferredArrivalWindow events consumed from
-    ``jnpa.crosstwin.deferred-arrival`` and applied to the TAS slot book."""
-    return {"windows": tas_mock.deferred_windows()}
+    ``jnpa.crosstwin.deferred-arrival`` and applied to the TAS slot book.
+
+    Serves the live in-memory book, and falls back to the persisted table
+    (core.deferred_arrival_window, migration 0115) when the book is empty — so a
+    window consumed before the last restart is still visible after a refresh.
+    """
+    windows = tas_mock.deferred_windows()
+    source = "memory"
+    if not windows:
+        from services.crosstwin import DeferredArrivalRepository
+
+        windows = await DeferredArrivalRepository(state.cfg.postgres_dsn).recent()
+        source = "rds"
+    return {"windows": windows, "count": len(windows), "source": source}
+
+
+@router.post("/api/tas/deferred-windows", status_code=status.HTTP_201_CREATED)
+async def tas_apply_deferred_window(
+    body: Dict[str, Any] = Body(...),
+    state: GatewayState = Depends(get_state),
+) -> dict:
+    """Apply a ``DeferredArrivalWindow`` over HTTP (XT-2, transport=HTTP).
+
+    The contract's primary transport is Kafka ``jnpa.crosstwin.deferred-arrival``,
+    published by UC-II. This endpoint accepts the IDENTICAL payload over HTTP so
+    the cross-twin flow can be exercised when the UC-II stack or the broker is not
+    reachable — the audit found no producer for this topic anywhere, which made
+    XT-2 undemonstrable from this repository alone.
+
+    Both transports converge on ``gateway.crosstwin.apply``, so the slot
+    metering, the RDS row, the dashboard frame and the driver push are byte-for-
+    byte the same whichever way the window arrives.
+    """
+    from .. import crosstwin
+
+    try:
+        win = DeferredArrivalWindow(**body)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"error": "invalid_deferred_arrival_window",
+                    "detail": exc.errors()},
+        )
+    result = await crosstwin.apply(state, win, transport="HTTP")
+    REQUESTS.labels("tas", "ok").inc()
+    return {
+        "applied": True,
+        "correlation_id": win.correlation_id,
+        "applied_slots": result["applied_slots"],
+        "persisted": result["persisted"],
+        "drivers_notified": result["notified"],
+        "window": result["window"],
+    }
 
 
 @router.post("/api/tas/restore")

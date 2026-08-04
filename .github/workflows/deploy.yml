@@ -125,6 +125,11 @@ jobs:
           rsync -avz --delete \
             --exclude '.git' \
             --exclude '.github' \
+            --exclude '/.env' \
+            --exclude '/.env.local' \
+            --exclude '/.env.prod' \
+            --exclude '/.env.tmp' \
+            --exclude '/.env*.bak*' \
             --exclude 'node_modules' \
             --exclude '**/node_modules' \
             --exclude '.venv' \
@@ -154,9 +159,9 @@ jobs:
               echo "Creating initial .env file..."
               cp .env.aws.example .env
 
-              # Auto-generate secure random credentials
-              DB_PASS="$(openssl rand -hex 16)"
-              sed -i "s/change-me-postgres/${DB_PASS}/g" .env
+              # NOTE: database credentials are NOT generated here. The app database
+              # is AWS RDS (jnpa_schema_v3) and its DSNs are written from the
+              # RDS_PASSWORD secret in step 1b-RDS below, on every deploy.
 
               MINIO_KEY="$(openssl rand -hex 16)"
               sed -i "s/change-me-minio-key/${MINIO_KEY}/g" .env
@@ -200,6 +205,104 @@ jobs:
             # Both services read INTERNAL_SERVICE_TOKEN from this same .env, so one
             # backfilled value keeps them in lockstep.
             ensure_key INTERNAL_SERVICE_TOKEN "$(openssl rand -hex 32)"
+            # LDB / NLDS (Logistics Data Bank) base URL for /api/ldb/*. Compose
+            # declares it as ${LDB_BASE_URL:-} (optional, empty => MOCK), so an
+            # unset value does NOT abort the deploy — it silently downgrades the
+            # LDB rung to mock data. .env.aws.example carries the real endpoint,
+            # but that template is only copied when .env does not yet exist, so an
+            # .env from an earlier deploy would never gain the key. Backfill it.
+            ensure_key LDB_BASE_URL "https://ldb.co.in/api/ldbv2"
+
+            # 1b-RDS. AWS RDS (jnpa_schema_v3) is the ONLY application database —
+            #     this stack starts no postgres container (it lives behind the
+            #     dev-only "localdb" compose profile). Rewrite POSTGRES_PASSWORD and
+            #     the five DSNs on EVERY deploy: idempotent, and it also repairs a
+            #     .env left over from the local-postgres era (@postgres:5432) or a
+            #     fresh .env still carrying the __RDS_PASSWORD__ placeholder.
+            #     The password comes from the RDS_PASSWORD repository secret; it is
+            #     never committed and GitHub masks it in the logs.
+            RDS_PW='${{ secrets.RDS_PASSWORD }}'
+            if [ -z "${RDS_PW}" ]; then
+              echo "DEPLOY ABORTED: repository secret RDS_PASSWORD is not set." >&2
+              echo "  Add it under Settings > Secrets and variables > Actions." >&2
+              echo "  URL-encode any of  : / ? # [ ] @  before storing it." >&2
+              exit 1
+            fi
+            # The endpoint and application user are secrets too — publishing the
+            # hostname next to a superuser name reduced the whole PII corpus to one
+            # guessed password. See docs/RDS_SECURITY.md.
+            RDS_ENDPOINT='${{ secrets.RDS_HOST }}'
+            if [ -z "${RDS_ENDPOINT}" ]; then
+              echo "DEPLOY ABORTED: repository secret RDS_HOST is not set." >&2
+              echo "  Add the RDS endpoint under Settings > Secrets and variables > Actions." >&2
+              exit 1
+            fi
+            # RDS_USER defaults to the least-privilege application role, NOT the
+            # postgres superuser (docs/RDS_SECURITY.md §3).
+            RDS_APP_USER='${{ secrets.RDS_USER }}'
+            RDS_APP_USER="${RDS_APP_USER:-jnpa_app}"
+            RDS_PASSWORD="${RDS_PW}" \
+            RDS_HOST="${RDS_ENDPOINT}" \
+            RDS_PORT="5432" RDS_DB="jnpa_schema_v3" RDS_USER="${RDS_APP_USER}" \
+              bash deploy/aws/use-rds.sh .env
+            unset RDS_PW
+
+            # 1b-RDS-check. Refuse to deploy unless every DSN really resolves to
+            #     RDS/jnpa_schema_v3 (catches a hand-edited or half-written .env).
+            for v in POSTGRES_DSN RFID_POSTGRES_DSN TRUCK_POSTGRES_DSN \
+                     CONGESTION_POSTGRES_DSN ANOMALY_POSTGRES_DSN; do
+              line="$(grep -E "^${v}=" .env | tail -n1 || true)"
+              case "${line}" in
+                *"${RDS_ENDPOINT}"*"/jnpa_schema_v3"*) : ;;
+                *) echo "DEPLOY ABORTED: ${v} does not point at RDS/jnpa_schema_v3." >&2; exit 1 ;;
+              esac
+            done
+            if grep -qE '@postgres:5432|@localhost:543|@127\.0\.0\.1:543' .env; then
+              echo "DEPLOY ABORTED: .env still contains a local-postgres DSN." >&2
+              exit 1
+            fi
+            # Placeholder left in a VALUE (comments in the template legitimately
+            # mention it, so only assignment lines are inspected).
+            if grep -qE '^[A-Za-z_][A-Za-z0-9_]*=.*__RDS_PASSWORD__' .env; then
+              echo "DEPLOY ABORTED: .env still carries the __RDS_PASSWORD__ placeholder." >&2
+              exit 1
+            fi
+            echo "Database posture OK: all five DSNs -> RDS jnpa_schema_v3 (no local fallback)."
+
+            # 1b-GRAFANA. Grafana's Postgres datasource points at the SAME RDS
+            #     instance, so DERIVE it from the values just resolved rather
+            #     than carrying a second copy of the endpoint in another secret
+            #     that can silently drift out of sync.
+            #
+            #     Why this block exists: docker-compose.yml declares
+            #     GRAFANA_PG_HOST as ${GRAFANA_PG_HOST:?} (required, no default).
+            #     Nothing wrote it — not .env.aws.example, not ensure_key, not
+            #     this workflow — so compose aborted the WHOLE stack on
+            #     "required variable GRAFANA_PG_HOST is missing a value".
+            #     Compose interpolation is evaluated for every service before any
+            #     container starts, so one unset monitoring variable took down all
+            #     30 services.
+            #
+            #     set_key (not ensure_key): these must be REWRITTEN every deploy.
+            #     ensure_key only appends when absent, which would pin a stale
+            #     endpoint or user after a rotation.
+            set_key() {
+              local key="$1" val="$2"
+              # Drop any existing assignment, then append the current value.
+              grep -v "^${key}=" .env > .env.tmp && mv .env.tmp .env
+              echo "${key}=${val}" >> .env
+              chmod 600 .env
+            }
+            set_key GRAFANA_PG_HOST "${RDS_ENDPOINT}:5432"
+            set_key GRAFANA_PG_DB "jnpa_schema_v3"
+            # Same least-privilege role the application uses. Grafana only reads.
+            set_key GRAFANA_PG_USER "${RDS_APP_USER}"
+            set_key GRAFANA_PG_SSLMODE "require"
+            # NOTE: compose reads the datasource PASSWORD from POSTGRES_PASSWORD
+            # (already written by use-rds.sh), not from a GRAFANA_PG_PASSWORD
+            # variable — see the grafana service in docker-compose.yml. A
+            # GRAFANA_PG_PASSWORD secret would be silently ignored.
+            echo "Grafana datasource -> ${RDS_ENDPOINT}:5432/jnpa_schema_v3 as ${RDS_APP_USER}"
 
             # 1c. Fail the deploy fast if the auth posture is unsafe. This mirrors
             #     gateway/auth.validate_auth_config() so a misconfigured .env is

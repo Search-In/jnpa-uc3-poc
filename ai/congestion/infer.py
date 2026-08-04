@@ -36,6 +36,7 @@ from prometheus_client import Counter, Gauge, Histogram, make_asgi_app
 from pydantic import BaseModel
 
 from jnpa_shared import kafka_io, tracing
+from jnpa_shared.config import require_dsn
 from jnpa_shared.logging import configure_logging, get_logger
 
 from . import storage
@@ -305,7 +306,9 @@ async def _store_snapshots(rows: List[HistoryRow]) -> int:
     if not recent:
         return 0
     try:
-        with psycopg.connect(cfg.postgres_dsn_libpq, connect_timeout=3) as conn:
+        with psycopg.connect(
+            require_dsn(cfg.postgres_dsn_libpq, "CONGESTION_POSTGRES_DSN"), connect_timeout=3
+        ) as conn:
             with conn.cursor() as cur:
                 cur.executemany(
                     "INSERT INTO core.traffic_snapshot (ts, segment_id, speed_kmh, jam_factor, source)"

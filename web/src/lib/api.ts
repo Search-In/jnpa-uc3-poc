@@ -4,6 +4,7 @@
 // Query surfaces the error state.
 
 import { getToken } from "./auth";
+import { getDataSourceMode } from "./dataSourceMode";
 import type { AvailableVehicle } from "./types";
 
 // Request budget. Without one, `fetch` waits indefinitely: the 2026-08-04 audit
@@ -43,10 +44,12 @@ async function http<T>(
   // auth is disabled there is no token and the header is simply omitted.
   const token = getToken();
   const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+  // Data-source provenance filter (LIVE = JNPA-API rows, DEMO = pre-loaded).
+  const dataModeHeader: Record<string, string> = { "x-data-mode": getDataSourceMode() };
   let res: Response;
   try {
     res = await fetch(path, {
-      headers: { "content-type": "application/json", ...authHeader, ...(init?.headers || {}) },
+      headers: { "content-type": "application/json", ...authHeader, ...dataModeHeader, ...(init?.headers || {}) },
       ...init,
       signal: timeoutSignal(timeoutMs, init?.signal),
     });
@@ -141,7 +144,8 @@ async function downloadFile(path: string, filename: string): Promise<void> {
   const token = getToken();
   const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
   const res = await fetch(path, {
-    headers: { ...authHeader },
+    // Data-source provenance filter (LIVE = JNPA-API rows, DEMO = pre-loaded).
+    headers: { ...authHeader, "x-data-mode": getDataSourceMode() },
     signal: timeoutSignal(UPLOAD_TIMEOUT_MS),
   });
   if (!res.ok) {
@@ -173,7 +177,8 @@ async function postForm<T>(path: string, form: FormData): Promise<T> {
   const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
   const res = await fetch(path, {
     method: "POST",
-    headers: { ...authHeader },
+    // Data-source provenance filter (LIVE = JNPA-API rows, DEMO = pre-loaded).
+    headers: { ...authHeader, "x-data-mode": getDataSourceMode() },
     body: form,
     signal: timeoutSignal(UPLOAD_TIMEOUT_MS),
   });

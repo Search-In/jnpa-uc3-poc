@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel
 
+from gateway.data_mode import data_mode
 from services.customs import CustomsService
 
 router = APIRouter(prefix="/api/customs", tags=["customs"])
@@ -74,8 +75,9 @@ def _page(items: List[dict], total: int, limit: int, offset: int, response: Resp
 
 # ------------------------------------------------------------------- summary
 @router.get("/summary", summary="Customs layer dashboard counts")
-async def summary(svc: CustomsService = Depends(get_service)) -> Dict[str, Any]:
-    return await svc.summary()
+async def summary(svc: CustomsService = Depends(get_service),
+                  mode: Optional[str] = Depends(data_mode)) -> Dict[str, Any]:
+    return await svc.summary(data_origin=mode)
 
 
 # ------------------------------------------------------------------- messages
@@ -88,8 +90,10 @@ async def list_messages(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     svc: CustomsService = Depends(get_service),
+    mode: Optional[str] = Depends(data_mode),
 ) -> Page:
-    filters = {"module": module, "message_type": message_type, "import_status": import_status}
+    filters = {"module": module, "message_type": message_type, "import_status": import_status,
+               "data_origin": mode}
     items = await svc.list_messages(filters=filters, limit=limit, offset=offset)
     total = await svc.count_messages(filters=filters)
     return _page(items, total, limit, offset, response)
@@ -112,8 +116,9 @@ async def list_igm(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     svc: CustomsService = Depends(get_service),
+    mode: Optional[str] = Depends(data_mode),
 ) -> Page:
-    filters = {"igm_no": igm_no}
+    filters = {"igm_no": igm_no, "data_origin": mode}
     items = await svc.list_igm(filters=filters, limit=limit, offset=offset)
     total = await svc.count_igm(filters=filters)
     return _page(items, total, limit, offset, response)
@@ -127,8 +132,9 @@ async def list_igm_containers(
     limit: int = Query(200, ge=1, le=2000),
     offset: int = Query(0, ge=0),
     svc: CustomsService = Depends(get_service),
+    mode: Optional[str] = Depends(data_mode),
 ) -> Page:
-    filters = {"igm_no": igm_no}
+    filters = {"igm_no": igm_no, "data_origin": mode}
     items = await svc.list_igm_containers(filters=filters, limit=limit, offset=offset)
     total = await svc.count_igm_containers(filters=filters)
     return _page(items, total, limit, offset, response)
@@ -144,9 +150,10 @@ async def list_ooc(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     svc: CustomsService = Depends(get_service),
+    mode: Optional[str] = Depends(data_mode),
 ) -> Page:
     filters = {"bill_of_entry_no": bill_of_entry_no, "igm_no": igm_no,
-               "out_of_charge_no": out_of_charge_no}
+               "out_of_charge_no": out_of_charge_no, "data_origin": mode}
     items = await svc.list_ooc(filters=filters, limit=limit, offset=offset)
     total = await svc.count_ooc(filters=filters)
     return _page(items, total, limit, offset, response)
@@ -173,8 +180,9 @@ async def list_smtp(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     svc: CustomsService = Depends(get_service),
+    mode: Optional[str] = Depends(data_mode),
 ) -> Page:
-    filters = {"smtp_no": smtp_no, "igm_no": igm_no, "bond_no": bond_no}
+    filters = {"smtp_no": smtp_no, "igm_no": igm_no, "bond_no": bond_no, "data_origin": mode}
     items = await svc.list_smtp(filters=filters, limit=limit, offset=offset)
     total = await svc.count_smtp(filters=filters)
     return _page(items, total, limit, offset, response)
@@ -188,8 +196,9 @@ async def list_rms(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     svc: CustomsService = Depends(get_service),
+    mode: Optional[str] = Depends(data_mode),
 ) -> Page:
-    filters = {"igm_no": igm_no}
+    filters = {"igm_no": igm_no, "data_origin": mode}
     items = await svc.list_rms(filters=filters, limit=limit, offset=offset)
     total = await svc.count_rms(filters=filters)
     return _page(items, total, limit, offset, response)
@@ -206,13 +215,15 @@ async def list_rms_containers(
     limit: int = Query(200, ge=1, le=2000),
     offset: int = Query(0, ge=0),
     svc: CustomsService = Depends(get_service),
+    mode: Optional[str] = Depends(data_mode),
 ) -> Page:
     if not str(igm_no).strip().isdigit():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail={"error": "invalid_igm_no", "igm_no": igm_no,
                                     "detail": "igm_no must be numeric"})
     filters = {"igm_no": igm_no, "machine_type": machine_type,
-               "scan_location": scan_location, "container_no": container_no}
+               "scan_location": scan_location, "container_no": container_no,
+               "data_origin": mode}
     items = await svc.list_rms_containers(filters=filters, limit=limit, offset=offset)
     total = await svc.count_rms_containers(filters=filters)
     return _page(items, total, limit, offset, response)
@@ -226,8 +237,9 @@ async def list_leo(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     svc: CustomsService = Depends(get_service),
+    mode: Optional[str] = Depends(data_mode),
 ) -> Page:
-    filters = {"sb_no": sb_no}
+    filters = {"sb_no": sb_no, "data_origin": mode}
     items = await svc.list_leo(filters=filters, limit=limit, offset=offset)
     total = await svc.count_leo(filters=filters)
     return _page(items, total, limit, offset, response)
@@ -242,8 +254,9 @@ async def list_shipping_bills(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     svc: CustomsService = Depends(get_service),
+    mode: Optional[str] = Depends(data_mode),
 ) -> Page:
-    filters = {"sb_no": sb_no, "site_id": site_id}
+    filters = {"sb_no": sb_no, "site_id": site_id, "data_origin": mode}
     items = await svc.list_shipping_bills(filters=filters, limit=limit, offset=offset)
     total = await svc.count_shipping_bills(filters=filters)
     return _page(items, total, limit, offset, response)
@@ -252,8 +265,9 @@ async def list_shipping_bills(
 # ------------------------------------------------------ container customs view
 @router.get("/containers/{container_no}", summary="Full customs view of one container")
 async def container_customs(container_no: str,
-                            svc: CustomsService = Depends(get_service)) -> Dict[str, Any]:
-    view = await svc.container_customs(container_no.strip().upper())
+                            svc: CustomsService = Depends(get_service),
+                            mode: Optional[str] = Depends(data_mode)) -> Dict[str, Any]:
+    view = await svc.container_customs(container_no.strip().upper(), data_origin=mode)
     if not (view["igm"] or view["ooc"] or view["smtp"] or view["rms"]):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "container_not_in_customs", "container_no": container_no})
@@ -271,9 +285,10 @@ async def list_events(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     svc: CustomsService = Depends(get_service),
+    mode: Optional[str] = Depends(data_mode),
 ) -> Page:
     items = await svc.list_events(module=module, container_no=container_no, event=event,
-                                  since_id=since, limit=limit, offset=offset)
+                                  since_id=since, data_origin=mode, limit=limit, offset=offset)
     return _page(items, len(items), limit, offset, response)
 
 

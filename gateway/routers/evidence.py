@@ -36,6 +36,20 @@ def _bucket() -> str:
     return os.environ.get("ANOMALY_EVIDENCE_BUCKET", "evidence").strip()
 
 
+def _buckets() -> list[str]:
+    """Buckets searched, in order, for a requested evidence object (fix G-2).
+
+    Evidence is written to more than one bucket: violation frames and ANPR crops
+    land in the `evidence` bucket, while documents stored by /api/ocr/document go
+    to `documents`. Both now persist a ``/api/evidence/{object}`` reference, so
+    this route has to resolve either — otherwise a stored, correctly-referenced
+    document 404s purely because it lives in the sibling bucket.
+    """
+    docs = os.environ.get("DOCUMENT_OCR_BUCKET", "documents").strip()
+    out = [b for b in (_bucket(), docs) if b]
+    return list(dict.fromkeys(out))  # de-dup, order preserved
+
+
 def _minio():
     from minio import Minio  # lazy import — optional dependency
 
@@ -49,19 +63,28 @@ def _minio():
 
 
 def _fetch(object_path: str) -> bytes:
-    """Blocking MinIO read (run off the event loop via run_in_threadpool)."""
-    resp = None
-    try:
-        client = _minio()
-        resp = client.get_object(_bucket(), object_path)
-        return resp.read()
-    finally:
+    """Blocking MinIO read (run off the event loop via run_in_threadpool).
+
+    Tries each configured evidence bucket in turn and raises the last error only
+    when none of them holds the object.
+    """
+    client = _minio()
+    last_exc: Exception | None = None
+    for bucket in _buckets():
+        resp = None
         try:
-            if resp is not None:
-                resp.close()
-                resp.release_conn()
-        except Exception:  # noqa: BLE001
-            pass
+            resp = client.get_object(bucket, object_path)
+            return resp.read()
+        except Exception as exc:  # noqa: BLE001 — try the next bucket
+            last_exc = exc
+        finally:
+            try:
+                if resp is not None:
+                    resp.close()
+                    resp.release_conn()
+            except Exception:  # noqa: BLE001
+                pass
+    raise last_exc if last_exc is not None else FileNotFoundError(object_path)
 
 
 @router.get("/{object_path:path}")

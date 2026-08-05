@@ -31,6 +31,7 @@ from pydantic import BaseModel
 from jnpa_shared.pii import mask_payload
 
 from ..auth import CONTROL_ROOM, Role, auth_enabled
+from ..data_mode import data_mode
 from ..metrics import REQUESTS
 from ..pii import mask_for_request
 from services.gate_documents import GateDocumentService
@@ -156,10 +157,12 @@ async def list_eir(
     terminal: Optional[str] = None,
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    data_origin: Optional[str] = Depends(data_mode),
     svc: GateDocumentService = Depends(get_service),
 ) -> Page:
     filters = {"container_number": container,
-               "truck_no": _norm_plate(truck) if truck else None, "terminal": terminal}
+               "truck_no": _norm_plate(truck) if truck else None, "terminal": terminal,
+               "data_origin": data_origin}
     return await _list(svc, "EIR", response, filters, limit, offset, request)
 
 
@@ -173,10 +176,12 @@ async def list_pin(
     terminal: Optional[str] = None,
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    data_origin: Optional[str] = Depends(data_mode),
     svc: GateDocumentService = Depends(get_service),
 ) -> Page:
     filters = {"pin_number": pin, "container_number": container,
-               "truck_no": _norm_plate(truck) if truck else None, "terminal": terminal}
+               "truck_no": _norm_plate(truck) if truck else None, "terminal": terminal,
+               "data_origin": data_origin}
     return await _list(svc, "PIN", response, filters, limit, offset, request)
 
 

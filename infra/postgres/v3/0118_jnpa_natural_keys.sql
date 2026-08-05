@@ -1,0 +1,36 @@
+-- ============================================================
+-- 0118  JNPA report-group ingestion — natural-key reservation (NO-OP)
+-- Additive only. Naming: singular, per architecture conventions.
+--
+-- This migration number is RESERVED for the Phase-3 report-group ingestion
+-- (services/jnpa_sync/report_ingest.py + report_mappers/). It intentionally
+-- creates NO schema objects. Here is why no new keys are needed:
+--
+--   * RAW LANDING is already keyed by 0117. Every report answer is stored
+--     verbatim in core.api_report_snapshot, whose UNIQUE index
+--     uq_api_report_snapshot (group_slug, COALESCE(report_date,'epoch'),
+--     COALESCE(terminal,''), payload_sha256) is the content-dedup key —
+--     re-polling unchanged content is an ON CONFLICT DO NOTHING no-op.
+--     insert_report_snapshot / update_report_mapped need no new column.
+--
+--   * MAPPED PERSISTENCE performs NO direct upsert of its own. Mapped rows
+--     are rendered to the existing CSV upload templates and fed through the
+--     SAME validated upload services the manual dump import uses:
+--         berthing-reports -> services.berthing.upload_service
+--                             BerthingUploadService.import_file(...)
+--                             (upserts jnpa.berthing_* on its own
+--                              vessel-call key + file-hash ledger dedup)
+--         daily-reports    -> services.performance.upload_service
+--                             UploadService.import_file("daily_status", ...)
+--                             (upserts jnpa.perf_* via its own ON CONFLICT
+--                              keys + the perf_upload ledger)
+--     Those services own their unique keys already; report_ingest adds none
+--     and writes no raw SQL into any core.* report table.
+--
+-- Net: report ingestion reuses the 0117 snapshot key and the existing upload
+-- pipelines' keys end-to-end. No unique/natural key is introduced here; the
+-- number is burned deliberately so the sequence stays gap-free and the design
+-- decision is recorded in the migration history.
+--
+-- (Intentionally empty — running this file is a no-op.)
+-- ============================================================

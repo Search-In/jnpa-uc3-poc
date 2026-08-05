@@ -116,17 +116,30 @@ class GateDocumentService:
             await self._repo.mark_partial(file_id, error_count=res.invalid_count)
             status = "PARTIAL"
 
+        # `imported` must report what THIS request persisted (fix G-1). On a
+        # re-upload of an already-ingested file the repository writes nothing and
+        # returns SKIPPED_DUPLICATE, but `imported_count` still carried the count
+        # from the ORIGINAL import — so the response claimed rows had landed when
+        # none had. DB behaviour is unchanged (it was already idempotent by row
+        # hash); only the reported number is corrected. The original import's
+        # count stays visible as `previously_imported` and in the ledger.
+        duplicate_file = bool(result.get("duplicate", False))
+        imported = 0 if status == "SKIPPED_DUPLICATE" else result["imported_count"]
+
         log.info("gate_doc_upload.import", extra={"doc_type": doc_type, "status": status,
                                                   "file_id": file_id,
-                                                  "imported": result["imported_count"],
+                                                  "imported": imported,
                                                   "invalid": res.invalid_count,
                                                   "ms": round((perf_counter() - t0) * 1000, 1)})
-        return {"file_id": file_id, "status": status,
-                "imported": result["imported_count"],
-                "skipped": result.get("duplicate_count", 0),
-                "invalid": res.invalid_count,
-                "duplicate_file": result.get("duplicate", False),
-                "summary": summary, "warnings": res.warnings[:200]}
+        out = {"file_id": file_id, "status": status,
+               "imported": imported,
+               "skipped": result.get("duplicate_count", 0),
+               "invalid": res.invalid_count,
+               "duplicate_file": duplicate_file,
+               "summary": summary, "warnings": res.warnings[:200]}
+        if status == "SKIPPED_DUPLICATE":
+            out["previously_imported"] = result["imported_count"]
+        return out
 
     # ---------------------------------------------------------------- reads
     async def list_docs(self, doc_type: str, *, filters, limit: int, offset: int) -> Dict[str, Any]:

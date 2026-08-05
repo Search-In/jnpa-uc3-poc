@@ -41,6 +41,7 @@ import { authEnabled, getRole } from "@/lib/auth";
 import BerthingReportUpload from "@/screens/berthing/ReportUpload";
 import BerthingReportDetails from "@/screens/berthing/ReportDetails";
 import BerthingTimelineDialog, { statusTone } from "@/screens/berthing/Timeline";
+import { CallFlags, FieldCell, TimeCell } from "@/screens/berthing/cells";
 
 const UPLOAD_ROLES = ["JNPA_TRAFFIC", "DTCCC_ADMIN", "TERMINAL_OPS", "CUSTOMS"];
 const CAN_UPLOAD = !authEnabled() || UPLOAD_ROLES.includes(getRole() ?? "");
@@ -65,21 +66,6 @@ function useDebounced<T>(value: T, delay = 350): T {
     return () => clearTimeout(id);
   }, [value, delay]);
   return d;
-}
-
-function fmtTs(ts?: string | null): string {
-  if (!ts) return "—";
-  try {
-    return new Date(ts).toLocaleString("en-IN", {
-      day: "2-digit",
-      month: "short",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    });
-  } catch {
-    return String(ts);
-  }
 }
 
 function fmtHours(h?: number | null): string {
@@ -356,17 +342,24 @@ export default function Berthing() {
                         >
                           <td className="px-3 py-2 font-semibold text-foreground">
                             {r.vessel_name}
+                            <CallFlags row={r} />
                           </td>
                           <td className="px-3 py-2 tabular-nums text-muted-foreground">
-                            {r.imo_number ?? "—"}
+                            <FieldCell row={r} field="imo_number" />
                           </td>
                           <td className="px-3 py-2 font-mono">{r.voyage_number}</td>
                           <td className="px-3 py-2">
                             <StatusChip label={r.terminal} tone={terminalTone(r.terminal)} />
                           </td>
-                          <td className="px-3 py-2">{r.berth_number ?? "—"}</td>
-                          <td className="px-3 py-2 tabular-nums">{fmtTs(r.eta)}</td>
-                          <td className="px-3 py-2 tabular-nums">{fmtTs(r.ata)}</td>
+                          <td className="px-3 py-2">
+                            <FieldCell row={r} field="berth_number" />
+                          </td>
+                          <td className="px-3 py-2 tabular-nums">
+                            <TimeCell row={r} field="eta" />
+                          </td>
+                          <td className="px-3 py-2 tabular-nums">
+                            <TimeCell row={r} field="ata" />
+                          </td>
                           <td className="px-3 py-2">
                             <StatusChip label={r.status} tone={statusTone(r.status)} />
                           </td>

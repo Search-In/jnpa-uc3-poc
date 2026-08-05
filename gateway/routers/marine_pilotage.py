@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict
 
+from ..data_mode import data_mode
 from ..metrics import REQUESTS
 from services.marine.pilotage import PilotageService
 
@@ -81,9 +82,9 @@ class PilotageStatsOut(BaseModel):
     by_movement: List[MovementStat]
 
 
-def _filters(movement, imo, pilot, vessel, via) -> Dict[str, Any]:
+def _filters(movement, imo, pilot, vessel, via, data_origin=None) -> Dict[str, Any]:
     return {"movement_type": movement, "imo_no": imo, "pilot_code": pilot,
-            "vessel": vessel, "via": via}
+            "vessel": vessel, "via": via, "data_origin": data_origin}
 
 
 @router.get("", response_model=PilotageListResponse,
@@ -98,9 +99,10 @@ async def list_pilotage(
     direction: str = Query(default="desc"),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    mode: Optional[str] = Depends(data_mode),
     service: PilotageService = Depends(get_service),
 ) -> PilotageListResponse:
-    res = await service.list_pilotage(_filters(movement, imo, pilot, vessel, via),
+    res = await service.list_pilotage(_filters(movement, imo, pilot, vessel, via, mode),
                                       sort=sort, direction=direction, limit=limit, offset=offset)
     REQUESTS.labels(_API, "ok").inc()
     return PilotageListResponse(**res)
@@ -110,17 +112,19 @@ async def list_pilotage(
             summary="Pilotage counts by movement type + distinct pilots")
 async def stats(
     movement: Optional[str] = Query(default=None),
+    mode: Optional[str] = Depends(data_mode),
     service: PilotageService = Depends(get_service),
 ) -> PilotageStatsOut:
-    res = await service.stats(_filters(movement, None, None, None, None))
+    res = await service.stats(_filters(movement, None, None, None, None, mode))
     REQUESTS.labels(_API, "ok").inc()
     return PilotageStatsOut(**res)
 
 
 @router.get("/{pilotage_id}", response_model=PilotageOut, summary="One pilotage movement")
 async def get_pilotage(pilotage_id: int,
+                       mode: Optional[str] = Depends(data_mode),
                        service: PilotageService = Depends(get_service)) -> PilotageOut:
-    res = await service.get(pilotage_id)
+    res = await service.get(pilotage_id, data_origin=mode)
     if res is None:
         REQUESTS.labels(_API, "not_found").inc()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,

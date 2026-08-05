@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict
 
+from ..data_mode import data_mode
 from ..metrics import REQUESTS
 from services.marine.sea_channel import SeaChannelService
 
@@ -66,8 +67,8 @@ class SeaChannelStatsOut(BaseModel):
     by_name: List[NameStat]
 
 
-def _filters(name, section) -> Dict[str, Any]:
-    return {"name": name, "section": section}
+def _filters(name, section, data_origin=None) -> Dict[str, Any]:
+    return {"name": name, "section": section, "data_origin": data_origin}
 
 
 @router.get("", response_model=SeaChannelListResponse,
@@ -79,9 +80,10 @@ async def list_channels(
     direction: str = Query(default="asc"),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    mode: Optional[str] = Depends(data_mode),
     service: SeaChannelService = Depends(get_service),
 ) -> SeaChannelListResponse:
-    res = await service.list_channels(_filters(name, section), sort=sort, direction=direction,
+    res = await service.list_channels(_filters(name, section, mode), sort=sort, direction=direction,
                                       limit=limit, offset=offset)
     REQUESTS.labels(_API, "ok").inc()
     return SeaChannelListResponse(**res)
@@ -91,25 +93,28 @@ async def list_channels(
 async def geojson(
     name: Optional[str] = Query(default=None),
     limit: int = Query(default=500, ge=1, le=1000),
+    mode: Optional[str] = Depends(data_mode),
     service: SeaChannelService = Depends(get_service),
 ) -> Dict[str, Any]:
-    res = await service.geojson(_filters(name, None), limit=limit)
+    res = await service.geojson(_filters(name, None, mode), limit=limit)
     REQUESTS.labels(_API, "ok").inc()
     return res
 
 
 @router.get("/stats", response_model=SeaChannelStatsOut,
             summary="Sea-channel counts + total area by name")
-async def stats(service: SeaChannelService = Depends(get_service)) -> SeaChannelStatsOut:
-    res = await service.stats(_filters(None, None))
+async def stats(mode: Optional[str] = Depends(data_mode),
+                service: SeaChannelService = Depends(get_service)) -> SeaChannelStatsOut:
+    res = await service.stats(_filters(None, None, mode))
     REQUESTS.labels(_API, "ok").inc()
     return SeaChannelStatsOut(**res)
 
 
 @router.get("/{channel_id}", response_model=SeaChannelOut, summary="One sea channel")
 async def get_channel(channel_id: int,
+                      mode: Optional[str] = Depends(data_mode),
                       service: SeaChannelService = Depends(get_service)) -> SeaChannelOut:
-    res = await service.get(channel_id)
+    res = await service.get(channel_id, data_origin=mode)
     if res is None:
         REQUESTS.labels(_API, "not_found").inc()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,

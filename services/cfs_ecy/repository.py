@@ -27,6 +27,16 @@ from jnpa_shared.logging import get_logger
 
 log = get_logger("services.cfs_ecy.repository")
 
+
+def _data_origin(uploaded_by: Optional[str]) -> str:
+    """LIVE (JNPA-API) vs DEMO (manual) provenance tag for one write.
+
+    The JNPA Simulated Port-Data API sync tags its imports ``uploaded_by =
+    'jnpa-api'`` → ``'API'``; every other importer → ``'MANUAL'``. Mirrors
+    gateway/data_mode.resolve_data_origin on the read side."""
+    return "API" if (uploaded_by or "").strip().lower() == "jnpa-api" else "MANUAL"
+
+
 _COLUMNS = (
     "id", "facility_type", "container_number", "iso_valid",
     "event_ts", "mode", "source", "source_file", "created_at",
@@ -68,6 +78,10 @@ class CfsEcyRepository:
         if filters.get("ts_to") is not None:
             conds.append("m.event_ts <= :ts_to")
             params["ts_to"] = filters["ts_to"]
+        # LIVE/DEMO provenance filter. None ⇒ no clause ⇒ identical legacy SQL.
+        if filters.get("data_origin") is not None:
+            conds.append("m.data_origin = :data_origin")
+            params["data_origin"] = filters["data_origin"]
         clause = ("WHERE " + " AND ".join(conds)) if conds else ""
         return clause, params
 
@@ -144,6 +158,9 @@ class CfsEcyRepository:
         if facility and facility != "CFS":
             # A non-CFS facility filter yields no dwell rows (ECY has none).
             return {"average_dwell_hours": None, "median_dwell_hours": None, "dwell_count": 0}
+        if filters.get("data_origin") is not None:
+            conds.append("d.data_origin = :data_origin")
+            params["data_origin"] = filters["data_origin"]
         sql = (
             "SELECT round(avg(d.dwell_hours)::numeric, 2) AS average_dwell_hours, "
             "  round(percentile_cont(0.5) WITHIN GROUP (ORDER BY d.dwell_hours)::numeric, 2) "
@@ -232,6 +249,9 @@ class CfsEcyRepository:
         if filters.get("ts_to") is not None:
             conds.append("d.last_out_ts <= :ts_to")
             params["ts_to"] = filters["ts_to"]
+        if filters.get("data_origin") is not None:
+            conds.append("d.data_origin = :data_origin")
+            params["data_origin"] = filters["data_origin"]
         where = " AND ".join(conds)
         async with get_engine(self._dsn).connect() as conn:
             total_row = (await conn.execute(
@@ -253,14 +273,22 @@ class CfsEcyRepository:
     # (facility_type, container_number, event_ts, mode) UNIQUE key with ON CONFLICT
     # DO NOTHING — idempotent, duplicate-safe, and it NEVER overwrites an existing row.
 
-    async def find_file_by_sha(self, sha256: str) -> Optional[dict]:
-        """The prior ledger row for identical bytes (content-level dedup), or None."""
+    async def find_file_by_sha(self, sha256: str,
+                               data_origin: Optional[str] = None) -> Optional[dict]:
+        """The prior ledger row for identical bytes (content-level dedup), or None.
+
+        Dedup is PER-ORIGIN (UNIQUE(source_sha256, data_origin)): the same bytes
+        delivered by the API and by a manual dump are kept once per origin, so
+        LIVE and DEMO are each complete. data_origin=None ⇒ identical legacy SQL."""
+        sql = ("SELECT id, facility_type, source_file, import_status, record_count, "
+               "imported_count, error_count, duplicate_count, created_at "
+               "FROM core.cfs_ecy_import_file WHERE source_sha256 = :sha")
+        params: dict[str, Any] = {"sha": sha256}
+        if data_origin is not None:
+            sql += " AND data_origin = :data_origin"
+            params["data_origin"] = data_origin
         async with get_engine(self._dsn).connect() as conn:
-            row = (await conn.execute(text(
-                "SELECT id, facility_type, source_file, import_status, record_count, "
-                "imported_count, error_count, duplicate_count, created_at "
-                "FROM core.cfs_ecy_import_file WHERE source_sha256 = :sha"),
-                {"sha": sha256})).mappings().first()
+            row = (await conn.execute(text(sql), params)).mappings().first()
         return dict(row) if row else None
 
     async def persist(self, records: Sequence[Mapping[str, Any]], *, facility_type: str,
@@ -273,7 +301,8 @@ class CfsEcyRepository:
         transaction. Re-uploading identical bytes is a no-op (SKIPPED_DUPLICATE); rows
         that collide with an EXISTING movement are silently skipped (counted as
         duplicates) and never overwrite it. Returns the outcome envelope."""
-        existing = await self.find_file_by_sha(source_sha256)
+        data_origin = _data_origin(uploaded_by)
+        existing = await self.find_file_by_sha(source_sha256, data_origin)
         if existing is not None:
             return {"file_id": existing["id"], "import_status": "SKIPPED_DUPLICATE",
                     "record_count": existing["record_count"],
@@ -285,12 +314,13 @@ class CfsEcyRepository:
             "facility_type": facility_type, "physical_format": physical_format,
             "source_file": source_file, "source_sha256": source_sha256,
             "file_size_bytes": file_size, "record_count": len(records),
-            "uploaded_by": uploaded_by, "source": source,
+            "uploaded_by": uploaded_by, "source": source, "data_origin": data_origin,
         }
         rows = [{"facility_type": r["facility_type"], "container_number": r["container_number"],
                  "iso_valid": bool(r["iso_valid"]), "event_ts": r["event_ts"],
                  "mode": r["mode"], "source": r.get("source") or "UPLOAD",
-                 "source_file": r.get("source_file") or source_file}
+                 "source_file": r.get("source_file") or source_file,
+                 "data_origin": data_origin}
                 for r in records]
         try:
             async with get_engine(self._dsn).begin() as conn:
@@ -313,7 +343,7 @@ class CfsEcyRepository:
                     "imported_count": imported, "error_count": 0,
                     "duplicate_count": dup, "duplicate": False}
         except IntegrityError as exc:
-            dup_row = await self.find_file_by_sha(source_sha256)
+            dup_row = await self.find_file_by_sha(source_sha256, data_origin)
             if dup_row is not None:
                 return {"file_id": dup_row["id"], "import_status": "SKIPPED_DUPLICATE",
                         "record_count": dup_row["record_count"],
@@ -352,7 +382,8 @@ class CfsEcyRepository:
         """Record a structurally-rejected upload (e.g. missing required columns / no
         valid rows) as a FAILED ledger row so it appears in upload history, with its
         column/row errors. Writes NO movement rows. De-dupes on sha256."""
-        existing = await self.find_file_by_sha(source_sha256)
+        data_origin = _data_origin(uploaded_by)
+        existing = await self.find_file_by_sha(source_sha256, data_origin)
         if existing is not None:
             return existing["id"]
         envelope = {
@@ -360,6 +391,7 @@ class CfsEcyRepository:
             "source_file": source_file, "source_sha256": source_sha256,
             "file_size_bytes": file_size, "record_count": 0,
             "error_detail": detail[:4000], "uploaded_by": uploaded_by, "source": "UPLOAD",
+            "data_origin": data_origin,
         }
         try:
             async with get_engine(self._dsn).begin() as conn:
@@ -445,29 +477,32 @@ class CfsEcyRepository:
 _FILE_INSERT = """
 INSERT INTO core.cfs_ecy_import_file
     (facility_type, physical_format, source_file, source_sha256, file_size_bytes,
-     record_count, import_status, uploaded_by, source)
+     record_count, import_status, uploaded_by, source, data_origin)
 VALUES
     (:facility_type, :physical_format, :source_file, :source_sha256, :file_size_bytes,
-     :record_count, 'PENDING', :uploaded_by, :source)
+     :record_count, 'PENDING', :uploaded_by, :source, :data_origin)
 RETURNING id
 """
 
 _FILE_INSERT_FAILED = """
 INSERT INTO core.cfs_ecy_import_file
     (facility_type, physical_format, source_file, source_sha256, file_size_bytes,
-     record_count, import_status, error_detail, uploaded_by, source)
+     record_count, import_status, error_detail, uploaded_by, source, data_origin)
 VALUES
     (:facility_type, :physical_format, :source_file, :source_sha256, :file_size_bytes,
-     :record_count, 'FAILED', :error_detail, :uploaded_by, :source)
+     :record_count, 'FAILED', :error_detail, :uploaded_by, :source, :data_origin)
 RETURNING id
 """
 
+# data_origin (LIVE/DEMO) rides alongside the existing per-row `source` provenance
+# (CODECO / UPLOAD): `source` is where the row came from, data_origin is which
+# corpus (API vs manual) a dashboard is asking for.
 _MOVEMENT_INSERT = """
 INSERT INTO core.cfs_ecy_movement
     (facility_type, container_number, iso_valid, event_ts, mode, source, source_file,
-     import_file_id)
+     import_file_id, data_origin)
 VALUES
     (:facility_type, :container_number, :iso_valid, :event_ts, :mode, :source, :source_file,
-     :import_file_id)
+     :import_file_id, :data_origin)
 ON CONFLICT ON CONSTRAINT uq_cfs_ecy_movement DO NOTHING
 """

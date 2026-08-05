@@ -429,11 +429,11 @@ function buildMockLdbTruck(vehicleNumber: string): LdbTruckTracking {
       truckType: "CONTAINERIZED",
       events,
       terminals: [{ locName: events[0].locName, events }],
-    latest: events[0],
-    alert: `ALERT! Trailer ${plate} carrying Container No. HMMU4963884`,
-    // No fabricated compliance — LIVE path fetches LDB Vahan details.
-    compliance: null,
-  };
+      latest: events[0],
+      alert: `ALERT! Trailer ${plate} carrying Container No. HMMU4963884`,
+      // No fabricated compliance — LIVE path fetches LDB Vahan details.
+      compliance: null,
+    };
   }
 
   const digits = plate.replace(/\D/g, "") || "0000000";

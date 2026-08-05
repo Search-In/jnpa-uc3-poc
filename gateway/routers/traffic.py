@@ -133,6 +133,7 @@ def _auto_congestion_alert(state: GatewayState, predictions: Any) -> None:
     if thr > 1.0:  # disabled by config
         return
     from .. import audit
+    from .. import mailer
     from .. import notifications as notif
     from . import push
     from services import congestion_alert
@@ -153,6 +154,8 @@ def _auto_congestion_alert(state: GatewayState, predictions: Any) -> None:
             broadcast=state.ws.broadcast,
             dispatch=_dispatch if targets else None,
             device_targets=targets or None,
+            # Admin email for a NEW alert only; a no-op when ADMIN_ALERT_EMAILS is unset.
+            email_notify=mailer.notify_congestion_alert,
         )
 
     audit.spawn(_run())
@@ -225,6 +228,7 @@ async def congestion_scan(
     Returns the alerts newly created (deduped per segment per hour).
     """
     from services import congestion_alert
+    from .. import mailer
     from .. import notifications as notif
 
     preds = body.get("predictions") if isinstance(body, dict) else None
@@ -248,6 +252,8 @@ async def congestion_scan(
         broadcast=state.ws.broadcast,
         dispatch=dispatch_fn,
         device_targets=targets,
+        # Admin email for a NEW alert only; a no-op when ADMIN_ALERT_EMAILS is unset.
+        email_notify=mailer.notify_congestion_alert,
     )
     REQUESTS.labels("traffic", "ok").inc()
     return {"threshold": thr, "count": len(created), "created": created}

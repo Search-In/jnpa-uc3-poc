@@ -17,6 +17,7 @@ import { Spinner, EmptyState, ErrorState } from "@/components/ui/misc";
 import { PageContainer, PageHeader, StatGrid, StatCard, StatusChip } from "@/components/ui/dtccc";
 import { DecisionPathBadge } from "@/components/DecisionPathBadge";
 import { fmtEta } from "@/lib/utils";
+import { gateIdColour } from "@/lib/tokens";
 import { weatherCondition, weatherHumidityPct, weatherRainMm } from "@/lib/weather";
 import {
   congestionTone,
@@ -423,6 +424,32 @@ function accidentLocation(a: any): string {
   return a?.accident_type ?? "—";
 }
 
+/**
+ * A gate name tinted with its shared identity colour (`gateIdColour`, defined
+ * once in lib/palette.ts alongside the other Okabe–Ito ramps). Styling matches
+ * the app's existing StatusChip idiom exactly — a 12%-alpha tint of the hue
+ * behind solid, semibold text — so the chips read as part of the current theme
+ * rather than as a new visual language.
+ *
+ * Presentation only: it renders whatever gate string it is handed and carries no
+ * state, no handlers and no routing logic. Because Radix portals a SelectItem's
+ * <ItemText> into the trigger's <SelectValue>, using this inside SelectItem
+ * colours BOTH the dropdown option and the selected value from one definition,
+ * which is what keeps the two permanently in sync.
+ */
+function GateChip({ gate, arrow = false }: { gate: string; arrow?: boolean }) {
+  const colour = gateIdColour(gate);
+  return (
+    <span
+      className="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold"
+      style={{ backgroundColor: `${colour}1f`, color: colour }}
+    >
+      {arrow ? "→ " : ""}
+      {gate.replace("G-", "")}
+    </span>
+  );
+}
+
 function QueueRow({
   truck,
   recommend,
@@ -463,7 +490,9 @@ function QueueRow({
     <tr className="border-b border-border/50 hover:bg-muted/40">
       <td className="px-4 py-2 font-mono text-xs">{truck.device_id}</td>
       <td className="px-4 py-2 font-mono text-xs">{truck.plate ?? "—"}</td>
-      <td className="px-4 py-2">{truck.gate_id?.replace("G-", "") ?? "—"}</td>
+      <td className="px-4 py-2">
+        {truck.gate_id ? <GateChip gate={truck.gate_id} /> : "—"}
+      </td>
       <td className="px-4 py-2 tabular-nums">{fmtEta(etaSeconds(truck))}</td>
       <td className="px-4 py-2 tabular-nums">{truck.remaining_km.toFixed(1)} km</td>
       <td className="px-4 py-2">
@@ -478,7 +507,7 @@ function QueueRow({
           <SelectContent>
             {GATES.map((g) => (
               <SelectItem key={g} value={g}>
-                → {g.replace("G-", "")}
+                <GateChip gate={g} arrow />
               </SelectItem>
             ))}
           </SelectContent>

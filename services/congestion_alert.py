@@ -34,6 +34,9 @@ _ALERT_NS = uuid.UUID("6f1d1e2a-0c3b-4a5e-9c7d-2b8a1f0e4c31")
 # Async transport callables the caller injects.
 BroadcastFn = Callable[[str, Dict[str, Any]], Awaitable[Any]]
 DispatchFn = Callable[[str, Dict[str, Any]], Awaitable[Any]]
+# (alert_id, alert payload) -> delivery summary dict | None. Injected like the
+# transports above so this module stays free of the gateway's email provider.
+EmailFn = Callable[[str, Dict[str, Any]], Awaitable[Any]]
 
 
 @dataclass(frozen=True)
@@ -151,15 +154,16 @@ async def _persist_alert(dsn: str, alert_id: str, alert: CongestionAlert) -> boo
 
 
 async def _persist_notification(dsn: str, alert_id: str, alert: CongestionAlert,
-                                receiver: Optional[str], status: str) -> None:
+                                receiver: Optional[str], status: str,
+                                channel: str = "push") -> None:
     from jnpa_shared.db import execute
 
     await execute(
         """
         INSERT INTO core.notification (event_id, channel, receiver, message, delivery_status, provider_response)
-        VALUES (:e, 'push', :r, :m, :st, CAST(:p AS jsonb))
+        VALUES (:e, :ch, :r, :m, :st, CAST(:p AS jsonb))
         """,
-        {"e": alert_id, "r": receiver, "m": alert.recommended_action, "st": status,
+        {"e": alert_id, "ch": channel, "r": receiver, "m": alert.recommended_action, "st": status,
          "p": json.dumps({"kind": "TRAFFIC_CONGESTION", "segment_id": alert.segment_id,
                           "severity": alert.severity})},
         dsn=dsn,
@@ -176,6 +180,7 @@ async def raise_congestion_alerts(
     device_targets: Optional[Sequence[str]] = None,
     segment_meta: Optional[Dict[str, Dict[str, Any]]] = None,
     bucket: Optional[str] = None,
+    email_notify: Optional[EmailFn] = None,
 ) -> List[Dict[str, Any]]:
     """Detect congestion and, for each newly-congested segment, create an alert.
 
@@ -183,8 +188,10 @@ async def raise_congestion_alerts(
       1. write a ``core.alert`` row (dedup by deterministic id),
       2. broadcast a ``type=alert`` WS frame (dashboard + foregrounded PWAs),
       3. push a per-driver advisory over ``dispatch`` to each ``device_targets``
-         entry (WebPush/FCM), if provided, and
-      4. record a ``core.notification`` delivery row with a real status.
+         entry (WebPush/FCM), if provided,
+      4. record a ``core.notification`` delivery row with a real status, and
+      5. notify the configured admin address(es) via ``email_notify`` — only when
+         the DB confirmed the alert as NEW, so a duplicate can never be mailed.
 
     Returns the list of alerts newly created this call (empty if none crossed the
     threshold, or all were already alerted this bucket). Every step is best-effort;
@@ -208,9 +215,15 @@ async def raise_congestion_alerts(
 
         # 1) persist alert (dedup) — only continue the fan-out when NEWLY created.
         is_new = True
+        # True only when the DB *confirmed* this alert as a new row, i.e. the
+        # deduplication actually succeeded. Stays False on the best-effort
+        # fallback below (and when no DSN is configured), which is what gates the
+        # admin email: a flapping database must never mail the same alert twice.
+        dedup_ok = False
         if dsn:
             try:
                 is_new = await _persist_alert(dsn, alert_id, alert)
+                dedup_ok = is_new
             except Exception:  # noqa: BLE001 — best-effort; still fan out on WS
                 is_new = True
         if not is_new:
@@ -259,6 +272,22 @@ async def raise_congestion_alerts(
                     "SENT" if broadcast is not None else "PENDING",
                 )
             except Exception:  # noqa: BLE001
+                pass
+
+        # 5) Admin email for this NEW alert. Gated on ``dedup_ok`` so it fires
+        # once per segment per bucket and never on the DB-failure fallback.
+        # ``email_notify`` returns None when no admin address is configured, in
+        # which case nothing is sent and no delivery row is written.
+        if email_notify is not None and dedup_ok:
+            try:
+                mail_res = await email_notify(alert_id, alert.payload())
+                if mail_res and dsn:
+                    rcpts = list(mail_res.get("recipients") or [])
+                    await _persist_notification(
+                        dsn, alert_id, alert, ", ".join(rcpts) or None,
+                        "SENT" if mail_res.get("delivered") else "FAILED", channel="email",
+                    )
+            except Exception:  # noqa: BLE001 — best-effort, exactly like the other channels
                 pass
 
         created.append({"alert_id": alert_id, **alert.payload()})

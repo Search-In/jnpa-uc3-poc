@@ -49,7 +49,12 @@ async function http<T>(
   let res: Response;
   try {
     res = await fetch(path, {
-      headers: { "content-type": "application/json", ...authHeader, ...dataModeHeader, ...(init?.headers || {}) },
+      headers: {
+        "content-type": "application/json",
+        ...authHeader,
+        ...dataModeHeader,
+        ...(init?.headers || {}),
+      },
       ...init,
       signal: timeoutSignal(timeoutMs, init?.signal),
     });

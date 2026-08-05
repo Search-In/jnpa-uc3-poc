@@ -26,7 +26,8 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          # No `version:` — it must not be set alongside package.json's `packageManager`
+          # (pnpm/action-setup rejects the pair). See the same note in ci.yml.
           run_install: false
 
       - name: Install Dependencies

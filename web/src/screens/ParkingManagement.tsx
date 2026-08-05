@@ -44,6 +44,15 @@ import type {
   ParkingViolation,
 } from "@/lib/types";
 
+// Parking-page facilities-map visibility. Flip to `true` to bring the map panel
+// back — that is the ONLY change required to restore it. Everything the panel
+// needs is deliberately left intact: the ArcgisMap import, useMapSettings, the
+// `basemap` value and the `mapFacilities` memo (and the parking data fetching
+// behind it) are all still wired up, so nothing has to be re-plumbed.
+// Scoped to THIS screen only — the shared <ArcgisMap> and its 2D/3D toggle are
+// untouched and continue to render normally everywhere else in the app.
+const SHOW_FACILITIES_MAP = false;
+
 type TabKey = "facilities" | "vehicles" | "history" | "violations" | "reefer";
 
 const PARKING_TABS: TabKey[] = ["facilities", "vehicles", "history", "violations", "reefer"];
@@ -219,9 +228,11 @@ export default function ParkingManagement() {
             </div>
           )}
         </Card>
-        <Card className="relative h-56 overflow-hidden p-0 lg:h-auto lg:min-h-[16rem]">
-          <ArcgisMap basemap={basemap} parkingFacilities={mapFacilities} />
-        </Card>
+        {SHOW_FACILITIES_MAP && (
+          <Card className="relative h-56 overflow-hidden p-0 lg:h-auto lg:min-h-[16rem]">
+            <ArcgisMap basemap={basemap} parkingFacilities={mapFacilities} />
+          </Card>
+        )}
       </div>
 
       {/* Tabbed tables */}

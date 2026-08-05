@@ -13,7 +13,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Repeat, Play, Trophy, ArrowRight } from "lucide-react";
 import { api } from "@/lib/api";
-import { PageContainer, PageHeader, StatusChip } from "@/components/ui/dtccc";
+import { PageContainer, PageHeader, RefreshButton, StatusChip } from "@/components/ui/dtccc";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState, LoadingState } from "@/components/ui/misc";
 import { STATUS } from "@/lib/tokens";
@@ -272,6 +272,11 @@ export default function DoubleTrip() {
             <Trophy size={15} />
             <h3 className="text-sm font-semibold">By vehicle</h3>
             <span className="text-[11px] text-muted-foreground">({byVehicle.length})</span>
+            <RefreshButton
+              onRefresh={() => void statsQ.refetch()}
+              isRefreshing={statsQ.isFetching}
+              className="ml-auto"
+            />
           </div>
           {!byVehicle.length ? (
             <EmptyState>No per-vehicle data yet.</EmptyState>
@@ -365,6 +370,14 @@ export default function DoubleTrip() {
             <span className="text-[11px] text-muted-foreground">
               ({cyclesQ.data?.count ?? cycles.length})
             </span>
+            {/* This screen is rendered inside Truck Operations' tab, where the page
+                header (and its refresh) is suppressed — so each table carries its
+                own re-fetch instead of needing a browser reload. */}
+            <RefreshButton
+              onRefresh={() => void cyclesQ.refetch()}
+              isRefreshing={cyclesQ.isFetching}
+              className="ml-auto"
+            />
           </div>
           {cyclesQ.isLoading ? (
             <LoadingState />

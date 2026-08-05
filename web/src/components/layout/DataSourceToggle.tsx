@@ -74,9 +74,7 @@ export function DataSourceToggle() {
         aria-label={`Data source ${mode}`}
         className={cn(
           "hidden rounded-full px-2 py-0.5 text-[11px] font-semibold lg:inline",
-          isLive
-            ? "bg-primary/10 text-primary"
-            : "bg-muted text-muted-foreground",
+          isLive ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground",
         )}
       >
         {isLive ? "LIVE · JNPA API" : "DEMO · pre-loaded"}

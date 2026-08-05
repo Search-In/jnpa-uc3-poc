@@ -48,6 +48,26 @@ export function gateColour(utilisation: number | null): string {
   return "#009E73";
 }
 
+// Per-gate IDENTITY colour. Deliberately distinct from `gateColour()` above,
+// which encodes throughput utilisation (a status ramp): this maps each terminal
+// to a STABLE hue so the same gate reads the same colour wherever it is listed —
+// selected value, dropdown option, chip or badge. The four hues are the Okabe–Ito
+// colours already used by SEVERITY_COLOUR, so no new colour enters the palette.
+export const GATE_ID_COLOUR: Record<string, string> = {
+  "G-NSICT": "#56B4E9", // blue   (Okabe–Ito sky blue)
+  "G-JNPCT": "#D55E00", // red    (Okabe–Ito vermillion)
+  "G-NSIGT": "#E69F00", // orange (Okabe–Ito orange)
+  "G-BMCT": "#009E73", // green  (Okabe–Ito bluish green)
+};
+
+/** Identity colour for a gate, accepting either the id ("G-NSICT") or the bare
+ *  terminal name ("NSICT"). Unknown gates fall back to the palette's neutral. */
+export function gateIdColour(gate?: string | null): string {
+  if (!gate) return "#999999";
+  const key = gate.startsWith("G-") ? gate : `G-${gate}`;
+  return GATE_ID_COLOUR[key] ?? "#999999";
+}
+
 export function sourceStateColour(state?: string | null): string {
   switch (state) {
     case "LIVE":

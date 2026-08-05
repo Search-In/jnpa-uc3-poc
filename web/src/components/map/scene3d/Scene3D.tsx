@@ -37,7 +37,7 @@ import type {
   Zone,
 } from "@/lib/types";
 import { gateColour, jamColour, MAP_TOKENS, parkingStatusColour, zoneColour } from "@/lib/tokens";
-import { JNPA_CENTER, JNPA_ZOOM } from "@/lib/basemap";
+import { JNPA_CENTER, JNPA_ZOOM, gateRoadHeading } from "@/lib/basemap";
 import { SATELLITE_BASEMAP, corridorExtent } from "@/lib/mapConfig";
 import { installBasemapFallback, isOfflineRequested, initialBasemap } from "./basemapFallback";
 import { applyGraphics, stableOid } from "./sceneUtils";
@@ -435,6 +435,11 @@ export function Scene3D({
     if (!layer) return;
     layer.removeAll();
     for (const g of gates) {
+      // Rotate the gate-house + canopy onto the access road it straddles. UC2
+      // does the same (its gate symbol layers carry heading: QUAY_HEADING); UC3
+      // has real per-gate road bearings from OSM, so it uses those. Rotation
+      // only — the gate point geometry is untouched.
+      const heading = gateRoadHeading(g.id);
       layer.add(
         new Graphic({
           geometry: new Point({ longitude: g.lon, latitude: g.lat, spatialReference: WGS84 }),
@@ -448,6 +453,7 @@ export function Scene3D({
                 resource: { href: `${MODELS}/toll-naka.glb` },
                 height: 9,
                 anchor: "bottom",
+                heading,
               },
               // Canopy roof slab coloured by live throughput utilisation.
               {
@@ -456,6 +462,7 @@ export function Scene3D({
                 width: 30,
                 depth: 12,
                 height: 2.5,
+                heading,
                 material: { color: gateColour(g.utilisation) },
                 // Crisp solid edges give the canopy slab a defined, solid read
                 // under the scene lighting (material refinement only — the slab's

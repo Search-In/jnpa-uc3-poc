@@ -1,0 +1,13 @@
+[project]
+name = "jnpa-portdata-sim"
+version = "0.1.0"
+description = "Contract-faithful simulator of the JNPA Simulated Port-Data API v2.0 (seeded from the sample data pack, reproduces the catalogued live-service defects)"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+]
+
+[tool.setuptools]
+packages = ["jnpa_portdata_sim"]
+package-dir = { "jnpa_portdata_sim" = "." }

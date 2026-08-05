@@ -113,8 +113,8 @@ def _insert_sql(doc_type: str) -> str:
     if doc_type == "FORM13":
         return _FORM13_INSERT
     cols = _COLS[doc_type]
-    collist = ", ".join(cols) + ", import_file_id"
-    vals = ", ".join(f":{c}" for c in cols) + ", :import_file_id"
+    collist = ", ".join(cols) + ", import_file_id, data_origin"
+    vals = ", ".join(f":{c}" for c in cols) + ", :import_file_id, :data_origin"
     # The row-hash unique index is PARTIAL (WHERE row_sha256 IS NOT NULL);
     # Postgres can only infer a partial index when the ON CONFLICT clause
     # repeats its predicate — without it every insert raises
@@ -131,18 +131,36 @@ def _form13_params(rec: Mapping[str, Any], import_file_id: int) -> dict[str, Any
             "issued_at": rec.get("issued_at"), "payload": json.dumps(payload, default=str)}
 
 
+def _data_origin(uploaded_by: Optional[str]) -> str:
+    """LIVE (JNPA-API sync) vs DEMO (manual) provenance tag for one import.
+
+    The JNPA API sync stamps its uploads with uploaded_by='jnpa-api'; every other
+    importer (dashboard upload / directory watch) is manual. Mirrors the tag the
+    0120/0121 migrations backfill from uploaded_by ('API' | 'MANUAL'). This is the
+    EIR/PIN counterpart to Form-13's own source_mode on core.gate_capture."""
+    return "API" if (uploaded_by or "").strip().lower() == "jnpa-api" else "MANUAL"
+
+
 class GateDocumentRepository:
     def __init__(self, dsn: Optional[str] = None) -> None:
         self._dsn = dsn
 
     # ---------------------------------------------------------------- dedup
-    async def find_file_by_sha(self, sha256: str) -> Optional[dict]:
+    async def find_file_by_sha(self, sha256: str, *,
+                               data_origin: Optional[str] = None) -> Optional[dict]:
+        # Dedup is PER-ORIGIN (uq_gate_doc_import_sha_origin): identical bytes from
+        # both the API and a manual dump are kept once per origin, so LIVE and DEMO
+        # each stay complete. None ⇒ legacy sha-only lookup (unfiltered).
+        clause = " AND data_origin = :data_origin" if data_origin else ""
+        params: dict[str, Any] = {"sha": sha256}
+        if data_origin:
+            params["data_origin"] = data_origin
         async with get_engine(self._dsn).connect() as conn:
             row = (await conn.execute(text(
                 "SELECT id, doc_type, source_file, import_status, record_count, "
                 "imported_count, error_count, duplicate_count, created_at "
-                "FROM core.gate_doc_import_file WHERE source_sha256 = :sha"),
-                {"sha": sha256})).mappings().first()
+                "FROM core.gate_doc_import_file WHERE source_sha256 = :sha" + clause),
+                params)).mappings().first()
         return dict(row) if row else None
 
     # ---------------------------------------------------------------- persist
@@ -154,7 +172,8 @@ class GateDocumentRepository:
         # poison the file forever: without this, one FAILED/PARTIAL upload makes
         # every retry of the same bytes return SKIPPED_DUPLICATE and the file can
         # never be loaded. Such a ledger row is reused (reset to PENDING) instead.
-        existing = await self.find_file_by_sha(source_sha256)
+        data_origin = _data_origin(uploaded_by)
+        existing = await self.find_file_by_sha(source_sha256, data_origin=data_origin)
         retry_file_id: Optional[int] = None
         if existing is not None:
             if (existing.get("imported_count") or 0) > 0 or existing["import_status"] == "SUCCESS":
@@ -173,7 +192,7 @@ class GateDocumentRepository:
             "source_file": source_file, "source_sha256": source_sha256,
             "file_size_bytes": file_size, "record_count": len(records),
             "duplicate_count": duplicate_count,
-            "uploaded_by": uploaded_by, "source": source,
+            "uploaded_by": uploaded_by, "source": source, "data_origin": data_origin,
         }
         insert_sql = _insert_sql(doc_type)
         cols = _COLS.get(doc_type)
@@ -198,6 +217,7 @@ class GateDocumentRepository:
                     else:
                         params = {c: rec.get(c) for c in cols}
                         params["import_file_id"] = fid
+                        params["data_origin"] = data_origin
                     try:
                         async with conn.begin_nested():
                             await conn.execute(text(insert_sql), params)
@@ -230,7 +250,7 @@ class GateDocumentRepository:
                     "duplicate_count": duplicate_count, "duplicate": False,
                     "row_errors": row_errors}
         except IntegrityError as exc:
-            dup = await self.find_file_by_sha(source_sha256)
+            dup = await self.find_file_by_sha(source_sha256, data_origin=data_origin)
             if dup is not None:
                 return {"file_id": dup["id"], "import_status": "SKIPPED_DUPLICATE",
                         "record_count": dup["record_count"],
@@ -266,14 +286,15 @@ class GateDocumentRepository:
                                      source_file: str, source_sha256: str,
                                      file_size: Optional[int], uploaded_by: Optional[str],
                                      detail: str, errors: Sequence[Mapping[str, Any]]) -> Optional[int]:
-        existing = await self.find_file_by_sha(source_sha256)
+        data_origin = _data_origin(uploaded_by)
+        existing = await self.find_file_by_sha(source_sha256, data_origin=data_origin)
         if existing is not None:
             return existing["id"]
         envelope = {"doc_type": doc_type, "physical_format": physical_format,
                     "source_file": source_file, "source_sha256": source_sha256,
                     "file_size_bytes": file_size, "record_count": 0,
                     "duplicate_count": 0, "error_detail": detail[:4000],
-                    "uploaded_by": uploaded_by, "source": "UPLOAD"}
+                    "uploaded_by": uploaded_by, "source": "UPLOAD", "data_origin": data_origin}
         try:
             async with get_engine(self._dsn).begin() as conn:
                 fid = (await conn.execute(text(_FILE_INSERT_FAILED), envelope)).mappings().first()["id"]
@@ -340,6 +361,12 @@ class GateDocumentRepository:
         if form13 and f.get("visit_id"):
             clauses.append("payload->>'visit_id' = :visit")
             p["visit"] = str(f["visit_id"]).strip()
+        # LIVE / DEMO provenance for EIR/PIN (native data_origin column). Form-13
+        # is excluded — it lives in core.gate_capture and uses source_mode instead.
+        # None ⇒ no clause ⇒ SQL identical to the pre-provenance query.
+        if not form13 and f.get("data_origin"):
+            clauses.append("data_origin = :data_origin")
+            p["data_origin"] = f["data_origin"]
         return ((" WHERE " + " AND ".join(clauses)) if clauses else ""), p
 
     # The `terminal` printed on a gate document is free text and spelled a dozen
@@ -387,16 +414,16 @@ class GateDocumentRepository:
         """Every gate document referencing one container (the box-side view).
 
         Returns Form-13 rows of BOTH provenances by default, each carrying
-        `source_mode`; pass source='live'/'sim' to narrow. EIR and PIN can only
-        originate from an upload, so they report 'live'."""
+        `source_mode`; pass source='live'/'sim' to narrow. EIR and PIN report their
+        real LIVE/DEMO provenance from the data_origin column (API/MANUAL)."""
         scope, scope_params = _form13_scope(source)
         cn = {"cn": container_no, **scope_params}
         return {
             "eir": await self._rows(
-                "SELECT *, 'live' AS source_mode FROM core.eir WHERE container_number = :cn "
+                "SELECT *, data_origin AS source_mode FROM core.eir WHERE container_number = :cn "
                 "ORDER BY truck_in_time NULLS LAST, id", {"cn": container_no}),
             "pin": await self._rows(
-                "SELECT *, 'live' AS source_mode FROM core.pin_ticket "
+                "SELECT *, data_origin AS source_mode FROM core.pin_ticket "
                 "WHERE container_number = :cn ORDER BY issued_at NULLS LAST, id",
                 {"cn": container_no}),
             "form13": await self._rows(
@@ -413,10 +440,10 @@ class GateDocumentRepository:
         t = {"t": truck_no, **scope_params}
         return {
             "eir": await self._rows(
-                "SELECT *, 'live' AS source_mode FROM core.eir WHERE truck_no = :t "
+                "SELECT *, data_origin AS source_mode FROM core.eir WHERE truck_no = :t "
                 "ORDER BY truck_in_time NULLS LAST, id", {"t": truck_no}),
             "pin": await self._rows(
-                "SELECT *, 'live' AS source_mode FROM core.pin_ticket WHERE truck_no = :t "
+                "SELECT *, data_origin AS source_mode FROM core.pin_ticket WHERE truck_no = :t "
                 "ORDER BY issued_at NULLS LAST, id", {"t": truck_no}),
             "form13": await self._rows(
                 f"{_FORM13_SELECT} WHERE {scope} AND vehicle_plate = :t "
@@ -513,19 +540,21 @@ class GateDocumentRepository:
 _FILE_INSERT = """
 INSERT INTO core.gate_doc_import_file
     (doc_type, physical_format, source_file, source_sha256, file_size_bytes,
-     record_count, duplicate_count, import_status, uploaded_by, source)
+     record_count, duplicate_count, import_status, uploaded_by, source, data_origin)
 VALUES
     (:doc_type, :physical_format, :source_file, :source_sha256, :file_size_bytes,
-     :record_count, :duplicate_count, 'PENDING', :uploaded_by, :source)
+     :record_count, :duplicate_count, 'PENDING', :uploaded_by, :source, :data_origin)
 RETURNING id
 """
 
 _FILE_INSERT_FAILED = """
 INSERT INTO core.gate_doc_import_file
     (doc_type, physical_format, source_file, source_sha256, file_size_bytes,
-     record_count, duplicate_count, import_status, error_detail, uploaded_by, source)
+     record_count, duplicate_count, import_status, error_detail, uploaded_by, source,
+     data_origin)
 VALUES
     (:doc_type, :physical_format, :source_file, :source_sha256, :file_size_bytes,
-     :record_count, :duplicate_count, 'FAILED', :error_detail, :uploaded_by, :source)
+     :record_count, :duplicate_count, 'FAILED', :error_detail, :uploaded_by, :source,
+     :data_origin)
 RETURNING id
 """

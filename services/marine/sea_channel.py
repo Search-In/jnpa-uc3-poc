@@ -36,6 +36,11 @@ class SeaChannelRepository:
             if val:
                 conds.append(f"s.{col} ILIKE :{key}")
                 params[key] = f"%{str(val).strip()}%"
+        # LIVE / DEMO provenance narrowing; None => unfiltered (byte-identical SQL).
+        data_origin = filters.get("data_origin")
+        if data_origin is not None:
+            conds.append("s.data_origin = :data_origin")
+            params["data_origin"] = data_origin
         clause = ("WHERE " + " AND ".join(conds)) if conds else ""
         return clause, params
 
@@ -57,11 +62,16 @@ class SeaChannelRepository:
             return int((await conn.execute(
                 text(f"SELECT count(*) FROM core.sea_channel s {clause}"), params)).scalar() or 0)
 
-    async def get(self, channel_id: int) -> Optional[dict]:
+    async def get(self, channel_id: int, *,
+                  data_origin: Optional[str] = None) -> Optional[dict]:
+        frag, extra = ("", {})
+        if data_origin is not None:
+            frag = " AND s.data_origin = :data_origin"
+            extra = {"data_origin": data_origin}
         async with get_engine(self._dsn).connect() as conn:
             row = (await conn.execute(text(
-                f"SELECT {_SELECT} FROM core.sea_channel s WHERE s.channel_id = :id"),
-                {"id": channel_id})).mappings().first()
+                f"SELECT {_SELECT} FROM core.sea_channel s WHERE s.channel_id = :id{frag}"),
+                {"id": channel_id, **extra})).mappings().first()
         return dict(row) if row else None
 
     async def stats(self, filters: Mapping[str, Any]) -> dict:
@@ -92,8 +102,9 @@ class SeaChannelService:
         return {"items": items, "total": total, "limit": limit, "offset": offset,
                 "count": len(items)}
 
-    async def get(self, channel_id: int) -> Optional[Dict[str, Any]]:
-        return await self._repo.get(channel_id)
+    async def get(self, channel_id: int, *,
+                  data_origin: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        return await self._repo.get(channel_id, data_origin=data_origin)
 
     async def stats(self, filters: Mapping[str, Any]) -> Dict[str, Any]:
         return await self._repo.stats(filters)

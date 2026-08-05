@@ -26,6 +26,7 @@ from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query, Reque
 from pydantic import BaseModel, ConfigDict
 
 from ..auth import CONTROL_ROOM, Role, auth_enabled
+from ..data_mode import data_mode
 from ..metrics import REQUESTS
 from services.cfs_ecy import CfsEcyService, CfsEcyUploadService, EcyCfsChainService
 
@@ -196,13 +197,15 @@ def _mode(value: Optional[str]) -> Optional[str]:
     return v
 
 
-def _filters(facility, mode, container, date_from, date_to) -> Dict[str, Any]:
+def _filters(facility, mode, container, date_from, date_to,
+             data_origin=None) -> Dict[str, Any]:
     return {
         "facility_type": _facility(facility),
         "mode": _mode(mode),
         "container": container,
         "ts_from": date_from,
         "ts_to": date_to,
+        "data_origin": data_origin,
     }
 
 
@@ -219,9 +222,10 @@ async def list_movements(
     direction: str = Query(default="desc"),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    data_origin: Optional[str] = Depends(data_mode),
     service: CfsEcyService = Depends(get_service),
 ) -> MovementListResponse:
-    filters = _filters(facility, mode, container, date_from, date_to)
+    filters = _filters(facility, mode, container, date_from, date_to, data_origin)
     res = await service.list_movements(filters, sort=sort, direction=direction,
                                        limit=limit, offset=offset)
     REQUESTS.labels("cfs_ecy", "ok").inc()
@@ -233,9 +237,10 @@ async def stats(
     facility: Optional[str] = Query(default=None, description="CFS | ECY"),
     date_from: Optional[datetime] = Query(default=None, alias="from"),
     date_to: Optional[datetime] = Query(default=None, alias="to"),
+    data_origin: Optional[str] = Depends(data_mode),
     service: CfsEcyService = Depends(get_service),
 ) -> StatsOut:
-    filters = _filters(facility, None, None, date_from, date_to)
+    filters = _filters(facility, None, None, date_from, date_to, data_origin)
     res = await service.stats(filters)
     REQUESTS.labels("cfs_ecy", "ok").inc()
     return StatsOut(**res)
@@ -247,9 +252,10 @@ async def dwell(
     date_to: Optional[datetime] = Query(default=None, alias="to"),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    data_origin: Optional[str] = Depends(data_mode),
     service: CfsEcyService = Depends(get_service),
 ) -> DwellResponse:
-    filters = {"ts_from": date_from, "ts_to": date_to}
+    filters = {"ts_from": date_from, "ts_to": date_to, "data_origin": data_origin}
     res = await service.dwell_report(filters, limit=limit, offset=offset)
     REQUESTS.labels("cfs_ecy", "ok").inc()
     return DwellResponse(**res)
@@ -292,10 +298,12 @@ async def list_chains(
     anomaly_code: Optional[str] = None,
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    data_origin: Optional[str] = Depends(data_mode),
     svc: EcyCfsChainService = Depends(get_chain_service),
 ) -> Page:
     filters = {"container_number": container, "chain_status": chain_status,
-               "anomaly_only": anomaly_only, "anomaly_code": anomaly_code}
+               "anomaly_only": anomaly_only, "anomaly_code": anomaly_code,
+               "data_origin": data_origin}
     res = await svc.list_chains(filters, limit=limit, offset=offset)
     REQUESTS.labels("cfs_ecy", "ok").inc()
     return _page(res["items"], res["total"], limit, offset, response)

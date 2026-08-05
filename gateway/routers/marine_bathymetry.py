@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict
 
+from ..data_mode import data_mode
 from ..metrics import REQUESTS
 from services.marine.bathymetry import BathymetryService
 
@@ -120,8 +121,9 @@ class SoundingListResponse(BaseModel):
     count: int
 
 
-def _survey_filters(drawing_no, section, vessel) -> Dict[str, Any]:
-    return {"drawing_no": drawing_no, "section": section, "vessel": vessel}
+def _survey_filters(drawing_no, section, vessel, data_origin=None) -> Dict[str, Any]:
+    return {"drawing_no": drawing_no, "section": section, "vessel": vessel,
+            "data_origin": data_origin}
 
 
 # --------------------------------------------------------------------------- endpoints
@@ -135,9 +137,10 @@ async def list_surveys(
     direction: str = Query(default="asc"),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    mode: Optional[str] = Depends(data_mode),
     service: BathymetryService = Depends(get_service),
 ) -> SurveyListResponse:
-    res = await service.list_surveys(_survey_filters(drawing_no, section, vessel),
+    res = await service.list_surveys(_survey_filters(drawing_no, section, vessel, mode),
                                      sort=sort, direction=direction,
                                      limit=limit, offset=offset)
     REQUESTS.labels(_API, "ok").inc()
@@ -147,8 +150,9 @@ async def list_surveys(
 @router.get("/surveys/{survey_id}/stats", response_model=SurveyStatsOut,
             summary="Sounding count, depth extents and above-design count for one survey")
 async def survey_stats(survey_id: int,
+                       mode: Optional[str] = Depends(data_mode),
                        service: BathymetryService = Depends(get_service)) -> SurveyStatsOut:
-    res = await service.survey_stats(survey_id)
+    res = await service.survey_stats(survey_id, data_origin=mode)
     if res is None:
         REQUESTS.labels(_API, "not_found").inc()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
@@ -160,8 +164,9 @@ async def survey_stats(survey_id: int,
 
 @router.get("/surveys/{survey_id}", response_model=SurveyOut, summary="One bathymetry survey")
 async def get_survey(survey_id: int,
+                     mode: Optional[str] = Depends(data_mode),
                      service: BathymetryService = Depends(get_service)) -> SurveyOut:
-    res = await service.get_survey(survey_id)
+    res = await service.get_survey(survey_id, data_origin=mode)
     if res is None:
         REQUESTS.labels(_API, "not_found").inc()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
@@ -184,6 +189,7 @@ async def list_soundings(
     direction: str = Query(default="asc"),
     limit: int = Query(default=100, ge=1, le=_MAX_SOUNDING_LIMIT),
     offset: int = Query(default=0, ge=0),
+    mode: Optional[str] = Depends(data_mode),
     service: BathymetryService = Depends(get_service),
 ) -> SoundingListResponse:
     if (min_depth is not None and max_depth is not None and min_depth > max_depth):
@@ -192,7 +198,8 @@ async def list_soundings(
                             detail={"error": "invalid_depth_range",
                                     "detail": "min_depth must not exceed max_depth"})
     filters = {"above_design": above_design, "min_depth": min_depth,
-               "max_depth": max_depth, "georeferenced": georeferenced}
+               "max_depth": max_depth, "georeferenced": georeferenced,
+               "data_origin": mode}
     res = await service.list_soundings(survey_id, filters, sort=sort, direction=direction,
                                        limit=limit, offset=offset)
     REQUESTS.labels(_API, "ok").inc()

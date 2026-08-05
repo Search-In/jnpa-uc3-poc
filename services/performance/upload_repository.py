@@ -26,6 +26,12 @@ from jnpa_shared.logging import get_logger
 
 log = get_logger("services.performance.upload_repository")
 
+
+def _data_origin(uploaded_by: Optional[str]) -> str:
+    """LIVE (JNPA-API sync) vs DEMO (manual import) provenance tag for a write."""
+    return "API" if (uploaded_by or "").strip().lower() == "jnpa-api" else "MANUAL"
+
+
 # Provenance stamped on every imported row (added by migration 0038).
 _AUDIT = ("source_file", "upload_id", "uploaded_at")
 
@@ -85,8 +91,10 @@ def _build(key: str) -> tuple[str, tuple[str, ...]]:
     UPDATE: on a fresh insert the row has no previous version, so xmax is 0.
     """
     table, constraint, keys, vals = _TABLES[key]
-    # dedupe: perf_daily_snapshot already owns a source_file column of its own
-    bind = tuple(dict.fromkeys(keys + vals + ("source_file", "upload_id")))
+    # dedupe: perf_daily_snapshot already owns a source_file column of its own.
+    # data_origin (0121) tags each row LIVE (API) / DEMO (manual) so the dashboard
+    # reads can narrow by provenance.
+    bind = tuple(dict.fromkeys(keys + vals + ("source_file", "upload_id", "data_origin")))
     cols = bind + ("uploaded_at",)
     placeholders = ", ".join([f":{c}" for c in bind] + ["now()"])
     updates = ", ".join(f"{c} = EXCLUDED.{c}" for c in cols if c not in keys)
@@ -125,12 +133,13 @@ class UploadRepository:
                             file_format: str = "CSV") -> str:
         sql = ("""INSERT INTO core.perf_upload
             (report_type, original_filename, file_format, file_size_bytes, uploaded_by,
-             status, row_count, error_count, notes)
-            VALUES (:rt,:fn,:ff,:sz,:ub,:st,:rc,:ec,:no) RETURNING upload_id""")
+             status, row_count, error_count, notes, data_origin)
+            VALUES (:rt,:fn,:ff,:sz,:ub,:st,:rc,:ec,:no,:do) RETURNING upload_id""")
         async with get_engine(self._dsn).begin() as conn:
             uid = (await conn.execute(text(sql), {"rt": report_type, "fn": filename,
                     "ff": file_format, "sz": size, "ub": uploaded_by, "st": status,
-                    "rc": row_count, "ec": error_count, "no": notes})).scalar()
+                    "rc": row_count, "ec": error_count, "no": notes,
+                    "do": _data_origin(uploaded_by)})).scalar()
         return str(uid)
 
     async def add_errors(self, upload_id: str, errors: list[dict]) -> None:
@@ -156,12 +165,14 @@ class UploadRepository:
     # ---------------------------------------------------------- atomic import
     async def import_records(self, records: Mapping[str, list[dict]], *,
                              upload_id: Optional[str] = None,
-                             source_file: Optional[str] = None) -> tuple[int, int, list[tuple]]:
+                             source_file: Optional[str] = None,
+                             data_origin: str = "MANUAL") -> tuple[int, int, list[tuple]]:
         """Upsert all records in ONE transaction. Returns (inserted, updated, per_table).
 
         Conflicting rows are REPLACED (a re-uploaded corrected report must correct the
-        data), and every row is stamped with the upload that produced it. Any error
-        rolls the whole thing back (no partial import).
+        data), and every row is stamped with the upload that produced it and its
+        LIVE/DEMO ``data_origin``. Any error rolls the whole thing back (no partial
+        import).
         """
         inserted = updated = 0
         per_table: list[tuple] = []
@@ -176,6 +187,7 @@ class UploadRepository:
                 for r in rows:
                     params = {c: r.get(c) for c in cols}
                     params["upload_id"] = upload_id
+                    params["data_origin"] = data_origin
                     # perf_daily_snapshot carries the report's own source_file; for every
                     # other table it is the provenance stamp. Both resolve to this file.
                     params["source_file"] = r.get("source_file") or source_file

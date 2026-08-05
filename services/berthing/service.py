@@ -28,11 +28,13 @@ class BerthingService:
         return {"items": items, "total": total, "limit": limit, "offset": offset,
                 "count": len(items)}
 
-    async def get(self, report_id: int) -> Optional[Dict[str, Any]]:
-        return await self._repo.get(report_id)
+    async def get(self, report_id: int, *,
+                  data_origin: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        return await self._repo.get(report_id, data_origin=data_origin)
 
-    async def timeline(self, report_id: int) -> Optional[Dict[str, Any]]:
-        return await self._repo.timeline(report_id)
+    async def timeline(self, report_id: int, *,
+                       data_origin: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        return await self._repo.timeline(report_id, data_origin=data_origin)
 
     async def stats(self, filters: Mapping[str, Any]) -> Dict[str, Any]:
         return await self._repo.stats(filters)

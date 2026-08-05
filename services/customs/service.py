@@ -111,11 +111,15 @@ class CustomsService:
         return round((perf_counter() - t0) * 1000, 1)
 
     # ------------------------------------------------------------------ import
-    async def import_file(self, path: str) -> dict:
+    async def import_file(self, path: str, *, data_origin: str = "MANUAL") -> dict:
         """Parse + persist one customs file. Returns the repository import-result dict
         augmented with ``source_file``. On a real, non-duplicate success emits exactly
         one customs event (from actual processing). A parse failure is recorded as a
-        FAILED result without raising, so a batch import never aborts on one bad file."""
+        FAILED result without raising, so a batch import never aborts on one bad file.
+
+        ``data_origin`` ('API' | 'MANUAL') tags the ledger + domain rows as LIVE
+        (JNPA-API) or DEMO (manual) corpus; a directory/disk import is 'MANUAL', the
+        API sync passes 'API' (see :meth:`import_bytes`)."""
         t0 = perf_counter()
         source_file = os.path.basename(path)
         try:
@@ -129,7 +133,7 @@ class CustomsService:
 
         result = await self._repo.persist(
             parsed, source_file=source_file, source_sha256=_sha256(path),
-            file_size=os.path.getsize(path))
+            file_size=os.path.getsize(path), data_origin=data_origin)
         result["source_file"] = source_file
 
         if result["import_status"] == "SUCCESS":
@@ -139,6 +143,38 @@ class CustomsService:
                  status=result["import_status"], record_count=result["record_count"],
                  imported_count=result["imported_count"], latency_ms=self._ms(t0))
         return result
+
+    async def import_bytes(self, content: bytes, filename: str,
+                           uploaded_by: str = "jnpa-api") -> dict:
+        """Byte-oriented twin of :meth:`import_file` for API-delivered files
+        (the JNPA Port-Data sync — services/jnpa_sync).
+
+        Customs format detection routes on the FILENAME (CHPOI03/10/13
+        prefixes, .TXT, .XLSX header probe) and every parser takes a path, so
+        the bytes are spilled into a private temp dir UNDER THE ORIGINAL
+        FILENAME and the whole import_file flow is reused verbatim — sha256,
+        ledger dedup and event emission come out byte-identical to a
+        path-based import of the same file.
+
+        ``uploaded_by`` selects the LIVE/DEMO provenance the rows are tagged with:
+        the JNPA sync delivers as ``uploaded_by='jnpa-api'`` ⇒ ``data_origin='API'``
+        (LIVE); anything else ⇒ ``'MANUAL'`` (DEMO). The customs ledger has no
+        uploader COLUMN, but it does carry ``data_origin`` (0120), so the tag is
+        threaded through into persistence rather than discarded."""
+        import shutil
+        import tempfile
+
+        # LIVE (JNPA-API) vs DEMO (manual): map the uploader seam onto data_origin.
+        data_origin = "API" if (uploaded_by or "").lower() == "jnpa-api" else "MANUAL"
+        safe_name = os.path.basename(filename or "") or "upload.bin"
+        tmpdir = tempfile.mkdtemp(prefix="customs_api_")
+        try:
+            path = os.path.join(tmpdir, safe_name)
+            with open(path, "wb") as fh:
+                fh.write(content)
+            return await self.import_file(path, data_origin=data_origin)
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
     async def _emit_import_event(self, module: str, parsed: ParsedMessage,
                                  result: dict) -> None:
@@ -297,8 +333,12 @@ class CustomsService:
     async def list_events(self, **filters: Any) -> list[dict]:
         return await self._repo.list_events(**filters)
 
-    async def summary(self) -> dict:
-        return await self._repo.summary()
+    async def summary(self, *, data_origin: Optional[str] = None) -> dict:
+        # data_origin threaded only when a LIVE/DEMO mode is pinned, so in-process
+        # callers (and test fakes) predating the param keep working unchanged.
+        if data_origin is None:
+            return await self._repo.summary()
+        return await self._repo.summary(data_origin=data_origin)
 
     async def list_messages(self, *, filters, limit, offset):
         return await self._repo.list_messages(filters=filters, limit=limit, offset=offset)
@@ -365,8 +405,14 @@ class CustomsService:
     async def count_shipping_bills(self, *, filters):
         return await self._repo.count_shipping_bills(filters=filters)
 
-    async def container_customs(self, container_no: str) -> dict:
-        view = await self._repo.container_customs(container_no)
+    async def container_customs(self, container_no: str, *,
+                                data_origin: Optional[str] = None) -> dict:
+        # data_origin threaded only when a LIVE/DEMO mode is pinned, so in-process
+        # callers (and test fakes) predating the param keep working unchanged.
+        if data_origin is None:
+            view = await self._repo.container_customs(container_no)
+        else:
+            view = await self._repo.container_customs(container_no, data_origin=data_origin)
         view["workflow"] = self._derive_workflow(view)
         # Last customs event for this box (from the existing append-only event log).
         events = await self._repo.list_events(container_no=container_no, limit=1)

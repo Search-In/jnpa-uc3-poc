@@ -31,6 +31,23 @@ services:
       # baked copy with current source. Deploy-time fix is `docker compose build gateway`.
       - ./shared/jnpa_shared:/usr/local/lib/python3.11/site-packages/jnpa_shared:ro
 
+  # LOCAL-ONLY: contract-faithful simulator of the JNPA Port-Data API
+  # (ingest/jnpa_portdata_sim), seeded from the real sample-data dump on the
+  # host. The live endpoint (dt.jnpa.in) is port-filtered as of 04-Aug-2026;
+  # pointing the gateway at this sim (JNPA_PORTDATA_API_URL=http://jnpa-sim:8500
+  # + any keygen-derived key, e.g. for sim@keltron.test) exercises the whole
+  # sync path offline. Cutover to live = change the URL + key, nothing else.
+  jnpa-sim:
+    build:
+      context: .
+      dockerfile: ingest/jnpa_portdata_sim/Dockerfile
+    environment:
+      JNPA_SIM_DATA_DIR: /data/jnpa_dump
+    volumes:
+      - "/Users/aniketchopade/Downloads/Digital Twin - Updated/Data:/data/jnpa_dump:ro"
+    ports:
+      - "8500:8500"
+
   web:
     volumes:
       - ./web/nginx/default.local.conf:/etc/nginx/conf.d/default.conf:ro

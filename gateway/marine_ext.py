@@ -471,6 +471,27 @@ _DDL: list[str] = [
                 CHECK (physical_format IN ('CSV','XLS','XLSX','PDF','XML','LOG','ZIP','SHP','JSON'));
         END IF;
     END $$""",
+
+    # ==================================================================
+    # Migrations 0120 / 0121 — data_origin provenance ('API' | 'MANUAL'): LIVE
+    # (JNPA-API-sourced) vs DEMO (manually-imported). The ledger + every marine
+    # domain read table carries the tag; the ledger's file-hash uniqueness becomes
+    # PER-ORIGIN so the same bytes from both origins each land once. Additive +
+    # idempotent; mirrors infra/postgres/v3/0120_* and 0121_* for the marine tables.
+    # ==================================================================
+    "ALTER TABLE core.marine_import_files ADD COLUMN IF NOT EXISTS data_origin text NOT NULL DEFAULT 'MANUAL'",
+    "ALTER TABLE core.vessel_call ADD COLUMN IF NOT EXISTS data_origin text NOT NULL DEFAULT 'MANUAL'",
+    "ALTER TABLE core.vessel_call_event ADD COLUMN IF NOT EXISTS data_origin text NOT NULL DEFAULT 'MANUAL'",
+    "ALTER TABLE core.pilotage ADD COLUMN IF NOT EXISTS data_origin text NOT NULL DEFAULT 'MANUAL'",
+    "ALTER TABLE core.port_craft ADD COLUMN IF NOT EXISTS data_origin text NOT NULL DEFAULT 'MANUAL'",
+    "ALTER TABLE core.sea_channel ADD COLUMN IF NOT EXISTS data_origin text NOT NULL DEFAULT 'MANUAL'",
+    "ALTER TABLE core.bathymetry_survey ADD COLUMN IF NOT EXISTS data_origin text NOT NULL DEFAULT 'MANUAL'",
+    "ALTER TABLE core.bathymetry_sounding ADD COLUMN IF NOT EXISTS data_origin text NOT NULL DEFAULT 'MANUAL'",
+    # per-origin ledger dedup: replace UNIQUE(file_hash) with UNIQUE(file_hash, data_origin)
+    "ALTER TABLE core.marine_import_files DROP CONSTRAINT IF EXISTS uq_marine_import_file_hash",
+    "DROP INDEX IF EXISTS core.uq_marine_import_file_hash",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_marine_import_file_hash_origin "
+    "ON core.marine_import_files (file_hash, data_origin)",
 ]
 
 

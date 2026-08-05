@@ -36,22 +36,27 @@ class VesselCallService:
     async def count(self, filters: Mapping[str, Any]) -> int:
         return await self._repo.count(filters)
 
-    async def get(self, call_id: int) -> Optional[Dict[str, Any]]:
-        return await self._repo.get(call_id)
+    async def get(self, call_id: int, *,
+                  data_origin: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        return await self._repo.get(call_id, data_origin=data_origin)
 
-    async def get_by_vcn(self, vcn: str) -> Optional[Dict[str, Any]]:
-        return await self._repo.get_by_vcn(vcn)
+    async def get_by_vcn(self, vcn: str, *,
+                         data_origin: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        return await self._repo.get_by_vcn(vcn, data_origin=data_origin)
 
-    async def get_by_via(self, via_no: str) -> List[Dict[str, Any]]:
+    async def get_by_via(self, via_no: str, *,
+                         data_origin: Optional[str] = None) -> List[Dict[str, Any]]:
         """A short VIA may resolve to several calls — see VesselCallRepository."""
-        return await self._repo.get_by_via(via_no)
+        return await self._repo.get_by_via(via_no, data_origin=data_origin)
 
-    async def timeline(self, call_id: int) -> Optional[Dict[str, Any]]:
-        return await self._repo.timeline(call_id)
+    async def timeline(self, call_id: int, *,
+                       data_origin: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        return await self._repo.timeline(call_id, data_origin=data_origin)
 
-    async def list_events(self, call_id: int, *, limit: int,
-                          offset: int) -> List[Dict[str, Any]]:
-        return await self._repo.list_events(call_id, limit=limit, offset=offset)
+    async def list_events(self, call_id: int, *, limit: int, offset: int,
+                          data_origin: Optional[str] = None) -> List[Dict[str, Any]]:
+        return await self._repo.list_events(call_id, limit=limit, offset=offset,
+                                            data_origin=data_origin)
 
     async def stats(self, filters: Mapping[str, Any]) -> Dict[str, Any]:
         return await self._repo.stats(filters)

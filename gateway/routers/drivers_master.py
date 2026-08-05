@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Optional, Union
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict
 
+from ..data_mode import data_mode
 from ..metrics import REQUESTS
 from ..pii import mask_for_request
 from services.driver_master import DriverMasterService
@@ -113,6 +114,7 @@ async def list_drivers(
     direction: str = Query(default="asc"),
     limit: int = Query(default=25, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    mode: Optional[str] = Depends(data_mode),
     service: DriverMasterService = Depends(get_service),
 ) -> DriverListResponse:
     filters = {
@@ -122,6 +124,7 @@ async def list_drivers(
         "enrolled": enrolled,
         "verification": verification,
         "transporter_id": transporter_id,
+        "data_origin": mode,
     }
     res = await service.list_drivers(filters, sort=sort, direction=direction,
                                      limit=limit, offset=offset)

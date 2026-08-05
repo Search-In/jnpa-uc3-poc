@@ -513,6 +513,11 @@ export function IntegrationReport() {
     queryFn: () => api.nvrHealth(),
     refetchInterval: POLL_MS,
   });
+  const weatherQ = useQuery({
+    queryKey: ["report", "weather-health"],
+    queryFn: () => api.weatherHealth(),
+    refetchInterval: POLL_MS,
+  });
 
   // Client-side health-check time — the last time these adapters were polled.
   const lastSync = new Date().toLocaleTimeString();
@@ -524,16 +529,37 @@ export function IntegrationReport() {
       { system: "LDB", mode: h(ldbQ).mode, configured: h(ldbQ).configured },
       { system: "RMS-TAS", mode: h(rmsQ).mode, configured: h(rmsQ).configured },
       { system: "NVR", mode: h(nvrQ).mode, configured: h(nvrQ).configured },
-      { system: "WEATHER", mode: "MOCK", configured: false },
+      // Open-Meteo needs no API key: `configured` comes straight from
+      // /api/weather/health and the adapter is LIVE whenever it answers.
+      // `provider` lists the active feeds ("OPEN_METEO" or
+      // "OPEN_METEO + OPENWEATHER" once an OpenWeather key is configured).
+      {
+        system: "WEATHER",
+        provider: h(weatherQ).provider,
+        mode: weatherQ.data ? "LIVE" : undefined,
+        configured: h(weatherQ).configured,
+      },
     ];
-  }, [pdpQ.data, ldbQ.data, rmsQ.data, nvrQ.data]);
+  }, [pdpQ.data, ldbQ.data, rmsQ.data, nvrQ.data, weatherQ.data]);
 
   const modeLabel = (r: any) => String(r.mode ?? "MOCK").toUpperCase();
   const configuredLabel = (r: any) => (r.configured ? "Yes" : "No");
 
   const columns: Column<any>[] = useMemo(
     () => [
-      { key: "system", header: "System", className: "font-medium", render: (r) => r.system },
+      {
+        key: "system",
+        header: "System",
+        className: "font-medium",
+        render: (r) => (
+          <div>
+            {r.system}
+            {r.provider ? (
+              <div className="text-[10px] font-normal text-muted-foreground">{r.provider}</div>
+            ) : null}
+          </div>
+        ),
+      },
       {
         key: "status",
         header: "Status",
@@ -556,15 +582,16 @@ export function IntegrationReport() {
         columns={columns}
         rows={rows}
         rowKey={(r) => String(r.system)}
-        status={mergeStatus(pdpQ, ldbQ, rmsQ, nvrQ)}
+        status={mergeStatus(pdpQ, ldbQ, rmsQ, nvrQ, weatherQ)}
         onRetry={() => {
           void pdpQ.refetch();
           void ldbQ.refetch();
           void rmsQ.refetch();
           void nvrQ.refetch();
+          void weatherQ.refetch();
         }}
         emptyLabel="No integration adapters reported."
-        search={(r, q) => includesQ(`${r.system} ${modeLabel(r)}`, q)}
+        search={(r, q) => includesQ(`${r.system} ${r.provider ?? ""} ${modeLabel(r)}`, q)}
         searchPlaceholder="Search system…"
         toolbar={
           <ReportToolbar

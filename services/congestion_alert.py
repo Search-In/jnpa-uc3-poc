@@ -198,8 +198,13 @@ async def raise_congestion_alerts(
 
     for alert in detected:
         alert_id = _alert_id(alert.segment_id, key)
+        # audience=broadcast: corridor congestion genuinely applies to every
+        # driver, so the WS frame stays unaddressed. The marker is explicit so
+        # the PWA can accept it — it must never infer "for everyone" from the
+        # absence of a device_id (that is what leaked other drivers' advisories).
         payload = {"id": alert_id, "kind": "TRAFFIC_CONGESTION",
-                   "severity": alert.severity, "payload": alert.payload()}
+                   "severity": alert.severity, "payload": alert.payload(),
+                   "audience": "broadcast"}
 
         # 1) persist alert (dedup) — only continue the fan-out when NEWLY created.
         is_new = True

@@ -11,8 +11,11 @@ Layering mirrors :mod:`services.cargo` / :mod:`services.driver_master`:
 * :class:`CfsEcyService`    — read orchestration + observability.
 """
 
+from .chain_repository import EcyCfsChainRepository
+from .chain_service import EcyCfsChainService
 from .repository import CfsEcyRepository
 from .service import CfsEcyService
 from .upload_service import CfsEcyUploadService
 
-__all__ = ["CfsEcyRepository", "CfsEcyService", "CfsEcyUploadService"]
+__all__ = ["CfsEcyRepository", "CfsEcyService", "CfsEcyUploadService",
+           "EcyCfsChainRepository", "EcyCfsChainService"]

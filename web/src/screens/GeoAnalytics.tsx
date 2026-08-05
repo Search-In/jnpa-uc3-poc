@@ -8,7 +8,8 @@
 // screens, so no backend/API changes. The zone editor is reused verbatim
 // (GeofencingManager) to preserve all terra-draw editing + PUT-to-Postgres.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Shapes, MapPinned, LogIn, TriangleAlert, Cpu, Flame, LogOut, Gauge } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -38,8 +39,34 @@ import type { AiEvent, GeofenceEvent, GeoVehicleInZone } from "@/lib/types";
 
 type TabKey = "zones" | "inside" | "events" | "violations" | "ai" | "heatmap" | "bottlenecks";
 
+const TAB_KEYS: TabKey[] = [
+  "zones",
+  "inside",
+  "events",
+  "violations",
+  "ai",
+  "heatmap",
+  "bottlenecks",
+];
+
 export default function GeoAnalytics({ defaultTab = "zones" }: { defaultTab?: TabKey }) {
-  const [tab, setTab] = useState<TabKey>(defaultTab);
+  // `?tab=` wins over the route's defaultTab prop: Command Center and Demo
+  // Console deep-link here (e.g. ?tab=bottlenecks) and previously the param was
+  // ignored, dropping the operator on Live Zones instead.
+  const [params, setParams] = useSearchParams();
+  const urlTab = params.get("tab") as TabKey | null;
+  const [tab, setTabState] = useState<TabKey>(
+    urlTab && TAB_KEYS.includes(urlTab) ? urlTab : defaultTab,
+  );
+  useEffect(() => {
+    if (urlTab && TAB_KEYS.includes(urlTab) && urlTab !== tab) setTabState(urlTab);
+  }, [urlTab]); // eslint-disable-line react-hooks/exhaustive-deps
+  const setTab = (k: TabKey) => {
+    setTabState(k);
+    const next = new URLSearchParams(params);
+    next.set("tab", k);
+    setParams(next, { replace: true });
+  };
 
   // Page-level queries for the summary cards (shared keys with the tab bodies).
   const zonesQ = useQuery({ queryKey: ["geo-zones-active"], queryFn: () => api.geoZonesActive() });

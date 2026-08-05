@@ -28,15 +28,28 @@ one-time click in the AWS console or a command on the box.
    │   │ web      │                                            │
    │   ├──────────┤  gateway, scenarios, anpr, congestion,    │
    │   │ services │  anomaly, truck-sim, vahan-*, rfid-*, …    │
-   │   ├──────────┤  postgres/timescale, kafka, redis, minio,  │
-   │   │ infra    │  mosquitto, prometheus, grafana, jaeger     │
+   │   ├──────────┤  kafka, redis, minio, mosquitto,           │
+   │   │ infra    │  prometheus, grafana, jaeger                │
    │   └──────────┘                                            │
-   │                                                          │
+   │                          │                                │
    │   Root EBS (OS) + Data EBS (mounted at /var/lib/docker)  │
-   │                  ↑ all volumes + images live here,        │
+   │                  ↑ volumes + images live here,            │
    │                    snapshot this for backups              │
-   └─────────────────────────────────────────────────────────┘
+   └──────────────────────────┼──────────────────────────────┘
+                              │ TLS :5432
+                              ▼
+              ┌───────────────────────────────────────┐
+              │  AWS RDS PostgreSQL — the ONLY database │
+              │  database-1.…ap-south-1.rds.amazonaws  │
+              │  db: jnpa_schema_v3                    │
+              └───────────────────────────────────────┘
 ```
+
+> **No database container.** The `postgres`/timescale service exists only for
+> local development, behind the `localdb` compose profile, and is never started
+> by the AWS overlay. Every service reads its DSN from the env file; compose
+> uses `${VAR:?…}` so a missing DSN aborts `up` instead of silently falling back
+> to a local database.
 
 Key decisions (already made): **single EC2 box running the existing compose
 stack**, **all stateful infra stays as containers** (Postgres/Timescale, Kafka,
@@ -163,10 +176,15 @@ cd /opt/jnpa-uc3-poc
 # 1. Create the production env from the template and fill in the secrets.
 cp deploy/.env.prod.example .env.prod
 nano .env.prod
-#   - Replace every __CHANGE_ME__ (DB password, MinIO keys, Grafana password).
-#     The DB password must match in BOTH POSTGRES_PASSWORD and POSTGRES_DSN.
+#   - Replace every __CHANGE_ME__ (MinIO keys, Grafana password, JWT secret).
 #   - Set PUBLIC_BASE_URL=https://uc3.example.com  (your real domain).
 #   - Leave all the external API keys blank for the offline demo (DATA_MODE=mock).
+
+# 1b. Point the five Postgres DSNs at RDS (jnpa_schema_v3). This writes
+#     POSTGRES_DSN + RFID_/TRUCK_/CONGESTION_/ANOMALY_POSTGRES_DSN, keeping the
+#     asyncpg (`ssl=require`) vs libpq (`sslmode=require`) forms straight.
+RDS_PASSWORD='<the RDS password>' bash deploy/aws/use-rds.sh .env.prod
+PGPASSWORD='<the RDS password>' bash deploy/aws/rds-preflight.sh   # optional reachability check
 
 # 2. Build + start the whole stack (first build pulls torch + Chromium ~10-20 min).
 deploy/jnpa-uc3.sh up

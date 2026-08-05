@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eir-ocr"
+version = "0.1.0"
+description = "EIR / gate-slip OCR ingest service (Tesseract) for the JNPA UC-III PoC"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "JNPA Digital Twin Team" }]
+
+dependencies = [
+    "fastapi==0.115.*",
+    "uvicorn[standard]>=0.30,<0.33",
+    "prometheus-client==0.21.*",
+    "pydantic==2.*",
+    "pillow>=10",
+    "pytesseract==0.3.*",
+    "python-multipart==0.0.*",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.*",
+    "httpx==0.27.*",
+]
+
+[project.scripts]
+eir-ocr = "eir_ocr.app:run"
+eir-ocr-verify = "eir_ocr.verify:main"
+
+[tool.setuptools]
+packages = ["eir_ocr"]
+package-dir = { "eir_ocr" = "." }
+
+[tool.setuptools.package-data]
+eir_ocr = ["fixtures/*.json"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+markers = [
+    "integration: needs tesseract binary",
+]

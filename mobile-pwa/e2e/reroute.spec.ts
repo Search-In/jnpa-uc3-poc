@@ -31,8 +31,8 @@ test("pair, trigger a TFC-1 re-route, banner appears within 5 s", async ({ page 
   await page.goto(`${PWA_BASE}?device=${DEVICE}`);
 
   // Pairing now lands on the Home context screen; open the Trip module from there.
-  await expect(page.getByRole("button", { name: "Start Trip" })).toBeVisible({ timeout: 20_000 });
-  await page.getByRole("button", { name: "Start Trip" }).click();
+  await expect(page.getByRole("button", { name: /View Route/ })).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("button", { name: /View Route/ }).click();
 
   // The Trip screen renders (the slot widget label is always there).
   await expect(page.getByText(/Slot at Gate|Slot rescheduled/)).toBeVisible({ timeout: 20_000 });
@@ -65,8 +65,8 @@ test("sign in with a Vehicle ID, then reach the Trip screen", async ({ page }) =
   await page.getByTestId("pair-submit").click();
 
   // A successful sign-in reveals the Home context screen…
-  await expect(page.getByRole("button", { name: "Start Trip" })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("button", { name: /View Route/ })).toBeVisible({ timeout: 20_000 });
   // …from which the Trip module is one tap away.
-  await page.getByRole("button", { name: "Start Trip" }).click();
+  await page.getByRole("button", { name: /View Route/ }).click();
   await expect(page.getByText(/Slot at Gate|Slot rescheduled/)).toBeVisible({ timeout: 20_000 });
 });

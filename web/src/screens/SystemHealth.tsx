@@ -6,7 +6,8 @@
 // plus last heartbeat, response time and a health indicator. Clicking a service
 // opens its decision log. No synthetic data is introduced. No backend changes.
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -98,6 +99,9 @@ function worstOf(rows: SourceHealth[]): SourceHealth | undefined {
   return [...rows].sort((a, b) => rank(b.state) - rank(a.state))[0];
 }
 
+type HealthTab = "services" | "integrations" | "nvr";
+const HEALTH_TABS: HealthTab[] = ["services", "integrations", "nvr"];
+
 export default function SystemHealth() {
   const { t } = useTranslation();
   const sourcesQ = useQuery({
@@ -121,7 +125,22 @@ export default function SystemHealth() {
   const [drawer, setDrawer] = useState<{ title: string; api?: string; source?: string } | null>(
     null,
   );
-  const [tab, setTab] = useState<"services" | "integrations" | "nvr">("services");
+  // `?tab=` deep-link (Demo Console links to ?tab=integrations; the legacy
+  // /integrations and /nvr routes redirect here with a tab).
+  const [params, setParams] = useSearchParams();
+  const urlTab = params.get("tab") as HealthTab | null;
+  const [tab, setTabState] = useState<HealthTab>(
+    urlTab && HEALTH_TABS.includes(urlTab) ? urlTab : "services",
+  );
+  useEffect(() => {
+    if (urlTab && HEALTH_TABS.includes(urlTab) && urlTab !== tab) setTabState(urlTab);
+  }, [urlTab]); // eslint-disable-line react-hooks/exhaustive-deps
+  const setTab = (k: HealthTab) => {
+    setTabState(k);
+    const next = new URLSearchParams(params);
+    next.set("tab", k);
+    setParams(next, { replace: true });
+  };
 
   const sources = sourcesQ.data ?? [];
   const cameras = camerasQ.data ?? [];

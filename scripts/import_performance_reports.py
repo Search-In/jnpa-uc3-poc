@@ -43,10 +43,9 @@ sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "shared"))
 
 DEFAULT_DATA_DIR = "/Users/pandurangdhage/Downloads/Digital Twin/Data/12-Performance & Daily Reports"
-DEFAULT_DSN = os.environ.get(
-    "POSTGRES_DSN",
-    "postgresql+asyncpg://postgres:TempPass123!@localhost:5433/postgres",
-)
+# Application database = AWS RDS (jnpa_schema_v3). No local-postgres fallback:
+# set POSTGRES_DSN (or pass --dsn) or the script refuses to run.
+DEFAULT_DSN = os.environ.get("POSTGRES_DSN", "")
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
 BATCH = 500
 
@@ -246,7 +245,13 @@ async def run(args) -> Dict[str, Any]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data-dir", default=DEFAULT_DATA_DIR)
-    ap.add_argument("--dsn", default=DEFAULT_DSN)
+    ap.add_argument(
+        "--dsn",
+        default=DEFAULT_DSN,
+        required=not DEFAULT_DSN,
+        help="SQLAlchemy asyncpg DSN for the RDS database "
+             "(defaults to $POSTGRES_DSN; no local fallback)",
+    )
     ap.add_argument("--kind", choices=["all", "daily", "monthly", "ldb"], default="all")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--limit", type=int, default=None, help="max daily files")

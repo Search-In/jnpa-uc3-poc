@@ -206,6 +206,152 @@ class ShippingLinesRepository:
             "SELECT id, event, module, reference, container_no, payload, created_at "
             f"FROM core.sl_event{clause} ORDER BY id DESC LIMIT :limit OFFSET :offset", params)
 
+    # ----------------------------------------------- E-DO (delivery orders)
+    #
+    # The shipping line's Electronic Delivery Order (AGDORD): the authority to
+    # release the box to the consignee. Exposed header-first (one row per DO)
+    # rather than through the flattened container view, because the facts that
+    # identify a DO — validity, agency, consignee, BL, IGM — live on the header
+    # and its lines, not on the CODECO join.
+    #
+    # `manifest_linked` reports whether any container on the DO also appears on a
+    # filed IGM. This is the ONE cross-document join that actually resolves in the
+    # current corpus, so it is surfaced rather than left for the caller to derive.
+    _EDO_HDR_COLS = (
+        "d.do_number, d.do_date, d.valid_upto, d.vcn, d.imo_no, d.voyage_no, "
+        "d.igm_no, d.igm_date, d.agency_name, d.custodian_code, d.delivery_type, "
+        "d.notify_email, d.total_weight, d.weight_unit, "
+        "(SELECT count(*) FROM core.delivery_order_line l "
+        "   WHERE l.do_number = d.do_number) AS container_count, "
+        "EXISTS (SELECT 1 FROM core.delivery_order_line l "
+        "        JOIN core.igm_line_container ic ON ic.container_no = l.container_no "
+        "        WHERE l.do_number = d.do_number) AS manifest_linked"
+    )
+
+    @staticmethod
+    def _edo_where(filters: Mapping[str, Any]) -> tuple[str, dict]:
+        clauses, params = [], {}
+        if filters.get("do_number"):
+            clauses.append("d.do_number = :do_number")
+            params["do_number"] = str(filters["do_number"]).strip()
+        if filters.get("igm_no"):
+            # igm_no is bigint — bind as int so asyncpg accepts it.
+            try:
+                params["igm_no"] = int(str(filters["igm_no"]).strip())
+                clauses.append("d.igm_no = :igm_no")
+            except ValueError:
+                clauses.append("false")
+        if filters.get("container_no"):
+            clauses.append(
+                "EXISTS (SELECT 1 FROM core.delivery_order_line l "
+                "        WHERE l.do_number = d.do_number AND l.container_no = :container_no)")
+            params["container_no"] = str(filters["container_no"]).strip().upper()
+        return ((" WHERE " + " AND ".join(clauses)) if clauses else ""), params
+
+    async def list_edo(self, *, filters: Mapping[str, Any], limit: int, offset: int) -> list[dict]:
+        where, params = self._edo_where(filters)
+        params.update(limit=limit, offset=offset)
+        return await self._rows(
+            f"SELECT {self._EDO_HDR_COLS} FROM core.delivery_order d{where} "
+            "ORDER BY d.do_date DESC NULLS LAST, d.do_number DESC "
+            "LIMIT :limit OFFSET :offset", params)
+
+    async def count_edo(self, *, filters: Mapping[str, Any]) -> int:
+        where, params = self._edo_where(filters)
+        return await self._count(f"SELECT count(*) FROM core.delivery_order d{where}", params)
+
+    async def edo_detail(self, do_number: str) -> dict:
+        """One delivery order: header + every container line, each line carrying the
+        IGM line it was manifested on when that manifest is on file."""
+        params = {"do": str(do_number).strip()}
+        header = await self._one(
+            f"SELECT {self._EDO_HDR_COLS} FROM core.delivery_order d WHERE d.do_number = :do",
+            params)
+        lines = await self._rows(
+            "SELECT l.line_no, l.container_no, l.seal_no, l.iso_code, l.bl_no, l.bl_date, "
+            "l.consignee_name, l.consignee_addr, l.cargo_desc, l.packages, l.package_code, "
+            "l.gross_weight, l.pol, l.pod, l.return_empty_by, "
+            "l.igm_line_no, l.igm_subline_no, "
+            # Did this exact container turn up on a filed manifest? Hero C is the
+            # only case in the corpus where it does.
+            "ic.igm_no AS manifest_igm_no, ic.line_no AS manifest_line_no "
+            "FROM core.delivery_order_line l "
+            "LEFT JOIN core.igm_line_container ic ON ic.container_no = l.container_no "
+            "WHERE l.do_number = :do ORDER BY l.line_no", params)
+        return {"do_number": do_number, "header": header, "lines": lines}
+
+    # ------------------------------------------------- CODECO gate movements
+    #
+    # The terminal's gate-out message: the container actually leaving on a truck
+    # (gate pass, vehicle, gate number) plus the vessel arrival timestamp the same
+    # message carries. Exposed directly rather than through the delivery-order
+    # join, because a box can be gated out with NO delivery order on file — the
+    # E-DO and CODECO document sets do not fully overlap in this corpus.
+    #
+    # ``dwell_hours`` is DERIVED here (arrival -> gate pass) so every consumer
+    # reports the same number instead of each re-deriving it from timestamps.
+    # The CODECO message names a gate NUMBER but not the terminal. The terminal is
+    # recovered from the vessel call the same message cites:
+    #     codeco.vcn -> core.vessel_call.terminal_id -> core.ref_terminal.code
+    # That is what lets a dashboard gate id like "NSICT-G1" (terminal code + gate
+    # number) select the movements that actually belong to it.
+    _GATE_MOVE_FROM = (
+        "FROM core.codeco_movement cm "
+        "LEFT JOIN core.vessel_call vc ON vc.vcn = cm.vcn "
+        "LEFT JOIN core.ref_terminal rt ON rt.terminal_id = vc.terminal_id"
+    )
+    _GATE_MOVE_COLS = (
+        "cm.id, cm.container_no, cm.vcn, cm.imo_no, cm.agent_code, cm.equipment_status, "
+        "cm.cargo_type, cm.iso_code, cm.pol, cm.final_pod, cm.receipt_date, cm.arrival_ts, "
+        "cm.gate_pass_no, cm.gate_pass_ts, cm.vehicle_no, cm.gate_no, cm.delivery_mode, "
+        "cm.seal_status, rt.code AS terminal_code, rt.pcs_code AS terminal_pcs_code, "
+        "EXTRACT(EPOCH FROM (cm.gate_pass_ts - cm.arrival_ts)) / 3600.0 AS dwell_hours"
+    )
+
+    @staticmethod
+    def _gate_move_where(filters: Mapping[str, Any]) -> tuple[str, dict]:
+        clauses, params = [], {}
+        # gate_no is text in the schema, so compare as text and trim the input.
+        if filters.get("gate_no"):
+            clauses.append("cm.gate_no = :gate_no")
+            params["gate_no"] = str(filters["gate_no"]).strip()
+        if filters.get("terminal_code"):
+            clauses.append("upper(rt.code) = upper(:terminal_code)")
+            params["terminal_code"] = str(filters["terminal_code"]).strip()
+        if filters.get("container_no"):
+            clauses.append("cm.container_no = :container_no")
+            params["container_no"] = str(filters["container_no"]).strip().upper()
+        if filters.get("vehicle_no"):
+            clauses.append("cm.vehicle_no = :vehicle_no")
+            params["vehicle_no"] = str(filters["vehicle_no"]).strip().upper()
+        return ((" WHERE " + " AND ".join(clauses)) if clauses else ""), params
+
+    async def list_gate_movements(self, *, filters: Mapping[str, Any],
+                                  limit: int, offset: int) -> list[dict]:
+        where, params = self._gate_move_where(filters)
+        params.update(limit=limit, offset=offset)
+        return await self._rows(
+            f"SELECT {self._GATE_MOVE_COLS} {self._GATE_MOVE_FROM}{where} "
+            "ORDER BY cm.gate_pass_ts DESC NULLS LAST, cm.id DESC "
+            "LIMIT :limit OFFSET :offset", params)
+
+    async def count_gate_movements(self, *, filters: Mapping[str, Any]) -> int:
+        where, params = self._gate_move_where(filters)
+        return await self._count(f"SELECT count(*) {self._GATE_MOVE_FROM}{where}", params)
+
+    async def list_gate_numbers(self) -> list[dict]:
+        """Gates that actually have gate-out movements, resolved to their terminal —
+        drives the gate filter without hardcoding gate ids. ``gate_id`` is the
+        dashboard-shaped identifier (``NSICT-G1``) so a UI gate row can match
+        directly instead of guessing."""
+        return await self._rows(
+            "SELECT rt.code AS terminal_code, cm.gate_no, "
+            "       rt.code || '-G' || cm.gate_no AS gate_id, "
+            "       count(*) AS movements "
+            f"{self._GATE_MOVE_FROM} "
+            "WHERE cm.gate_no IS NOT NULL "
+            "GROUP BY rt.code, cm.gate_no ORDER BY rt.code NULLS LAST, cm.gate_no", {})
+
     async def find_file_by_sha(self, sha256: str) -> Optional[dict]:
         return await self._one(
             "SELECT id, list_type, terminal, source_file, import_status, record_count, "

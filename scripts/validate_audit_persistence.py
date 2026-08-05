@@ -10,9 +10,11 @@ rows land in each of the five tables. Proves the acceptance criteria:
   * every notification has delivery history     -> notifications
   * decisions are durable (survive restart)     -> decision_audit
 
-Run against the running stack (Postgres published on localhost:5433):
+Run against the running stack. POSTGRES_DSN is REQUIRED (AWS RDS,
+jnpa_schema_v3) — there is no local-postgres fallback:
 
-    POSTGRES_DSN='postgresql+asyncpg://postgres:jnpa_pw@localhost:5433/postgres' \
+    POSTGRES_DSN='postgresql+asyncpg://postgres:<pw>@database-1.__RDS_HOST__\
+ap-south-1.rds.amazonaws.com:5432/jnpa_schema_v3?ssl=require' \
         .venv/bin/python scripts/validate_audit_persistence.py
 
 Exit code 0 = all checks passed.
@@ -31,10 +33,12 @@ _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "shared"))
 
-DSN = os.environ.get(
-    "POSTGRES_DSN",
-    "postgresql+asyncpg://postgres:jnpa_pw@localhost:5433/postgres",
-)
+DSN = os.environ.get("POSTGRES_DSN", "").strip()
+if not DSN:
+    raise SystemExit(
+        "POSTGRES_DSN is not set. Point it at the RDS database (jnpa_schema_v3); "
+        "there is no local-postgres fallback."
+    )
 os.environ["POSTGRES_DSN"] = DSN
 
 from gateway import audit  # noqa: E402

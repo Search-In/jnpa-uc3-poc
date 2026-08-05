@@ -81,6 +81,9 @@ _POLICY: tuple[tuple[str, frozenset[str]], ...] = (
     # the police reports it writes into.
     ("/api/violations", CONTROL_ROOM | {Role.TRAFFIC_POLICE.value, Role.CUSTOMS.value}),
     ("/api/gate-data", CONTROL_ROOM | {Role.CUSTOMS.value}),
+    # UC-III gate documents (EIR / PIN ticket / Form-13) — same audience as
+    # gate-data and the customs clearance layer they sit beside.
+    ("/api/gate-docs", CONTROL_ROOM | {Role.CUSTOMS.value}),
     # Customs module (IGM/OOC/SMTP/RMS/LEO/Shipping Bill import + reads + workflow).
     # The customs clearance pipeline is customs + control-room only — the same
     # audience as gate-data; a DRIVER/police token can never touch it. Covers both
@@ -105,6 +108,11 @@ _POLICY: tuple[tuple[str, frozenset[str]], ...] = (
     # Data-Upload modules; more specific than the /api/drivers admin rule below is not
     # a concern (distinct /api/td-upload prefix).
     ("/api/td-upload", CONTROL_ROOM | {Role.CUSTOMS.value}),
+    # Transporter master + blacklist (UC-III). Reads serve the control room,
+    # customs and the police-facing screens that embed the blacklist panel; a
+    # DRIVER token gets nothing here. Writes are further restricted by the
+    # method overlay below (audit finding: blacklist/lift were open to all).
+    ("/api/transporters", CONTROL_ROOM | {Role.CUSTOMS.value, Role.TRAFFIC_POLICE.value}),
     # FASTag (toll balance / transactions / enroute) — operational logistics data
     # for the control room + customs (same audience as gate-data).
     ("/api/fastag", CONTROL_ROOM | {Role.CUSTOMS.value}),
@@ -116,6 +124,18 @@ _POLICY: tuple[tuple[str, frozenset[str]], ...] = (
     # resolves the driver from the token's device binding, never client input);
     # control room + customs may view for support.
     ("/api/driver", {Role.DRIVER.value} | CONTROL_ROOM | {Role.CUSTOMS.value}),
+    # UC-III job spine. The control tower assigns and the customs desk sees the
+    # scan/gate picture; a DRIVER acts only through /api/driver/jobs (above),
+    # which enforces per-job ownership on top of this rule.
+    ("/api/jobs", CONTROL_ROOM | {Role.CUSTOMS.value}),
+    ("/api/cargo-jobs", CONTROL_ROOM | {Role.CUSTOMS.value}),
+    ("/api/gate/", CONTROL_ROOM | {Role.CUSTOMS.value}),
+    ("/api/yard", CONTROL_ROOM | {Role.CUSTOMS.value}),
+    ("/api/scan", CONTROL_ROOM | {Role.CUSTOMS.value}),
+    # Export leg (booking -> Form13 -> gate-in -> VGM -> LEO -> COPRAR -> loaded).
+    # Same audience as the import job spine it mirrors: LEO and the shipping bill
+    # are customs facts, the gate and load steps are control-room ones.
+    ("/api/export", CONTROL_ROOM | {Role.CUSTOMS.value}),
     # Driver Master & Intelligence (read-only registry) — same audience as the
     # enrollment/identity admin surface it complements. Longest-prefix wins over
     # the DRIVER-scoped /api/driver rule above for /api/drivers/*.
@@ -163,6 +183,44 @@ def roles_for_path(path: str) -> frozenset[str]:
         if path.startswith(prefix) and len(prefix) > best_len:
             best, best_len = roles, len(prefix)
     return best if best is not None else ALL_ROLES
+
+
+# Method-scoped WRITE overlay (audit C7): surfaces whose READS stay broadly
+# visible but whose mutations must not fall through to "any authenticated
+# stakeholder" — before this a DRIVER token could rewrite geofence zones,
+# release cargo, or inject AI/camera events. Checked IN ADDITION to _POLICY
+# (the effective role set is the intersection). Deliberately NOT covering the
+# driver-PWA write paths (/api/geo/evaluate, /api/parking, /api/alerts ack,
+# /api/trucks route-ack, /api/push, /api/identity/enrol-request, /checkin).
+_WRITE = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_METHOD_POLICY: tuple[tuple[str, frozenset[str], frozenset[str]], ...] = (
+    ("/api/zones", _WRITE, CONTROL_ROOM),
+    ("/api/geo/zones", _WRITE, CONTROL_ROOM),
+    ("/api/cargo", _WRITE, CONTROL_ROOM | {Role.CUSTOMS.value}),
+    ("/api/workflows", _WRITE, CONTROL_ROOM),
+    ("/api/accidents", _WRITE, CONTROL_ROOM | {Role.TRAFFIC_POLICE.value}),
+    ("/api/camera-ai", _WRITE, CONTROL_ROOM),
+    ("/api/ai", _WRITE, CONTROL_ROOM),
+    ("/api/nvr", _WRITE, CONTROL_ROOM),
+    ("/api/ldb", _WRITE, CONTROL_ROOM | {Role.CUSTOMS.value}),
+    ("/api/trt", _WRITE, CONTROL_ROOM),
+    ("/api/reefer", _WRITE, CONTROL_ROOM),
+    ("/api/rms-tas", _WRITE, CONTROL_ROOM | {Role.CUSTOMS.value}),
+    ("/api/bottlenecks", _WRITE, CONTROL_ROOM),
+    ("/api/double-trip", _WRITE, CONTROL_ROOM),
+    ("/api/transporters", _WRITE, CONTROL_ROOM | {Role.CUSTOMS.value}),
+)
+
+
+def roles_for(path: str, method: str) -> frozenset[str]:
+    """Effective permitted roles for (path, method): _POLICY ∩ write-overlay."""
+    roles = roles_for_path(path)
+    best: frozenset[str] | None = None
+    best_len = -1
+    for prefix, methods, mroles in _METHOD_POLICY:
+        if method.upper() in methods and path.startswith(prefix) and len(prefix) > best_len:
+            best, best_len = mroles, len(prefix)
+    return roles & best if best is not None else roles
 
 
 # Endpoints whose first path segment after the prefix is a device id a DRIVER may
@@ -465,8 +523,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if role not in ALL_ROLES:
             return JSONResponse({"detail": "token carries no valid role"}, status_code=403)
 
-        # 3. Authorize (RBAC by path).
-        allowed = roles_for_path(request.url.path)
+        # 3. Authorize (RBAC by path + method — writes carry a tighter overlay).
+        allowed = roles_for(request.url.path, request.method)
         if role not in allowed:
             return JSONResponse(
                 {"detail": f"role {role} not permitted for {request.url.path}"},

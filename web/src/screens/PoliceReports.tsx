@@ -21,11 +21,6 @@ import {
   FileDown,
   ExternalLink,
   BarChart3,
-  Camera,
-  Video,
-  Gauge,
-  Snowflake,
-  Cable,
 } from "lucide-react";
 import {
   Bar,
@@ -40,6 +35,7 @@ import {
 import { useSocket } from "@/hooks/SocketContext";
 import { getAdapter } from "@/data";
 import { api } from "@/lib/api";
+import { useIncomingSearch } from "@/lib/searchStore";
 import type { PoliceIncident } from "@/lib/types";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -58,18 +54,7 @@ import {
   type Column,
   type Tone,
 } from "@/components/ui/dtccc";
-import DocumentOCR from "@/screens/DocumentOCR";
 import Accidents from "@/screens/Accidents";
-import EcyTrt from "@/screens/EcyTrt";
-import DoubleTrip from "@/screens/DoubleTrip";
-import TransporterBlacklist from "@/screens/TransporterBlacklist";
-import {
-  CameraAIReport,
-  NvrReport,
-  BottlenecksReport,
-  ReeferReport,
-  IntegrationReport,
-} from "@/screens/reports/Uc3ReportTabs";
 import { EmptyState } from "@/components/ui/misc";
 import { severityColour } from "@/lib/palette";
 import { STATUS } from "@/lib/tokens";
@@ -98,18 +83,12 @@ function sevTone(sev: string): Tone {
   return "neutral";
 }
 
-type Uc3TabKey =
-  | "enforcement"
-  | "document_ocr"
-  | "accident"
-  | "ecy_trt"
-  | "double_trip"
-  | "blacklist"
-  | "camera_ai"
-  | "nvr"
-  | "bottlenecks"
-  | "reefer"
-  | "integrations";
+// Reports is an ENFORCEMENT screen. Camera AI, NVR, Reefer, Bottlenecks,
+// Integration Health, ECY TRT, Double Trip, Blacklist and Document OCR were all
+// mounted here a second time; each now has exactly one home
+// (/gate-customs, /health, /parking, /geofencing, /truck-ops, /vehicles,
+// /uc3-lifecycle respectively), so the duplicates are removed.
+type Uc3TabKey = "enforcement" | "accident";
 
 export default function PoliceReports() {
   const [uc3Tab, setUc3Tab] = useState<Uc3TabKey>("enforcement");
@@ -121,68 +100,14 @@ export default function PoliceReports() {
           onChange={setUc3Tab}
           tabs={[
             { key: "enforcement", label: "Enforcement", icon: ShieldAlert },
-            { key: "document_ocr", label: "Document OCR", icon: ScanFace },
             { key: "accident", label: "Accident Report", icon: FileWarning },
-            { key: "ecy_trt", label: "ECY TRT", icon: FileText },
-            { key: "double_trip", label: "Double Trip", icon: ReceiptText },
-            { key: "blacklist", label: "Blacklist", icon: ShieldAlert },
-            { key: "camera_ai", label: "Camera AI", icon: Camera },
-            { key: "nvr", label: "NVR", icon: Video },
-            { key: "bottlenecks", label: "Road Bottlenecks", icon: Gauge },
-            { key: "reefer", label: "Reefer", icon: Snowflake },
-            { key: "integrations", label: "Integration Health", icon: Cable },
           ]}
         />
       </div>
       {uc3Tab === "enforcement" && <EnforcementReports />}
-      {uc3Tab === "document_ocr" && (
-        <Embedded>
-          <DocumentOCR />
-        </Embedded>
-      )}
       {uc3Tab === "accident" && (
         <Embedded>
           <Accidents />
-        </Embedded>
-      )}
-      {uc3Tab === "ecy_trt" && (
-        <Embedded>
-          <EcyTrt />
-        </Embedded>
-      )}
-      {uc3Tab === "double_trip" && (
-        <Embedded>
-          <DoubleTrip />
-        </Embedded>
-      )}
-      {uc3Tab === "blacklist" && (
-        <Embedded>
-          <TransporterBlacklist />
-        </Embedded>
-      )}
-      {uc3Tab === "camera_ai" && (
-        <Embedded>
-          <CameraAIReport />
-        </Embedded>
-      )}
-      {uc3Tab === "nvr" && (
-        <Embedded>
-          <NvrReport />
-        </Embedded>
-      )}
-      {uc3Tab === "bottlenecks" && (
-        <Embedded>
-          <BottlenecksReport />
-        </Embedded>
-      )}
-      {uc3Tab === "reefer" && (
-        <Embedded>
-          <ReeferReport />
-        </Embedded>
-      )}
-      {uc3Tab === "integrations" && (
-        <Embedded>
-          <IntegrationReport />
         </Embedded>
       )}
     </>
@@ -191,6 +116,9 @@ export default function PoliceReports() {
 
 function EnforcementReports() {
   const { t } = useTranslation();
+  // Header Global Search hand-off (entity "case"/"vehicle"). Previously the
+  // omnibox navigated here with ?q= and the query was dropped.
+  const incomingSearch = useIncomingSearch(["case", "vehicle"]);
   const qc = useQueryClient();
   const [tab, setTab] = useState<TabKey>("police");
   const [kind, setKind] = useState("");
@@ -397,6 +325,7 @@ function EnforcementReports() {
                 onRetry={() => q.refetch()}
                 onSelect={setSelected}
                 highlightPlate={highlightPlate}
+                initialSearch={incomingSearch}
               />
             </Card>
           </div>
@@ -511,12 +440,14 @@ function IncidentsTable({
   onRetry,
   onSelect,
   highlightPlate,
+  initialSearch,
 }: {
   incidents: PoliceIncident[];
   status: any;
   onRetry: () => void;
   onSelect: (i: PoliceIncident) => void;
   highlightPlate: string | null;
+  initialSearch?: string;
 }) {
   const columns: Column<PoliceIncident>[] = [
     {
@@ -575,6 +506,7 @@ function IncidentsTable({
           .includes(q)
       }
       searchPlaceholder="Search plate / kind / gate…"
+      initialSearch={initialSearch}
       pageSize={12}
       onRowClick={onSelect}
     />

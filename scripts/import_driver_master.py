@@ -17,7 +17,7 @@ A record is INVALID (not imported) only if it lacks a licence number or name.
 
 Usage:
     python scripts/import_driver_master.py --dry-run          # parse+clean, no DB
-    POSTGRES_DSN='postgresql+asyncpg://postgres:TempPass123!@localhost:5433/postgres' \
+    POSTGRES_DSN='postgresql+asyncpg://postgres:$RDS_PW@__RDS_HOST__:5432/jnpa_schema_v3?ssl=require' \
         .venv/bin/python scripts/import_driver_master.py      # live upsert
 Options: --xlsx PATH, --dsn, --dry-run, --limit N, --report PATH, --skip-pdp.
 """
@@ -40,10 +40,9 @@ sys.path.insert(0, str(_ROOT / "shared"))
 DEFAULT_XLSX = (
     "/Users/pandurangdhage/Downloads/Digital Twin/Data/11-Transport Data/PDP Details.xlsx"
 )
-DEFAULT_DSN = os.environ.get(
-    "POSTGRES_DSN",
-    "postgresql+asyncpg://postgres:TempPass123!@localhost:5433/postgres",
-)
+# Application database = AWS RDS (jnpa_schema_v3). No local-postgres fallback:
+# set POSTGRES_DSN (or pass --dsn) or the script refuses to run.
+DEFAULT_DSN = os.environ.get("POSTGRES_DSN", "")
 PDP_BATCH = 2000
 DRIVER_BATCH = 1000
 
@@ -128,26 +127,31 @@ def clean_driver(raw: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], List[st
     return rec, issues
 
 
+# v3 runtime schema (core.driver): arch column names (driver_name,
+# licence_number, date_of_birth); licence_no_norm is a GENERATED column (never
+# inserted); the upsert arbiter is the partial unique index
+# uq_driver_licence_norm (managed rows, id < 100000000) — matches
+# services/transporters_drivers/repository.py.
 _DRIVER_UPSERT = """
 INSERT INTO core.driver AS d
-    (licence_no, licence_no_norm, source_srno, name, company_name, transporter_id,
-     photo_file, licence_type, licence_valid_to, latest_pdp_number, dob)
+    (licence_number, source_srno, driver_name, company_name, transporter_id,
+     photo_file, licence_type, licence_valid_to, latest_pdp_number, date_of_birth)
 VALUES
-    (:licence_no, :licence_no_norm, :source_srno, :name, :company_name, :transporter_id,
+    (:licence_no, :source_srno, :name, :company_name, :transporter_id,
      :photo_file, :licence_type, :licence_valid_to, :latest_pdp_number, :dob)
-ON CONFLICT (licence_no_norm) DO UPDATE SET
-    licence_no = EXCLUDED.licence_no, source_srno = EXCLUDED.source_srno,
-    name = EXCLUDED.name, company_name = EXCLUDED.company_name,
+ON CONFLICT (licence_no_norm) WHERE id < 100000000 DO UPDATE SET
+    licence_number = EXCLUDED.licence_number, source_srno = EXCLUDED.source_srno,
+    driver_name = EXCLUDED.driver_name, company_name = EXCLUDED.company_name,
     transporter_id = EXCLUDED.transporter_id, photo_file = EXCLUDED.photo_file,
     licence_type = EXCLUDED.licence_type, licence_valid_to = EXCLUDED.licence_valid_to,
-    latest_pdp_number = EXCLUDED.latest_pdp_number, dob = EXCLUDED.dob,
+    latest_pdp_number = EXCLUDED.latest_pdp_number, date_of_birth = EXCLUDED.date_of_birth,
     updated_at = now()
-WHERE (d.name, d.company_name, d.transporter_id, d.photo_file, d.licence_type,
-       d.licence_valid_to, d.latest_pdp_number, d.dob, d.source_srno)
+WHERE (d.driver_name, d.company_name, d.transporter_id, d.photo_file, d.licence_type,
+       d.licence_valid_to, d.latest_pdp_number, d.date_of_birth, d.source_srno)
   IS DISTINCT FROM
-      (EXCLUDED.name, EXCLUDED.company_name, EXCLUDED.transporter_id, EXCLUDED.photo_file,
+      (EXCLUDED.driver_name, EXCLUDED.company_name, EXCLUDED.transporter_id, EXCLUDED.photo_file,
        EXCLUDED.licence_type, EXCLUDED.licence_valid_to, EXCLUDED.latest_pdp_number,
-       EXCLUDED.dob, EXCLUDED.source_srno)
+       EXCLUDED.date_of_birth, EXCLUDED.source_srno)
 RETURNING (xmax = 0) AS inserted
 """
 
@@ -158,6 +162,12 @@ def clean_pdp(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if pdp_id is None:
         return None
     validity, _ = clean_date(raw.get("validity"), min_year=2000, max_year=2100)
+    cancellation_time = raw.get("cancellation_time")
+    cancellation_date = None
+    if isinstance(cancellation_time, dt.datetime):
+        cancellation_date = cancellation_time.date()
+    elif isinstance(cancellation_time, dt.date):
+        cancellation_date = cancellation_time
     return {
         "pdp_id": pdp_id,
         "acceptance_time_stamp": raw.get("acceptance_time_stamp"),
@@ -167,22 +177,26 @@ def clean_pdp(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "validity": validity,
         "remarks": clean_text(raw.get("remarks")),
         "pdp_cancelled_by": clean_text(raw.get("pdp_cancelled_by")),
-        "cancellation_time": raw.get("cancellation_time"),
+        "cancellation_time": cancellation_time,
+        "cancellation_date": cancellation_date,
     }
 
 
+# v3 runtime schema (core.pdp): arch column names accepted_at / valid_until /
+# cancelled_by / cancellation_date, plus the 0102 ext column cancellation_time.
 _PDP_UPSERT = """
 INSERT INTO core.pdp
-    (pdp_id, acceptance_time_stamp, active, appl_number, pdp_number, validity,
-     remarks, pdp_cancelled_by, cancellation_time)
+    (pdp_id, accepted_at, active, appl_number, pdp_number, valid_until,
+     remarks, cancelled_by, cancellation_date, cancellation_time)
 VALUES
     (:pdp_id, :acceptance_time_stamp, :active, :appl_number, :pdp_number, :validity,
-     :remarks, :pdp_cancelled_by, :cancellation_time)
+     :remarks, :pdp_cancelled_by, :cancellation_date, :cancellation_time)
 ON CONFLICT (pdp_id) DO UPDATE SET
-    acceptance_time_stamp = EXCLUDED.acceptance_time_stamp, active = EXCLUDED.active,
+    accepted_at = EXCLUDED.accepted_at, active = EXCLUDED.active,
     appl_number = EXCLUDED.appl_number, pdp_number = EXCLUDED.pdp_number,
-    validity = EXCLUDED.validity, remarks = EXCLUDED.remarks,
-    pdp_cancelled_by = EXCLUDED.pdp_cancelled_by, cancellation_time = EXCLUDED.cancellation_time
+    valid_until = EXCLUDED.valid_until, remarks = EXCLUDED.remarks,
+    cancelled_by = EXCLUDED.cancelled_by, cancellation_date = EXCLUDED.cancellation_date,
+    cancellation_time = EXCLUDED.cancellation_time
 """
 
 
@@ -211,7 +225,7 @@ def load_sheet(xlsx: str, sheet: str, cols, limit: Optional[int]) -> List[Dict[s
 async def resolve_transporters(dsn: str) -> Dict[str, int]:
     from jnpa_shared.db import fetch_all
 
-    rows = await fetch_all("SELECT id, name FROM core.transporter", {}, dsn=dsn)
+    rows = await fetch_all("SELECT id, company_name AS name FROM core.transporter", {}, dsn=dsn)
     return {str(r["name"]).strip().lower(): int(r["id"]) for r in rows if r.get("name")}
 
 
@@ -287,7 +301,13 @@ def build_driver_report(raw_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--xlsx", default=DEFAULT_XLSX)
-    ap.add_argument("--dsn", default=DEFAULT_DSN)
+    ap.add_argument(
+        "--dsn",
+        default=DEFAULT_DSN,
+        required=not DEFAULT_DSN,
+        help="SQLAlchemy asyncpg DSN for the RDS database "
+             "(defaults to $POSTGRES_DSN; no local fallback)",
+    )
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--skip-pdp", action="store_true")

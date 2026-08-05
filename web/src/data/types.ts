@@ -34,6 +34,7 @@ import type {
   IdentityVerifyResult,
   IdentityEnrollResult,
   KpiResult,
+  LdbTruckTrackingResponse,
   ParkingFacility,
   ParkingSummary,
   PoliceIncident,
@@ -65,6 +66,24 @@ export interface AnprConditionSlice {
   detection_recall?: number;
 }
 
+/**
+ * Explicit statement of WHETHER the ANPR accuracy numbers mean anything.
+ *
+ * DEGRADED means the evaluated pipeline is not the bid stack (PaddleOCR absent
+ * and/or detector weights missing), so the figures describe the template-matching
+ * fallback. They are real measurements of the wrong thing, and the UI must say so
+ * rather than render "0.0% vs a 95% target" as though the system had been tested
+ * and failed. Emitted by ai/anpr describe_capability().
+ */
+export interface AnprCapability {
+  status: "FULL" | "DEGRADED";
+  engine: string;
+  missing: string[];
+  headline: string;
+  reason: string | null;
+  remediation: string[];
+}
+
 export interface OcrEval {
   /** OCR accuracy in the CLEAR condition, 0..1 (e.g. 0.97). */
   clear_accuracy: number;
@@ -74,6 +93,10 @@ export interface OcrEval {
   target_met?: boolean;
   /** True when the deterministic fallback OCR is active (no CRNN weights). */
   degraded?: boolean;
+  /** Capability envelope — see AnprCapability. */
+  capability?: AnprCapability;
+  /** False when the accuracy fields must NOT be presented as a result. */
+  accuracy_reportable?: boolean;
   // --- evaluator-facing normalized fields (from GET /api/anpr/eval) ---
   model_name?: string;
   accuracy?: number;
@@ -271,6 +294,9 @@ export interface DataAdapter {
     vehicleId: string,
     input: UpdateVehicleInput,
   ): Promise<{ updated: boolean; vehicle: FleetVehicle }>;
+
+  /** NLDS/LDB truck port-events by plate (Vehicle Management → Track). */
+  ldbTruck(vehicleNumber: string): Promise<LdbTruckTrackingResponse>;
 
   // --- Vehicle Intelligence Identity & Detection (camera workflows) ---
   vehicleIdentity(vehicleNumber: string, image: string): Promise<VehicleIdentityResult>;

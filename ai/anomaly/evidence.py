@@ -17,6 +17,7 @@ emitted — just without an ``evidence_url``.
 """
 from __future__ import annotations
 
+import hashlib
 from typing import Optional
 from uuid import UUID
 
@@ -69,6 +70,9 @@ class EvidenceWriter:
         if url:
             alert.payload["evidence_url"] = url
             alert.payload["evidence_object"] = object_name
+            # Tamper-evidence: hash the exact bytes persisted to MinIO so the
+            # dashboard / case file can verify the frame is the one captured.
+            alert.payload["evidence_sha256"] = hashlib.sha256(frame).hexdigest()
         return alert
 
     def close(self) -> None:

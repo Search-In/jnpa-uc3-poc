@@ -49,6 +49,13 @@ class SourceManager:
             for name in cfg.source_order
             if name in _FACTORY
         ]
+        # A keyless adapter answers immediately with a synthetic reading, which
+        # would shadow every LIVE provider behind it in source_order. Keep the
+        # configured (live-capable) providers first so setting an API key is
+        # sufficient to activate that provider; the stable sort preserves
+        # cfg.source_order within each group, so the all-keyless (offline) and
+        # all-configured behaviours are unchanged.
+        self.sources.sort(key=lambda s: not s.configured)
 
     def _cache_key(self, seg_id: str) -> str:
         return f"traffic:speed:{seg_id}"

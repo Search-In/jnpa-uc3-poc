@@ -206,35 +206,89 @@ async def _audit(
     from_status: Optional[str] = None, to_status: Optional[str] = None,
     actor: Optional[str] = None, detail: Optional[dict] = None,
 ) -> str:
-    """Append a tamper-evident audit row; returns the new chain hash."""
-    from jnpa_shared.db import execute, fetch_one
+    """Append a tamper-evident audit row; returns the new chain hash.
 
-    prev = await fetch_one(
-        "SELECT hash FROM core.case_audit WHERE case_id = CAST(:c AS uuid) "
-        "ORDER BY id DESC LIMIT 1",
-        {"c": case_id}, dsn=dsn,
-    )
-    prev_hash = (prev or {}).get("hash")
+    Atomic per case: prev-hash read and insert run in ONE transaction with the
+    parent case row locked ``FOR UPDATE``, so two concurrent audits on the same
+    case serialize instead of both reading the same prev hash and forking the
+    chain (the old two-statement autocommit version had exactly that race).
+    """
+    from sqlalchemy import text
+    from jnpa_shared.db import get_engine
+
     stamp = datetime.now(timezone.utc).isoformat()
+    engine = get_engine(dsn)
+    async with engine.begin() as conn:
+        # Serialize audits per case (row may not exist yet for the very first
+        # OPEN audit — that insert races nothing, the case insert precedes it).
+        await conn.execute(
+            text("SELECT id FROM core.violation_case "
+                 "WHERE id = CAST(:c AS uuid) FOR UPDATE"),
+            {"c": case_id},
+        )
+        prev = (await conn.execute(
+            text("SELECT hash FROM core.case_audit WHERE case_id = CAST(:c AS uuid) "
+                 "ORDER BY id DESC LIMIT 1"),
+            {"c": case_id},
+        )).mappings().first()
+        prev_hash = (prev or {}).get("hash")
+        chain = chain_hash(prev_hash, event=event, from_status=from_status,
+                           to_status=to_status, actor=actor,
+                           detail=detail or {}, at=stamp)
+        await conn.execute(
+            text("""
+            INSERT INTO core.case_audit
+                (case_id, event, from_status, to_status, actor, detail, prev_hash, hash)
+            VALUES (CAST(:c AS uuid), :event, :frm, :to, :actor,
+                    CAST(:detail AS jsonb), :prev, :hash)
+            """),
+            {"c": case_id, "event": event, "frm": from_status, "to": to_status,
+             "actor": actor, "detail": json.dumps({**(detail or {}), "at": stamp}),
+             "prev": prev_hash, "hash": chain},
+        )
+    return chain
+
+
+def chain_hash(prev_hash: Optional[str], *, event: str,
+               from_status: Optional[str], to_status: Optional[str],
+               actor: Optional[str], detail: dict, at: str) -> str:
+    """Canonical chain-hash computation — the writer and the verifier MUST use
+    this one function so verification can never drift from the write path."""
     body = json.dumps(
         {"event": event, "from": from_status, "to": to_status, "actor": actor,
-         "detail": detail or {}, "at": stamp},
+         "detail": detail, "at": at},
         sort_keys=True, separators=(",", ":"),
     )
-    chain = hashlib.sha256(((prev_hash or "") + body).encode()).hexdigest()
-    await execute(
-        """
-        INSERT INTO core.case_audit
-            (case_id, event, from_status, to_status, actor, detail, prev_hash, hash)
-        VALUES (CAST(:c AS uuid), :event, :frm, :to, :actor,
-                CAST(:detail AS jsonb), :prev, :hash)
-        """,
-        {"c": case_id, "event": event, "frm": from_status, "to": to_status,
-         "actor": actor, "detail": json.dumps({**(detail or {}), "at": stamp}),
-         "prev": prev_hash, "hash": chain},
-        dsn=dsn,
+    return hashlib.sha256(((prev_hash or "") + body).encode()).hexdigest()
+
+
+async def verify_chain(dsn: str, case_id: str) -> dict:
+    """Recompute the case's audit hash chain from row 1 and compare.
+
+    Returns {valid, length, broken_at?} — broken_at is the first audit row id
+    whose stored hash/prev_hash disagrees with the recomputation (i.e. the row
+    where tampering or a fork would have occurred).
+    """
+    from jnpa_shared.db import fetch_all
+
+    rows = await fetch_all(
+        "SELECT id, event, from_status, to_status, actor, detail, prev_hash, hash "
+        "FROM core.case_audit WHERE case_id = CAST(:c AS uuid) ORDER BY id",
+        {"c": case_id}, dsn=dsn,
     )
-    return chain
+    prev: Optional[str] = None
+    for r in rows:
+        detail = r.get("detail") or {}
+        if isinstance(detail, str):
+            detail = json.loads(detail)
+        at = detail.pop("at", None)
+        expected = chain_hash(prev, event=r["event"], from_status=r["from_status"],
+                              to_status=r["to_status"], actor=r["actor"],
+                              detail=detail, at=at or "")
+        if r["prev_hash"] != prev or r["hash"] != expected:
+            return {"valid": False, "length": len(rows), "broken_at": r["id"]}
+        prev = r["hash"]
+    return {"valid": True, "length": len(rows)}
 
 
 # --- case operations --------------------------------------------------------

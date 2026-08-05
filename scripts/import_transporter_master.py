@@ -29,8 +29,8 @@ Usage:
     # Dry-run: parse + clean + classify, no DB writes (needs only openpyxl)
     python scripts/import_transporter_master.py --dry-run
 
-    # Live upsert against the running stack (Postgres on localhost:5433)
-    POSTGRES_DSN='postgresql+asyncpg://postgres:jnpa_pw@localhost:5433/postgres' \
+    # Live upsert against the RDS application database (jnpa_schema_v3)
+    POSTGRES_DSN='postgresql+asyncpg://postgres:$RDS_PW@__RDS_HOST__:5432/jnpa_schema_v3?ssl=require' \
         .venv/bin/python scripts/import_transporter_master.py
 
 Options: --xlsx PATH, --dsn DSN, --dry-run, --limit N, --report PATH (JSON).
@@ -56,10 +56,9 @@ DEFAULT_XLSX = (
     "/Users/pandurangdhage/Downloads/Digital Twin/Data/"
     "11-Transport Data/TransporterDetails.xlsx"
 )
-DEFAULT_DSN = os.environ.get(
-    "POSTGRES_DSN",
-    "postgresql+asyncpg://postgres:jnpa_pw@localhost:5433/postgres",
-)
+# Application database = AWS RDS (jnpa_schema_v3). No local-postgres fallback:
+# set POSTGRES_DSN (or pass --dsn) or the script refuses to run.
+DEFAULT_DSN = os.environ.get("POSTGRES_DSN", "")
 
 # Source-column -> our field name. Header row of the sheet must contain these.
 _COLUMNS = {
@@ -216,32 +215,36 @@ def load_rows(xlsx_path: str, limit: Optional[int]) -> List[Dict[str, Any]]:
 
 
 # --- upsert ------------------------------------------------------------------
+# v3 runtime schema (core.transporter): the source company id IS the arch PK
+# `company_id`; legacy DTO names map to the arch column names (company_name,
+# mobile_number, document_type, document_file, user_id). Mirrors the proven
+# upsert in services/transporters_drivers/repository.py.
 _UPSERT = """
 INSERT INTO core.transporter AS t
-    (source_company_id, source_user_id, name, contact_person, designation,
-     email, mobile, address, doc_type, doc_file, contact, status)
+    (company_id, user_id, company_name, contact_person, designation,
+     email, mobile_number, address, document_type, document_file, contact, status)
 VALUES
     (:source_company_id, :source_user_id, :name, :contact_person, :designation,
      :email, :mobile, :address, :doc_type, :doc_file,
      CAST(:contact AS jsonb), 'ACTIVE')
-ON CONFLICT (source_company_id) DO UPDATE SET
-    source_user_id = EXCLUDED.source_user_id,
-    name           = EXCLUDED.name,
+ON CONFLICT (company_id) DO UPDATE SET
+    user_id        = EXCLUDED.user_id,
+    company_name   = EXCLUDED.company_name,
     contact_person = EXCLUDED.contact_person,
     designation    = EXCLUDED.designation,
     email          = EXCLUDED.email,
-    mobile         = EXCLUDED.mobile,
+    mobile_number  = EXCLUDED.mobile_number,
     address        = EXCLUDED.address,
-    doc_type       = EXCLUDED.doc_type,
-    doc_file       = EXCLUDED.doc_file,
+    document_type  = EXCLUDED.document_type,
+    document_file  = EXCLUDED.document_file,
     contact        = EXCLUDED.contact,
     updated_at     = now()
-WHERE (t.source_user_id, t.name, t.contact_person, t.designation, t.email,
-       t.mobile, t.address, t.doc_type, t.doc_file, t.contact)
+WHERE (t.user_id, t.company_name, t.contact_person, t.designation, t.email,
+       t.mobile_number, t.address, t.document_type, t.document_file, t.contact)
   IS DISTINCT FROM
-      (EXCLUDED.source_user_id, EXCLUDED.name, EXCLUDED.contact_person,
-       EXCLUDED.designation, EXCLUDED.email, EXCLUDED.mobile, EXCLUDED.address,
-       EXCLUDED.doc_type, EXCLUDED.doc_file, EXCLUDED.contact)
+      (EXCLUDED.user_id, EXCLUDED.company_name, EXCLUDED.contact_person,
+       EXCLUDED.designation, EXCLUDED.email, EXCLUDED.mobile_number, EXCLUDED.address,
+       EXCLUDED.document_type, EXCLUDED.document_file, EXCLUDED.contact)
 RETURNING (xmax = 0) AS inserted
 """
 
@@ -337,7 +340,13 @@ def print_summary(report: Dict[str, Any], tally: Optional[Dict[str, int]],
 def main() -> int:
     ap = argparse.ArgumentParser(description="Import Transport Master dataset")
     ap.add_argument("--xlsx", default=DEFAULT_XLSX)
-    ap.add_argument("--dsn", default=DEFAULT_DSN)
+    ap.add_argument(
+        "--dsn",
+        default=DEFAULT_DSN,
+        required=not DEFAULT_DSN,
+        help="SQLAlchemy asyncpg DSN for the RDS database "
+             "(defaults to $POSTGRES_DSN; no local fallback)",
+    )
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--report", default=None, help="write full report JSON here")

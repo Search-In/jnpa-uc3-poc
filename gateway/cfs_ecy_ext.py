@@ -26,6 +26,7 @@ log = get_logger("gateway.cfs_ecy_ext")
 # statement per execute()). Mirrors migration 0027 exactly.
 _DDL: list[str] = [
     "CREATE SCHEMA IF NOT EXISTS core",
+    "CREATE SCHEMA IF NOT EXISTS mart",
     """CREATE TABLE IF NOT EXISTS core.cfs_ecy_movement (
         id               bigserial PRIMARY KEY,
         facility_type    text NOT NULL CHECK (facility_type IN ('CFS','ECY')),

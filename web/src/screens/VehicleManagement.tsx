@@ -8,7 +8,17 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Truck, Plus, Pencil, Eye, Power, Wrench, CheckCircle2, CircleSlash } from "lucide-react";
+import {
+  Truck,
+  Plus,
+  Pencil,
+  Eye,
+  Power,
+  Wrench,
+  CheckCircle2,
+  CircleSlash,
+  MapPinned,
+} from "lucide-react";
 import { getAdapter } from "@/data";
 import type { FleetVehicle, VehicleStatus } from "@/lib/types";
 import { Card } from "@/components/ui/card";
@@ -29,6 +39,7 @@ import {
 import TransporterBlacklist from "@/screens/TransporterBlacklist";
 import DriverMaster from "@/screens/DriverMaster";
 import TransportersDriversUploadPanel from "@/screens/td/UploadPanel";
+import TruckTrackDialog from "@/screens/TruckTrackDialog";
 import { authEnabled, getRole } from "@/lib/auth";
 import { STATUS } from "@/lib/tokens";
 import { fmtDateTimeIST } from "@/lib/utils";
@@ -88,6 +99,7 @@ export default function VehicleManagement() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editVehicle, setEditVehicle] = useState<FleetVehicle | null>(null);
   const [viewVehicle, setViewVehicle] = useState<FleetVehicle | null>(null);
+  const [trackVehicle, setTrackVehicle] = useState<FleetVehicle | null>(null);
 
   const listQ = useQuery({
     queryKey: ["fleet-vehicles"],
@@ -179,6 +191,7 @@ export default function VehicleManagement() {
           row={v}
           onView={() => setViewVehicle(v)}
           onEdit={() => setEditVehicle(v)}
+          onTrack={() => setTrackVehicle(v)}
           onChanged={invalidate}
         />
       ),
@@ -364,6 +377,12 @@ export default function VehicleManagement() {
           {viewVehicle && <VehicleDetail vehicle={viewVehicle} />}
         </DialogContent>
       </Dialog>
+
+      <TruckTrackDialog
+        open={!!trackVehicle}
+        vehicleNumber={trackVehicle?.vehicle_number ?? null}
+        onClose={() => setTrackVehicle(null)}
+      />
     </PageContainer>
   );
 }
@@ -514,15 +533,18 @@ function RowActions({
   row,
   onView,
   onEdit,
+  onTrack,
   onChanged,
 }: {
   row: FleetVehicle;
   onView: () => void;
   onEdit: () => void;
+  onTrack: () => void;
   onChanged: () => void;
 }) {
   const { t } = useTranslation();
   const isActive = (row.status ?? "").toUpperCase() === "ACTIVE";
+  const canTrack = !!(row.vehicle_number || "").trim();
   const toggle = useMutation({
     mutationFn: () =>
       getAdapter().updateVehicle(row.vehicle_id, {
@@ -547,6 +569,18 @@ function RowActions({
         className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] font-medium hover:bg-muted"
       >
         <Pencil className="h-3.5 w-3.5" /> {t("vehicles.editAction", "Edit")}
+      </button>
+      <button
+        onClick={stop(onTrack)}
+        disabled={!canTrack}
+        title={
+          canTrack
+            ? t("vehicles.trackHint", "Track port events by truck number (NLDS / LDB)")
+            : t("vehicles.trackNoPlate", "No vehicle number to track")
+        }
+        className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] font-medium hover:bg-muted disabled:opacity-50"
+      >
+        <MapPinned className="h-3.5 w-3.5" /> {t("vehicles.track", "Track")}
       </button>
       <button
         onClick={stop(() => toggle.mutate())}

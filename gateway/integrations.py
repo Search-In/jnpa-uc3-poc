@@ -92,11 +92,16 @@ async def call(
     dsn: Optional[str] = None,
     method: str = "GET",
     http_client: Optional[httpx.AsyncClient] = None,
+    accept_json_error_bodies: bool = False,
 ) -> Dict[str, Any]:
     """Perform one adapter call. Returns ``{"source": "LIVE"|"MOCK"|"ERROR", "data": {...}}``.
 
     ``live_path`` is appended to the system base URL for the real call; pass None to
     force the mock branch. ``mock_fn`` builds the deterministic fallback payload.
+
+    ``accept_json_error_bodies``: when True, a non-200 response whose body is JSON
+    is still treated as LIVE (e.g. LDB returns HTTP 500 + ``{code:404}`` for an
+    unknown truck). Without this flag those answers fall through to MOCK.
     """
     cfg = system_config(system)
     t0 = time.perf_counter()
@@ -118,6 +123,20 @@ async def call(
                              response=data if isinstance(data, dict) else {"data": data},
                              source="LIVE", latency_ms=latency)
                 return {"source": "LIVE", "data": data}
+            if accept_json_error_bodies:
+                try:
+                    data = resp.json()
+                except Exception:  # noqa: BLE001
+                    data = None
+                if isinstance(data, dict):
+                    log.info(
+                        "integration_live_json_error_body",
+                        system=system, status=resp.status_code,
+                        code=data.get("code"), app_status=data.get("status"),
+                    )
+                    await _audit(dsn, system=system, op=op, ref=ref, request=request,
+                                 response=data, source="LIVE", latency_ms=latency)
+                    return {"source": "LIVE", "data": data}
             log.warning("integration_live_non200", system=system, status=resp.status_code)
         except Exception as exc:  # noqa: BLE001 - live down => fall back to mock
             log.warning("integration_live_failed", system=system, error=str(exc))

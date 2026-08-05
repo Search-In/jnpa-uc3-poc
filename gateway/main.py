@@ -30,8 +30,10 @@ from fastapi.responses import JSONResponse
 
 from .mode import ProductionSafetyError, mode_name, production_mode
 
-from jnpa_shared.schemas import TOPIC_ALERTS, TOPIC_ANPR, TOPIC_TRAFFIC
+from jnpa_shared.schemas import (TOPIC_ALERTS, TOPIC_ANPR, TOPIC_DEFERRED_ARRIVAL,
+                                 TOPIC_TRAFFIC, DeferredArrivalWindow)
 from jnpa_shared import tracing
+from jnpa_shared.kafka_io import broker_configured as kafka_configured
 
 from . import audit
 from .config import GatewayConfig
@@ -80,15 +82,23 @@ from .routers import (
 # UC-III Final-Completion routers (additive; see gateway/uc3_ext.py + migration 0024).
 from .routers import (
     accidents,
+    air_quality,
     berthing,
+    bhuvan,
     bottlenecks,
     camera_ai,
     cfs_ecy,
     customs,
+    container_job,
     document_ocr,
     double_trip,
+    driver_jobs,
+    export_lifecycle,
+    gate_documents,
     ldb,
+    logistics,
     marine_calls,
+    marine_live_vessels,
     marine_imports,
     marine_manual_craft,
     marine_manual_pilot,
@@ -108,6 +118,7 @@ from .routers import (
     transporters,
     transporters_drivers_upload,
     trt,
+    weather,
 )
 from .state import GatewayState
 
@@ -121,6 +132,48 @@ log = get_logger("gateway")
 # correctly configured deployment and for local development. Raising here aborts
 # process startup with a clear, actionable message.
 validate_auth_config()
+
+
+def _validate_environment() -> None:
+    """Report environment misconfiguration at BOOT, not at first request.
+
+    Complements ``validate_auth_config`` (which owns the fail-fast auth rules)
+    with the broader required-variable sweep from ``scripts/check_env.py`` — the
+    audit found nine variables the stack needs that nothing validated, including
+    ``PWA_PAIRING_SECRET``, whose absence silently 401s every driver login.
+
+    Warnings are LOGGED, never fatal: this must not become a new way for the
+    gateway to refuse to start. The genuinely fatal cases are already covered by
+    ``validate_auth_config`` above. Import failures are swallowed so the gateway
+    still boots in a stripped image that has no scripts/ directory.
+    """
+    try:
+        import pathlib
+        import sys as _sys
+
+        _root = str(pathlib.Path(__file__).resolve().parents[1])
+        if _root not in _sys.path:
+            _sys.path.insert(0, _root)
+        from scripts.check_env import env_source, validate  # type: ignore
+
+        errors, warnings = validate(env_source())
+        for e in errors:
+            log.error("env_config_error", detail=e)
+        for w in warnings:
+            log.warning("env_config_warning", detail=w)
+        if errors:
+            log.error(
+                "env_config_incomplete",
+                errors=len(errors),
+                hint="run `make env-check` for the full report",
+            )
+        else:
+            log.info("env_config_ok", warnings=len(warnings))
+    except Exception as exc:  # noqa: BLE001 — diagnostics must never block boot
+        log.debug("env_validation_skipped", error=str(exc))
+
+
+_validate_environment()
 
 # OpenTelemetry: export spans to Jaeger (no-op if otel deps / endpoint absent).
 # instrument_httpx() makes the gateway's outbound proxy calls continue the trace
@@ -235,6 +288,23 @@ async def _lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         log.warning("cfs_ecy_schema_boot_failed", error=str(exc))
 
+    # UC-III gate documents (EIR / PIN / Form-13): mirrors migration 0112 for a dev
+    # DB. Additive; touches nothing existing.
+    try:
+        from . import gate_docs_ext
+        await gate_docs_ext.ensure_gate_doc_schema(cfg.postgres_dsn or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("gate_doc_schema_boot_failed", error=str(exc))
+
+    # UC-III lifecycle bus: hand the live WS hub to services/lifecycle_bus so
+    # cargo/job/gate/yard/scan milestones fan out to the control room in real time
+    # instead of only landing in an event table for polling.
+    try:
+        from services.lifecycle_bus import set_ws_broadcaster
+        set_ws_broadcaster(app.state.gw.ws.broadcast)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("lifecycle_bus_ws_wire_failed", error=str(exc))
+
     # Berthing Reports (module 7): per-terminal vessel-call tables + lifecycle events +
     # upload ledger. Idempotent, additive — mirrors migration 0036 so a dev DB that never
     # ran it still gets the objects. Read-only wrt every existing table.
@@ -303,6 +373,42 @@ async def _lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         log.warning("td_upload_schema_boot_failed", error=str(exc))
 
+    # Weather module (Open-Meteo Weather + Marine): the core.weather_reading audit /
+    # fallback table. Idempotent, additive — mirrors v3 migration 0105 so a dev DB
+    # that never ran it still gets the object. Touches no existing table.
+    try:
+        from . import weather_ext
+        await weather_ext.ensure_weather_schema(cfg.postgres_dsn or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("weather_schema_boot_failed", error=str(exc))
+
+    # Traffic module (TomTom Flow + Incidents): the core.traffic_reading audit /
+    # fallback table. Idempotent, additive — mirrors v3 migration 0107 so a dev DB
+    # that never ran it still gets the object. Touches no existing table.
+    try:
+        from . import traffic_ext
+        await traffic_ext.ensure_traffic_schema(cfg.postgres_dsn or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("traffic_schema_boot_failed", error=str(exc))
+
+    # Air-quality module (OpenAQ): the core.air_quality_readings audit /
+    # fallback table. Idempotent, additive — mirrors v3 migration 0108 so a dev DB
+    # that never ran it still gets the object. Touches no existing table.
+    try:
+        from . import air_quality_ext
+        await air_quality_ext.ensure_air_quality_schema(cfg.postgres_dsn or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("air_quality_schema_boot_failed", error=str(exc))
+
+    # Logistics module (ULIP): the core.logistics_event / logistics_tracking /
+    # ulip_api_audit tables. Idempotent, additive — mirrors v3 migration 0109 so
+    # a dev DB that never ran it still gets the objects. Touches no existing table.
+    try:
+        from . import logistics_ext
+        await logistics_ext.ensure_logistics_schema(cfg.postgres_dsn or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("logistics_schema_boot_failed", error=str(exc))
+
     # Vehicle Master (fleet registry): ensure the table, then migrate the truck-sim
     # fleet into it (idempotent, never clobbering an operator edit) so no existing
     # vehicle disappears when the master is introduced. Best-effort — a sim/DB blip
@@ -368,9 +474,57 @@ async def _lifespan(app: FastAPI):
         state, loop, TOPIC_ANPR, "anpr", "jnpa-gateway-anpr",
         persist=audit.persist_anpr_read, broadcast=False,
     )
-    alert_pump.start()
-    traffic_pump.start()
-    anpr_pump.start()
+    # Cross-twin TAS metering (XT-2): consume UC-II DeferredArrivalWindow
+    # events and apply them to the TAS slot book. Also broadcast on WS as
+    # type=tas so both frontends see the re-slot live.
+    async def _apply_deferred(value) -> None:
+        from . import crosstwin
+        try:
+            win = DeferredArrivalWindow(**value)
+        except Exception as exc:  # noqa: BLE001 - reject malformed, keep pump alive
+            log.warning("deferred_arrival_invalid", error=str(exc))
+            return
+        # One applier for both transports: persists to RDS, fans out to the
+        # dashboard, and pushes the drivers whose slots moved.
+        await crosstwin.apply(app.state.gw, win, transport="KAFKA")
+
+    deferred_pump = KafkaPump(
+        state, loop, TOPIC_DEFERRED_ARRIVAL, "tas", "jnpa-gateway-tas",
+        persist=_apply_deferred,
+    )
+
+    # Start the pumps ONLY when a broker is actually configured — the same guard
+    # services/lifecycle_bus.py applies to its producer, for the same reason.
+    #
+    # Each KafkaPump runs a daemon thread that retries forever, and every retry
+    # builds a fresh librdkafka Consumer, which itself spawns several internal
+    # threads. In a process with no broker that is pure waste; in the TEST SUITE
+    # it is fatal. Each TestClient(app) triggers this startup, so a whole-suite
+    # run accumulated four leaking pumps per client across ~80 test files until
+    # the process died with "RuntimeError: can't start new thread" — 20 failures
+    # and 36 errors that all passed when the same files ran in isolation.
+    #
+    # The pumps are unconditionally started in every real deployment, because
+    # compose and the prod env-file always set KAFKA_BROKERS.
+    _pumps = (alert_pump, traffic_pump, anpr_pump, deferred_pump)
+    if kafka_configured():
+        for _p in _pumps:
+            _p.start()
+        log.info("kafka_pumps_started", count=len(_pumps))
+    else:
+        log.info(
+            "kafka_pumps_skipped",
+            reason="no KAFKA_BROKERS configured",
+            detail="set KAFKA_BROKERS to enable the alert/traffic/anpr/tas pumps",
+        )
+
+    # Replay persisted cross-twin windows into the in-memory slot book so a
+    # restart does not silently drop UC-II's metering (migration 0115).
+    try:
+        from . import crosstwin
+        await crosstwin.restore(app.state.gw)
+    except Exception as exc:  # noqa: BLE001 - boot must never depend on this
+        log.warning("crosstwin_restore_failed", error=str(exc))
 
     # MQTT truck-position pump (async task) — best-effort.
     mqtt_task = asyncio.create_task(mqtt_truck_pump(state, stop), name="mqtt-truck-pump")
@@ -382,6 +536,7 @@ async def _lifespan(app: FastAPI):
         alert_pump.stop()
         traffic_pump.stop()
         anpr_pump.stop()
+        deferred_pump.stop()
         mqtt_task.cancel()
         try:
             await mqtt_task
@@ -532,9 +687,14 @@ app.include_router(nvr.router)               # NVR device/stream integration
 app.include_router(trt.router)               # ECY TRT KPI
 app.include_router(cfs_ecy.router)           # CFS-ECY CODECO gate movements (module 13, read-only)
 app.include_router(customs.router)           # Customs docs (module 5: IGM/OOC/SMTP/RMS/LEO/SB)
+app.include_router(gate_documents.router)    # UC-III gate documents (EIR / PIN ticket / Form-13 + TAT)
+app.include_router(container_job.router)     # UC-III job spine: assignment + gate/yard/scan events
+app.include_router(driver_jobs.router)       # DRIVER-scoped job surface for the mobile PWA
+app.include_router(export_lifecycle.router)  # export leg: booking -> Form13 -> VGM -> LEO -> COPRAR -> loaded
 app.include_router(shipping_lines.router)     # Shipping Lines (module 4: IAL/EAL/EDO, read-only + import)
 app.include_router(berthing.router)          # Berthing Reports (module 7: per-terminal vessel calls + upload)
-app.include_router(marine_calls.router)      # UC-I Marine vessel-call spine (module: marine, read-only)
+app.include_router(marine_calls.router)         # UC-I Marine vessel-call spine (module: marine, read-only)
+app.include_router(marine_live_vessels.router)  # Live AIS vessel positions (MarineTraffic proxy, no DB write)
 app.include_router(marine_imports.router)    # UC-I Marine Data-Upload sub-module (CSV: validate/upload/history)
 app.include_router(marine_pilotage.router)   # UC-I Marine pilotage movements (read-only; XLSX via marine_imports)
 app.include_router(marine_manual_pilot.router)  # UC-I Marine manual pilot assignment (operator fallback; additive paths only)
@@ -551,6 +711,10 @@ app.include_router(reefer.router)            # reefer availability
 app.include_router(pdp.router)               # PDP adapter
 app.include_router(ldb.router)               # LDB adapter
 app.include_router(rms_tas.router)           # RMS-TAS persisted appointment surface
+app.include_router(weather.router)           # Open-Meteo weather + marine (LIVE→CACHED→SYNTHETIC)
+app.include_router(air_quality.router)       # OpenAQ air quality (LIVE→CACHED→DATABASE→SYNTHETIC)
+app.include_router(bhuvan.router)            # Bhuvan WMS geospatial layer (ISRO/NRSC, control-plane only)
+app.include_router(logistics.router)         # ULIP logistics intelligence (LIVE→CACHED→DATABASE→FALLBACK)
 app.include_router(double_trip.router)       # TT double-trip workflow
 app.include_router(ws.router)
 app.include_router(checkin.router)
@@ -590,7 +754,8 @@ async def root() -> dict:
                  "/api/gates", "/api/corridor", "/api/zones", "/api/push",
                  "/api/reports/police", "/api/empty", "/api/carbon",
                  "/api/gate-data", "/api/identity", "/api/parking",
-                 "/api/debug/decisions", "/api/ws", "/checkin"],
+                 "/api/debug/decisions", "/api/ws", "/checkin",
+                 "/api/marine/vessels"],
     }
 
 

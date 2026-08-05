@@ -172,7 +172,15 @@ class CustomsService:
             "records": sum(r["record_count"] for r in results),
             "imported": sum(r["imported_count"] for r in results),
         }
-        return {"root": root, "totals": totals, "results": results}
+        # Auto-reconcile: without this the imported customs facts (OOC/RMS) never
+        # reach core.cargo.customs_status in a running system (manual-only before).
+        reconcile: Optional[dict] = None
+        if totals["succeeded"]:
+            try:
+                reconcile = await self.reconcile_cargo()
+            except Exception as exc:  # noqa: BLE001 — reconcile must never fail an import
+                log.warning("customs.auto_reconcile_failed", error=str(exc))
+        return {"root": root, "totals": totals, "results": results, "reconcile": reconcile}
 
     @staticmethod
     def _discover(root: str) -> list[str]:
@@ -197,6 +205,26 @@ class CustomsService:
         return await self.import_directory(root)
 
     # --------------------------------------------------- cargo binding (workflow)
+    async def materialize_cargo(self, *, igm_no: Optional[str] = None,
+                                limit: int = 5000, reconcile: bool = True) -> dict:
+        """Materialise manifest containers into the cargo lifecycle, then bind
+        their customs facts.
+
+        This is the missing IGM -> Cargo step. It runs the creation pass and then
+        (unless ``reconcile=False``) the EXISTING reconcile pass, so a single call
+        takes a freshly imported IGM all the way to correct customs_status. Each
+        pass is independently idempotent, so re-running changes nothing.
+        """
+        t0 = perf_counter()
+        created = await self._repo.materialize_cargo_from_igm(igm_no=igm_no, limit=limit)
+        for cn in created["sample"]:
+            await self._safe_event("cargo.materialized", container_no=cn,
+                                   payload={"source": "IGM", "igm_no": igm_no})
+        bound = await self.reconcile_cargo() if reconcile else None
+        log.info("customs.materialize", igm_no=igm_no, created=created["created"],
+                 candidates=created["candidates"], latency_ms=self._ms(t0))
+        return {**created, "reconciled": bound}
+
     async def reconcile_cargo(self) -> dict:
         """Apply the customs → cargo workflow: drive core.cargo.customs_status from the
         imported customs documents (Out-Of-Charge -> CLEARED; RMS scan selection ->
@@ -304,6 +332,9 @@ class CustomsService:
     async def count_ooc(self, *, filters):
         return await self._repo.count_ooc(filters=filters)
 
+    async def ooc_detail(self, be_no: str):
+        return await self._repo.ooc_detail(be_no)
+
     async def list_smtp(self, *, filters, limit, offset):
         return await self._repo.list_smtp(filters=filters, limit=limit, offset=offset)
 
@@ -315,6 +346,12 @@ class CustomsService:
 
     async def count_rms(self, *, filters):
         return await self._repo.count_rms(filters=filters)
+
+    async def list_rms_containers(self, *, filters, limit, offset):
+        return await self._repo.list_rms_containers(filters=filters, limit=limit, offset=offset)
+
+    async def count_rms_containers(self, *, filters):
+        return await self._repo.count_rms_containers(filters=filters)
 
     async def list_leo(self, *, filters, limit, offset):
         return await self._repo.list_leo(filters=filters, limit=limit, offset=offset)

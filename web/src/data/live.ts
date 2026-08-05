@@ -246,6 +246,11 @@ export class LiveAdapter implements DataAdapter {
       input,
     );
 
+  ldbTruck = (vehicleNumber: string) =>
+    getJson<import("@/lib/types").LdbTruckTrackingResponse>(
+      `/api/ldb/truck/${encodeURIComponent(vehicleNumber.trim().toUpperCase())}`,
+    );
+
   // --- Vehicle Intelligence Identity & Detection ---
   vehicleIdentity = (vehicleNumber: string, image: string) =>
     sendJson<VehicleIdentityResult>(
@@ -306,6 +311,8 @@ export class LiveAdapter implements DataAdapter {
         dataset_breakdown?: OcrEval["dataset_breakdown"];
         data_mode?: OcrEval["data_mode"];
         metrics_synthetic?: boolean;
+        capability?: OcrEval["capability"];
+        accuracy_reportable?: boolean;
       }>("/api/anpr/eval");
       // Prefer the explicit per-condition accuracy; fall back to the combined %.
       const acc =
@@ -328,6 +335,10 @@ export class LiveAdapter implements DataAdapter {
         dataset_breakdown: d.dataset_breakdown,
         data_mode: d.data_mode,
         metrics_synthetic: d.metrics_synthetic,
+        capability: d.capability,
+        // Default to the honest reading when the gateway predates this field:
+        // if the engine is degraded, the numbers are not reportable.
+        accuracy_reportable: d.accuracy_reportable ?? !d.degraded,
       };
     } catch {
       return null;

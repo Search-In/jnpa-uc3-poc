@@ -62,6 +62,9 @@ class ImportResponse(BaseModel):
     root: str
     totals: ImportTotals
     results: List[Dict[str, Any]]
+    # Auto-reconcile outcome (customs facts -> core.cargo.customs_status); None
+    # when nothing new was imported or reconcile was skipped.
+    reconcile: Optional[Dict[str, Any]] = None
 
 
 def _page(items: List[dict], total: int, limit: int, offset: int, response: Response) -> Page:
@@ -149,6 +152,17 @@ async def list_ooc(
     return _page(items, total, limit, offset, response)
 
 
+@router.get("/ooc/{be_no}/items", summary="One Bill of Entry: OOC facts, containers and invoice items")
+async def ooc_detail(be_no: str, svc: CustomsService = Depends(get_service)) -> Dict[str, Any]:
+    """Everything behind one BE — the out-of-charge grant, the containers it covers
+    and every invoice line item (description, HS code, CIF/assessable value)."""
+    view = await svc.ooc_detail(be_no)
+    if view.get("ooc") is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail={"error": "bill_of_entry_not_found", "be_no": be_no})
+    return view
+
+
 # ---------------------------------------------------------------------- SMTP
 @router.get("/smtp", response_model=Page, summary="Sub-Manifest Transhipment Permits (CHPOI13)")
 async def list_smtp(
@@ -178,6 +192,29 @@ async def list_rms(
     filters = {"igm_no": igm_no}
     items = await svc.list_rms(filters=filters, limit=limit, offset=offset)
     total = await svc.count_rms(filters=filters)
+    return _page(items, total, limit, offset, response)
+
+
+@router.get("/rms/{igm_no}/containers", response_model=Page,
+            summary="Selected containers of an RMS scan list (scanner routing facts)")
+async def list_rms_containers(
+    igm_no: str,
+    response: Response,
+    machine_type: Optional[str] = Query(None, description="scanner machine class: D (drive-through) / M (mobile) / F (fixed)"),
+    scan_location: Optional[str] = Query(None, description="scanner location code contains-match, e.g. INNSA1RSDT02"),
+    container_no: Optional[str] = None,
+    limit: int = Query(200, ge=1, le=2000),
+    offset: int = Query(0, ge=0),
+    svc: CustomsService = Depends(get_service),
+) -> Page:
+    if not str(igm_no).strip().isdigit():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail={"error": "invalid_igm_no", "igm_no": igm_no,
+                                    "detail": "igm_no must be numeric"})
+    filters = {"igm_no": igm_no, "machine_type": machine_type,
+               "scan_location": scan_location, "container_no": container_no}
+    items = await svc.list_rms_containers(filters=filters, limit=limit, offset=offset)
+    total = await svc.count_rms_containers(filters=filters)
     return _page(items, total, limit, offset, response)
 
 
@@ -259,3 +296,29 @@ async def reconcile(svc: CustomsService = Depends(get_service)) -> Dict[str, Any
     scan selection marks it UNDER_INSPECTION — only for containers already in core.cargo.
     Idempotent; emits customs events + raises scan-hold notifications on the existing feed."""
     return await svc.reconcile_cargo()
+
+
+@router.post("/materialize", summary="Create cargo rows for manifested containers (IGM -> Cargo)")
+async def materialize(
+    igm_no: Optional[str] = Query(default=None,
+                                  description="restrict to one IGM; omit for every manifest"),
+    limit: int = Query(default=5000, ge=1, le=20000),
+    reconcile_after: bool = Query(default=True,
+                                  description="also run /reconcile so customs_status binds"),
+    svc: CustomsService = Depends(get_service),
+) -> Dict[str, Any]:
+    """Close the IGM -> Cargo gap: give every manifested container a cargo row.
+
+    Without this step the import lifecycle could not start — core.igm_line_container
+    held thousands of real manifested boxes while core.cargo held a handful, so
+    ``/reconcile`` (which only updates rows that already exist) had nothing to
+    bind and no container could be discharged, yard-assigned, verified or
+    released.
+
+    Idempotent: rows are inserted ON CONFLICT DO NOTHING, so a second call creates
+    nothing and never disturbs a container already moving through the yard. Every
+    new row starts at ``CREATED``/``PENDING`` — the state machine is still walked
+    step by step, nothing is fast-forwarded.
+    """
+    return await svc.materialize_cargo(igm_no=igm_no, limit=limit,
+                                       reconcile=reconcile_after)

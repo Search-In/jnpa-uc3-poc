@@ -118,7 +118,10 @@ export function Shell({ children, onResetBaseline, resetDisabled }: ShellProps) 
       {/* ---- Body: sidebar + content ----------------------------------- */}
       <div className="flex min-h-0 flex-1">
         <Sidebar />
-        <main className="min-h-0 min-w-0 flex-1 overflow-hidden">{children}</main>
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          <MockModeBanner />
+          <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
+        </main>
       </div>
     </div>
   );
@@ -260,6 +263,26 @@ function NavLeafLink({ leaf, nested }: { leaf: NavLeaf; nested?: boolean }) {
 function itemVisible(item: NavItem): boolean {
   if (item.kind === "leaf") return canSeeScreen(item.to);
   return item.children.some((c) => canSeeScreen(c.to));
+}
+
+/**
+ * Full-width MOCK banner. The sidebar "SIM" pill is easy to miss, and a mock
+ * build fabricates near-target KPIs — demoing it unnoticed would misrepresent
+ * the system. A production build (`npm run build`) is LIVE by default, so this
+ * banner never appears in a client demo.
+ */
+function MockModeBanner() {
+  if (DATA_MODE === "live") return null;
+  return (
+    <div
+      role="status"
+      className="flex items-center justify-center gap-2 bg-amber-500/15 px-4 py-1.5 text-[11px] font-semibold text-amber-700 dark:text-amber-400"
+    >
+      <span className="h-1.5 w-1.5 rounded-full bg-amber-500" aria-hidden />
+      DEMO DATA (MOCK) — figures on adapter-backed screens are simulated, not from the database. Run
+      a production build for live data.
+    </div>
+  );
 }
 
 /** Small "data source" badge in the sidebar footer (LIVE = gateway, SIM = mock). */

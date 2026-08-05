@@ -10,7 +10,7 @@ import type {
   TruckEnvelope,
   VahanEnvelope,
 } from "./types";
-import { getToken, setToken, tokenNeedsRefresh } from "./device";
+import { getPairing, getToken, setToken, tokenNeedsRefresh } from "./device";
 
 // Gateway base URL. Empty by default (same-origin: the Vite dev proxy or the
 // web/ nginx at /pwa forwards /api -> gateway). Set VITE_GATEWAY_URL at build
@@ -21,10 +21,16 @@ export const API_BASE = (import.meta.env.VITE_GATEWAY_URL || "").replace(/\/$/, 
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getToken();
+  // Send the paired device on every request. With AUTH_ENABLED=true the JWT's
+  // device_id claim wins and this is ignored; with auth OFF (the demo profile)
+  // it is what scopes /api/driver/* to THIS driver — without it the gateway had
+  // no way to tell one driver's PWA from another's and returned everyone's jobs.
+  const deviceId = getPairing()?.deviceId;
   const res = await fetch(API_BASE + path, {
     headers: {
       "content-type": "application/json",
       ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(deviceId ? { "X-Device-Id": deviceId } : {}),
       ...(init?.headers || {}),
     },
     ...init,
@@ -149,6 +155,37 @@ export const api = {
       return null;
     }
   },
+
+  // --- UC-III assigned jobs (driver-scoped: the gateway resolves "mine" from the
+  // device binding on the token, never from client input) ---
+  myJobs: (includeClosed = false) =>
+    http<{ items: DriverJob[]; count: number; total: number; scope: string }>(
+      `/api/driver/jobs?include_closed=${includeClosed ? "true" : "false"}`,
+    ),
+  myJob: (jobId: number) =>
+    http<DriverJob & { events: DriverJobEvent[] }>(`/api/driver/jobs/${jobId}`),
+  jobAccept: (jobId: number) =>
+    http<{ job: DriverJob }>(`/api/driver/jobs/${jobId}/accept`, { method: "POST" }),
+  jobGateArrival: (jobId: number, gateId?: string) =>
+    http<{ gate_event: unknown; job: DriverJob | null }>(`/api/driver/jobs/${jobId}/gate-arrival`, {
+      method: "POST",
+      body: JSON.stringify({ gate_id: gateId }),
+    }),
+  jobPickup: (jobId: number, yardLocation?: string) =>
+    http<{ movement: unknown; job: DriverJob | null }>(`/api/driver/jobs/${jobId}/pickup`, {
+      method: "POST",
+      body: JSON.stringify({ yard_location: yardLocation }),
+    }),
+  jobDrop: (jobId: number, yardLocation?: string) =>
+    http<{ movement: unknown; job: DriverJob | null }>(`/api/driver/jobs/${jobId}/drop`, {
+      method: "POST",
+      body: JSON.stringify({ yard_location: yardLocation }),
+    }),
+  jobComplete: (jobId: number, notes?: string) =>
+    http<{ job: DriverJob }>(`/api/driver/jobs/${jobId}/complete`, {
+      method: "POST",
+      body: JSON.stringify({ notes }),
+    }),
 
   // --- geometry for the mini-map ---
   gates: () => http<{ gates: Gate[] }>("/api/gates"),
@@ -320,3 +357,41 @@ export const api = {
       },
     ),
 };
+
+// ---------------------------------------------------------------- UC-III jobs
+export type DriverJobStatus =
+  | "ASSIGNED"
+  | "ACCEPTED"
+  | "AT_GATE"
+  | "IN_YARD"
+  | "PICKED_UP"
+  | "DROPPED"
+  | "COMPLETED"
+  | "CANCELLED";
+
+export interface DriverJob {
+  id: number;
+  container_number: string | null;
+  group_code: string | null;
+  vehicle_id: string;
+  vehicle_no: string | null;
+  driver_id: string | null;
+  move_type: string;
+  document_type: string | null;
+  document_reference: string | null;
+  terminal: string | null;
+  gate: string | null;
+  status: DriverJobStatus;
+  assigned_at: string;
+  accepted_at: string | null;
+  completed_at: string | null;
+  notes: string | null;
+}
+
+export interface DriverJobEvent {
+  id: number;
+  event: string;
+  old_status: string | null;
+  new_status: string | null;
+  created_at: string;
+}

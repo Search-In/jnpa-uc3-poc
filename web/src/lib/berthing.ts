@@ -318,7 +318,9 @@ export function classifyField(row: BerthingRow, field: BerthingField): FieldVerd
       tone: "neutral",
       hint: `${FIELD_LABEL[field]} is recorded at ${dueAt.replace(/_/g, " ").toLowerCase()}; this call is ${String(
         row.status ?? "not yet started",
-      ).replace(/_/g, " ").toLowerCase()}.`,
+      )
+        .replace(/_/g, " ")
+        .toLowerCase()}.`,
     };
   }
 

@@ -490,9 +490,7 @@ function QueueRow({
     <tr className="border-b border-border/50 hover:bg-muted/40">
       <td className="px-4 py-2 font-mono text-xs">{truck.device_id}</td>
       <td className="px-4 py-2 font-mono text-xs">{truck.plate ?? "—"}</td>
-      <td className="px-4 py-2">
-        {truck.gate_id ? <GateChip gate={truck.gate_id} /> : "—"}
-      </td>
+      <td className="px-4 py-2">{truck.gate_id ? <GateChip gate={truck.gate_id} /> : "—"}</td>
       <td className="px-4 py-2 tabular-nums">{fmtEta(etaSeconds(truck))}</td>
       <td className="px-4 py-2 tabular-nums">{truck.remaining_km.toFixed(1)} km</td>
       <td className="px-4 py-2">

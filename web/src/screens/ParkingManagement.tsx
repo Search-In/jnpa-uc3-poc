@@ -4,7 +4,8 @@
 // via /api/parking/* — no synthetic occupancy. Redesigned onto the DTCCC kit
 // (summary cards, occupancy chart, facilities map, tabbed searchable tables).
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   SquareParking,
@@ -14,6 +15,7 @@ import {
   ParkingCircle,
   Ban,
   CheckCircle2,
+  Snowflake,
 } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api } from "@/lib/api";
@@ -28,9 +30,11 @@ import {
   SegmentedTabs,
   DataTable,
   StatusChip,
+  Embedded,
   type Column,
   type Tone,
 } from "@/components/ui/dtccc";
+import ReeferAvailability from "@/screens/ReeferAvailability";
 import { STATUS } from "@/lib/tokens";
 import { fmtDateTimeIST } from "@/lib/utils";
 import type {
@@ -40,7 +44,9 @@ import type {
   ParkingViolation,
 } from "@/lib/types";
 
-type TabKey = "facilities" | "vehicles" | "history" | "violations";
+type TabKey = "facilities" | "vehicles" | "history" | "violations" | "reefer";
+
+const PARKING_TABS: TabKey[] = ["facilities", "vehicles", "history", "violations", "reefer"];
 
 function statusTone(status?: string | null, freePct?: number | null): Tone {
   if (status === "FULL") return "critical";
@@ -51,29 +57,48 @@ function statusTone(status?: string | null, freePct?: number | null): Tone {
 export default function ParkingManagement() {
   const qc = useQueryClient();
   const { basemap } = useMapSettings();
-  const [tab, setTab] = useState<TabKey>("facilities");
+  // `?tab=` deep-link (Command Center / Demo Console link to ?tab=reefer).
+  const [params, setParams] = useSearchParams();
+  const urlTab = params.get("tab") as TabKey | null;
+  const [tab, setTabState] = useState<TabKey>(
+    urlTab && PARKING_TABS.includes(urlTab) ? urlTab : "facilities",
+  );
+  useEffect(() => {
+    if (urlTab && PARKING_TABS.includes(urlTab) && urlTab !== tab) setTabState(urlTab);
+  }, [urlTab]); // eslint-disable-line react-hooks/exhaustive-deps
+  const setTab = (k: TabKey) => {
+    setTabState(k);
+    const next = new URLSearchParams(params);
+    next.set("tab", k);
+    setParams(next, { replace: true });
+  };
 
-  // Distinct key from the adapter-shaped ["parking-summary"] used by the Live-Ops
-  // ParkingBoard — this one returns the {available,capacity,...} api shape, so a
-  // shared key would let one screen read the other's differently-named fields.
-  const sumQ = useQuery({
-    queryKey: ["parking-summary-mgmt"],
-    queryFn: () => api.parkingSummary(),
-    refetchInterval: 10000,
-  });
   const availQ = useQuery({
     queryKey: ["parking-avail"],
     queryFn: () => api.parkingAvailability(),
-    refetchInterval: 10000,
   });
   const histQ = useQuery({ queryKey: ["parking-hist"], queryFn: () => api.parkingHistory(200) });
   const violQ = useQuery({ queryKey: ["parking-viol"], queryFn: () => api.parkingViolations(200) });
 
-  const s = sumQ.data;
   const facilities = availQ.data?.facilities ?? [];
   const activeVehicles = (histQ.data?.transactions ?? []).filter((t) => t.status === "ACTIVE");
 
-  const utilPct = s && s.capacity ? Math.round((s.occupied / s.capacity) * 100) : 0;
+  // KPI rollup computed from the (already-loaded) per-facility availability data —
+  // the same RDS occupancy the facilities table shows. This removes the fragile
+  // dependency on the /api/parking/summary endpoint, whose fields are named
+  // total_capacity/total_occupied/... (the shared ParkingBoard contract) and so
+  // never matched the capacity/occupied/... this screen read — leaving the cards
+  // blank. Deriving here always yields numbers and can't drift from the table.
+  const kpi = useMemo(() => {
+    const capacity = facilities.reduce((a, f) => a + (f.capacity ?? 0), 0);
+    const occupied = facilities.reduce((a, f) => a + (f.occupied ?? 0), 0);
+    const available = Math.max(capacity - occupied, 0);
+    // Full = a facility with real capacity and zero free slots.
+    const full = facilities.filter((f) => (f.capacity ?? 0) > 0 && (f.available ?? 0) <= 0).length;
+    return { capacity, occupied, available, full };
+  }, [facilities]);
+
+  const utilPct = kpi.capacity ? Math.round((kpi.occupied / kpi.capacity) * 100) : 0;
 
   const chartData = useMemo(
     () =>
@@ -106,7 +131,6 @@ export default function ParkingManagement() {
   );
 
   function refreshAll() {
-    void qc.invalidateQueries({ queryKey: ["parking-summary-mgmt"] });
     void qc.invalidateQueries({ queryKey: ["parking-avail"] });
     void qc.invalidateQueries({ queryKey: ["parking-hist"] });
     void qc.invalidateQueries({ queryKey: ["parking-viol"] });
@@ -118,8 +142,8 @@ export default function ParkingManagement() {
         icon={SquareParking}
         title="Parking Management"
         subtitle="Geo-fenced port holding yards · RDS-backed"
-        updatedAt={sumQ.dataUpdatedAt}
-        isFetching={sumQ.isFetching && !sumQ.isLoading}
+        updatedAt={availQ.dataUpdatedAt}
+        isFetching={availQ.isFetching && !availQ.isLoading}
         onRefresh={refreshAll}
       />
 
@@ -129,31 +153,31 @@ export default function ParkingManagement() {
           <StatCard
             icon={ParkingCircle}
             label="Total Capacity"
-            value={s?.capacity ?? "—"}
+            value={kpi.capacity}
             tone="info"
-            loading={sumQ.isLoading}
+            loading={availQ.isLoading}
           />
           <StatCard
             icon={Car}
             label="Occupied"
-            value={s?.occupied ?? "—"}
+            value={kpi.occupied}
             tone="warn"
-            loading={sumQ.isLoading}
+            loading={availQ.isLoading}
             sub={`${utilPct}% utilised`}
           />
           <StatCard
             icon={CheckCircle2}
             label="Available"
-            value={s?.available ?? "—"}
+            value={kpi.available}
             tone="ok"
-            loading={sumQ.isLoading}
+            loading={availQ.isLoading}
           />
           <StatCard
             icon={Ban}
             label="Full Facilities"
-            value={s?.full ?? "—"}
-            tone={(s?.full ?? 0) > 0 ? "critical" : "ok"}
-            loading={sumQ.isLoading}
+            value={kpi.full}
+            tone={kpi.full > 0 ? "critical" : "ok"}
+            loading={availQ.isLoading}
           />
           <StatCard
             icon={TriangleAlert}
@@ -221,6 +245,7 @@ export default function ParkingManagement() {
               icon: TriangleAlert,
               count: violQ.data?.violations?.length,
             },
+            { key: "reefer", label: "Reefer", icon: Snowflake },
           ]}
         />
         <Card className="overflow-hidden">
@@ -243,6 +268,11 @@ export default function ParkingManagement() {
               status={violQ}
               onRetry={() => violQ.refetch()}
             />
+          )}
+          {tab === "reefer" && (
+            <Embedded>
+              <ReeferAvailability />
+            </Embedded>
           )}
         </Card>
       </div>
@@ -407,6 +437,32 @@ function HistoryTable({
   );
 }
 
+// Severity/duration live in the parking_events.detail jsonb (not dedicated
+// columns). Surface them for the Violations tab, falling back to a sensible
+// severity derived from the event type when the seed didn't record one.
+function violationDurationMin(detail: Record<string, unknown> | null | undefined): number | null {
+  if (!detail) return null;
+  const min = detail.duration_min ?? detail.duration_minutes;
+  if (typeof min === "number") return Math.round(min);
+  const sec = detail.duration_s ?? detail.duration_seconds;
+  if (typeof sec === "number") return Math.round(sec / 60);
+  return null;
+}
+
+function violationSeverity(
+  detail: Record<string, unknown> | null | undefined,
+  eventType: string,
+): "High" | "Medium" | "Low" {
+  const raw = String(detail?.severity ?? "").toLowerCase();
+  if (raw === "high" || raw === "critical") return "High";
+  if (raw === "medium" || raw === "moderate") return "Medium";
+  if (raw === "low") return "Low";
+  // Derive from the event type when the seed carried no explicit severity.
+  if (eventType === "ILLEGAL_PARKING" || eventType === "NO_PARKING_VIOLATION") return "High";
+  if (eventType === "OVERFLOW") return "Medium";
+  return "Low";
+}
+
 function ViolationsTable({
   rows,
   status,
@@ -429,6 +485,27 @@ function ViolationsTable({
       render: (v) => v.vehicle_id ?? "—",
     },
     { key: "facility", header: "Facility", render: (v) => v.facility_id ?? "—" },
+    {
+      key: "duration",
+      header: "Duration",
+      render: (v) => {
+        const mins = violationDurationMin(v.detail);
+        return mins != null ? `${mins}m` : "—";
+      },
+    },
+    {
+      key: "severity",
+      header: "Severity",
+      render: (v) => {
+        const sev = violationSeverity(v.detail, v.event_type);
+        return (
+          <StatusChip
+            label={sev}
+            tone={sev === "High" ? "critical" : sev === "Medium" ? "warn" : "ok"}
+          />
+        );
+      },
+    },
     {
       key: "when",
       header: "When",

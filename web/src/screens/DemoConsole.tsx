@@ -9,7 +9,7 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import {
   SlidersHorizontal,
   Bug,
@@ -21,8 +21,12 @@ import {
   TriangleAlert,
   Play,
   ExternalLink,
+  Rocket,
+  Snowflake,
+  CalendarClock,
 } from "lucide-react";
 import { getAdapter, DATA_MODE } from "@/data";
+import { api } from "@/lib/api";
 import { useSocket } from "@/hooks/SocketContext";
 import type { FaultControlResult, FaultSeverity, FaultState, OperatorBanner } from "@/lib/types";
 import { Card } from "@/components/ui/card";
@@ -82,13 +86,23 @@ function TestingCard({
 export default function DemoConsole() {
   const { t } = useTranslation();
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const { operatorBanner: wsBanner } = useSocket();
   const [localBanner, setLocalBanner] = useState<OperatorBanner | null>(null);
+
+  // UC-III demo shortcuts — seed helpers reuse existing @/lib/api methods, then navigate.
+  const seedReefer = useMutation({
+    mutationFn: () => api.reeferSeed(24),
+    onSuccess: () => navigate("/parking?tab=reefer"),
+  });
+  const seedRms = useMutation({
+    mutationFn: () => api.rmsSeed({ gate_id: "G-NSICT", slots_per_day: 8 }),
+    onSuccess: () => navigate("/health?tab=integrations"),
+  });
 
   const faultsQ = useQuery<FaultState>({
     queryKey: ["faults"],
     queryFn: () => getAdapter().getFaults(),
-    refetchInterval: 3000,
   });
   const force = useMutation({
     mutationFn: ({ domain, rung }: { domain: string; rung: string }) =>
@@ -252,17 +266,30 @@ export default function DemoConsole() {
           subtitle="Model realism probes (RDS-backed metrics)"
         >
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <Probe
-              label={t("demo.ocrAccuracyClear")}
-              loading={ocrQ.isLoading}
-              value={ocrQ.data ? `${(ocrQ.data.clear_accuracy * 100).toFixed(1)}%` : null}
-              met={
-                ocrQ.data
-                  ? (ocrQ.data.target_met ?? ocrQ.data.clear_accuracy >= (ocrQ.data.target ?? 0.95))
-                  : undefined
-              }
-              target={`≥${((ocrQ.data?.target ?? 0.95) * 100).toFixed(0)}%`}
-            />
+            {/*
+              When the ANPR engine is degraded (PaddleOCR absent — the default on
+              an arm64-built image) the accuracy figures measure the
+              template-matching fallback, not the bid stack. Rendering them as
+              "0.0% against a ≥95% target" states that the system was tested and
+              failed; it was never tested. Show the capability instead, and say
+              exactly what is missing.
+            */}
+            {ocrQ.data && ocrQ.data.accuracy_reportable === false ? (
+              <DegradedProbe label={t("demo.ocrAccuracyClear")} capability={ocrQ.data.capability} />
+            ) : (
+              <Probe
+                label={t("demo.ocrAccuracyClear")}
+                loading={ocrQ.isLoading}
+                value={ocrQ.data ? `${(ocrQ.data.clear_accuracy * 100).toFixed(1)}%` : null}
+                met={
+                  ocrQ.data
+                    ? (ocrQ.data.target_met ??
+                      ocrQ.data.clear_accuracy >= (ocrQ.data.target ?? 0.95))
+                    : undefined
+                }
+                target={`≥${((ocrQ.data?.target ?? 0.95) * 100).toFixed(0)}%`}
+              />
+            )}
             <Probe
               label={t("demo.f1ForecastLabel")}
               loading={f1Q.isLoading}
@@ -348,6 +375,57 @@ export default function DemoConsole() {
             </Link>
           </div>
         </TestingCard>
+
+        {/* UC-III Demo Shortcuts */}
+        <TestingCard
+          icon={Rocket}
+          title="UC-III Demo Shortcuts"
+          subtitle="One-click seed + jump to the host screen for the UC-III walkthrough"
+          className="lg:col-span-2"
+        >
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={() => seedReefer.mutate()}
+              disabled={seedReefer.isPending}
+              className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-[13px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
+            >
+              <Snowflake className="h-3.5 w-3.5" />{" "}
+              {seedReefer.isPending ? "Seeding…" : "Seed Reefer Slots"}
+            </button>
+            <button
+              onClick={() => seedRms.mutate()}
+              disabled={seedRms.isPending}
+              className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-[13px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
+            >
+              <CalendarClock className="h-3.5 w-3.5" />{" "}
+              {seedRms.isPending ? "Seeding…" : "Seed RMS-TAS Slots"}
+            </button>
+            <Link
+              to="/alerts?tab=accidents"
+              className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-[13px] font-medium hover:bg-muted"
+            >
+              <TriangleAlert className="h-3.5 w-3.5" /> Open Accident Console
+            </Link>
+            <Link
+              to="/live?tab=trt"
+              className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-[13px] font-medium hover:bg-muted"
+            >
+              <ExternalLink className="h-3.5 w-3.5" /> Open ECY TRT
+            </Link>
+            <Link
+              to="/geofencing?tab=bottlenecks"
+              className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-[13px] font-medium hover:bg-muted"
+            >
+              <ExternalLink className="h-3.5 w-3.5" /> Open Road Bottlenecks
+            </Link>
+            <Link
+              to="/gate-customs"
+              className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-[13px] font-medium hover:bg-muted"
+            >
+              <Camera className="h-3.5 w-3.5" /> Open Camera AI
+            </Link>
+          </div>
+        </TestingCard>
       </div>
 
       {/* KPI deltas */}
@@ -356,6 +434,48 @@ export default function DemoConsole() {
         <KpiStrip />
       </div>
     </PageContainer>
+  );
+}
+
+/**
+ * Capability tile shown INSTEAD of an accuracy number when the ANPR engine is
+ * degraded.
+ *
+ * The honest position is "not measured on this host", not "0.0%". This states
+ * which component is missing and what fixes it, so the presenter has a real
+ * answer to "where is your ANPR accuracy?" rather than a number to defend.
+ */
+function DegradedProbe({
+  label,
+  capability,
+}: {
+  label: string;
+  capability?: import("@/data/types").AnprCapability;
+}) {
+  return (
+    <div
+      className="rounded-lg border p-3"
+      style={{ borderColor: STATUS.warning, backgroundColor: STATUS.warning + "14" }}
+    >
+      <div className="text-base font-bold" style={{ color: STATUS.warning }}>
+        DEGRADED
+      </div>
+      <div className="mt-0.5 text-[11px] text-muted-foreground">{label}</div>
+      <div className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
+        {capability?.reason ??
+          "The evaluated pipeline is not the production stack — accuracy is not measurable on this host."}
+      </div>
+      {capability?.remediation?.length ? (
+        <ul className="mt-1.5 list-disc space-y-0.5 pl-4 text-[10px] leading-snug text-muted-foreground">
+          {capability.remediation.map((r) => (
+            <li key={r}>{r}</li>
+          ))}
+        </ul>
+      ) : null}
+      <div className="mt-1.5">
+        <StatusChip label="accuracy not reported" tone="warn" />
+      </div>
+    </div>
   );
 }
 

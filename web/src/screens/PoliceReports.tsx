@@ -35,6 +35,7 @@ import {
 import { useSocket } from "@/hooks/SocketContext";
 import { getAdapter } from "@/data";
 import { api } from "@/lib/api";
+import { useIncomingSearch } from "@/lib/searchStore";
 import type { PoliceIncident } from "@/lib/types";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -49,9 +50,11 @@ import {
   DataTable,
   FilterSelect,
   StatusChip,
+  Embedded,
   type Column,
   type Tone,
 } from "@/components/ui/dtccc";
+import Accidents from "@/screens/Accidents";
 import { EmptyState } from "@/components/ui/misc";
 import { severityColour } from "@/lib/palette";
 import { STATUS } from "@/lib/tokens";
@@ -80,8 +83,42 @@ function sevTone(sev: string): Tone {
   return "neutral";
 }
 
+// Reports is an ENFORCEMENT screen. Camera AI, NVR, Reefer, Bottlenecks,
+// Integration Health, ECY TRT, Double Trip, Blacklist and Document OCR were all
+// mounted here a second time; each now has exactly one home
+// (/gate-customs, /health, /parking, /geofencing, /truck-ops, /vehicles,
+// /uc3-lifecycle respectively), so the duplicates are removed.
+type Uc3TabKey = "enforcement" | "accident";
+
 export default function PoliceReports() {
+  const [uc3Tab, setUc3Tab] = useState<Uc3TabKey>("enforcement");
+  return (
+    <>
+      <div className="px-4 pt-3">
+        <SegmentedTabs
+          value={uc3Tab}
+          onChange={setUc3Tab}
+          tabs={[
+            { key: "enforcement", label: "Enforcement", icon: ShieldAlert },
+            { key: "accident", label: "Accident Report", icon: FileWarning },
+          ]}
+        />
+      </div>
+      {uc3Tab === "enforcement" && <EnforcementReports />}
+      {uc3Tab === "accident" && (
+        <Embedded>
+          <Accidents />
+        </Embedded>
+      )}
+    </>
+  );
+}
+
+function EnforcementReports() {
   const { t } = useTranslation();
+  // Header Global Search hand-off (entity "case"/"vehicle"). Previously the
+  // omnibox navigated here with ?q= and the query was dropped.
+  const incomingSearch = useIncomingSearch(["case", "vehicle"]);
   const qc = useQueryClient();
   const [tab, setTab] = useState<TabKey>("police");
   const [kind, setKind] = useState("");
@@ -131,7 +168,6 @@ export default function PoliceReports() {
   const q = useQuery({
     queryKey: ["police", filters],
     queryFn: () => getAdapter().policeReport(filters),
-    refetchInterval: 10_000,
   });
   const customsQ = useQuery({
     queryKey: ["customs-history"],
@@ -289,6 +325,7 @@ export default function PoliceReports() {
                 onRetry={() => q.refetch()}
                 onSelect={setSelected}
                 highlightPlate={highlightPlate}
+                initialSearch={incomingSearch}
               />
             </Card>
           </div>
@@ -403,12 +440,14 @@ function IncidentsTable({
   onRetry,
   onSelect,
   highlightPlate,
+  initialSearch,
 }: {
   incidents: PoliceIncident[];
   status: any;
   onRetry: () => void;
   onSelect: (i: PoliceIncident) => void;
   highlightPlate: string | null;
+  initialSearch?: string;
 }) {
   const columns: Column<PoliceIncident>[] = [
     {
@@ -467,6 +506,7 @@ function IncidentsTable({
           .includes(q)
       }
       searchPlaceholder="Search plate / kind / gate…"
+      initialSearch={initialSearch}
       pageSize={12}
       onRowClick={onSelect}
     />

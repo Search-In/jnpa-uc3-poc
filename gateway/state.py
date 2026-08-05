@@ -51,7 +51,7 @@ class GatewayState:
     def __init__(self, cfg: GatewayConfig) -> None:
         self.cfg = cfg
         # Auditing HTTP client: every outbound (external) call is logged to
-        # jnpa.api_audit_log (request/response/status/latency/error). Drop-in for
+        # core.api_audit_log (request/response/status/latency/error). Drop-in for
         # httpx.AsyncClient — behaviour is unchanged, logging is fire-and-forget.
         self.http = AuditingAsyncClient(
             timeout=cfg.upstream_timeout_s, audit_dsn=cfg.postgres_dsn or None
@@ -62,12 +62,31 @@ class GatewayState:
         # Read at the top of each fallback chain to force a rung on demand.
         self.faults = FaultRegistry()
         self.ws = WsHub()
-        # DB-driven geo-fence enforcement engine (reads jnpa.geofence_zones live).
+        # DB-driven geo-fence enforcement engine (reads core.geofence_zone live).
         # Fed by the MQTT truck pump + POST /api/geo/evaluate (mobile location).
         self.geofence = GeofenceEngine(cfg.postgres_dsn or None)
+        # Wire the engine's per-driver push (WebPush + FCM) — best-effort, only
+        # fires when the driver has a registered device. The WS leg is already
+        # covered by the alerts pump, so this adds only the two device transports.
+        self.geofence.set_driver_notifier(self._push_driver_alert)
 
     async def aclose(self) -> None:
         await self.http.aclose()
+
+    # --------------------------------------------------------- driver push seam
+    async def _push_driver_alert(self, driver_id, vehicle_id, advisory: Dict[str, Any]) -> None:
+        """Resolve the driver's registered device and push WebPush + FCM.
+
+        Lazily imports the push router (avoids a state<->notifications import
+        cycle). No-op when no device is registered against the driver/vehicle.
+        """
+        from .routers import push
+
+        device_id = await push.resolve_device(self, driver_id=driver_id, vehicle_id=vehicle_id)
+        if not device_id:
+            return
+        await push.deliver(self, device_id, advisory)
+        await push.deliver_fcm(self, device_id, advisory)
 
     # ----------------------------------------------------------------- faults
     async def broadcast_operator_banner(self) -> dict:

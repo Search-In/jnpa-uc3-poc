@@ -33,13 +33,39 @@ interface PushPayload {
   body?: string;
   device_id?: string;
   gate_id?: string | null;
+  // Deep-link hash (e.g. "#/zones") set by locally-raised notifications
+  // (lib/notify) so notificationclick can route to the right screen.
+  href?: string;
+  category?: string;
   [k: string]: unknown;
+}
+
+// Normalise a raw push payload from either transport into our flat shape.
+// * WebPush (pywebpush) sends our advisory flat: { title, body, type, href, … }.
+// * FCM (firebase-admin, data-only) wraps it: { data: { title, body, … }, from,
+//   … } and may also carry a `notification` block. We flatten both here so the
+//   single push handler renders identically — this is why NO second (Firebase)
+//   service worker is needed.
+function normalize(raw: unknown): PushPayload {
+  const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const isFcm = r.data && typeof r.data === "object";
+  const base = isFcm ? (r.data as Record<string, unknown>) : r;
+  const notif = (
+    r.notification && typeof r.notification === "object"
+      ? (r.notification as Record<string, unknown>)
+      : {}
+  ) as { title?: string; body?: string };
+  return {
+    ...(base as PushPayload),
+    ...(notif.title ? { title: notif.title } : {}),
+    ...(notif.body ? { body: notif.body } : {}),
+  };
 }
 
 self.addEventListener("push", (event: PushEvent) => {
   let data: PushPayload = {};
   try {
-    data = event.data ? (event.data.json() as PushPayload) : {};
+    data = event.data ? normalize(event.data.json()) : {};
   } catch {
     data = { title: "JNPA Trucking", body: event.data?.text() ?? "New advisory" };
   }
@@ -74,13 +100,23 @@ self.addEventListener("push", (event: PushEvent) => {
 self.addEventListener("notificationclick", (event: NotificationEvent) => {
   event.notification.close();
   const data = (event.notification.data || {}) as PushPayload;
-  const target = data.type === "reroute" ? `${BASE}#/reroute` : `${BASE}#/inbox`;
+  // Honour an explicit deep-link hash first (locally-raised notifications), then
+  // fall back to reroute → /reroute, everything else → /inbox.
+  const hash = data.href
+    ? data.href.startsWith("#")
+      ? data.href
+      : `#${data.href}`
+    : data.type === "reroute"
+      ? "#/reroute"
+      : "#/inbox";
+  const target = `${BASE}${hash}`;
 
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
       for (const c of clients) {
         if ("focus" in c) {
-          c.postMessage({ source: "push", frame: data });
+          // Navigate the focused client to the deep-link, then focus it.
+          c.postMessage({ source: "push", frame: data, navigate: hash });
           return c.focus();
         }
       }

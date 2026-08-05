@@ -32,7 +32,7 @@ ETA_PUBLISHED = Counter(
 )
 TELEMETRY_PERSISTED = Counter(
     "truck_telemetry_persisted_total",
-    "Total telemetry rows written to jnpa.truck_telemetry via batched COPY.",
+    "Total telemetry rows written to core.truck_telemetry via batched COPY.",
 )
 PUBLISH_ERRORS = Counter(
     "truck_publish_errors_total",

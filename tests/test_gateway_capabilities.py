@@ -166,4 +166,7 @@ def test_parking_summary_totals(client):
     assert r.status_code == 200
     body = r.json()
     assert body["decision_path"] in {"LIVE", "RDS_DIRECT", "UNAVAILABLE"}
-    assert body["available"] == body["capacity"] - body["occupied"]
+    # Gateway normalises the summary to the frontend ParkingSummary contract
+    # (total_*/full_count) so the web board header populates on the live path.
+    assert body["total_available"] == body["total_capacity"] - body["total_occupied"]
+    assert "full_count" in body and "facilities" in body

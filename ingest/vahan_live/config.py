@@ -36,7 +36,7 @@ class LiveConfig:
     surepass_fastag_url: str = SUREPASS_FASTAG
     upstream_timeout_s: float = 8.0
 
-    # --- Service identity (jnpa.services registry) ---
+    # --- Service identity (core.ulip_service registry) ---
     service_name: str = "vahan"
     service_kind: str = "live"
     base_url: str = "http://vahan-live:8202"

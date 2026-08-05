@@ -11,16 +11,16 @@
 --
 -- Idempotent: each block is guarded so re-running never duplicates.
 -- APPLY: psql "$DSN" -v ON_ERROR_STOP=1 -f scripts/seed_demo_p0.sql
--- Modules: FASTag txns · Driver enrolment · Parking history · Empty-container
+-- Modules: FASTag txns · Driver enrollment · Parking history · Empty-container
 --          allocation history · Scenario timeline.
 -- ===========================================================================
-CREATE SCHEMA IF NOT EXISTS jnpa;
-SET search_path TO jnpa, public;
+CREATE SCHEMA IF NOT EXISTS core;
+SET search_path TO core, public;
 
 -- 1. FASTag transactions ----------------------------------------------------
 -- (Search-driven tab re-fetches from ULIP-SIM live; these rows give the table a
 --  non-empty demo history and satisfy the /api/fastag/health table check.)
-INSERT INTO jnpa.fastag_transactions
+INSERT INTO core.fastag_transaction
     (id, tag_id, rc_number, seq_no, transaction_date_time, lane_direction,
      toll_plaza_name, vehicle_type, bank_name, status, created_at)
 SELECT gen_random_uuid(), 'TAG-DEMO-001', 'MH04DM0001', 'DEMO-' || g,
@@ -29,10 +29,10 @@ SELECT gen_random_uuid(), 'TAG-DEMO-001', 'MH04DM0001', 'DEMO-' || g,
        'JNPA Toll Plaza (DEMO)', 'VC4', 'SIM DEMO BANK', 'SUCCESS',
        now() - (g || ' hours')::interval
 FROM generate_series(1, 8) AS g
-WHERE NOT EXISTS (SELECT 1 FROM jnpa.fastag_transactions WHERE rc_number = 'MH04DM0001');
+WHERE NOT EXISTS (SELECT 1 FROM core.fastag_transaction WHERE rc_number = 'MH04DM0001');
 
--- 2. Driver enrolment (create table if the service hasn't yet) ---------------
-CREATE TABLE IF NOT EXISTS jnpa.driver_enrollments (
+-- 2. Driver enrollment (create table if the service hasn't yet) ---------------
+CREATE TABLE IF NOT EXISTS core.driver_enrollment (
     driver_id         text PRIMARY KEY,
     name              text NOT NULL,
     license_no        text,
@@ -57,9 +57,9 @@ CREATE TABLE IF NOT EXISTS jnpa.driver_enrollments (
     updated_at        timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_driver_enrol_status
-    ON jnpa.driver_enrollments (status, submitted_at DESC);
+    ON core.driver_enrollment (status, submitted_at DESC);
 
-INSERT INTO jnpa.driver_enrollments
+INSERT INTO core.driver_enrollment
     (driver_id, name, license_no, mobile, vehicle_no, aadhaar_masked,
      status, consent, consent_at, provider, submitted_at)
 SELECT 'DRV-DEMO-' || g,
@@ -69,57 +69,57 @@ SELECT 'DRV-DEMO-' || g,
        'XXXX-XXXX-' || (1000 + g), 'PENDING', true, now(), 'demo',
        now() - (g || ' hours')::interval
 FROM generate_series(1, 5) AS g
-WHERE NOT EXISTS (SELECT 1 FROM jnpa.driver_enrollments WHERE driver_id LIKE 'DRV-DEMO-%');
+WHERE NOT EXISTS (SELECT 1 FROM core.driver_enrollment WHERE driver_id LIKE 'DRV-DEMO-%');
 
 -- 3. Parking history (COMPLETED transactions + events) ----------------------
 -- Uses the first real facility so FK/geo joins resolve; occupancy stays RDS-real
 -- (these are COMPLETED, so they don't inflate the live occupied count).
-INSERT INTO jnpa.parking_transactions
+INSERT INTO core.parking_transaction
     (vehicle_id, driver_id, facility_id, slot_id, entry_time, exit_time,
      duration, status, created_at)
 SELECT 'MH04DM' || lpad(g::text, 4, '0'), 'DRV-DEMO-' || ((g % 5) + 1),
-       (SELECT id FROM jnpa.parking_facilities ORDER BY id LIMIT 1),
+       (SELECT id FROM core.parking_facility ORDER BY id LIMIT 1),
        NULL,
        now() - ((g * 3) || ' hours')::interval,
        now() - ((g * 3 - 2) || ' hours')::interval,
        (2 || ' hours')::interval, 'COMPLETED',
        now() - ((g * 3) || ' hours')::interval
 FROM generate_series(1, 8) AS g
-WHERE NOT EXISTS (SELECT 1 FROM jnpa.parking_transactions WHERE vehicle_id LIKE 'MH04DM%');
+WHERE NOT EXISTS (SELECT 1 FROM core.parking_transaction WHERE vehicle_id LIKE 'MH04DM%');
 
-INSERT INTO jnpa.parking_events
+INSERT INTO core.parking_event
     (event_type, vehicle_id, driver_id, facility_id, slot_id, detail, created_at)
 SELECT (ARRAY['ALLOCATION','RELEASE'])[1 + (g % 2)],
        'MH04DM' || lpad(g::text, 4, '0'), 'DRV-DEMO-' || ((g % 5) + 1),
-       (SELECT id FROM jnpa.parking_facilities ORDER BY id LIMIT 1),
+       (SELECT id FROM core.parking_facility ORDER BY id LIMIT 1),
        NULL, '{"source":"DEMO","sim":true}'::jsonb,
        now() - ((g * 3) || ' hours')::interval
 FROM generate_series(1, 6) AS g
 WHERE NOT EXISTS (
-    SELECT 1 FROM jnpa.parking_events
+    SELECT 1 FROM core.parking_event
     WHERE detail->>'source' = 'DEMO' AND vehicle_id LIKE 'MH04DM%');
 
 -- 4. Empty-container allocation history --------------------------------------
-INSERT INTO jnpa.empty_container_allocations
+INSERT INTO core.empty_container_allocation
     (container_id, truck_id, trailer_id, driver_id, shipping_line, cfs, ecd,
      allocation_reason, allocated_at, status)
-SELECT (SELECT container_id FROM jnpa.empty_container_inventory
+SELECT (SELECT container_id FROM core.empty_container_inventory
         ORDER BY container_id LIMIT 1 OFFSET g),
        'TRK-DEMO-' || g, 'TRL-DEMO-' || g, 'DRV-DEMO-' || ((g % 5) + 1),
        'SIM DEMO LINE', 'CFS-DEMO', 'ECD-DEMO', 'DEMO seed allocation',
        now() - (g || ' hours')::interval, 'ALLOCATED'
 FROM generate_series(1, 6) AS g
 WHERE NOT EXISTS (
-    SELECT 1 FROM jnpa.empty_container_allocations WHERE shipping_line = 'SIM DEMO LINE');
+    SELECT 1 FROM core.empty_container_allocation WHERE shipping_line = 'SIM DEMO LINE');
 
 -- 5. Scenario timeline (handle + steps) --------------------------------------
-INSERT INTO jnpa.scenario_handles (handle_id, name, status, params, trace_id, started_at, ended_at)
+INSERT INTO core.scenario_handle (handle_id, name, status, params, trace_id, started_at, ended_at)
 SELECT 'demo-tfc1-0001', 'tfc1', 'completed',
        '{"source":"DEMO","sim":true,"gate_id":"G-NSICT"}'::jsonb,
        'demo-trace-0001', now() - interval '30 min', now() - interval '25 min'
-WHERE NOT EXISTS (SELECT 1 FROM jnpa.scenario_handles WHERE handle_id = 'demo-tfc1-0001');
+WHERE NOT EXISTS (SELECT 1 FROM core.scenario_handle WHERE handle_id = 'demo-tfc1-0001');
 
-INSERT INTO jnpa.scenario_steps (handle_id, step_no, ts, title, status, trigger, detail)
+INSERT INTO core.scenario_step (handle_id, step_no, ts, title, status, trigger, detail)
 SELECT 'demo-tfc1-0001', s.step_no, now() - interval '30 min' + (s.step_no || ' min')::interval,
        s.title, s.status, s.trigger, '{"source":"DEMO","sim":true}'::jsonb
 FROM (VALUES
@@ -129,23 +129,23 @@ FROM (VALUES
     (4, 'Congestion re-route advised','info',     'reroute'),
     (5, 'Gate-in completed',          'ok',       'gate_in')
 ) AS s(step_no, title, status, trigger)
-WHERE NOT EXISTS (SELECT 1 FROM jnpa.scenario_steps WHERE handle_id = 'demo-tfc1-0001');
+WHERE NOT EXISTS (SELECT 1 FROM core.scenario_step WHERE handle_id = 'demo-tfc1-0001');
 
 -- Summary of what is now present (demo rows only) ---------------------------
-SELECT 'fastag_transactions' AS table, count(*) FROM jnpa.fastag_transactions WHERE rc_number='MH04DM0001'
-UNION ALL SELECT 'driver_enrollments', count(*) FROM jnpa.driver_enrollments WHERE driver_id LIKE 'DRV-DEMO-%'
-UNION ALL SELECT 'parking_transactions', count(*) FROM jnpa.parking_transactions WHERE vehicle_id LIKE 'MH04DM%'
-UNION ALL SELECT 'parking_events(demo)', count(*) FROM jnpa.parking_events WHERE detail->>'source'='DEMO'
-UNION ALL SELECT 'empty_container_allocations', count(*) FROM jnpa.empty_container_allocations WHERE shipping_line='SIM DEMO LINE'
-UNION ALL SELECT 'scenario_steps', count(*) FROM jnpa.scenario_steps WHERE handle_id='demo-tfc1-0001';
+SELECT 'fastag_transaction' AS table, count(*) FROM core.fastag_transaction WHERE rc_number='MH04DM0001'
+UNION ALL SELECT 'driver_enrollment', count(*) FROM core.driver_enrollment WHERE driver_id LIKE 'DRV-DEMO-%'
+UNION ALL SELECT 'parking_transaction', count(*) FROM core.parking_transaction WHERE vehicle_id LIKE 'MH04DM%'
+UNION ALL SELECT 'parking_event(demo)', count(*) FROM core.parking_event WHERE detail->>'source'='DEMO'
+UNION ALL SELECT 'empty_container_allocation', count(*) FROM core.empty_container_allocation WHERE shipping_line='SIM DEMO LINE'
+UNION ALL SELECT 'scenario_step', count(*) FROM core.scenario_step WHERE handle_id='demo-tfc1-0001';
 
 -- ---------------------------------------------------------------------------
 -- To REMOVE all P0 demo seed data (rollback):
---   DELETE FROM jnpa.scenario_steps       WHERE handle_id='demo-tfc1-0001';
---   DELETE FROM jnpa.scenario_handles     WHERE handle_id='demo-tfc1-0001';
---   DELETE FROM jnpa.empty_container_allocations WHERE shipping_line='SIM DEMO LINE';
---   DELETE FROM jnpa.parking_events       WHERE detail->>'source'='DEMO';
---   DELETE FROM jnpa.parking_transactions WHERE vehicle_id LIKE 'MH04DM%';
---   DELETE FROM jnpa.driver_enrollments   WHERE driver_id LIKE 'DRV-DEMO-%';
---   DELETE FROM jnpa.fastag_transactions  WHERE rc_number='MH04DM0001';
+--   DELETE FROM core.scenario_step        WHERE handle_id='demo-tfc1-0001';
+--   DELETE FROM core.scenario_handle      WHERE handle_id='demo-tfc1-0001';
+--   DELETE FROM core.empty_container_allocation WHERE shipping_line='SIM DEMO LINE';
+--   DELETE FROM core.parking_event        WHERE detail->>'source'='DEMO';
+--   DELETE FROM core.parking_transaction  WHERE vehicle_id LIKE 'MH04DM%';
+--   DELETE FROM core.driver_enrollment    WHERE driver_id LIKE 'DRV-DEMO-%';
+--   DELETE FROM core.fastag_transaction   WHERE rc_number='MH04DM0001';
 -- ---------------------------------------------------------------------------

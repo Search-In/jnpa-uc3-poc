@@ -39,7 +39,7 @@ MQTT_TELEMETRY_SUFFIX = "telemetry"
 MQTT_ETA_SUFFIX = "eta"
 KAFKA_TELEMETRY_TOPIC = "truck.telemetry"
 KAFKA_ETA_TOPIC = "truck.eta"
-TELEMETRY_TABLE = "jnpa.truck_telemetry"
+TELEMETRY_TABLE = "core.truck_telemetry"
 # Redis key the dashboard writes congestion to: traffic:segment:{id}:jam_factor
 REDIS_JAM_KEY_FMT = "traffic:segment:{segment_id}:jam_factor"
 
@@ -73,6 +73,7 @@ class TruckConfig:
 
     # --- State machine dwell times (seconds) ---
     gate_queue_dwell_s: float = 120.0    # base AT_GATE_QUEUE dwell (jam-scaled)
+    gate_txn_dwell_s: float = 90.0       # base GATE_TRANSACTION dwell (boom processing)
     inside_port_dwell_s: float = 300.0   # turnaround inside the port
     idle_dwell_s: float = 60.0           # rest at home before next trip
 
@@ -98,7 +99,9 @@ class TruckConfig:
     eta_topic: str = KAFKA_ETA_TOPIC
 
     # --- Postgres / Timescale (plain libpq DSN for asyncpg) ---
-    postgres_dsn: str = "postgresql://postgres:jnpa_pw@postgres:5432/postgres"
+    # Empty by default: set POSTGRES_DSN_LIBPQ (TRUCK_POSTGRES_DSN in compose)
+    # to the RDS jnpa_schema_v3 DSN. There is no local-postgres fallback.
+    postgres_dsn: str = ""
     db_pool_min: int = 1
     db_pool_max: int = 4
     db_batch_max: int = 5000             # rows per COPY flush
@@ -112,7 +115,7 @@ class TruckConfig:
     log_level: str = "INFO"
     use_uvloop: bool = True
 
-    # --- Gate destinations (round-robin); ids mirror jnpa.gates seed rows ---
+    # --- Gate destinations (round-robin); ids mirror core.gate seed rows ---
     gate_ids: Tuple[str, ...] = field(
         default_factory=lambda: ("G-NSICT", "G-JNPCT", "G-NSIGT", "G-BMCT")
     )
@@ -139,6 +142,7 @@ class TruckConfig:
             gps_outlier_prob=_as_float(os.environ.get("TRUCK_GPS_OUTLIER_PROB"), 0.01),
             gps_outlier_m=_as_float(os.environ.get("TRUCK_GPS_OUTLIER_M"), 50.0),
             gate_queue_dwell_s=_as_float(os.environ.get("TRUCK_GATE_DWELL_S"), 120.0),
+            gate_txn_dwell_s=_as_float(os.environ.get("TRUCK_GATE_TXN_DWELL_S"), 90.0),
             inside_port_dwell_s=_as_float(os.environ.get("TRUCK_PORT_DWELL_S"), 300.0),
             idle_dwell_s=_as_float(os.environ.get("TRUCK_IDLE_DWELL_S"), 60.0),
             osrm_base_url=os.environ.get(

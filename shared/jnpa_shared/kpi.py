@@ -58,6 +58,12 @@ class KpiResult:
     direction: Direction
     on_target: bool
     trend: List[float] = field(default_factory=list)
+    # Provenance so the dashboard can badge a KPI honestly: "live" means the
+    # value was aggregated from real event data; "baseline" means no event data
+    # was available yet and the configured baseline is shown as a placeholder.
+    source: Literal["live", "baseline"] = "live"
+    # Number of samples (trips/vehicles) the value was aggregated from.
+    n: int = 0
 
     def to_dict(self) -> dict:
         # camelCase delta to match the web KpiResult contract.
@@ -72,6 +78,8 @@ class KpiResult:
             "direction": self.direction,
             "onTarget": self.on_target,
             "trend": [round(t, 2) for t in self.trend],
+            "source": self.source,
+            "n": self.n,
         }
 
 
@@ -93,12 +101,15 @@ def _delta_pct(value: float, baseline: float, direction: Direction) -> float:
     return raw
 
 
-def compute_kpi(key: str, value: float, trend: Sequence[float] | None = None) -> KpiResult:
+def compute_kpi(key: str, value: float, trend: Sequence[float] | None = None,
+                source: Literal["live", "baseline"] = "live", n: int = 0) -> KpiResult:
     """Build a :class:`KpiResult` for ``key`` from an already-aggregated value.
 
     ``value`` is the current scalar (e.g. mean queue wait in minutes). ``trend``
     is an optional ordered window (oldest -> newest) for the sparkline; if the
-    last element is omitted it is set to ``value``.
+    last element is omitted it is set to ``value``. ``source`` records whether the
+    value came from real event data (``"live"``) or is the configured baseline
+    placeholder (``"baseline"``); ``n`` is the sample count behind it.
     """
     if key not in KPI_TARGETS:
         raise KeyError(f"unknown KPI key: {key!r}")
@@ -117,6 +128,8 @@ def compute_kpi(key: str, value: float, trend: Sequence[float] | None = None) ->
         direction=t.direction,
         on_target=_on_target(value, t.target, t.direction),
         trend=[float(x) for x in series],
+        source=source,
+        n=n,
     )
 
 

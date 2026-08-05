@@ -23,7 +23,7 @@ class CarbonConfig:
     # --- Synthetic AoI fleet (deterministic; used by /rollup) ---
     aoi_fleet_size: int = 200
 
-    # --- Service identity (for jnpa.services registry / dashboards) ---
+    # --- Service identity (for core.ulip_service registry / dashboards) ---
     service_name: str = "carbon"
     service_kind: str = "calc"
     base_url: str = "http://carbon:8340"

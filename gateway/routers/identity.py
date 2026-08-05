@@ -16,17 +16,21 @@ docs/ASSUMPTIONS.md). No real driver biometrics are processed.
 """
 from __future__ import annotations
 
+import re
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from pydantic import BaseModel
 
-from .. import enrollment, objectstore
+from .. import enrollment, fleet, objectstore
 from ..dpdp import audit_identity_access, enforce_dpdp
 from ..logging import get_logger
 from ..mode import allow_base64_image_fallback, allow_synthetic_identity
 from ..metrics import REQUESTS, UPSTREAM_LATENCY
+from ..pii import mask_for_request
 from ..state import GatewayState, get_state
 
 
@@ -199,7 +203,7 @@ async def verify(request: Request, body: Dict[str, Any] = Body(...),
     REQUESTS.labels("identity", "ok").inc()
     audit_identity_access(actor=actor, driver_id=driver_id, purpose=purpose,
                           is_synthetic=is_synthetic, decision=str(result.get("decision", "?")))
-    # Persistent verification audit trail (jnpa.verification_logs).
+    # Persistent verification audit trail (core.verification_log).
     await enrollment.log_verification(
         state.cfg.postgres_dsn, driver_id=driver_id,
         decision=str(result.get("decision", "?")), score=result.get("score"),
@@ -217,7 +221,7 @@ async def identify(request: Request, body: Dict[str, Any] = Body(...),
     """1:N identification — captured face -> embedding -> nearest enrolled driver.
 
     Pipeline: quality + liveness gate (identity /embed) -> ArcFace embedding ->
-    cosine nearest-neighbour over jnpa.driver_faces -> top-1 if >= threshold else
+    cosine nearest-neighbour over core.driver_face -> top-1 if >= threshold else
     UNKNOWN. No manual driver selection. Every attempt is audited.
     """
     from identity.embeddings import cosine  # type: ignore
@@ -298,7 +302,7 @@ async def enrol(request: Request, body: Dict[str, Any] = Body(...),
     """Capture/refresh a driver's reference template (purpose = ENROLMENT).
 
     DPDP-gated like /verify; proxies the identity service, degrading to an
-    in-process synthetic reference so the demo enrols even if the service is down.
+    in-process synthetic reference so the demo enrolls even if the service is down.
     """
     is_synthetic = bool(body.get("is_synthetic", True))
     purpose = enforce_dpdp(purpose=body.get("purpose") or "ENROLMENT", is_synthetic=is_synthetic)
@@ -316,7 +320,7 @@ async def enrol(request: Request, body: Dict[str, Any] = Body(...),
         raise HTTPException(
             status_code=503,
             detail={"error": "identity_service_unavailable", "component": "identity",
-                    "message": "Identity service required to mint the enrolment template"})
+                    "message": "Identity service required to mint the enrollment template"})
     REQUESTS.labels("identity", "ok").inc()
     audit_identity_access(actor=_actor(request), driver_id=driver_id, purpose=purpose,
                           is_synthetic=is_synthetic, decision="ENROLLED")
@@ -326,7 +330,7 @@ async def enrol(request: Request, body: Dict[str, Any] = Body(...),
 
 
 async def _merge_enrolled(state: GatewayState, drivers: list) -> list:
-    """Append ACTIVE master drivers (jnpa.drivers — promoted on approval) to the
+    """Append ACTIVE master drivers (core.driver_identity — promoted on approval) to the
     synthetic gallery so the verification dropdown offers real enrolled drivers too.
     Synthetic ids are kept; enrolled ids are de-duplicated against them."""
     try:
@@ -348,20 +352,30 @@ async def _merge_enrolled(state: GatewayState, drivers: list) -> list:
 
 
 @router.get("/gallery")
-async def gallery(state: GatewayState = Depends(get_state)) -> dict:
+async def gallery(request: Request, state: GatewayState = Depends(get_state)) -> dict:
+    """Enrolled-driver gallery.
+
+    ``_merge_enrolled`` folds REAL enrolled drivers (core.driver_identity, which
+    carries ``license_no``) into the synthetic gallery, so the payload goes
+    through the PII gate — masked unless the caller holds an entitled role.
+    """
     data = await _upstream(state, "GET", "/gallery")
     if data is not None:
         drivers = await _merge_enrolled(state, list(data.get("drivers", [])))
         REQUESTS.labels("identity", "ok").inc()
-        return {"decision_path": "LIVE", **data, "drivers": drivers, "count": len(drivers)}
+        return mask_for_request(
+            request, {"decision_path": "LIVE", **data, "drivers": drivers, "count": len(drivers)},
+            surface="identity.gallery")
     from identity import gallery as gal_mod  # type: ignore
     drivers = await _merge_enrolled(state, [d.public() for d in gal_mod.generate_gallery().values()])
     REQUESTS.labels("identity", "ok").inc()
-    return {"decision_path": "SYNTHETIC", "synthetic": True,
-            "drivers": drivers, "count": len(drivers)}
+    return mask_for_request(
+        request, {"decision_path": "SYNTHETIC", "synthetic": True,
+                  "drivers": drivers, "count": len(drivers)},
+        surface="identity.gallery")
 
 
-# --------------------------------------------------------------------------- enrolment workflow
+# --------------------------------------------------------------------------- enrollment workflow
 # Driver PWA submits a profile + consented reference frames -> PENDING; an admin
 # (DTCCC_ADMIN / CUSTOMS) reviews and approves -> the identity template is minted
 # and the driver becomes ACTIVE (verifiable). DPDP-audited at every step.
@@ -369,7 +383,7 @@ async def gallery(state: GatewayState = Depends(get_state)) -> dict:
 @router.post("/enrol-request")
 async def enrol_request(request: Request, body: Dict[str, Any] = Body(...),
                         state: GatewayState = Depends(get_state)) -> dict:
-    """Driver-side enrolment submission (purpose = ENROLMENT). Stores a PENDING
+    """Driver-side enrollment submission (purpose = ENROLMENT). Stores a PENDING
     request; the driver is NOT activated until an admin approves."""
     is_synthetic = bool(body.get("is_synthetic", True))
     purpose = enforce_dpdp(purpose=body.get("purpose") or "ENROLMENT", is_synthetic=is_synthetic)
@@ -406,17 +420,17 @@ async def enrol_request(request: Request, body: Dict[str, Any] = Body(...),
 @router.get("/enrol-request/{driver_id}")
 async def enrol_request_status(driver_id: str,
                                state: GatewayState = Depends(get_state)) -> dict:
-    """Driver polls their own enrolment status (PENDING / ACTIVE / REJECTED)."""
+    """Driver polls their own enrollment status (PENDING / ACTIVE / REJECTED)."""
     rec = await enrollment.get(state.cfg.postgres_dsn, driver_id, include_faces=False)
     if not rec:
-        raise HTTPException(status_code=404, detail="no enrolment request for this driver")
+        raise HTTPException(status_code=404, detail="no enrollment request for this driver")
     return rec
 
 
 @router.get("/enrollments")
 async def list_enrollments(status: Optional[str] = Query(default=None),
                            state: GatewayState = Depends(get_state)) -> dict:
-    """Admin queue of enrolment requests (summary view, newest first)."""
+    """Admin queue of enrollment requests (summary view, newest first)."""
     items = await enrollment.list_requests(
         state.cfg.postgres_dsn, status=status.upper() if status else None)
     REQUESTS.labels("identity", "ok").inc()
@@ -426,26 +440,116 @@ async def list_enrollments(status: Optional[str] = Query(default=None),
 @router.get("/enrollments/{driver_id}")
 async def enrollment_detail(driver_id: str,
                             state: GatewayState = Depends(get_state)) -> dict:
-    """Full enrolment record incl. the captured reference frames for admin review."""
+    """Full enrollment record incl. the captured reference frames for admin review."""
     rec = await enrollment.get(state.cfg.postgres_dsn, driver_id, include_faces=True)
     if not rec:
-        raise HTTPException(status_code=404, detail="enrolment not found")
+        raise HTTPException(status_code=404, detail="enrollment not found")
     return rec
 
 
 @router.get("/drivers")
 async def list_drivers(state: GatewayState = Depends(get_state)) -> dict:
-    """Active master drivers (jnpa.drivers) — the canonical enrolled identities."""
+    """Active master drivers (core.driver_identity) — the canonical enrolled identities."""
     items = await enrollment.list_active_drivers(state.cfg.postgres_dsn)
     REQUESTS.labels("identity", "ok").inc()
     return {"drivers": items, "count": len(items)}
+
+
+# --------------------------------------------------------------------------- admin driver-profile creation
+# A Control-Room admin (CUSTOMS / DTCCC_ADMIN — enforced by the /api/identity RBAC
+# policy) can create a driver profile directly and assign it a Vehicle ID. This
+# produces a PENDING enrollment (source=ADMIN) that flows through the SAME approval
+# workflow; on approval the driver is promoted to core.driver_identity and the assigned
+# Vehicle ID becomes eligible for PWA login. The vehicle list is the truck fleet;
+# already-assigned vehicles are excluded so an admin can only pick an available one.
+
+_VEHICLE_ID_RE = re.compile(r"^TRK-\d{6}$")
+
+
+class CreateDriverBody(BaseModel):
+    name: str
+    vehicle_no: str
+    license_no: Optional[str] = None
+    mobile: Optional[str] = None
+    emergency_contact: Optional[str] = None
+    driver_id: Optional[str] = None  # optional; auto-generated when absent
+
+
+async def _vehicle_exists(state: GatewayState, vehicle_id: str) -> bool:
+    """True if the Vehicle ID is an ACTIVE vehicle in the Vehicle Master. Assignment
+    no longer reads from the truck-sim: a vehicle must be registered (and ACTIVE) in
+    core.vehicle before a driver can be assigned to it."""
+    return await fleet.vehicle_exists(
+        state.cfg.postgres_dsn, vehicle_id, active_only=True)
+
+
+@router.get("/available-vehicles")
+async def available_vehicles(q: Optional[str] = Query(default=None),
+                             limit: int = Query(default=50, ge=1, le=500),
+                             state: GatewayState = Depends(get_state)) -> dict:
+    """Legacy alias of ``GET /api/vehicles/available`` — kept so existing callers
+    keep working. Sources ACTIVE Vehicle Master entries not already assigned to an
+    active driver / open enrollment (no longer reads the truck-sim directly)."""
+    dsn = state.cfg.postgres_dsn
+    taken = await enrollment.assigned_vehicles(dsn)
+    out = await fleet.list_available(dsn, taken, q=q, limit=limit)
+    REQUESTS.labels("identity", "ok").inc()
+    return {"vehicles": out, "count": len(out)}
+
+
+@router.post("/drivers")
+async def create_driver_profile(request: Request, body: CreateDriverBody,
+                                state: GatewayState = Depends(get_state)) -> dict:
+    """Create an admin-originated driver profile + vehicle assignment (PENDING).
+
+    Validates the vehicle exists and is not already assigned, then records a
+    PENDING enrollment (source=ADMIN). Approval is NOT bypassed — the existing
+    approve endpoint promotes the driver to ACTIVE. Admin-only via RBAC."""
+    actor = _actor(request)
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    vehicle_no = enrollment.normalize_vehicle_no(body.vehicle_no)
+    if not _VEHICLE_ID_RE.match(vehicle_no):
+        raise HTTPException(status_code=400,
+                            detail="vehicle_no must be a valid Vehicle ID, e.g. TRK-000123")
+    if not await _vehicle_exists(state, vehicle_no):
+        raise HTTPException(
+            status_code=404,
+            detail=f"vehicle {vehicle_no} is not a registered ACTIVE vehicle in the "
+                   f"Vehicle Master")
+    conflict = await enrollment.vehicle_assignment_conflict(state.cfg.postgres_dsn, vehicle_no)
+    if conflict:
+        raise HTTPException(status_code=409, detail={
+            "error": "vehicle_already_assigned", "vehicle_no": vehicle_no,
+            "held_by": conflict,
+            "message": f"Vehicle {vehicle_no} is already assigned to "
+                       f"{conflict.get('name') or conflict.get('driver_id')} "
+                       f"({str(conflict.get('kind'))})."})
+    driver_id = (body.driver_id or "").strip() or f"DRV-{uuid.uuid4().hex[:8].upper()}"
+    if await enrollment.get(state.cfg.postgres_dsn, driver_id, include_faces=False):
+        raise HTTPException(status_code=409, detail=f"driver_id {driver_id} already exists")
+
+    rec = await enrollment.submit(
+        state.cfg.postgres_dsn, driver_id=driver_id, name=name,
+        license_no=(body.license_no or "").strip(),
+        mobile=(body.mobile or "").strip(),
+        vehicle_no=vehicle_no,
+        emergency_contact=(body.emergency_contact or "").strip(),
+        consent=False, face_images=[], documents=[],
+        source=enrollment.SOURCE_ADMIN, created_by=actor)
+    REQUESTS.labels("identity", "ok").inc()
+    audit_identity_access(actor=actor, driver_id=driver_id, purpose="ENROLMENT",
+                          is_synthetic=True, decision="ADMIN_CREATED")
+    return {"created": True, "driver_id": driver_id,
+            "status": rec.get("status", enrollment.PENDING), "enrollment": rec}
 
 
 @router.get("/verifications")
 async def verification_log(driver_id: Optional[str] = Query(default=None),
                            limit: int = Query(default=50),
                            state: GatewayState = Depends(get_state)) -> dict:
-    """Verification audit trail (jnpa.verification_logs) — who/decision/score/when."""
+    """Verification audit trail (core.verification_log) — who/decision/score/when."""
     items = await enrollment.recent_verifications(
         state.cfg.postgres_dsn, driver_id=driver_id, limit=min(limit, 500))
     REQUESTS.labels("identity", "ok").inc()
@@ -460,11 +564,40 @@ async def approve_enrollment(driver_id: str, request: Request,
     purpose = enforce_dpdp(purpose="ENROLMENT", is_synthetic=True)
     rec = await enrollment.get(state.cfg.postgres_dsn, driver_id, include_faces=True)
     if not rec:
-        raise HTTPException(status_code=404, detail="enrolment not found")
+        raise HTTPException(status_code=404, detail="enrollment not found")
     faces = rec.get("face_images") or []
     reference_image = faces[0] if faces else rec.get("reference_image")
     if not reference_image:
-        raise HTTPException(status_code=400, detail="no reference frame to enrol")
+        # A PWA submission MUST carry a reference frame (face enrollment is the whole
+        # point). An ADMIN-created profile has none by design: it is approved
+        # "profile-only" — activated + promoted to the master driver table so the
+        # assigned Vehicle ID becomes eligible for PWA login, with no biometric
+        # template. Face enrollment can be completed later from the PWA.
+        if str(rec.get("source") or "").upper() != enrollment.SOURCE_ADMIN:
+            raise HTTPException(status_code=400, detail="no reference frame to enroll")
+        actor = _actor(request)
+        # Promote FIRST: the core.driver_identity insert is what enforces one-active-driver-
+        # per-vehicle (uq_drivers_vehicle_active). If it conflicts we abort before
+        # flipping the enrollment to ACTIVE, so the record never lands in an
+        # inconsistent "ACTIVE enrollment, no driver row" state.
+        try:
+            await enrollment.promote_to_driver(
+                state.cfg.postgres_dsn, rec, actor=actor, photo_url=None,
+                reference_image=None, template_dim=None, provider="admin")
+        except Exception as exc:  # noqa: BLE001 — most likely uq_drivers_vehicle_active
+            log.warning("admin_profile_promote_failed", driver_id=driver_id, error=str(exc))
+            raise HTTPException(
+                status_code=409,
+                detail={"error": "vehicle_already_assigned",
+                        "message": "This vehicle is already assigned to another active "
+                                   "driver; cannot activate."}) from exc
+        updated = await enrollment.mark_active(
+            state.cfg.postgres_dsn, driver_id, actor=actor, photo_url=None,
+            reference_image=None, template_dim=None, provider="admin")
+        REQUESTS.labels("identity", "ok").inc()
+        audit_identity_access(actor=actor, driver_id=driver_id, purpose=purpose,
+                              is_synthetic=True, decision="APPROVED_PROFILE_ONLY")
+        return {"approved": True, "profile_only": True, "enrollment": updated}
 
     # Reference photo -> MinIO (drivers/ bucket). In PRODUCTION object storage is
     # REQUIRED: a failed upload is a hard error (no base64 fallback). In DEV the
@@ -481,7 +614,7 @@ async def approve_enrollment(driver_id: str, request: Request,
     stored_ref = reference_image if allow_base64_image_fallback() else None
 
     # Mint + store the template in the identity service (reuses its /enrol).
-    # overwrite=True: admin approval is the authoritative, deliberate (re-)enrolment.
+    # overwrite=True: admin approval is the authoritative, deliberate (re-)enrollment.
     data = await _upstream(state, "POST", "/enrol", {
         "driver_id": driver_id, "image": reference_image, "photo_url": photo_url,
         "is_synthetic": True, "purpose": "ENROLMENT", "overwrite": True,
@@ -493,7 +626,7 @@ async def approve_enrollment(driver_id: str, request: Request,
             detail={"error": "identity_service_unavailable",
                     "component": "identity",
                     "message": "Identity service must mint the face template before approval"})
-    # Quality gate: the identity service refuses to enrol a poor reference frame.
+    # Quality gate: the identity service refuses to enroll a poor reference frame.
     if data is not None and data.get("enrolled") is False:
         raise HTTPException(
             status_code=422,
@@ -501,7 +634,7 @@ async def approve_enrollment(driver_id: str, request: Request,
                     "reason": data.get("reason"),
                     "quality": data.get("quality"),
                     "message": "Reference frame failed the face-quality check; "
-                               "request re-enrolment with a clearer photo"})
+                               "request re-enrollment with a clearer photo"})
     provider = (data or {}).get("provider", "synthetic")
     dim = (data or {}).get("dim")
 
@@ -509,11 +642,11 @@ async def approve_enrollment(driver_id: str, request: Request,
     updated = await enrollment.mark_active(
         state.cfg.postgres_dsn, driver_id, actor=actor, photo_url=photo_url,
         reference_image=stored_ref, template_dim=dim, provider=provider)
-    # Promote into the canonical master identity table (jnpa.drivers).
+    # Promote into the canonical master identity table (core.driver_identity).
     await enrollment.promote_to_driver(
         state.cfg.postgres_dsn, {**rec, "photo_url": photo_url}, actor=actor,
         photo_url=photo_url, reference_image=stored_ref, template_dim=dim, provider=provider)
-    # Persist the biometric template for 1:N identification (jnpa.driver_faces).
+    # Persist the biometric template for 1:N identification (core.driver_face).
     emb = (data or {}).get("embedding")
     if emb:
         await enrollment.store_face(state.cfg.postgres_dsn, driver_id, emb,
@@ -528,10 +661,10 @@ async def approve_enrollment(driver_id: str, request: Request,
 async def reject_enrollment(driver_id: str, request: Request,
                             body: Dict[str, Any] = Body(default={}),
                             state: GatewayState = Depends(get_state)) -> dict:
-    """Reject an enrolment. The driver may re-submit from the PWA."""
+    """Reject an enrollment. The driver may re-submit from the PWA."""
     rec = await enrollment.get(state.cfg.postgres_dsn, driver_id, include_faces=False)
     if not rec:
-        raise HTTPException(status_code=404, detail="enrolment not found")
+        raise HTTPException(status_code=404, detail="enrollment not found")
     updated = await enrollment.set_status(
         state.cfg.postgres_dsn, driver_id, enrollment.REJECTED,
         actor=_actor(request), reason=str(body.get("reason") or ""))
@@ -546,10 +679,10 @@ async def request_reenrollment(driver_id: str, request: Request,
     """Ask the driver to re-capture and re-submit their reference frames."""
     rec = await enrollment.get(state.cfg.postgres_dsn, driver_id, include_faces=False)
     if not rec:
-        raise HTTPException(status_code=404, detail="enrolment not found")
+        raise HTTPException(status_code=404, detail="enrollment not found")
     updated = await enrollment.set_status(
         state.cfg.postgres_dsn, driver_id, enrollment.REENROLL,
-        actor=_actor(request), reason=str(body.get("reason") or "re-enrolment requested"))
+        actor=_actor(request), reason=str(body.get("reason") or "re-enrollment requested"))
     REQUESTS.labels("identity", "ok").inc()
     return {"reenroll": True, "enrollment": updated}
 

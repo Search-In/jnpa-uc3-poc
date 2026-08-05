@@ -2,7 +2,7 @@
 
 The optimiser already produced probable allocations; this module makes the
 INVENTORY, every ALLOCATION, and the MOVEMENT HISTORY durable in Postgres, and
-reuses the audit-framework TABLES (jnpa.digital_twin_events / jnpa.decision_audit)
+reuses the audit-framework TABLES (core.digital_twin_event / core.decision_audit)
 by writing to them directly — the audit framework CODE is not modified.
 
 Lives inside the bind-mounted empty-container service and builds on the installed
@@ -11,6 +11,8 @@ Lives inside the bind-mounted empty-container service and builds on the installe
 there is no client-side insert burst (kind to a memory-tight Postgres).
 """
 from __future__ import annotations
+
+import os
 
 import json
 from typing import Any, Dict, List, Optional
@@ -25,31 +27,31 @@ log = get_logger("empty_container.persistence")
 _MAX_PER_TYPE = 40
 
 _DDL = """
-CREATE SCHEMA IF NOT EXISTS jnpa;
-CREATE TABLE IF NOT EXISTS jnpa.empty_container_inventory (
+CREATE SCHEMA IF NOT EXISTS core;
+CREATE TABLE IF NOT EXISTS core.empty_container_inventory (
     container_id text PRIMARY KEY, container_type text, location text, owner text,
     availability_status text NOT NULL DEFAULT 'AVAILABLE'
         CHECK (availability_status IN ('AVAILABLE','ALLOCATED','IN_TRANSIT','DELIVERED')),
     updated_at timestamptz NOT NULL DEFAULT now());
-CREATE INDEX IF NOT EXISTS idx_ec_inventory_status ON jnpa.empty_container_inventory (availability_status, container_type);
-CREATE INDEX IF NOT EXISTS idx_ec_inventory_location ON jnpa.empty_container_inventory (location);
-CREATE TABLE IF NOT EXISTS jnpa.empty_container_allocations (
+CREATE INDEX IF NOT EXISTS idx_ec_inventory_status ON core.empty_container_inventory (availability_status, container_type);
+CREATE INDEX IF NOT EXISTS idx_ec_inventory_location ON core.empty_container_inventory (location);
+CREATE TABLE IF NOT EXISTS core.empty_container_allocation (
     id bigserial PRIMARY KEY, container_id text, truck_id text, trailer_id text,
     driver_id text, shipping_line text, cfs text, ecd text, allocation_reason text,
     allocated_at timestamptz NOT NULL DEFAULT now(),
     status text NOT NULL DEFAULT 'ALLOCATED'
         CHECK (status IN ('ALLOCATED','PICKED_UP','IN_TRANSIT','DELIVERED','COMPLETED','CANCELLED')));
-CREATE INDEX IF NOT EXISTS idx_ec_alloc_container ON jnpa.empty_container_allocations (container_id, allocated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_ec_alloc_status ON jnpa.empty_container_allocations (status, allocated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_ec_alloc_ts ON jnpa.empty_container_allocations (allocated_at DESC);
-CREATE TABLE IF NOT EXISTS jnpa.container_movement_history (
+CREATE INDEX IF NOT EXISTS idx_ec_alloc_container ON core.empty_container_allocation (container_id, allocated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ec_alloc_status ON core.empty_container_allocation (status, allocated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ec_alloc_ts ON core.empty_container_allocation (allocated_at DESC);
+CREATE TABLE IF NOT EXISTS core.container_movement_history (
     id bigserial PRIMARY KEY, container_id text, allocation_id bigint,
     movement_type text NOT NULL
         CHECK (movement_type IN ('PICKUP','ALLOCATION','TRANSFER','DELIVERY','COMPLETION')),
     location text, detail jsonb NOT NULL DEFAULT '{}'::jsonb,
     created_at timestamptz NOT NULL DEFAULT now());
-CREATE INDEX IF NOT EXISTS idx_container_move_container ON jnpa.container_movement_history (container_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_container_move_type ON jnpa.container_movement_history (movement_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_container_move_container ON core.container_movement_history (container_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_container_move_type ON core.container_movement_history (movement_type, created_at DESC);
 """
 
 _READY: Dict[str, bool] = {}
@@ -78,6 +80,9 @@ async def _returning(sql: str, params: dict, *, dsn: str) -> Optional[dict]:
 
 
 async def ensure_container_schema(dsn: Optional[str]) -> None:
+    if os.getenv("JNPA_RUNTIME_DDL", "0") != "1":
+        # schema-v3: DDL is owned by infra/postgres/v3 migrations, never runtime.
+        return
     if not dsn or _READY.get(dsn):
         return
     from jnpa_shared.db import execute
@@ -109,7 +114,7 @@ async def seed_inventory(depots: List[Any], *, dsn: Optional[str]) -> int:
                 continue
             await execute(
                 """
-                INSERT INTO jnpa.empty_container_inventory
+                INSERT INTO core.empty_container_inventory
                     (container_id, container_type, location, owner, availability_status)
                 SELECT :prefix || lpad(gs::text, 4, '0'), :ctype, :loc, :owner, 'AVAILABLE'
                 FROM generate_series(1, :n) AS gs
@@ -119,7 +124,7 @@ async def seed_inventory(depots: List[Any], *, dsn: Optional[str]) -> int:
                  "loc": dep.depot_id, "owner": dep.kind, "n": n},
                 dsn=dsn,
             )
-    row = await fetch_one("SELECT count(*) AS n FROM jnpa.empty_container_inventory", dsn=dsn)
+    row = await fetch_one("SELECT count(*) AS n FROM core.empty_container_inventory", dsn=dsn)
     total = int(row["n"]) if row else 0
     log.info("container_inventory_seeded", depots=len(depots), containers=total)
     return total
@@ -139,7 +144,7 @@ async def available(*, container_type: Optional[str] = None, limit: int = 200,
     rows = await fetch_all(
         f"""
         SELECT container_id, container_type, location, owner, availability_status, updated_at
-        FROM jnpa.empty_container_inventory {where}
+        FROM core.empty_container_inventory {where}
         ORDER BY container_id LIMIT :limit
         """,
         params, dsn=dsn,
@@ -158,7 +163,7 @@ async def available_summary(*, dsn: Optional[str]) -> dict:
                count(*) FILTER (WHERE availability_status='AVAILABLE') AS available,
                count(*) FILTER (WHERE availability_status='ALLOCATED') AS allocated,
                count(*) AS total
-        FROM jnpa.empty_container_inventory GROUP BY container_type ORDER BY container_type
+        FROM core.empty_container_inventory GROUP BY container_type ORDER BY container_type
         """,
         dsn=dsn,
     )
@@ -177,9 +182,9 @@ async def allocate_container(*, container_type: str, truck_id: Optional[str],
 
     inv = await _returning(
         """
-        UPDATE jnpa.empty_container_inventory SET availability_status = 'ALLOCATED', updated_at = now()
+        UPDATE core.empty_container_inventory SET availability_status = 'ALLOCATED', updated_at = now()
         WHERE container_id = (
-            SELECT container_id FROM jnpa.empty_container_inventory
+            SELECT container_id FROM core.empty_container_inventory
             WHERE availability_status = 'AVAILABLE' AND container_type = :ct
             ORDER BY container_id LIMIT 1 FOR UPDATE SKIP LOCKED)
         RETURNING container_id, container_type, location, owner
@@ -198,7 +203,7 @@ async def allocate_container(*, container_type: str, truck_id: Optional[str],
     alloc_reason = reason or f"Nearest available {container_type} at {inv['location']} ({inv['owner']})"
     alloc = await _returning(
         """
-        INSERT INTO jnpa.empty_container_allocations
+        INSERT INTO core.empty_container_allocation
             (container_id, truck_id, trailer_id, driver_id, shipping_line, cfs, ecd,
              allocation_reason, status)
         VALUES (:cid, :truck, :trailer, :driver, :sl, :cfs, :ecd, :reason, 'ALLOCATED')
@@ -211,7 +216,7 @@ async def allocate_container(*, container_type: str, truck_id: Optional[str],
     alloc_id = alloc["id"] if alloc else None
     await execute(
         """
-        INSERT INTO jnpa.container_movement_history (container_id, allocation_id, movement_type, location, detail)
+        INSERT INTO core.container_movement_history (container_id, allocation_id, movement_type, location, detail)
         VALUES (:cid, :aid, 'ALLOCATION', :loc, CAST(:d AS jsonb))
         """,
         {"cid": container_id, "aid": alloc_id, "loc": inv["location"],
@@ -246,7 +251,7 @@ async def allocation_history(*, limit: int = 100, dsn: Optional[str] = None) -> 
         """
         SELECT id, container_id, truck_id, trailer_id, driver_id, shipping_line,
                cfs, ecd, allocation_reason, allocated_at, status
-        FROM jnpa.empty_container_allocations ORDER BY allocated_at DESC LIMIT :limit
+        FROM core.empty_container_allocation ORDER BY allocated_at DESC LIMIT :limit
         """,
         {"limit": max(1, min(int(limit), 1000))}, dsn=dsn,
     )
@@ -259,7 +264,7 @@ async def _dt_event(event_type, *, vehicle_id, driver_id, location, payload, dsn
     try:
         await execute(
             """
-            INSERT INTO jnpa.digital_twin_events (event_type, vehicle_id, driver_id, location, payload)
+            INSERT INTO core.digital_twin_event (event_type, vehicle_id, driver_id, location, payload)
             VALUES (:t, :v, :d, CAST(:loc AS jsonb), CAST(:p AS jsonb))
             """,
             {"t": event_type, "v": vehicle_id, "d": driver_id, "loc": _j(location), "p": _j(payload)},
@@ -275,7 +280,7 @@ async def _decision_audit(*, request_id, rule, decision, action, inp, dsn) -> No
     try:
         await execute(
             """
-            INSERT INTO jnpa.decision_audit (request_id, input_data, rule_executed, decision, action_taken)
+            INSERT INTO core.decision_audit (request_id, input_data, rule_executed, decision, action_taken)
             VALUES (:r, CAST(:i AS jsonb), :rule, :dec, :act)
             """,
             {"r": request_id, "i": _j(inp), "rule": rule, "dec": decision, "act": action},

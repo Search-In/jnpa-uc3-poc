@@ -21,7 +21,7 @@ from typing import List, Optional
 
 from jnpa_shared import corridor
 
-# The 4 JNPA gates (ids mirror jnpa.gates in infra/postgres/init.sql).
+# The 4 JNPA gates (ids mirror core.gate in infra/postgres/init.sql).
 GATE_IDS: List[str] = ["G-NSICT", "G-JNPCT", "G-NSIGT", "G-BMCT"]
 
 # Gate coordinates (mirror the seed rows so emitted positions are realistic).

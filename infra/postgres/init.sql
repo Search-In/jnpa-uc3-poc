@@ -72,7 +72,7 @@ CREATE TABLE jnpa.services (
 );
 
 -- --------------------------------------------------------------------------
--- Driver enrolment (UC-III Identity / face-recognition, Appendix C #2).
+-- Driver enrollment (UC-III Identity / face-recognition, Appendix C #2).
 -- The Driver PWA submits a profile + consented reference face frames; an admin
 -- (DTCCC_ADMIN / CUSTOMS) reviews and approves, at which point the identity
 -- service generates + stores the face template and the reference photo is
@@ -103,12 +103,14 @@ CREATE TABLE IF NOT EXISTS jnpa.driver_enrollments (
     reviewed_at       timestamptz,
     reviewed_by       text,
     rejection_reason  text,
+    created_by        text,                     -- admin actor when source='ADMIN' (0019)
+    source            text NOT NULL DEFAULT 'PWA',  -- 'PWA' | 'ADMIN' (0019)
     updated_at        timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_driver_enrol_status
     ON jnpa.driver_enrollments (status, submitted_at DESC);
 
--- Append-only DPDP audit of every enrolment lifecycle event (who, what, when).
+-- Append-only DPDP audit of every enrollment lifecycle event (who, what, when).
 CREATE TABLE IF NOT EXISTS jnpa.enrollment_audit (
     id        bigserial PRIMARY KEY,
     driver_id text NOT NULL,
@@ -122,7 +124,7 @@ CREATE INDEX IF NOT EXISTS idx_enrollment_audit_driver
 
 -- Master driver identity (production data model). `driver_enrollments` above is the
 -- WORKFLOW/request table (PENDING→ACTIVE…); this `drivers` table is the canonical
--- identity record an enrolment is PROMOTED into on admin approval. Verification
+-- identity record an enrollment is PROMOTED into on admin approval. Verification
 -- reads the active driver from here. Embeddings live in the identity service; this
 -- holds the durable profile + the reference-photo pointer + template metadata.
 CREATE TABLE IF NOT EXISTS jnpa.drivers (
@@ -138,11 +140,23 @@ CREATE TABLE IF NOT EXISTS jnpa.drivers (
     photo_url         text,                -- MinIO object URL (drivers/ bucket)
     reference_image   text,                -- base64 reference frame (dev fallback only)
     template_dim      int,
-    provider          text,                -- onnx | synthetic
+    provider          text,                -- onnx | synthetic | admin
+    vehicle_no_norm   text,                -- UPPER(TRIM(vehicle_no)); PWA-login match key (0019)
     enrolled_at       timestamptz NOT NULL DEFAULT now(),
     approved_by       text,
+    created_by        text,                -- admin actor when created via Control-Room (0019)
     updated_at        timestamptz NOT NULL DEFAULT now()
 );
+-- PWA login gate: entered Vehicle ID -> active driver (0019).
+CREATE INDEX IF NOT EXISTS idx_drivers_vehicle_no
+    ON jnpa.drivers (vehicle_no);
+CREATE INDEX IF NOT EXISTS idx_drivers_vehicle_no_norm
+    ON jnpa.drivers (vehicle_no_norm);
+-- At most one ACTIVE driver per vehicle — makes the Vehicle ID an unambiguous
+-- login credential (0019).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_drivers_vehicle_active
+    ON jnpa.drivers (vehicle_no_norm)
+    WHERE status = 'ACTIVE' AND vehicle_no_norm IS NOT NULL;
 
 -- Biometric template store for 1:N identification. One unit-norm ArcFace
 -- embedding per active driver; a captured face is matched by nearest cosine
@@ -174,6 +188,31 @@ CREATE TABLE IF NOT EXISTS jnpa.verification_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_verification_logs_driver
     ON jnpa.verification_logs (driver_id, ts DESC);
+
+-- --------------------------------------------------------------------------
+-- Vehicle Master (fleet registry). The authoritative list of vehicles a driver
+-- may be assigned to. Distinct from jnpa.vehicle_master above (that is the Vahan
+-- RC-lookup cache, keyed by plate). Every vehicle exists here first; the
+-- "assign vehicle" dropdown draws ONLY from ACTIVE rows not held by an active
+-- driver. The truck-sim fleet is migrated in on boot (gateway/fleet.py) so no
+-- existing vehicle disappears when the master is introduced.
+-- --------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS jnpa.fleet_vehicles (
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    vehicle_id      text NOT NULL UNIQUE,   -- fleet id, e.g. TRK-000001
+    vehicle_number  text,                   -- plate, e.g. MH04AB1234
+    vehicle_type    text,                   -- e.g. Container Truck
+    chassis_number  text,
+    rfid_fastag_id  text,
+    status          text NOT NULL DEFAULT 'ACTIVE'
+                    CHECK (status IN ('ACTIVE', 'INACTIVE', 'MAINTENANCE')),
+    created_by      text,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    updated_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_fleet_vehicles_vehicle_id ON jnpa.fleet_vehicles (vehicle_id);
+CREATE INDEX IF NOT EXISTS idx_fleet_vehicles_number ON jnpa.fleet_vehicles (vehicle_number);
+CREATE INDEX IF NOT EXISTS idx_fleet_vehicles_status ON jnpa.fleet_vehicles (status);
 
 -- --------------------------------------------------------------------------
 -- Time-series (hypertables)
@@ -274,6 +313,8 @@ CREATE INDEX IF NOT EXISTS idx_scenario_steps_handle ON jnpa.scenario_steps (han
 CREATE INDEX IF NOT EXISTS idx_anpr_plate_ts ON jnpa.anpr_reads (plate, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_telemetry_plate_ts ON jnpa.truck_telemetry (plate, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_alerts_ts ON jnpa.alerts (ts DESC);
+-- Vehicle-intel read path: alerts by plate, newest first (migration 0014).
+CREATE INDEX IF NOT EXISTS idx_alerts_plate ON jnpa.alerts (plate, ts DESC);
 
 -- ===========================================================================
 -- Seed data
@@ -410,6 +451,81 @@ WHERE provisional = true
 ORDER BY provisional_until ASC;
 
 -- ===========================================================================
+-- Gate lifecycle events + Appendix-C gate KPIs.
+-- The truck-sim (primary GPS device feed) emits one row per state transition of
+-- a port visit: GATE_ARRIVAL (joined queue), GATE_TXN_START (boom processing
+-- began), GATE_IN (boom cleared / admitted), GATE_OUT (left the port). The KPI
+-- views pair these per trip_id to derive real, event-driven KPI values — no
+-- hardcoded numbers. The gateway also auto-provisions this table + views at boot
+-- (ensure_kpi_gate_schema) so pre-existing volumes gain them without a reset.
+-- ===========================================================================
+CREATE TABLE IF NOT EXISTS jnpa.gate_events (
+    id         bigserial PRIMARY KEY,
+    ts         timestamptz NOT NULL DEFAULT now(),
+    device_id  text NOT NULL,
+    plate      text,
+    gate_id    text,
+    trip_id    text NOT NULL,
+    event_type text NOT NULL
+               CHECK (event_type IN ('GATE_ARRIVAL','GATE_TXN_START','GATE_IN','GATE_OUT')),
+    lat        double precision,
+    lon        double precision
+);
+CREATE INDEX IF NOT EXISTS idx_gate_events_trip ON jnpa.gate_events (trip_id);
+CREATE INDEX IF NOT EXISTS idx_gate_events_type_ts ON jnpa.gate_events (event_type, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_gate_events_ts ON jnpa.gate_events (ts DESC);
+
+-- One row per port visit with the four phase timestamps pivoted out (last 24h).
+CREATE OR REPLACE VIEW jnpa.kpi_gate_trip_timeline AS
+SELECT
+    trip_id,
+    max(gate_id)                                        AS gate_id,
+    max(plate)                                          AS plate,
+    min(ts) FILTER (WHERE event_type = 'GATE_ARRIVAL')   AS arrival_ts,
+    min(ts) FILTER (WHERE event_type = 'GATE_TXN_START') AS txn_start_ts,
+    min(ts) FILTER (WHERE event_type = 'GATE_IN')        AS gate_in_ts,
+    min(ts) FILTER (WHERE event_type = 'GATE_OUT')       AS gate_out_ts
+FROM jnpa.gate_events
+WHERE ts > now() - interval '24 hours'
+GROUP BY trip_id;
+
+-- KPI 1 — Gate Queue Wait Time: GATE_ARRIVAL -> GATE_TXN_START, per 15-min bucket.
+CREATE OR REPLACE VIEW jnpa.kpi_gate_queue_wait AS
+SELECT
+    time_bucket('15 minutes', txn_start_ts)                                  AS bucket,
+    round(avg(EXTRACT(EPOCH FROM (txn_start_ts - arrival_ts)))::numeric/60.0, 2) AS wait_min,
+    count(*)                                                                 AS trips
+FROM jnpa.kpi_gate_trip_timeline
+WHERE arrival_ts IS NOT NULL AND txn_start_ts IS NOT NULL
+  AND txn_start_ts >= arrival_ts
+GROUP BY 1
+ORDER BY 1 DESC;
+
+-- KPI 2 — Avg Gate Transaction Time: GATE_TXN_START -> GATE_IN, per 15-min bucket.
+CREATE OR REPLACE VIEW jnpa.kpi_gate_txn_time AS
+SELECT
+    time_bucket('15 minutes', gate_in_ts)                                    AS bucket,
+    round(avg(EXTRACT(EPOCH FROM (gate_in_ts - txn_start_ts)))::numeric/60.0, 2) AS txn_min,
+    count(*)                                                                 AS trips
+FROM jnpa.kpi_gate_trip_timeline
+WHERE txn_start_ts IS NOT NULL AND gate_in_ts IS NOT NULL
+  AND gate_in_ts >= txn_start_ts
+GROUP BY 1
+ORDER BY 1 DESC;
+
+-- KPI 4 — Turn-Around Time inside port: GATE_IN -> GATE_OUT, per 15-min bucket.
+CREATE OR REPLACE VIEW jnpa.kpi_tat_inside_port AS
+SELECT
+    time_bucket('15 minutes', gate_out_ts)                                   AS bucket,
+    round(avg(EXTRACT(EPOCH FROM (gate_out_ts - gate_in_ts)))::numeric/60.0, 2) AS tat_min,
+    count(*)                                                                 AS trips
+FROM jnpa.kpi_gate_trip_timeline
+WHERE gate_in_ts IS NOT NULL AND gate_out_ts IS NOT NULL
+  AND gate_out_ts >= gate_in_ts
+GROUP BY 1
+ORDER BY 1 DESC;
+
+-- ===========================================================================
 -- Geo-fence zones (UC-III Sub-Criterion 4 — Geo-fencing Manager).
 -- The dashboard's terra-draw editor PUTs no-parking / restricted polygons here;
 -- the behavioural anomaly service (ai/anomaly) reads them live to decide
@@ -492,6 +608,8 @@ CREATE TABLE IF NOT EXISTS jnpa.challans (
     created_by      text
 );
 CREATE INDEX IF NOT EXISTS idx_challans_case ON jnpa.challans (case_id);
+-- Vehicle-intel read path: challans by vehicle, newest first (migration 0014).
+CREATE INDEX IF NOT EXISTS idx_challans_vehicle ON jnpa.challans (vehicle_number, issued_at DESC);
 
 CREATE TABLE IF NOT EXISTS jnpa.case_audit (
     id          bigserial PRIMARY KEY,
@@ -917,3 +1035,226 @@ CREATE TRIGGER trg_geofence_events_event_type
     BEFORE INSERT OR UPDATE ON jnpa.geofence_events
     FOR EACH ROW EXECUTE FUNCTION jnpa.geofence_events_default_event_type();
 ALTER TABLE jnpa.geofence_events ALTER COLUMN event_type SET NOT NULL;
+
+-- ==== driver push registrations (migration 0011) ====
+-- Durable home for the driver-notification transports: the WebPush subscription
+-- (webpush jsonb) and the Firebase FCM device token (fcm_token). Keyed on the
+-- same device_id as jnpa.device_bindings. Additive only. The gateway also
+-- self-provisions this at runtime (gateway/routers/push.py::_ensure), but seeding
+-- it here means the table exists on a fresh boot BEFORE the first read path runs
+-- (resolve_device / token lookup), which would otherwise error on an empty DB.
+CREATE SCHEMA IF NOT EXISTS jnpa;
+SET search_path TO jnpa, public;
+CREATE TABLE IF NOT EXISTS jnpa.push_subscriptions (
+    device_id    text PRIMARY KEY,
+    driver_id    text,
+    vehicle_id   text,
+    webpush      jsonb,
+    fcm_token    text,
+    platform     text NOT NULL DEFAULT 'web',
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    updated_at   timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_push_subs_fcm
+    ON jnpa.push_subscriptions (fcm_token)
+    WHERE fcm_token IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_push_subs_driver
+    ON jnpa.push_subscriptions (driver_id);
+
+-- ==== Cargo (migration 0013) ====
+-- Single shared cargo record for the Traffic Twin (POC-3) + Cargo Twin (POC-2).
+-- POC-3 is the common backend: /api/cargo CRUD lives here; POC-2 consumes it and
+-- keeps no backend/DB. `container_number` is the ISO-6346 follow-the-box PK.
+-- Mirrors infra/postgres/migrations/0013_cargo.sql for fresh-boot bootstraps.
+CREATE SCHEMA IF NOT EXISTS jnpa;
+SET search_path TO jnpa, public;
+CREATE OR REPLACE FUNCTION jnpa.set_updated_at()
+RETURNS trigger AS $$
+BEGIN
+    NEW.updated_at := now();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+CREATE TABLE IF NOT EXISTS jnpa.cargo (
+    container_number text PRIMARY KEY,
+    vessel_name      text,
+    customs_status   text NOT NULL DEFAULT 'PENDING'
+                     CHECK (customs_status IN ('PENDING','CLEARED','HELD','UNDER_INSPECTION')),
+    yard_block       text,
+    is_released      boolean NOT NULL DEFAULT false,
+    vehicle_number   text,
+    gate             text,
+    camera_id        text,
+    eta              timestamptz,
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    updated_at       timestamptz NOT NULL DEFAULT now()
+);
+-- Contract extensions (migration 0015): e-Seal, pre-document status, origin stream.
+ALTER TABLE jnpa.cargo
+    ADD COLUMN IF NOT EXISTS eseal_status text
+        CHECK (eseal_status IN ('ACTIVE','ARMED','TAMPERED','REMOVED','NONE'));
+ALTER TABLE jnpa.cargo ADD COLUMN IF NOT EXISTS eseal_number text;
+ALTER TABLE jnpa.cargo
+    ADD COLUMN IF NOT EXISTS pre_document_status text
+        CHECK (pre_document_status IN ('NOT_STARTED','PENDING','IN_PROGRESS','COMPLETED'));
+ALTER TABLE jnpa.cargo ADD COLUMN IF NOT EXISTS origin_stream text;
+CREATE INDEX IF NOT EXISTS idx_cargo_customs_status ON jnpa.cargo (customs_status);
+CREATE INDEX IF NOT EXISTS idx_cargo_is_released    ON jnpa.cargo (is_released);
+CREATE INDEX IF NOT EXISTS idx_cargo_yard_block     ON jnpa.cargo (yard_block);
+CREATE INDEX IF NOT EXISTS idx_cargo_vehicle        ON jnpa.cargo (vehicle_number) WHERE vehicle_number IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_cargo_eta            ON jnpa.cargo (eta DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_cargo_origin_stream       ON jnpa.cargo (origin_stream);
+CREATE INDEX IF NOT EXISTS idx_cargo_eseal_status        ON jnpa.cargo (eseal_status);
+CREATE INDEX IF NOT EXISTS idx_cargo_pre_document_status ON jnpa.cargo (pre_document_status);
+DROP TRIGGER IF EXISTS trg_cargo_updated_at ON jnpa.cargo;
+CREATE TRIGGER trg_cargo_updated_at
+    BEFORE UPDATE ON jnpa.cargo
+    FOR EACH ROW EXECUTE FUNCTION jnpa.set_updated_at();
+-- Append-only cargo lifecycle event log (notifications contract; migration 0015).
+CREATE TABLE IF NOT EXISTS jnpa.cargo_events (
+    id               bigserial PRIMARY KEY,
+    event            text NOT NULL,
+    container_number text NOT NULL,
+    payload          jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at       timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cargo_events_created   ON jnpa.cargo_events (id DESC);
+CREATE INDEX IF NOT EXISTS idx_cargo_events_container ON jnpa.cargo_events (container_number);
+CREATE INDEX IF NOT EXISTS idx_cargo_events_event     ON jnpa.cargo_events (event);
+
+-- Cargo workflow lifecycle (migration 0016): current status on the record + an
+-- append-only transition log. TRIGGER -> APPROVE / REJECT, driven by POC-2.
+ALTER TABLE jnpa.cargo
+    ADD COLUMN IF NOT EXISTS workflow_status text
+        CHECK (workflow_status IN ('TRIGGERED','APPROVED','REJECTED'));
+CREATE TABLE IF NOT EXISTS jnpa.cargo_workflow_events (
+    id               bigserial PRIMARY KEY,
+    container_number text NOT NULL,
+    action           text NOT NULL CHECK (action IN ('TRIGGER','APPROVE','REJECT')),
+    old_status       text,
+    new_status       text,
+    comment          text,
+    created_at       timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cargo_workflow_container ON jnpa.cargo_workflow_events (container_number);
+CREATE INDEX IF NOT EXISTS idx_cargo_workflow_created   ON jnpa.cargo_workflow_events (id DESC);
+
+-- Cargo stakeholder notifications (migration 0017): addressed, severity-tagged
+-- notification events raised by POC-2 (customs alerts, pendency, escalations).
+CREATE TABLE IF NOT EXISTS jnpa.cargo_notifications (
+    id                bigserial PRIMARY KEY,
+    container_number  text NOT NULL,
+    notification_type text NOT NULL,
+    severity          text NOT NULL DEFAULT 'MEDIUM'
+                      CHECK (severity IN ('LOW','MEDIUM','HIGH','CRITICAL')),
+    message           text,
+    stakeholders      jsonb NOT NULL DEFAULT '[]'::jsonb,
+    status            text NOT NULL DEFAULT 'CREATED'
+                      CHECK (status IN ('CREATED','ACKNOWLEDGED','RESOLVED')),
+    created_at        timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cargo_notif_container ON jnpa.cargo_notifications (container_number);
+CREATE INDEX IF NOT EXISTS idx_cargo_notif_type      ON jnpa.cargo_notifications (notification_type);
+CREATE INDEX IF NOT EXISTS idx_cargo_notif_severity  ON jnpa.cargo_notifications (severity);
+CREATE INDEX IF NOT EXISTS idx_cargo_notif_status    ON jnpa.cargo_notifications (status);
+CREATE INDEX IF NOT EXISTS idx_cargo_notif_created   ON jnpa.cargo_notifications (id DESC);
+
+-- Cargo planning (migration 0018): forward-looking yard / rake / reefer plans.
+CREATE TABLE IF NOT EXISTS jnpa.cargo_yard_plans (
+    id                bigserial PRIMARY KEY,
+    container_number  text NOT NULL,
+    preferred_block   text,
+    assigned_block    text NOT NULL,
+    priority          text NOT NULL DEFAULT 'MEDIUM'
+                      CHECK (priority IN ('LOW','MEDIUM','HIGH','CRITICAL')),
+    status            text NOT NULL DEFAULT 'PLANNED',
+    created_at        timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cargo_yard_plan_container ON jnpa.cargo_yard_plans (container_number);
+CREATE INDEX IF NOT EXISTS idx_cargo_yard_plan_block     ON jnpa.cargo_yard_plans (assigned_block);
+CREATE INDEX IF NOT EXISTS idx_cargo_yard_plan_created   ON jnpa.cargo_yard_plans (id DESC);
+CREATE TABLE IF NOT EXISTS jnpa.cargo_rake_plans (
+    id                 bigserial PRIMARY KEY,
+    rake_id            text NOT NULL,
+    containers         jsonb NOT NULL DEFAULT '[]'::jsonb,
+    planned_containers integer NOT NULL DEFAULT 0,
+    status             text NOT NULL DEFAULT 'PLANNED',
+    created_at         timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cargo_rake_plan_rake    ON jnpa.cargo_rake_plans (rake_id);
+CREATE INDEX IF NOT EXISTS idx_cargo_rake_plan_created ON jnpa.cargo_rake_plans (id DESC);
+CREATE TABLE IF NOT EXISTS jnpa.cargo_reefer_plans (
+    id                bigserial PRIMARY KEY,
+    container_number  text NOT NULL,
+    temperature       numeric,
+    power_required    boolean NOT NULL DEFAULT true,
+    slot              text NOT NULL,
+    status            text NOT NULL DEFAULT 'ALLOCATED',
+    created_at        timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cargo_reefer_plan_container ON jnpa.cargo_reefer_plans (container_number);
+CREATE INDEX IF NOT EXISTS idx_cargo_reefer_plan_created   ON jnpa.cargo_reefer_plans (id DESC);
+
+-- Migration 0020: per-vehicle carbon-emission ledger (UC-3 audit R6). Gives the
+-- previously compute-only carbon calculator a durable store; written by
+-- POST /api/carbon/calculate, read by GET /api/carbon/history[/{vehicle_id}].
+CREATE TABLE IF NOT EXISTS jnpa.carbon_emission (
+    id                  bigserial PRIMARY KEY,
+    vehicle_id          text NOT NULL,
+    vehicle_type        text,
+    distance_km         numeric,
+    fuel_consumed_litre numeric,
+    idle_time_minutes   numeric,
+    co2_kg              numeric,
+    source              text,
+    calculation_method  text,
+    created_at          timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_carbon_emission_vehicle ON jnpa.carbon_emission (vehicle_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_carbon_emission_created ON jnpa.carbon_emission (created_at DESC);
+
+-- Cargo lifecycle state management (migration 0023): a single validated lifecycle
+-- CREATED -> VESSEL_DISCHARGED -> YARD_ASSIGNED -> [position/reefer/rake]* ->
+-- SCAN_PENDING -> VERIFIED -> RELEASED, closing the UC-II -> UC-III handover. The
+-- transition policy lives in services.cargo; these are the additive stores.
+ALTER TABLE jnpa.cargo
+    ADD COLUMN IF NOT EXISTS lifecycle_status text DEFAULT 'CREATED'
+        CHECK (lifecycle_status IN (
+            'CREATED','VESSEL_DISCHARGED','YARD_ASSIGNED','YARD_POSITION_ALLOCATED',
+            'REEFER_PLANNED','RAKE_ASSIGNED','SCAN_PENDING','VERIFIED','RELEASED'));
+CREATE INDEX IF NOT EXISTS idx_cargo_lifecycle_status ON jnpa.cargo (lifecycle_status);
+UPDATE jnpa.cargo
+   SET lifecycle_status = CASE
+        WHEN is_released THEN 'RELEASED'
+        WHEN yard_block IS NOT NULL THEN 'YARD_ASSIGNED'
+        ELSE 'CREATED'
+   END
+ WHERE lifecycle_status IS NULL;
+-- Yard position detail (block / row / slot / position) on the existing plan table.
+ALTER TABLE jnpa.cargo_yard_plans ADD COLUMN IF NOT EXISTS yard_row      text;
+ALTER TABLE jnpa.cargo_yard_plans ADD COLUMN IF NOT EXISTS yard_slot     text;
+ALTER TABLE jnpa.cargo_yard_plans ADD COLUMN IF NOT EXISTS yard_position text;
+-- Append-only lifecycle audit history.
+CREATE TABLE IF NOT EXISTS jnpa.cargo_lifecycle_events (
+    id               bigserial PRIMARY KEY,
+    container_number text NOT NULL,
+    action           text NOT NULL,
+    old_status       text,
+    new_status       text NOT NULL,
+    actor_role       text,
+    note             text,
+    created_at       timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cargo_lifecycle_ev_container ON jnpa.cargo_lifecycle_events (container_number);
+CREATE INDEX IF NOT EXISTS idx_cargo_lifecycle_ev_created   ON jnpa.cargo_lifecycle_events (id DESC);
+-- Scan / customs verification records.
+CREATE TABLE IF NOT EXISTS jnpa.cargo_scan_verifications (
+    id               bigserial PRIMARY KEY,
+    container_number text NOT NULL,
+    verified         boolean NOT NULL DEFAULT true,
+    remarks          text,
+    actor_role       text,
+    created_at       timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cargo_scan_verif_container ON jnpa.cargo_scan_verifications (container_number);
+CREATE INDEX IF NOT EXISTS idx_cargo_scan_verif_created   ON jnpa.cargo_scan_verifications (id DESC);

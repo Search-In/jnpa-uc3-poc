@@ -1,7 +1,7 @@
 """RFID MQTT consumer — JNPA UC-III PoC.
 
 Subscribes to ``rfid/readers/+``, validates each payload against the ``RfidRead``
-schema, writes valid reads to ``jnpa.rfid_reads`` (Timescale), and forwards them
+schema, writes valid reads to ``core.rfid_read`` (Timescale), and forwards them
 to the Kafka topic ``rfid.reads`` for downstream consumers (the correlator).
 
 Architecture: paho runs its network loop on a background thread and pushes
@@ -27,6 +27,7 @@ import asyncpg
 from pydantic import ValidationError
 
 from jnpa_shared import kafka_io
+from jnpa_shared.config import require_dsn
 from jnpa_shared.logging import configure_logging, get_logger
 from jnpa_shared.schemas import RfidRead
 
@@ -45,7 +46,7 @@ from rfid_ingest.metrics import (
 log = get_logger("rfid_ingest.consumer")
 
 _INSERT_SQL = (
-    "INSERT INTO jnpa.rfid_reads (ts, reader_id, tag_id, rssi) "
+    "INSERT INTO core.rfid_read (ts, reader_id, tag_id, rssi) "
     "VALUES ($1, $2, $3, $4)"
 )
 
@@ -130,11 +131,14 @@ class Consumer:
 
     async def _connect_pool(self) -> asyncpg.Pool:
         """Create the asyncpg pool, retrying until Postgres is reachable."""
+        # Raise (don't retry) on a missing DSN: without it asyncpg would fall
+        # back to libpq defaults (local socket) instead of the RDS database.
+        dsn = require_dsn(self.cfg.postgres_dsn, "POSTGRES_DSN_LIBPQ")
         delay = 1.0
         while not self._stop.is_set():
             try:
                 pool = await asyncpg.create_pool(
-                    dsn=self.cfg.postgres_dsn, min_size=1, max_size=4
+                    dsn=dsn, min_size=1, max_size=4
                 )
                 log.info("postgres_connected")
                 return pool

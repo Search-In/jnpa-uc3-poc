@@ -10,7 +10,7 @@
 // Pure presentation — no data fetching, no backend coupling. Colours come from
 // tokens.ts only.
 
-import { useMemo, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ChevronLeft, ChevronRight, RefreshCw, Search, type LucideIcon } from "lucide-react";
@@ -22,6 +22,8 @@ import {
   LastUpdated,
   type AsyncStatus,
 } from "@/components/ui/misc";
+import { AutoRefreshControl } from "@/components/ui/AutoRefreshControl";
+import { useRefresh } from "@/lib/refresh";
 import { STATUS } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 
@@ -34,6 +36,21 @@ export const TONE_COLOUR: Record<Tone, string> = {
   neutral: "#64748b",
 };
 
+// --- Embedded mode -----------------------------------------------------------
+// A screen rendered INSIDE another screen's tab (UC-III features folded into
+// their host screens) should drop its own full-page chrome so the host owns the
+// header/scroll. Wrap the nested screen in <Embedded>…</Embedded>: PageHeader
+// then renders nothing and PageContainer becomes a plain block. Backward
+// compatible — outside an <Embedded> the context is false and every standalone
+// screen renders exactly as before.
+const EmbeddedContext = createContext(false);
+export function useEmbedded(): boolean {
+  return useContext(EmbeddedContext);
+}
+export function Embedded({ children }: { children: ReactNode }) {
+  return <EmbeddedContext.Provider value={true}>{children}</EmbeddedContext.Provider>;
+}
+
 // --- Page chrome -------------------------------------------------------------
 
 export function PageContainer({
@@ -43,6 +60,12 @@ export function PageContainer({
   children: ReactNode;
   className?: string;
 }) {
+  const embedded = useEmbedded();
+  // Embedded: plain block so the host tab owns height/scroll. Standalone: the
+  // usual full-height scroll page (unchanged).
+  if (embedded) {
+    return <div className={cn("flex flex-col gap-4", className)}>{children}</div>;
+  }
   return (
     <div className={cn("flex h-full flex-col overflow-y-auto bg-background", className)}>
       {children}
@@ -68,6 +91,16 @@ export function PageHeader({
   actions?: ReactNode;
 }) {
   const { t } = useTranslation();
+  const embedded = useEmbedded();
+  const { refresh, lastRefreshAt, isRefreshing } = useRefresh();
+  // Embedded in a host screen's tab → the host already shows a page header, so
+  // the nested screen's own header is suppressed to avoid a doubled title.
+  if (embedded) return null;
+  // Screens may still pass a scoped updatedAt/isFetching/onRefresh; otherwise we
+  // fall back to the global RefreshManager so every page behaves identically.
+  const effectiveUpdatedAt = updatedAt ?? lastRefreshAt;
+  const effectiveFetching = isFetching ?? isRefreshing;
+  const handleRefresh = onRefresh ?? refresh;
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border bg-card px-4 py-3">
       <div className="flex items-center gap-2.5">
@@ -85,19 +118,16 @@ export function PageHeader({
       </div>
       <div className="ml-auto flex items-center gap-3">
         {actions}
-        {(updatedAt !== undefined || isFetching) && (
-          <LastUpdated at={updatedAt || undefined} isFetching={isFetching} />
-        )}
-        {onRefresh && (
-          <button
-            type="button"
-            onClick={onRefresh}
-            className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted"
-          >
-            <RefreshCw className={cn("h-3.5 w-3.5", isFetching && "animate-spin")} />
-            {t("commandCenter.refresh")}
-          </button>
-        )}
+        <LastUpdated at={effectiveUpdatedAt || undefined} isFetching={effectiveFetching} />
+        <AutoRefreshControl />
+        <button
+          type="button"
+          onClick={handleRefresh}
+          className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted"
+        >
+          <RefreshCw className={cn("h-3.5 w-3.5", effectiveFetching && "animate-spin")} />
+          {t("commandCenter.refresh")}
+        </button>
       </div>
     </div>
   );
@@ -293,6 +323,7 @@ export function DataTable<T>({
   onRowClick,
   isRowActive,
   maxHeight,
+  initialSearch,
 }: {
   columns: Column<T>[];
   rows: T[];
@@ -303,6 +334,9 @@ export function DataTable<T>({
   /** Enables the search box; return true to keep the row for query `q`. */
   search?: (row: T, q: string) => boolean;
   searchPlaceholder?: string;
+  /** Seeds the search box — used by the header Global Search hand-off so a
+   *  screen opened with `?q=…` lands already filtered instead of unfiltered. */
+  initialSearch?: string;
   /** Extra filter controls rendered in the toolbar (right of search). */
   toolbar?: ReactNode;
   pageSize?: number;
@@ -313,8 +347,17 @@ export function DataTable<T>({
   maxHeight?: string;
 }) {
   const { t } = useTranslation();
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(initialSearch ?? "");
   const [page, setPage] = useState(0);
+
+  // Re-seed when the caller's query changes (a second Global Search hand-off to
+  // the same screen must re-filter, not sit on the previous query).
+  useEffect(() => {
+    if (initialSearch !== undefined) {
+      setQ(initialSearch);
+      setPage(0);
+    }
+  }, [initialSearch]);
 
   const filtered = useMemo(() => {
     if (!search || !q.trim()) return rows;

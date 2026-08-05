@@ -4,16 +4,68 @@
 // Query surfaces the error state.
 
 import { getToken } from "./auth";
+import type { AvailableVehicle } from "./types";
 
-async function http<T>(path: string, init?: RequestInit): Promise<T> {
+// Request budget. Without one, `fetch` waits indefinitely: the 2026-08-04 audit
+// measured /api/kpi at 81s against RDS and the panel simply hung — no spinner
+// resolution, no error state, nothing for the operator to act on. A bounded wait
+// that surfaces a clear failure is always better than an unbounded one.
+export const DEFAULT_TIMEOUT_MS = 15_000;
+
+// Uploads/downloads move megabytes over venue wifi; they get a longer budget.
+export const UPLOAD_TIMEOUT_MS = 120_000;
+
+// Marker used on the thrown Error so apiError() can classify a timeout without
+// depending on the browser's DOMException wording (which differs across engines).
+const TIMEOUT_MARKER = "ETIMEDOUT";
+
+/** AbortSignal that fires after `ms`, combined with any caller-supplied signal. */
+function timeoutSignal(ms: number, existing?: AbortSignal | null): AbortSignal {
+  // AbortSignal.any is not in every target browser yet; fall back to the plain
+  // timeout signal when the caller passed none (the overwhelming majority).
+  const timeout = AbortSignal.timeout(ms);
+  if (!existing) return timeout;
+  const anyOf = (AbortSignal as { any?: (s: AbortSignal[]) => AbortSignal }).any;
+  return anyOf ? anyOf([existing, timeout]) : timeout;
+}
+
+/** True when `err` is an abort raised by our own timeout (not a user cancel). */
+function isTimeout(err: unknown): boolean {
+  return err instanceof DOMException && err.name === "TimeoutError";
+}
+
+async function http<T>(
+  path: string,
+  init?: RequestInit,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+): Promise<T> {
   // Attach the bearer token when a session exists (auth-enabled builds). When
   // auth is disabled there is no token and the header is simply omitted.
   const token = getToken();
   const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
-  const res = await fetch(path, {
-    headers: { "content-type": "application/json", ...authHeader, ...(init?.headers || {}) },
-    ...init,
-  });
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      headers: { "content-type": "application/json", ...authHeader, ...(init?.headers || {}) },
+      ...init,
+      signal: timeoutSignal(timeoutMs, init?.signal),
+    });
+  } catch (err) {
+    if (isTimeout(err)) {
+      // Shaped like the HTTP errors below so apiError() parses it uniformly and
+      // panels can render one consistent failure state.
+      throw new Error(
+        `408 Request Timeout — ${JSON.stringify({
+          detail: {
+            error: TIMEOUT_MARKER,
+            detail: `The server did not respond within ${Math.round(timeoutMs / 1000)}s.`,
+            path,
+          },
+        })}`,
+      );
+    }
+    throw err;
+  }
   if (!res.ok) {
     let detail: any = undefined;
     try {
@@ -29,6 +81,58 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
+// The gateway reports refusals as `{detail: {error, detail, ...extra}}` with a
+// machine-readable `error` code (e.g. "pdp_expired", "no_gate_document"), but
+// http() flattens that into an Error message so TanStack Query can surface it.
+// This reads the structure back out so a caller can render the precise reason
+// instead of a raw "400 Bad Request — {...}" string.
+export interface ApiErrorInfo {
+  status: number | null;
+  code: string | null;
+  detail: string;
+  extra: Record<string, unknown>;
+  /** True when the request exceeded its client-side budget (see http()). */
+  timedOut: boolean;
+}
+
+/** Convenience for panels: "did this fail because the server was too slow?" */
+export function isTimeoutError(err: unknown): boolean {
+  return apiError(err).code === TIMEOUT_MARKER;
+}
+
+export function apiError(err: unknown): ApiErrorInfo {
+  const message = err instanceof Error ? err.message : String(err ?? "");
+  const status = Number.parseInt(message, 10);
+  const sep = message.indexOf(" — ");
+  const out: ApiErrorInfo = {
+    status: Number.isNaN(status) ? null : status,
+    code: null,
+    detail: message,
+    extra: {},
+    timedOut: false,
+  };
+  if (sep === -1) return out;
+  try {
+    const body = JSON.parse(message.slice(sep + 3)) as { detail?: unknown };
+    const d = body?.detail;
+    if (typeof d === "string") return { ...out, detail: d };
+    if (d && typeof d === "object") {
+      const { error, detail, ...extra } = d as Record<string, unknown>;
+      const code = typeof error === "string" ? error : null;
+      return {
+        ...out,
+        code,
+        detail: typeof detail === "string" ? detail : out.detail,
+        extra,
+        timedOut: code === TIMEOUT_MARKER,
+      };
+    }
+  } catch {
+    /* non-JSON error body — keep the raw message */
+  }
+  return out;
+}
+
 // Authenticated file download. A plain <a href>/new-tab navigation can NOT carry
 // the bearer token, so it 401s ("missing bearer token") on auth-enabled builds.
 // Fetch the file with the token attached, then save the response blob via a
@@ -36,7 +140,10 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
 async function downloadFile(path: string, filename: string): Promise<void> {
   const token = getToken();
   const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
-  const res = await fetch(path, { headers: { ...authHeader } });
+  const res = await fetch(path, {
+    headers: { ...authHeader },
+    signal: timeoutSignal(UPLOAD_TIMEOUT_MS),
+  });
   if (!res.ok) {
     let detail: any = undefined;
     try {
@@ -64,7 +171,12 @@ async function downloadFile(path: string, filename: string): Promise<void> {
 async function postForm<T>(path: string, form: FormData): Promise<T> {
   const token = getToken();
   const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
-  const res = await fetch(path, { method: "POST", headers: { ...authHeader }, body: form });
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { ...authHeader },
+    body: form,
+    signal: timeoutSignal(UPLOAD_TIMEOUT_MS),
+  });
   if (!res.ok) {
     let detail: any = undefined;
     try {
@@ -253,6 +365,9 @@ export const api = {
     http<{ slots: import("./types").TasSlot[] }>(
       `/api/tas/slots${gateId ? `?gate_id=${encodeURIComponent(gateId)}` : ""}`,
     ),
+  // Cross-twin XT-2: DeferredArrivalWindow events consumed from UC-II via
+  // jnpa.crosstwin.deferred-arrival and applied to the TAS slot book.
+  tasDeferredWindows: () => http<{ windows: any[] }>(`/api/tas/deferred-windows`),
 
   health: () => http<{ status: string; ws_clients: number }>("/healthz"),
 
@@ -282,6 +397,12 @@ export const api = {
   customsHistory: (limit = 200) =>
     http<{ count: number; alerts: import("./types").CustomsAlert[] }>(
       `/api/gate-data/customs/history?limit=${limit}`,
+    ),
+  // Full customs document view of one container (module 5, /api/customs). Reused
+  // by the ICEGATE details drawer; RBAC matches /api/gate-data (CONTROL_ROOM|CUSTOMS).
+  customsContainer: (containerNo: string) =>
+    http<import("./types").CustomsContainerView>(
+      `/api/customs/containers/${encodeURIComponent(containerNo)}`,
     ),
 
   // --- Parking Management (RDS-backed: parking_facilities/slots/transactions/events) ---
@@ -405,6 +526,1053 @@ export const api = {
     }),
   wfExecutions: (limit = 50) =>
     http<{ executions: WfExecution[]; count: number }>(`/api/workflows/executions?limit=${limit}`),
+
+  // ===================================================================
+  // UC-III Final-Completion feature APIs (additive; gateway routers 0024)
+  // ===================================================================
+  // --- Accidents (Feature 1) ---
+  accidents: (params?: {
+    status?: string;
+    accident_type?: string;
+    vehicle_id?: string;
+    limit?: number;
+  }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<{ count: number; accidents: any[] }>(
+      `/api/accidents${q.toString() ? `?${q}` : ""}`,
+    );
+  },
+  accidentDashboard: () => http<any>("/api/accidents/dashboard"),
+  accident: (id: number | string) =>
+    http<{ accident: any; timeline: any[] }>(`/api/accidents/${id}`),
+  accidentReport: (body: Record<string, any>) =>
+    http<{ created: boolean; accident: any }>("/api/accidents", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  accidentStatus: (id: number | string, body: Record<string, any>) =>
+    http<any>(`/api/accidents/${id}/status`, { method: "POST", body: JSON.stringify(body) }),
+  accidentInvestigation: (id: number | string, body: Record<string, any>) =>
+    http<any>(`/api/accidents/${id}/investigation`, { method: "POST", body: JSON.stringify(body) }),
+  accidentResolve: (id: number | string, body: Record<string, any>) =>
+    http<any>(`/api/accidents/${id}/resolve`, { method: "POST", body: JSON.stringify(body) }),
+
+  // --- Transporter blacklist (Feature 2) ---
+  transporters: (params?: { q?: string; status?: string; limit?: number }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<{ count: number; transporters: any[] }>(
+      `/api/transporters${q.toString() ? `?${q}` : ""}`,
+    );
+  },
+  transporterBlacklist: () =>
+    http<{ count: number; blacklist: any[] }>("/api/transporters/blacklist"),
+  transporter: (id: number) =>
+    http<{ transporter: any; vehicles: any[]; blacklist_history: any[] }>(
+      `/api/transporters/${id}`,
+    ),
+  transporterCreate: (body: Record<string, any>) =>
+    http<any>("/api/transporters", { method: "POST", body: JSON.stringify(body) }),
+  transporterAddVehicle: (id: number, body: Record<string, any>) =>
+    http<any>(`/api/transporters/${id}/vehicles`, { method: "POST", body: JSON.stringify(body) }),
+  transporterBlacklistAdd: (id: number, body: Record<string, any>) =>
+    http<any>(`/api/transporters/${id}/blacklist`, { method: "POST", body: JSON.stringify(body) }),
+  transporterLift: (id: number, body?: Record<string, any>) =>
+    http<any>(`/api/transporters/${id}/lift`, { method: "POST", body: JSON.stringify(body || {}) }),
+  validateVehicle: (plate: string) =>
+    http<any>(`/api/transporters/validate/vehicle/${encodeURIComponent(plate)}`),
+  validateDriver: (driverId: string) =>
+    http<any>(`/api/transporters/validate/driver/${encodeURIComponent(driverId)}`),
+
+  // --- Driver Master & Intelligence (read-only registry) ---
+  driversMaster: (params?: {
+    q?: string;
+    company?: string;
+    status?: string;
+    enrolled?: boolean;
+    verification?: string;
+    transporter_id?: number;
+    sort?: string;
+    direction?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/drivers/master${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  driverMasterStats: () =>
+    http<{
+      total_drivers: number;
+      active_pdp: number;
+      expiring_soon: number;
+      expired_pdp: number;
+      companies: number;
+      enrolled: number;
+      pending_enrollment: number;
+      not_enrolled: number;
+    }>("/api/drivers/master/stats"),
+  driverMaster: (licence: string) =>
+    http<any>(`/api/drivers/master/${encodeURIComponent(licence)}`),
+  driverMasterPdpHistory: (licence: string, params?: { limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && qs.set(k, String(v)));
+    return http<{
+      licence: string;
+      appl_number: string | null;
+      items: any[];
+      total: number;
+      limit: number;
+      offset: number;
+      count: number;
+    }>(
+      `/api/drivers/master/${encodeURIComponent(licence)}/pdp-history${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  driverMasterValidate: (licence: string) =>
+    http<any>(`/api/drivers/master/validate/${encodeURIComponent(licence)}`),
+
+  // --- CFS-ECY CODECO gate movements (module 13, read-only) ---
+  cfsEcyMovements: (params?: {
+    facility?: string;
+    mode?: string;
+    container?: string;
+    from?: string;
+    to?: string;
+    sort?: string;
+    direction?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/cfs-ecy/movements${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  cfsEcyStats: (params?: { facility?: string; from?: string; to?: string }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{
+      total_in: number;
+      total_out: number;
+      total_events: number;
+      container_count: number;
+      active_containers: number;
+      iso_invalid: number;
+      average_dwell_hours: number | null;
+      median_dwell_hours: number | null;
+      dwell_count: number;
+      daily_throughput: { day: string; in_count: number; out_count: number }[];
+    }>(`/api/cfs-ecy/stats${qs.toString() ? `?${qs}` : ""}`);
+  },
+  cfsEcyDwell: (params?: { from?: string; to?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; summary: any; note: string }>(
+      `/api/cfs-ecy/dwell${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  cfsEcyContainer: (containerNumber: string) =>
+    http<any>(`/api/cfs-ecy/containers/${encodeURIComponent(containerNumber)}`),
+
+  // --- CFS-ECY Data Upload (module 13 sub-module) — mirrors the shipping-lines helpers ---
+  cfsEcyDownloadTemplate: (facility: string) =>
+    downloadFile(`/api/cfs-ecy/templates/${facility}`, `cfs_ecy_${facility}_template.csv`),
+  cfsEcyUploadValidate: (facility: string, file: File) => {
+    const f = new FormData();
+    f.append("file", file);
+    f.append("facility", facility);
+    return postForm<any>("/api/cfs-ecy/validate", f);
+  },
+  cfsEcyUpload: (facility: string, file: File) => {
+    const f = new FormData();
+    f.append("file", file);
+    f.append("facility", facility);
+    return postForm<any>("/api/cfs-ecy/upload", f);
+  },
+  cfsEcyUploads: (params?: { facility?: string; status?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && qs.set(k, String(v)));
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/cfs-ecy/uploads${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  cfsEcyUploadDetail: (fileId: number) => http<any>(`/api/cfs-ecy/uploads/${fileId}`),
+
+  // --- ECY→CFS repositioning chains (F-Y1 lifecycle, migration 0114) ---
+  ecyCfsChains: (params?: {
+    container?: string;
+    chain_status?: string;
+    anomaly_only?: boolean;
+    anomaly_code?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{
+      items: EcyCfsChain[];
+      total: number;
+      limit: number;
+      offset: number;
+      count: number;
+    }>(`/api/cfs-ecy/chains${qs.toString() ? `?${qs}` : ""}`);
+  },
+  ecyCfsChain: (containerNumber: string) =>
+    http<EcyCfsChain>(`/api/cfs-ecy/chains/${encodeURIComponent(containerNumber)}`),
+  ecyCfsChainStats: () => http<EcyCfsChainStats>("/api/cfs-ecy/chains/stats"),
+  ecyCfsChainRebuild: () =>
+    http<{ chains: number; complete: number; anomalies: number; ms: number }>(
+      "/api/cfs-ecy/chains/rebuild",
+      { method: "POST" },
+    ),
+
+  // --- UC-III gate documents (EIR / PIN ticket / Form-13) ---
+  gateDocSummary: () => http<GateDocSummary>("/api/gate-docs/summary"),
+  gateDocList: (
+    docType: "eir" | "pin" | "form13",
+    params?: {
+      container?: string;
+      truck?: string;
+      vehicle?: string;
+      pin?: string;
+      visit_id?: string;
+      terminal?: string;
+      limit?: number;
+      offset?: number;
+    },
+  ) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/gate-docs/${docType}${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  gateDocsForContainer: (containerNo: string) =>
+    http<GateDocBundle>(`/api/gate-docs/container/${encodeURIComponent(containerNo)}`),
+  gateDocsForTruck: (truckNo: string) =>
+    http<GateDocBundle>(`/api/gate-docs/truck/${encodeURIComponent(truckNo)}`),
+  gateDocTat: (terminal?: string) =>
+    http<GateDocTat>(
+      `/api/gate-docs/tat${terminal ? `?terminal=${encodeURIComponent(terminal)}` : ""}`,
+    ),
+  gateDocDownloadTemplate: (docType: string) =>
+    downloadFile(
+      `/api/gate-docs/templates/${docType}`,
+      `gate_doc_${docType.toLowerCase()}_template.csv`,
+    ),
+  gateDocUploadValidate: (docType: string, file: File) => {
+    const f = new FormData();
+    f.append("file", file);
+    f.append("doc_type", docType);
+    return postForm<any>("/api/gate-docs/validate", f);
+  },
+  gateDocUpload: (docType: string, file: File) => {
+    const f = new FormData();
+    f.append("file", file);
+    f.append("doc_type", docType);
+    return postForm<any>("/api/gate-docs/upload", f);
+  },
+  gateDocUploads: (params?: { doc_type?: string; status?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && qs.set(k, String(v)));
+    return http<{ items: any[]; total: number; count: number }>(
+      `/api/gate-docs/uploads${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  gateDocUploadDetail: (fileId: number) => http<any>(`/api/gate-docs/uploads/${fileId}`),
+
+  // --- UC-III job spine: assignment + gate / yard / scan events ---
+  jobs: (params?: {
+    container?: string;
+    vehicle_id?: string;
+    driver_id?: string;
+    status?: string;
+    open_only?: boolean;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{
+      items: ContainerJob[];
+      total: number;
+      limit: number;
+      offset: number;
+      count: number;
+    }>(`/api/jobs${qs.toString() ? `?${qs}` : ""}`);
+  },
+  job: (jobId: number) => http<ContainerJob & { events: JobEvent[] }>(`/api/jobs/${jobId}`),
+  jobValidate: (body: JobAssignInput) =>
+    http<{ ok: boolean; checks: JobCheck[]; vehicle: any; permit: any }>("/api/jobs/validate", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  jobAssign: (body: JobAssignInput) =>
+    http<{ job: ContainerJob; checks: JobCheck[] }>("/api/jobs", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  jobAccept: (jobId: number) =>
+    http<{ job: ContainerJob }>(`/api/jobs/${jobId}/accept`, { method: "POST" }),
+  jobComplete: (jobId: number, notes?: string) =>
+    http<{ job: ContainerJob }>(`/api/jobs/${jobId}/complete`, {
+      method: "POST",
+      body: JSON.stringify({ notes }),
+    }),
+  jobCancel: (jobId: number, reason: string) =>
+    http<{ job: ContainerJob }>(`/api/jobs/${jobId}/cancel`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    }),
+  jobForContainer: (containerNo: string) =>
+    http<ContainerJob & { events: JobEvent[] }>(
+      `/api/cargo-jobs/container/${encodeURIComponent(containerNo)}`,
+    ),
+
+  // --- assignment dropdown sources ------------------------------------------
+  // The two masters a job is raised against. Both resolve to the SAME tables the
+  // assignment validator checks (core.vehicle / core.driver_identity), so a
+  // selected option's id is always a valid vehicle_id / driver_id.
+  // NOTE: these two live under a stricter RBAC policy than /api/jobs itself
+  // (CUSTOMS + DTCCC_ADMIN only) — callers must handle 403 (see JobAssignPanel).
+  availableVehicles: (q?: string, limit = 50) => {
+    const qs = new URLSearchParams({ limit: String(limit) });
+    if (q) qs.set("q", q);
+    return http<{ vehicles: AvailableVehicle[]; count: number }>(
+      `/api/vehicles/available?${qs.toString()}`,
+    );
+  },
+  activeDrivers: () => http<{ drivers: ActiveDriver[]; count: number }>("/api/identity/drivers"),
+
+  gateEventCreate: (body: {
+    event_type: string;
+    plate: string;
+    gate_id?: string;
+    job_id?: number;
+    container_number?: string;
+    bat_lane?: string;
+    document_type?: string;
+    document_reference?: string;
+  }) =>
+    http<{ gate_event: any; job: ContainerJob | null }>("/api/gate/events", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  gateEvents: (params?: {
+    plate?: string;
+    container?: string;
+    job_id?: number;
+    limit?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; count: number }>(
+      `/api/gate/events${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+
+  yardMovementCreate: (body: {
+    movement_type: string;
+    job_id?: number;
+    container_number?: string;
+    yard_location?: string;
+    from_location?: string;
+    terminal?: string;
+  }) =>
+    http<{ movement: any; job: ContainerJob | null }>("/api/yard/movements", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  yardMovements: (params?: { container?: string; job_id?: number; limit?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; count: number }>(
+      `/api/yard/movements${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+
+  scanMachines: () => http<{ items: ScannerMachine[]; count: number }>("/api/scan/machines"),
+  scanStatus: (containerNo: string) =>
+    http<ScanStatus>(`/api/scan/status/${encodeURIComponent(containerNo)}`),
+  scanRecord: (body: {
+    container_number: string;
+    result: string;
+    machine_code?: string;
+    job_id?: number;
+    remarks?: string;
+  }) => http<{ scan: any }>("/api/scan/events", { method: "POST", body: JSON.stringify(body) }),
+  scanEvents: (params?: { container?: string; result?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; count: number }>(
+      `/api/scan/events${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+
+  // --- Berthing Reports (module 7) — vessel calls + lifecycle + Data Upload ---
+  berthingReports: (params?: {
+    terminal?: string;
+    status?: string;
+    vessel?: string;
+    voyage?: string;
+    berthed_only?: boolean;
+    from?: string;
+    to?: string;
+    sort?: string;
+    direction?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/berthing${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  berthingStats: (params?: { terminal?: string; from?: string; to?: string }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{
+      total: number;
+      expected: number;
+      arrived: number;
+      berthed: number;
+      completed: number;
+      departed: number;
+      terminals: number;
+      avg_berth_hours: number | null;
+      by_terminal: { terminal: string; count: number; berthed: number }[];
+    }>(`/api/berthing/stats${qs.toString() ? `?${qs}` : ""}`);
+  },
+  berthingReport: (id: number) => http<any>(`/api/berthing/${id}`),
+  berthingTimeline: (id: number) => http<any>(`/api/berthing/${id}/timeline`),
+
+  // Data Upload (module 7 sub-module) — mirrors the cfs-ecy helpers.
+  berthingDownloadTemplate: (terminal: string) =>
+    downloadFile(`/api/berthing/templates/${terminal || "ALL"}`, `berthing_template.csv`),
+  berthingUploadValidate: (terminal: string, file: File) => {
+    const f = new FormData();
+    f.append("file", file);
+    if (terminal) f.append("terminal", terminal);
+    return postForm<any>("/api/berthing/validate", f);
+  },
+  berthingUpload: (terminal: string, file: File) => {
+    const f = new FormData();
+    f.append("file", file);
+    if (terminal) f.append("terminal", terminal);
+    return postForm<any>("/api/berthing/upload", f);
+  },
+  berthingUploads: (params?: { terminal?: string; status?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && qs.set(k, String(v)));
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/berthing/uploads${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  berthingUploadDetail: (fileId: number) => http<any>(`/api/berthing/uploads/${fileId}`),
+
+  // --- Berthing Full Extract (module 7 sub-module) — verbatim every-table PDF capture ---
+  berthingExtract: (file: File) => {
+    const f = new FormData();
+    f.append("file", file);
+    return postForm<any>("/api/berthing/extract", f);
+  },
+  berthingExtractImport: (file: File) => {
+    const f = new FormData();
+    f.append("file", file);
+    return postForm<any>("/api/berthing/extract/import", f);
+  },
+  berthingDocuments: (params?: { terminal?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && qs.set(k, String(v)));
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/berthing/documents${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  berthingDocumentTables: (documentId: number) =>
+    http<any>(`/api/berthing/documents/${documentId}/tables`),
+  berthingDocumentFullView: (documentId: number) =>
+    http<{
+      document_id: number;
+      file_name: string;
+      terminal: string;
+      report_date: string | null;
+      page_count: number;
+      table_count: number;
+      row_count: number;
+      tables: {
+        table_name: string;
+        columns: string[];
+        rows: Record<string, any>[];
+        row_count: number;
+        extraction_note: string | null;
+      }[];
+    }>(`/api/berthing/documents/${documentId}/full-view`),
+
+  // --- Transporters & Drivers Data Upload (UC-III sub-module) — mirrors the cfs-ecy helpers ---
+  tdUploadDownloadTemplate: (entity: string) =>
+    downloadFile(
+      `/api/td-upload/templates/${entity}`,
+      `${entity.toLowerCase()}_upload_template.csv`,
+    ),
+  tdUploadValidate: (entity: string, file: File) => {
+    const f = new FormData();
+    f.append("file", file);
+    f.append("entity", entity);
+    return postForm<any>("/api/td-upload/validate", f);
+  },
+  tdUpload: (entity: string, file: File) => {
+    const f = new FormData();
+    f.append("file", file);
+    f.append("entity", entity);
+    return postForm<any>("/api/td-upload/upload", f);
+  },
+  tdUploads: (params?: { entity?: string; status?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && qs.set(k, String(v)));
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/td-upload/uploads${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  tdUploadDetail: (fileId: number) => http<any>(`/api/td-upload/uploads/${fileId}`),
+
+  // --- Performance & Daily Reports (module 12, read-only) ---
+  perfTerminals: () => http<{ items: any[]; count: number }>(`/api/performance/terminals`),
+  perfMeta: () =>
+    http<{ report_dates: string[]; latest_report_date: string | null; ldb_months: string[] }>(
+      `/api/performance/meta`,
+    ),
+  // --- Performance Data Upload (module 12 sub-module, admin-only) ---
+  perfDownloadTemplate: (reportType: string) =>
+    downloadFile(`/api/performance/templates/${reportType}`, `${reportType}_template.csv`),
+  perfUploadValidate: (reportType: string, file: File) => {
+    const f = new FormData();
+    f.append("report_type", reportType);
+    f.append("file", file);
+    return postForm<any>(`/api/performance/validate`, f);
+  },
+  perfUploadImport: (reportType: string, file: File) => {
+    const f = new FormData();
+    f.append("report_type", reportType);
+    f.append("file", file);
+    return postForm<any>(`/api/performance/upload`, f);
+  },
+  perfUploads: (params?: {
+    report_type?: string;
+    status?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/performance/uploads${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  perfKpi: (date?: string) => {
+    const qs = new URLSearchParams();
+    if (date) qs.set("date", date);
+    return http<{
+      report_date: string;
+      prev_report_date: string | null;
+      metrics: Record<string, number | null>;
+      deltas: Record<string, number>;
+    }>(`/api/performance/kpi${qs.toString() ? `?${qs}` : ""}`);
+  },
+  perfDaily: (date: string) => http<any>(`/api/performance/daily?date=${encodeURIComponent(date)}`),
+  perfTraffic: (params?: {
+    from?: string;
+    to?: string;
+    terminal?: string;
+    period?: string;
+    sort?: string;
+    direction?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/performance/daily/traffic${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  perfStatus: (params?: { date?: string; terminal?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/performance/daily/status${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  perfVessels: (params?: { date?: string; terminal?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/performance/daily/vessels${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  perfMonthly: (params?: {
+    fiscal_year?: string;
+    terminal?: string;
+    from?: string;
+    to?: string;
+    sort?: string;
+    direction?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/performance/monthly-teu${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  perfTrends: (params?: {
+    metric?: string;
+    grain?: string;
+    terminal?: string;
+    from?: string;
+    to?: string;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{
+      metric: string;
+      grain: string;
+      terminal: string | null;
+      count: number;
+      series: { t: string; terminal_code: string; value: number | null }[];
+    }>(`/api/performance/trends${qs.toString() ? `?${qs}` : ""}`);
+  },
+  perfStats: (params?: { from?: string; to?: string }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{
+      days: number;
+      latest_kpi: any;
+      daily: {
+        day: string;
+        total_teus: number | null;
+        gate_in_teus: number | null;
+        gate_out_teus: number | null;
+        yard_occupancy_pct: number | null;
+      }[];
+    }>(`/api/performance/stats${qs.toString() ? `?${qs}` : ""}`);
+  },
+  perfDwell: (params?: { month?: string; terminal?: string; cycle?: string; segment?: string }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; count: number }>(
+      `/api/performance/dwell${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  perfCfsIcd: (params?: {
+    month?: string;
+    facility_type?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/performance/cfs-icd${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  perfCongestion: (params?: { month?: string; cycle?: string }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; count: number }>(
+      `/api/performance/congestion${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  perfRoutes: (params?: { month?: string; cycle?: string; transport_mode?: string }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; count: number }>(
+      `/api/performance/routes${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  perfWeather: (params?: { month?: string; terminal?: string; cycle?: string }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; count: number }>(
+      `/api/performance/weather${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+
+  // --- Camera AI (Features 3/4/5) ---
+  cameraCounts: (params?: { camera_id?: string; gate_id?: string; limit?: number }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<{ count: number; counts: any[] }>(
+      `/api/camera-ai/counts${q.toString() ? `?${q}` : ""}`,
+    );
+  },
+  cameraSummary: () => http<any>("/api/camera-ai/summary"),
+  cameraDashboard: () => http<any>("/api/camera-ai/dashboard"),
+  cameraTrailers: (limit = 100) =>
+    http<{ count: number; trailers: any[] }>(`/api/camera-ai/trailer?limit=${limit}`),
+  cameraContainers: (limit = 100) =>
+    http<{ count: number; containers: any[] }>(`/api/camera-ai/container?limit=${limit}`),
+  cameraCountIngest: (body: Record<string, any>) =>
+    http<any>("/api/camera-ai/counts", { method: "POST", body: JSON.stringify(body) }),
+  cameraTrailerIngest: (body: Record<string, any>) =>
+    http<any>("/api/camera-ai/trailer", { method: "POST", body: JSON.stringify(body) }),
+  cameraContainerIngest: (body: Record<string, any>) =>
+    http<any>("/api/camera-ai/container", { method: "POST", body: JSON.stringify(body) }),
+
+  // --- Document OCR (Feature 6) ---
+  ocrDocuments: (params?: { doc_type?: string; limit?: number }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<{ count: number; documents: any[] }>(
+      `/api/ocr/documents${q.toString() ? `?${q}` : ""}`,
+    );
+  },
+  ocrDocument: (id: number) => http<any>(`/api/ocr/documents/${id}`),
+  ocrHealth: () => http<any>("/api/ocr/health"),
+  ocrUpload: (file: File, docType: string, sourceRef?: string) => {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    fd.append("doc_type", docType);
+    if (sourceRef) fd.append("source_ref", sourceRef);
+    return postForm<any>("/api/ocr/document", fd);
+  },
+
+  // --- NVR (Feature 7) ---
+  nvrDevices: () => http<{ count: number; devices: any[] }>("/api/nvr/devices"),
+  nvrDevice: (id: string) => http<any>(`/api/nvr/devices/${encodeURIComponent(id)}`),
+  nvrStreams: () => http<{ count: number; streams: any[] }>("/api/nvr/streams"),
+  nvrHealth: () => http<any>("/api/nvr/health"),
+  nvrRegister: (body: Record<string, any>) =>
+    http<any>("/api/nvr/devices", { method: "POST", body: JSON.stringify(body) }),
+  nvrMapChannel: (id: string, body: Record<string, any>) =>
+    http<any>(`/api/nvr/devices/${encodeURIComponent(id)}/channels`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  // --- ECY TRT (Feature 8) ---
+  trtSummary: () => http<any>("/api/trt/summary"),
+  trtRecords: (params?: { status?: string; vehicle_id?: string; limit?: number }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<{ count: number; records: any[] }>(
+      `/api/trt/records${q.toString() ? `?${q}` : ""}`,
+    );
+  },
+  trtPhase: (body: Record<string, any>) =>
+    http<any>("/api/trt/phase", { method: "POST", body: JSON.stringify(body) }),
+
+  // --- Bottlenecks (Feature 9) ---
+  bottlenecks: (top = 3) => http<any>(`/api/bottlenecks?top=${top}`),
+  bottleneckSnapshot: () => http<any>("/api/bottlenecks/snapshot", { method: "POST" }),
+  bottleneckHistory: (limit = 100) =>
+    http<{ count: number; snapshots: any[] }>(`/api/bottlenecks/history?limit=${limit}`),
+
+  // --- Reefer (Feature 11) ---
+  reeferSlots: (params?: { facility_id?: string; status?: string }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<{ count: number; slots: any[] }>(`/api/reefer/slots${q.toString() ? `?${q}` : ""}`);
+  },
+  reeferAvailability: () => http<any>("/api/reefer/availability"),
+  reeferSeed: (count = 24) =>
+    http<any>("/api/reefer/seed", { method: "POST", body: JSON.stringify({ count }) }),
+  reeferAllocate: (body: Record<string, any>) =>
+    http<any>("/api/reefer/allocate", { method: "POST", body: JSON.stringify(body) }),
+  reeferRelease: (body: Record<string, any>) =>
+    http<any>("/api/reefer/release", { method: "POST", body: JSON.stringify(body) }),
+
+  // --- Integrations: PDP / LDB / RMS-TAS (Features 12/13/14) ---
+  pdpVehicle: (plate: string) => http<any>(`/api/pdp/vehicle/${encodeURIComponent(plate)}`),
+  pdpTraffic: () => http<any>("/api/pdp/traffic"),
+  pdpHealth: () => http<any>("/api/pdp/health"),
+  ldbContainer: (no: string) => http<any>(`/api/ldb/container/${encodeURIComponent(no)}`),
+  ldbMovements: (no: string) => http<any>(`/api/ldb/container/${encodeURIComponent(no)}/movements`),
+  ldbTruck: (vehicleNumber: string) =>
+    http<{
+      source: string;
+      tracking: {
+        truckNumber: string;
+        truckType?: string;
+        alert?: string | null;
+        latest?: any;
+        events: Array<{
+          eventName?: string;
+          locName?: string;
+          containerNumber?: string;
+          eventTime?: string | number;
+          eventTimeLabel?: string;
+          dateMarker?: string;
+          transportMode?: string;
+          locLat?: string;
+          locLong?: string;
+        }>;
+        terminals: Array<{ locName: string; events: any[] }>;
+      };
+    }>(`/api/ldb/truck/${encodeURIComponent(vehicleNumber)}`),
+  ldbHealth: () => http<any>("/api/ldb/health"),
+  rmsSlots: (params?: { gate_id?: string; date?: string }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<{ count: number; slots: any[] }>(
+      `/api/rms-tas/slots${q.toString() ? `?${q}` : ""}`,
+    );
+  },
+  rmsHealth: () => http<any>("/api/rms-tas/health"),
+
+  // --- Weather (Open-Meteo weather + marine, LIVE→CACHED→SYNTHETIC) ---
+  // Coordinates default to the configured JNPA port location on the backend, so
+  // callers normally pass no params. The endpoint degrades instead of failing:
+  // read `status` / `source` / `decision_path` for provenance.
+  weatherCurrent: (params?: { latitude?: number; longitude?: number; forecast_hours?: number }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<import("./types").WeatherCurrent>(
+      `/api/weather/current${q.toString() ? `?${q}` : ""}`,
+    );
+  },
+  weatherHealth: () => http<import("./types").WeatherHealth>("/api/weather/health"),
+
+  // --- Traffic (TomTom flow + incidents, LIVE→CACHED→DATABASE→SYNTHETIC) ---
+  // Coordinates default to the configured JNPA port location on the backend, so
+  // callers normally pass no params. The endpoint degrades instead of failing:
+  // read `status` / `source` / `decision_path` for provenance. The TomTom key
+  // stays backend-only — the browser only ever talks to the gateway.
+  trafficCurrent: (params?: { latitude?: number; longitude?: number }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<import("./types").TrafficCurrent>(
+      `/api/traffic/current${q.toString() ? `?${q}` : ""}`,
+    );
+  },
+  trafficHealth: () => http<import("./types").TrafficHealth>("/api/traffic/health"),
+
+  // --- Air quality (OpenAQ, LIVE→CACHED→DATABASE→SYNTHETIC) ---
+  // Coordinates default to the configured JNPA port location on the backend, so
+  // callers normally pass no params. The endpoint degrades instead of failing:
+  // read `status` / `source` / `decision_path` for provenance. The browser
+  // only ever talks to the gateway — never to api.openaq.org.
+  airQualityCurrent: (params?: { latitude?: number; longitude?: number }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<import("./types").AirQualityCurrent>(
+      `/api/air-quality/current${q.toString() ? `?${q}` : ""}`,
+    );
+  },
+  airQualityHealth: () => http<import("./types").AirQualityHealth>("/api/air-quality/health"),
+
+  // --- Logistics (ULIP, LIVE→CACHED→DATABASE→FALLBACK) ---
+  // The endpoints degrade instead of failing: read `status` / `source` /
+  // `decision_path` for provenance. The FALLBACK rung is explicitly empty
+  // (data_available: false) — the surface never fabricates shipment data.
+  // The browser only ever talks to the gateway — never to the ULIP platform.
+  logisticsCurrent: () => http<import("./types").LogisticsCurrent>("/api/logistics/current"),
+  logisticsTracking: (refId: string) =>
+    http<import("./types").LogisticsTracking>(
+      `/api/logistics/tracking/${encodeURIComponent(refId)}`,
+    ),
+  logisticsEvents: (params?: {
+    ref_id?: string;
+    event_type?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<import("./types").LogisticsEventsPage>(
+      `/api/logistics/events${q.toString() ? `?${q}` : ""}`,
+    );
+  },
+  logisticsHealth: () => http<import("./types").LogisticsHealth>("/api/logistics/health"),
+
+  // --- Bhuvan WMS (ISRO/NRSC geospatial layer, control-plane only) ---
+  // The gateway never proxies imagery: /layers returns the WMS endpoint +
+  // named layers (validated server-side via GetCapabilities) and the ArcGIS
+  // WMSLayer renders GetMap tiles from the Bhuvan server directly. The raw
+  // answer is validated by map/bhuvan.parseBhuvanConfig before use.
+  bhuvanHealth: () => http<import("@/map/bhuvan").BhuvanHealth>("/api/bhuvan/health"),
+  bhuvanLayers: () => http<unknown>("/api/bhuvan/layers"),
+  rmsSeed: (body: Record<string, any>) =>
+    http<any>("/api/rms-tas/seed", { method: "POST", body: JSON.stringify(body) }),
+  rmsBook: (body: Record<string, any>) =>
+    http<any>("/api/rms-tas/book", { method: "POST", body: JSON.stringify(body) }),
+
+  // --- TT Double Trip (Feature 15) ---
+  doubleTripStatistics: () => http<any>("/api/double-trip/statistics"),
+  doubleTripCycles: (params?: { vehicle_id?: string; limit?: number }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<{ count: number; cycles: any[] }>(
+      `/api/double-trip/cycles${q.toString() ? `?${q}` : ""}`,
+    );
+  },
+  doubleTripStart: (body: Record<string, any>) =>
+    http<any>("/api/double-trip/start", { method: "POST", body: JSON.stringify(body) }),
+  doubleTripComplete: (tripId: number) =>
+    http<any>(`/api/double-trip/${tripId}/complete`, { method: "POST" }),
+
+  // --- Shipping Lines (module 4: IAL/EAL advance lists + EDO delivery orders) ---
+  // Fully server-driven: every filter, search and page is resolved by the backend
+  // (GET /api/shipping-lines) so they span the entire dataset, not a loaded page.
+  shippingLinesSummary: () => http<any>("/api/shipping-lines/summary"),
+  shippingLinesList: (params?: {
+    list_type?: string;
+    terminal?: string;
+    category?: string;
+    freight_kind?: string;
+    shipping_line?: string;
+    container?: string;
+    bl?: string;
+    q?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/shipping-lines${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  shippingLinesContainer: (containerNo: string) =>
+    http<{ container_no: string; summary: any; advance_lists: any[]; delivery_orders: any[] }>(
+      `/api/shipping-lines/container/${encodeURIComponent(containerNo)}`,
+    ),
+  shippingLinesByBl: (bl: string, params?: { limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && qs.set(k, String(v)));
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/shipping-lines/bl/${encodeURIComponent(bl)}${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  shippingLinesLines: (params?: { limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && qs.set(k, String(v)));
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/shipping-lines/lines${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  shippingLinesDeliveryOrders: (params?: {
+    container?: string;
+    vehicle?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/shipping-lines/delivery-orders${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  shippingLinesMessages: (params?: {
+    list_type?: string;
+    terminal?: string;
+    import_status?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/shipping-lines/messages${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  // Cargo enrichment (module-4 soft link): shipping-line facts for one cargo container.
+  // 404s when the container is not a cargo record; callers fall back to
+  // shippingLinesContainer for a non-cargo container-detail view.
+  cargoShippingLine: (containerNo: string) =>
+    http<{
+      container_number: string;
+      shipping_line: any;
+      advance_lists: any[];
+      delivery_orders: any[];
+    }>(`/api/cargo/${encodeURIComponent(containerNo)}/shipping-line`),
+
+  // --- Shipping Lines Data Upload (module 4 sub-module) — mirrors the perf upload helpers ---
+  shippingLinesDownloadTemplate: (listType: string) =>
+    downloadFile(
+      `/api/shipping-lines/templates/${listType}`,
+      `shipping_lines_${listType}_template.csv`,
+    ),
+  shippingLinesUploadValidate: (listType: string, file: File) => {
+    const f = new FormData();
+    f.append("file", file);
+    f.append("list_type", listType);
+    return postForm<any>("/api/shipping-lines/validate", f);
+  },
+  shippingLinesUpload: (listType: string, file: File) => {
+    const f = new FormData();
+    f.append("file", file);
+    f.append("list_type", listType);
+    return postForm<any>("/api/shipping-lines/upload", f);
+  },
+  shippingLinesUploads: (params?: { list_type?: string; status?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && qs.set(k, String(v)));
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/shipping-lines/uploads${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  shippingLinesUploadDetail: (fileId: number) => http<any>(`/api/shipping-lines/uploads/${fileId}`),
 };
 
 export interface WfField {
@@ -445,4 +1613,180 @@ export interface WfExecution {
   event: Record<string, unknown>;
   results: WfExecutionResult[];
   matched_count: number;
+}
+
+// ===================================================================== UC-III
+// Types for the UC-III lifecycle surface (gate documents, job spine, ECY→CFS
+// chains). Kept next to the helpers above so the screens import one module.
+
+export interface EcyCfsChainLeg {
+  seq: number;
+  leg: string;
+  label: string;
+  ts: string | null;
+  duration_hours?: number | null;
+  present: boolean;
+  note?: string;
+}
+export interface EcyCfsChain {
+  id: number;
+  container_number: string;
+  ecy_out_ts: string | null;
+  cfs_in_ts: string | null;
+  cfs_out_ts: string | null;
+  ecy_in_ts: string | null;
+  transit_hours: number | null;
+  dwell_hours: number | null;
+  cycle_hours: number | null;
+  chain_status: "COMPLETE" | "PARTIAL" | "ORPHAN";
+  legs_present: number;
+  event_count: number;
+  has_anomaly: boolean;
+  anomaly_codes: string[];
+  anomaly_labels?: string[];
+  anomaly_detail: Record<string, unknown>;
+  legs?: EcyCfsChainLeg[];
+}
+export interface EcyCfsChainStats {
+  chains: number;
+  complete_chains: number;
+  partial_chains: number;
+  anomaly_chains: number;
+  avg_transit_hours: number | null;
+  avg_dwell_hours: number | null;
+  avg_cycle_hours: number | null;
+  median_cycle_hours: number | null;
+  by_anomaly: { code: string; chains: number }[];
+  anomaly_labels: Record<string, string>;
+  last_rebuilt_at: string | null;
+}
+
+export interface GateDocSummary {
+  eir: number;
+  pin_tickets: number;
+  pin_legs: number;
+  dual_move_tickets: number;
+  form13: number;
+  containerless_docs: number;
+  eir_with_tat: number;
+  files: number;
+}
+export interface GateDocBundle {
+  container_no?: string;
+  truck_no?: string;
+  eir: any[];
+  pin: any[];
+  form13: any[];
+  total: number;
+  terminals?: string[];
+  tat_samples?: {
+    eir_no: string | null;
+    terminal: string | null;
+    container_number: string | null;
+    truck_in_time: string | null;
+    truck_out_time: string | null;
+    tat_minutes: number | null;
+  }[];
+}
+export interface GateDocTat {
+  samples: number;
+  avg_tat_min: number | null;
+  median_tat_min: number | null;
+  min_tat_min: number | null;
+  max_tat_min: number | null;
+  source: string;
+  by_terminal: { terminal: string; samples: number; avg_tat_min: number }[];
+}
+
+export type JobStatus =
+  | "ASSIGNED"
+  | "ACCEPTED"
+  | "AT_GATE"
+  | "IN_YARD"
+  | "PICKED_UP"
+  | "DROPPED"
+  | "COMPLETED"
+  | "CANCELLED";
+export interface ContainerJob {
+  id: number;
+  container_number: string | null;
+  group_code: string | null;
+  transporter_id: number | null;
+  vehicle_id: string;
+  vehicle_no: string | null;
+  driver_id: string | null;
+  driver_licence: string | null;
+  move_type: string;
+  document_type: string | null;
+  document_reference: string | null;
+  terminal: string | null;
+  gate: string | null;
+  status: JobStatus;
+  assigned_by: string | null;
+  assigned_at: string;
+  accepted_at: string | null;
+  completed_at: string | null;
+  cancelled_reason: string | null;
+  notes: string | null;
+}
+export interface JobEvent {
+  id: number;
+  event: string;
+  old_status: string | null;
+  new_status: string | null;
+  actor: string | null;
+  actor_role: string | null;
+  detail: Record<string, unknown>;
+  created_at: string;
+}
+export interface JobCheck {
+  check: string;
+  ok: boolean;
+  detail: string;
+  [k: string]: unknown;
+}
+// An enrolled driver from core.driver_identity (GET /api/identity/drivers).
+// `license_no` is what the PDP permit check is resolved through, so a driver
+// without one can never clear validation.
+export interface ActiveDriver {
+  driver_id: string;
+  name?: string | null;
+  license_no?: string | null;
+  photo_url?: string | null;
+}
+export interface JobAssignInput {
+  container_number?: string;
+  group_code?: string;
+  vehicle_id?: string;
+  vehicle_no?: string;
+  driver_id?: string;
+  driver_licence?: string;
+  move_type: string;
+  document_type?: string;
+  document_reference?: string;
+  terminal?: string;
+  gate?: string;
+  notes?: string;
+}
+
+export interface ScannerMachine {
+  machine_code: string;
+  machine_class: "DRIVE_THROUGH" | "MOBILE" | "FIXED";
+  machine_type: string | null;
+  location_code: string | null;
+  customs_house: string | null;
+  terminal: string | null;
+  lane: string | null;
+  active: boolean;
+}
+export interface ScanStatus {
+  container_number: string;
+  scan_required: boolean;
+  rms_selection: Record<string, unknown> | null;
+  machine_code: string | null;
+  machine_class: string | null;
+  latest_scan: Record<string, unknown> | null;
+  result: string | null;
+  cleared: boolean;
+  job_id: number | null;
 }

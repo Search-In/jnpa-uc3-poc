@@ -25,10 +25,15 @@ import {
   CreditCard,
   FileText,
   UserPlus,
+  CarFront,
   HeartPulse,
   FlaskConical,
   SlidersHorizontal,
   Workflow,
+  BarChart3,
+  Anchor,
+  Boxes,
+  Ship,
 } from "lucide-react";
 
 export interface NavLeaf {
@@ -55,6 +60,12 @@ export interface NavSection {
   items: NavItem[];
 }
 
+// Internal-only screens are hidden from the client navigation but stay routed
+// (deep-link/bookmark still work) — Workflow Composer's rule actions are not yet
+// executed by the backend, and Demo Console injects faults, so neither belongs
+// in a client demo. Set VITE_SHOW_INTERNAL_SCREENS=true to show them again.
+export const SHOW_INTERNAL_SCREENS = import.meta.env.VITE_SHOW_INTERNAL_SCREENS === "true";
+
 const leaf = (to: string, i18nKey: string, icon: LucideIcon): NavLeaf => ({
   kind: "leaf",
   to,
@@ -63,6 +74,8 @@ const leaf = (to: string, i18nKey: string, icon: LucideIcon): NavLeaf => ({
 });
 
 export const NAV_SECTIONS: NavSection[] = [
+  // Section order mirrors the operator's workflow: what is happening NOW, then
+  // the UC-3 truck & cargo journey, then analysis, then administration.
   {
     id: "operations",
     i18nKey: "navSection.operations",
@@ -76,9 +89,21 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: Truck,
         children: [leaf("/live", "nav.live", Radio), leaf("/advisory", "nav.advisory", Route)],
       },
-      leaf("/parking", "nav.parking", SquareParking),
-      leaf("/gate-customs", "nav.gateCustoms", ShieldCheck),
       leaf("/alerts", "nav.alerts", BellRing),
+      leaf("/parking", "nav.parking", SquareParking),
+    ],
+  },
+  {
+    // The complete UC-3 operational journey, in the order it happens.
+    id: "lifecycle",
+    i18nKey: "navSection.lifecycle",
+    emoji: "📦",
+    items: [
+      leaf("/uc3-lifecycle", "nav.uc3Lifecycle", Box),
+      leaf("/gate-customs", "nav.gateCustoms", ShieldCheck),
+      leaf("/truck-ops", "nav.truckOps", Truck),
+      leaf("/cfs-ecy", "nav.cfsEcy", Boxes),
+      leaf("/shipping-lines", "nav.shippingLines", Ship),
     ],
   },
   {
@@ -87,26 +112,32 @@ export const NAV_SECTIONS: NavSection[] = [
     emoji: "📊",
     items: [
       leaf("/intelligence", "nav.intelligence", ScanSearch),
-      leaf("/follow-the-box", "nav.followBox", Box),
       // Geo-fencing Manager + Geo-fence Events are merged into one Geo Analytics
-      // screen, so the sidebar shows a SINGLE entry (no duplicate operational
-      // pages). Both /geofencing and /geofence-events routes remain valid for
-      // deep links; the merged screen opens at the matching default tab.
+      // screen, so the sidebar shows a SINGLE entry. Both /geofencing and
+      // /geofence-events routes remain valid for deep links.
       leaf("/geofencing", "navGroup.geo", MapIcon),
       leaf("/fastag", "nav.fastag", CreditCard),
+      leaf("/berthing", "nav.berthing", Anchor),
+      leaf("/performance", "nav.performance", BarChart3),
       leaf("/reports", "nav.reports", FileText),
     ],
   },
+
   {
     id: "administration",
     i18nKey: "navSection.administration",
     emoji: "⚙",
     items: [
+      leaf("/vehicles", "nav.vehicles", CarFront),
       leaf("/enrollments", "nav.enrollments", UserPlus),
-      leaf("/workflows", "nav.workflows", Workflow),
       leaf("/health", "nav.health", HeartPulse),
+      ...(SHOW_INTERNAL_SCREENS
+        ? [
+            leaf("/workflows", "nav.workflows", Workflow),
+            leaf("/demo", "nav.demo", SlidersHorizontal),
+          ]
+        : []),
       leaf("/what-if", "nav.whatIf", FlaskConical),
-      leaf("/demo", "nav.demo", SlidersHorizontal),
     ],
   },
 ];

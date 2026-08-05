@@ -2,6 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "@/lib/api";
 import { cached } from "@/lib/store";
+import { alertToNotification } from "@/lib/notify";
+import { SkeletonCard } from "@/components/Skeleton";
+import { IconPin, IconAlertTriangle } from "@/components/icons";
 
 // Alert Center — category-based driver alert inbox. Consumes real /api/alerts
 // (RDS-backed jnpa.alerts) and buckets each alert into a driver-friendly
@@ -154,47 +157,85 @@ export default function AlertCenter() {
       </div>
 
       {loading ? (
-        <div className="muted">Loading…</div>
+        <SkeletonCard lines={2} />
       ) : !filtered.length ? (
-        <div className="muted" style={{ padding: 24, textAlign: "center" }}>
-          No alerts in this category.
+        <div className="empty">
+          <div style={{ fontSize: 34, marginBottom: 6 }}>✅</div>
+          {t("alertCenter.empty", { defaultValue: "No alerts right now. Drive safe." })}
         </div>
       ) : (
         filtered.map((a) => {
           const kind = a.kind || "ALERT";
           const crit = (a.severity || "").toLowerCase() === "critical";
           const p = a.payload || {};
-          const loc =
-            p.zone_id ||
-            p.gate_id ||
-            p.container_no ||
-            p.segment_id ||
-            a.plate ||
-            p.plate ||
-            p.device_id ||
-            p.vehicle_id ||
-            "—";
+          // Only show a driver-meaningful location (gate / zone / plate) — never a
+          // raw device / segment / container id.
+          const loc = p.gate_id || p.zone_id || a.plate || p.plate || null;
+          const cat = alertToNotification(String(kind));
           return (
             <div
               key={a.id}
               className="card"
               style={{
-                padding: 12,
-                marginBottom: 8,
-                borderLeft: `3px solid ${crit ? "var(--red,#c00)" : "var(--amber,#d80)"}`,
+                padding: 14,
+                marginBottom: 10,
+                borderLeft: `4px solid ${crit ? "var(--red,#c00)" : "var(--orange,#d80)"}`,
               }}
             >
-              <div style={{ display: "flex", justifyContent: "space-between" }}>
-                <div style={{ fontWeight: 600 }}>{kind.replace(/_/g, " ")}</div>
-                <div className="muted" style={{ fontSize: 11 }}>
-                  {a.ts ? new Date(a.ts).toLocaleTimeString() : ""}
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "baseline",
+                  gap: 8,
+                }}
+              >
+                <div
+                  style={{
+                    fontWeight: 700,
+                    fontSize: 16,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                  }}
+                >
+                  {crit ? (
+                    <span style={{ color: "var(--red)", flex: "none" }}>
+                      <IconAlertTriangle size={17} />
+                    </span>
+                  ) : null}
+                  {cat.title}
+                </div>
+                <div className="muted" style={{ fontSize: 12.5, flex: "none" }}>
+                  {a.ts
+                    ? new Date(a.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                    : ""}
                 </div>
               </div>
-              <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
-                📍 {String(loc)}
-              </div>
+              {loc ? (
+                <div
+                  className="muted"
+                  style={{
+                    fontSize: 13,
+                    marginTop: 3,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 5,
+                  }}
+                >
+                  <IconPin size={13} />
+                  {loc.toString().startsWith("G-")
+                    ? `Gate ${loc.toString().replace(/^G-/, "")}`
+                    : loc}
+                </div>
+              ) : null}
               <div
-                style={{ fontSize: 13, marginTop: 6, color: crit ? "var(--red,#c00)" : undefined }}
+                style={{
+                  fontSize: 14.5,
+                  fontWeight: 600,
+                  marginTop: 8,
+                  color: crit ? "var(--red,#c00)" : "var(--text)",
+                }}
               >
                 → {actionFor(kind)}
               </div>

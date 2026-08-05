@@ -5,7 +5,7 @@
 // cards, tabbed searchable tables). Per-source provider mode (SIM|LIVE) is shown
 // as a badge so the operator sees which sources are wired to a real endpoint.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ShieldCheck,
@@ -15,8 +15,10 @@ import {
   Container,
   Flag,
   ClipboardCheck,
+  Camera,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { useIncomingSearch } from "@/lib/searchStore";
 import { Card } from "@/components/ui/card";
 import {
   PageContainer,
@@ -26,13 +28,16 @@ import {
   SegmentedTabs,
   DataTable,
   StatusChip,
+  Embedded,
   type Column,
   type Tone,
 } from "@/components/ui/dtccc";
+import CameraAI from "@/screens/CameraAI";
+import CustomsDetailsDrawer from "@/components/panels/CustomsDetailsDrawer";
 import { fmtDateTimeIST } from "@/lib/utils";
 import type { CustomsAlert, GateCapture, LeoReconciliation } from "@/lib/types";
 
-type TabKey = "captures" | "leo" | "customs";
+type TabKey = "captures" | "leo" | "customs" | "camera";
 
 const CAPTURE_TYPES = [
   { key: "ESEAL", label: "e-Seal", icon: ShieldCheck },
@@ -50,6 +55,15 @@ export default function GateCustoms() {
   const qc = useQueryClient();
   const [tab, setTab] = useState<TabKey>("captures");
   const [captureType, setCaptureType] = useState<string>("ESEAL");
+  // Container selected for the ICEGATE customs details drawer (null = closed).
+  const [selectedContainer, setSelectedContainer] = useState<string | null>(null);
+
+  // Header Global Search hand-off. The omnibox routes a CONTAINER query here;
+  // before this the query was dropped and the operator landed unfiltered.
+  const incomingSearch = useIncomingSearch(["container", "vehicle"]);
+  useEffect(() => {
+    if (incomingSearch) setTab("captures");
+  }, [incomingSearch]);
 
   const providersQ = useQuery({ queryKey: ["gate-providers"], queryFn: () => api.gateProviders() });
   const capturesQ = useQuery({
@@ -156,6 +170,7 @@ export default function GateCustoms() {
             { key: "captures", label: "Gate Captures", icon: ClipboardCheck },
             { key: "leo", label: "Auto-LEO", icon: ShieldCheck, count: recon.length },
             { key: "customs", label: "Customs Flags", icon: Flag, count: customs.length },
+            { key: "camera", label: "Camera AI", icon: Camera },
           ]}
         />
 
@@ -173,6 +188,8 @@ export default function GateCustoms() {
               status={capturesQ}
               onRetry={() => capturesQ.refetch()}
               type={captureType}
+              onRowClick={(c) => c.container_no && setSelectedContainer(c.container_no)}
+              initialSearch={incomingSearch}
             />
           </Card>
         )}
@@ -186,7 +203,18 @@ export default function GateCustoms() {
             <CustomsTable rows={customs} status={customsQ} onRetry={() => customsQ.refetch()} />
           </Card>
         )}
+        {tab === "camera" && (
+          <Embedded>
+            <CameraAI />
+          </Embedded>
+        )}
       </div>
+
+      {/* ICEGATE row details — customs document view + workflow timeline. */}
+      <CustomsDetailsDrawer
+        containerNo={selectedContainer}
+        onClose={() => setSelectedContainer(null)}
+      />
     </PageContainer>
   );
 }
@@ -200,11 +228,15 @@ function CapturesTable({
   status,
   onRetry,
   type,
+  onRowClick,
+  initialSearch,
 }: {
   rows: GateCapture[];
   status: any;
   onRetry: () => void;
   type: string;
+  onRowClick?: (c: GateCapture) => void;
+  initialSearch?: string;
 }) {
   const columns: Column<GateCapture>[] = useMemo(
     () => [
@@ -242,6 +274,7 @@ function CapturesTable({
       rowKey={(c) => String(c.id)}
       status={status}
       onRetry={onRetry}
+      onRowClick={type === "ICEGATE" ? onRowClick : undefined}
       emptyLabel={`No ${type} captures in RDS yet.`}
       search={(c, q) =>
         `${c.container_no ?? ""} ${c.vehicle_plate ?? ""} ${c.status ?? ""}`
@@ -249,6 +282,7 @@ function CapturesTable({
           .includes(q)
       }
       searchPlaceholder="Search container / vehicle…"
+      initialSearch={initialSearch}
       pageSize={10}
     />
   );

@@ -37,7 +37,9 @@ configuration change, not a rewrite.
   the service runs a deterministic fallback OCR and reports its true (lower) accuracy via `/eval` —
   it never fabricates the 95% figure.
 - **Congestion**: GraphSAGE (road graph) + LSTM. Trained on 14 days of deterministic synthetic
-  commute history (+ real Timescale tail when available). Reported **F1 = 0.8411 ≥ 0.85**.
+  commute history (+ real Timescale tail when available). Reported **F1 = 0.8797 ≥ 0.85**
+  (train_stride=1 retrain; the prior 0.8411 is retained in the metrics artifact as
+  retrain-loop evidence).
 - **Anomaly**: ByteTrack + rule engine + trajectory autoencoder, trained on synthetic "normal"
   corridor trajectories.
 
@@ -57,7 +59,7 @@ configuration change, not a rewrite.
 ## Identity / face-recognition (C2) — DPDP posture
 
 - **PoC biometrics use synthetic, consented faces only.** No real driver biometrics are processed.
-  Given DPDP Act exposure (bid §7.4), real PDP biometric enrolment is a **post-award, consent-gated**
+  Given DPDP Act exposure (bid §7.4), real PDP biometric enrollment is a **post-award, consent-gated**
   workflow. The PoC demonstrates the *verification pipeline* (embed → match → PROVISIONAL on miss)
   on a synthetic gallery so the mechanism is provable without handling personal data.
 

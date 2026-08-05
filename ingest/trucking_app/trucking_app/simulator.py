@@ -42,6 +42,16 @@ from .truck import Truck, TruckState
 
 log = get_logger("trucking_app.simulator")
 
+# Gate lifecycle events emitted when a truck *enters* each of these states. The
+# KPI views pair consecutive events per trip to measure the Appendix-C gate KPIs
+# (queue wait, transaction time, turn-around time inside the port).
+_GATE_EVENT_BY_STATE = {
+    TruckState.AT_GATE_QUEUE: "GATE_ARRIVAL",     # joined the gate queue
+    TruckState.GATE_TRANSACTION: "GATE_TXN_START",  # boom processing began
+    TruckState.INSIDE_PORT: "GATE_IN",            # boom cleared, admitted
+    TruckState.EN_ROUTE_HOME: "GATE_OUT",         # left the port (exit)
+}
+
 
 class Simulator:
     """Drives the fleet and fans telemetry out to MQTT + Kafka + Timescale."""
@@ -132,7 +142,7 @@ class Simulator:
                 publishes.append(self._advance_and_event(truck, dt))
                 interval = (
                     self.cfg.interval_at_gate_s
-                    if truck.state == TruckState.AT_GATE_QUEUE
+                    if truck.state in (TruckState.AT_GATE_QUEUE, TruckState.GATE_TRANSACTION)
                     else self.cfg.interval_default_s
                 )
                 setattr(truck, "_next_update", tick_start + interval)
@@ -164,6 +174,7 @@ class Simulator:
         schedule, route or not. Kafka + DB writes happen here (cheap, non-async);
         only the MQTT publish is returned for the caller to ``gather``.
         """
+        gate_evt: str | None = None
         if truck.needs_route:
             self._kick_route(truck)
         else:
@@ -174,12 +185,26 @@ class Simulator:
                 STATE_TRANSITIONS.labels(new_state.value).inc()
                 TRUCKS_BY_STATE.labels(prev_state.value).dec()
                 TRUCKS_BY_STATE.labels(new_state.value).inc()
+                gate_evt = _GATE_EVENT_BY_STATE.get(new_state)
                 # A leg just finished -> the next driving leg needs a route; kick
                 # it now so the polyline is ready before the next tick.
                 if truck.needs_route:
                     self._kick_route(truck)
 
         event = truck.telemetry()
+        if gate_evt is not None:
+            # Use the true gate position (not GPS-noised) and the event ts so the
+            # KPI arithmetic is on clean timestamps.
+            self.db.enqueue_gate_event(
+                ts=event.ts,
+                device_id=truck.profile.device_id,
+                plate=truck.profile.plate,
+                gate_id=truck.profile.gate_id,
+                trip_id=truck.trip_id,
+                event_type=gate_evt,
+                lat=truck.position[0],
+                lon=truck.position[1],
+            )
         self.kafka.publish_telemetry(truck.profile.device_id, event)
         self.db.enqueue(event)
         self._published_window += 1

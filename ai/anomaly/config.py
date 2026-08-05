@@ -107,8 +107,10 @@ class AnomalyConfig:
     alerts_topic: str = "alerts"
 
     # --- Postgres (alert store + track history for AE training) ---
-    # libpq DSN (no SQLAlchemy "+asyncpg" prefix) for psycopg.
-    postgres_dsn_libpq: str = "postgresql://postgres:jnpa_pw@postgres:5432/postgres"
+    # libpq DSN (no SQLAlchemy "+asyncpg" prefix) for psycopg. Empty by
+    # default: ANOMALY_POSTGRES_DSN must point at RDS (jnpa_schema_v3);
+    # there is no local-postgres fallback.
+    postgres_dsn_libpq: str = ""
 
     # --- MinIO (AE weights + evidence images) ---
     minio_endpoint: str = "minio:9000"
@@ -195,10 +197,7 @@ class AnomalyConfig:
             frame_cameras=os.environ.get("ANOMALY_FRAME_CAMERAS", ""),
             kafka_brokers=os.environ.get("KAFKA_BROKERS", "kafka:9092"),
             alerts_topic=os.environ.get("ANOMALY_ALERTS_TOPIC", "alerts"),
-            postgres_dsn_libpq=os.environ.get(
-                "ANOMALY_POSTGRES_DSN",
-                "postgresql://postgres:jnpa_pw@postgres:5432/postgres",
-            ),
+            postgres_dsn_libpq=os.environ.get("ANOMALY_POSTGRES_DSN", ""),
             minio_endpoint=os.environ.get("MINIO_ENDPOINT", "minio:9000"),
             minio_access_key=os.environ.get("MINIO_ACCESS_KEY", "minioadmin"),
             minio_secret_key=os.environ.get("MINIO_SECRET_KEY", "minioadmin"),
@@ -213,7 +212,7 @@ class AnomalyConfig:
 
 
 # Corridor + gate cameras whose frame streams the detector consumes by default
-# (mirrors the jnpa.cameras seed in infra/postgres/init.sql).
+# (mirrors the core.camera seed in infra/postgres/init.sql).
 DEFAULT_CAMERAS = (
     "CAM-COR-01", "CAM-COR-02", "CAM-COR-03",
     "CAM-COR-04", "CAM-COR-05", "CAM-COR-06",

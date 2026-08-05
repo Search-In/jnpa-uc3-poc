@@ -313,7 +313,7 @@ async def _latest_db_read(state: GatewayState, camera_id: str) -> Optional[dict]
         row = await fetch_one(
             """
             SELECT ts, camera_id, plate, conf, vehicle_class, image_url, weather, degraded
-            FROM jnpa.anpr_reads
+            FROM core.anpr_read
             WHERE camera_id = :cam
             ORDER BY ts DESC
             LIMIT 1

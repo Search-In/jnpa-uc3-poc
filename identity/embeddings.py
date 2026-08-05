@@ -9,8 +9,8 @@ processing any real biometric data. No images are ever read or written.
 
 The numbers are chosen so the pipeline behaves like a real one:
 
-* A genuine live capture is the enrolment vector plus small deterministic
-  per-capture "noise", giving cosine ~0.97 against enrolment (close, not
+* A genuine live capture is the enrollment vector plus small deterministic
+  per-capture "noise", giving cosine ~0.97 against enrollment (close, not
   identical — exactly what a second photo of the same person looks like).
 * An impostor capture is a different identity's vector, giving cosine < 0.5.
 
@@ -28,7 +28,7 @@ from typing import List, Sequence
 DEFAULT_DIM = 128
 
 # How much per-capture noise a *genuine* live capture carries relative to the
-# enrolment vector. Tuned so cosine(enrolment, genuine_capture) ~= 0.97 at
+# enrollment vector. Tuned so cosine(enrollment, genuine_capture) ~= 0.97 at
 # DEFAULT_DIM (the noise vector's L2 norm scales with sqrt(dim), so the value is
 # kept small; verified empirically in tests/test_identity.py).
 GENUINE_NOISE = 0.0375
@@ -104,10 +104,10 @@ def cosine(a: Sequence[float], b: Sequence[float]) -> float:
 def capture_embedding(driver_id: str, genuine: bool, dim: int = DEFAULT_DIM) -> List[float]:
     """Simulate a *live* capture embedding for a verification attempt.
 
-    * ``genuine=True``  -> the driver's enrolment vector perturbed by small
-      deterministic per-capture noise. Cosine vs enrolment ~= 0.97.
+    * ``genuine=True``  -> the driver's enrollment vector perturbed by small
+      deterministic per-capture noise. Cosine vs enrollment ~= 0.97.
     * ``genuine=False`` -> a wholly different deterministic identity (an
-      impostor presenting at the gate). Cosine vs the claimed enrolment < 0.5.
+      impostor presenting at the gate). Cosine vs the claimed enrollment < 0.5.
 
     Deterministic: a given ``driver_id`` always yields the same genuine and the
     same impostor capture, so tests and demos are reproducible.
@@ -163,8 +163,8 @@ class EmbeddingProvider:
 class SyntheticEmbeddingProvider(EmbeddingProvider):
     """Deterministic, image-free embeddings (the original PoC behaviour).
 
-    The reference is the driver's enrolment vector; a capture is the same vector
-    plus small per-capture noise (cosine ~0.97), so a genuine enrol→verify of the
+    The reference is the driver's enrollment vector; a capture is the same vector
+    plus small per-capture noise (cosine ~0.97), so a genuine enroll→verify of the
     same driver clears the verify threshold. Pixels are ignored — no biometric is
     processed — which is exactly the documented synthetic/consented PoC posture.
     """
@@ -184,12 +184,12 @@ class OnnxArcFaceProvider(EmbeddingProvider):
     Pipeline: decode -> detect the largest face (OpenCV Haar cascade, bundled — no
     extra model) -> crop with margin -> resize 112x112 -> RGB, ArcFace normalise
     -> ONNX inference -> L2-normalised 512-d embedding. If no face is detected the
-    frame is centre-cropped (the client face-guide centres the face) so enrolment
+    frame is centre-cropped (the client face-guide centres the face) so enrollment
     still works. Requires a captured image; raising on a missing image lets the
     caller fall back to synthetic.
 
-    The same pipeline runs for both the reference (enrolment) and the live capture,
-    so a genuine same-person enrol->verify scores high (~0.5-0.9) while a different
+    The same pipeline runs for both the reference (enrollment) and the live capture,
+    so a genuine same-person enroll->verify scores high (~0.5-0.9) while a different
     person scores near zero — the threshold (IDENTITY_VERIFY_THRESHOLD, tuned for
     ArcFace, ~0.45) cleanly separates them.
     """

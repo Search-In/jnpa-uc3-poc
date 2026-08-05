@@ -16,7 +16,7 @@ Three fallback chains are encoded (matching the bid spec):
        LIVE_FALLBACK -> vahan-sim
        CACHED        -> last response from Redis (TTL 12 h)
        PROVISIONAL   -> admit with provisional=true + a 24 h cure window;
-                        write jnpa.vehicle_master(provisional_until=now()+24h)
+                        write core.vehicle_rc(provisional_until=now()+24h)
                         and emit Alert(kind=PROVISIONAL_VEHICLE).
 
 3. Trucking App:

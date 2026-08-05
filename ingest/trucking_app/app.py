@@ -156,7 +156,7 @@ async def devices_list(
             "speed_kmh": event.speed_kmh,
             "heading": event.heading,
             "remaining_km": round(truck.remaining_km, 3),
-            "eta_s": truck.eta_s,
+            "eta_s": truck.eta_s if truck.eta_s is not None else round(fleet.estimate_eta_s(truck), 1),
             "segment_id": truck.current_segment_id,
         })
         if len(out) >= limit:
@@ -224,7 +224,7 @@ async def device(device_id: str) -> dict:
         "battery": event.battery,
         "accuracy_m": event.accuracy_m,
         "remaining_km": round(truck.remaining_km, 3),
-        "eta_s": truck.eta_s,
+        "eta_s": truck.eta_s if truck.eta_s is not None else round(fleet.estimate_eta_s(truck), 1),
         "segment_id": truck.current_segment_id,
     }
 

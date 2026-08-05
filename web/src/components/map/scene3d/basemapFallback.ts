@@ -65,8 +65,8 @@ export function makeOfflineBasemap(): Basemap {
 }
 
 /** The basemap to start with: local when offline is requested, else the given
- *  online basemap id (defaults to the UC3 dark-gray-vector, no API key needed). */
-export function initialBasemap(online: string = "dark-gray-vector"): string | Basemap {
+ *  online basemap id (defaults to the UC3 Esri satellite imagery). */
+export function initialBasemap(online: string = "satellite"): string | Basemap {
   return isOfflineRequested() ? makeOfflineBasemap() : online;
 }
 

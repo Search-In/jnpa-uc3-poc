@@ -1,4 +1,4 @@
-# Driver Enrolment & Identity Verification — Production Runbook
+# Driver Enrollment & Identity Verification — Production Runbook
 
 This subsystem runs in two modes, selected by **`APP_ENV`** (same dev/prod
 classification as the auth layer). The mode decides whether resilience fallbacks
@@ -8,7 +8,7 @@ are allowed.
 
 | Capability            | DEV (`APP_ENV=development`, default) | PRODUCTION (`APP_ENV=production`) |
 |-----------------------|--------------------------------------|----------------------------------|
-| Enrolment store       | Postgres, **in-memory fallback** if DB down | **Postgres REQUIRED** — DB down → structured `503` (no memory) |
+| Enrollment store       | Postgres, **in-memory fallback** if DB down | **Postgres REQUIRED** — DB down → structured `503` (no memory) |
 | Face image storage    | MinIO, **base64 fallback** in DB     | **MinIO REQUIRED** — upload fail → `503` (no base64) |
 | Identity matching     | ArcFace ONNX, **synthetic fallback** (no-image/simulate) | **ArcFace ONNX REQUIRED** — service down on approval → `503`; a real capture is never synthetic-passed |
 | Auth / RBAC           | off (frictionless)                   | **REQUIRED** (`validate_auth_config` fails startup otherwise) |
@@ -27,7 +27,7 @@ path in any mode — if the model is unreachable the result is `PROVISIONAL`
   REJECTED → REENROLL`) + captured frames pending review.
 - **`verification_logs`** — append-only audit of every `/verify` decision
   (driver, decision, score, provider, path, actor, purpose, reason, ts).
-- `enrollment_audit` — append-only enrolment lifecycle audit (DPDP).
+- `enrollment_audit` — append-only enrollment lifecycle audit (DPDP).
 
 ## API (all via the gateway, DPDP-audited)
 
@@ -96,7 +96,7 @@ The dashboard build must be live: `VITE_DATA_MODE=live`.
 
 ## Pre-deployment checklist (validated)
 
-1. Enrol a driver from the PWA → `PENDING`.
+1. Enroll a driver from the PWA → `PENDING`.
 2. Approve in the admin portal → `ACTIVE`, promoted to `drivers`, template minted, photo in MinIO.
 3. Restart gateway + identity.
 4. Driver still `ACTIVE` (read from Postgres, not memory).
@@ -110,7 +110,7 @@ Run on real captures in the ONNX pipeline (skipped under the synthetic provider)
 
 - **Quality (active, no model)** — exactly one face, sharpness (Laplacian var),
   brightness, and face-size are checked on `/verify` and `/enrol`. A failing frame
-  returns `decision=REJECTED, reason=quality:<code>` (verify) or refuses enrolment
+  returns `decision=REJECTED, reason=quality:<code>` (verify) or refuses enrollment
   (`enrolled=false`; admin approval returns `422 reference_quality_failed`). Codes:
   `no_face_detected | multiple_faces | face_too_small | image_too_blurry |
   too_dark | too_bright`. Tunable via `IDENTITY_QUALITY_*` env.
@@ -131,5 +131,5 @@ Run on real captures in the ONNX pipeline (skipped under the synthetic provider)
   ArcFace scores ~0.6 vs ~0.85 with alignment; thresholds are set accordingly.
 - **1:N search is in-app cosine** over `jnpa.driver_faces` (no pgvector in the DB
   image) — fine for thousands of drivers; use pgvector/FAISS for larger fleets.
-- No duplicate-face detection at enrolment (same face under two driver IDs).
+- No duplicate-face detection at enrollment (same face under two driver IDs).
 - Single identity instance, CPU inference, no GPU/HA/model-rotation.

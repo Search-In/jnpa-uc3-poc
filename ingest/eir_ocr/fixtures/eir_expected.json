@@ -1,0 +1,104 @@
+{
+  "by_sha256_12": {
+    "f0151933fb88": "eir1_psa_bmct",
+    "549542e74546": "eir2_dpworld_nsict",
+    "151067d00747": "eir3_gateway_maersk",
+    "08bc5d0485e6": "eir4_gateway_one"
+  },
+  "selftest": [
+    {"stem": "eir1_psa_bmct", "field": "ContainerNo", "expect": "found"},
+    {"stem": "eir1_psa_bmct", "field": "LICNo", "expect": "found"},
+    {"stem": "eir1_psa_bmct", "field": "EIRNo", "expect": "found"},
+    {"stem": "eir1_psa_bmct", "field": "Category", "expect": "found"},
+    {"stem": "eir2_dpworld_nsict", "field": "ContainerNo", "expect": "blank"},
+    {"stem": "eir2_dpworld_nsict", "field": "LICNo", "expect": "found"},
+    {"stem": "eir3_gateway_maersk", "field": "ContainerNo", "expect": "found"},
+    {"stem": "eir3_gateway_maersk", "field": "LICNo", "expect": "found"},
+    {"stem": "eir3_gateway_maersk", "field": "ClientCode", "expect": "found"},
+    {"stem": "eir3_gateway_maersk", "field": "IsReefer", "expect": "found"},
+    {"stem": "eir4_gateway_one", "field": "ContainerNo", "expect": "found"},
+    {"stem": "eir4_gateway_one", "field": "LICNo", "expect": "found"},
+    {"stem": "eir4_gateway_one", "field": "IsReefer", "expect": "found"}
+  ],
+  "documents": {
+    "eir1_psa_bmct": {
+      "sha256_12": "f0151933fb88",
+      "category": "EIR",
+      "fields": {
+        "Category": "IMPORT",
+        "ShippingAgent": "MSC",
+        "EIRNo": "4339869",
+        "LICNo": "MH43BX1488",
+        "TruckCompany": "TRANSTA",
+        "ContainerNo": "MSMU1908508",
+        "ISOCode": "2210",
+        "GrossWeight": "24.6 t",
+        "ContainerStatus": "Full",
+        "VesselVia": "SAV/S0696",
+        "ToFrom": "CLP CFS",
+        "BATNo": "B723",
+        "UserLoginID": "BPM006"
+      }
+    },
+    "eir2_dpworld_nsict": {
+      "sha256_12": "549542e74546",
+      "category": "EIR",
+      "fields": {
+        "Terminal": "DP World Nhava Sheva ICT",
+        "BATNo": "UE56",
+        "LocSlip": "Pickup Laden",
+        "ContainerNo": "__BLANK__",
+        "ISOCode": "4532",
+        "GroupCode": "CFSZNT",
+        "LICNo": "MH46AF4375",
+        "ContainerStatus": "Full",
+        "YardPosition": "4L10"
+      }
+    },
+    "eir3_gateway_maersk": {
+      "sha256_12": "151067d00747",
+      "category": "EIR",
+      "fields": {
+        "Terminal": "Gateway Terminals India Pvt Ltd",
+        "ContainerNo": "MRKU5014206",
+        "BATNo": "D391",
+        "Line": "MAE",
+        "TransID": "5599372",
+        "ContainerStatus": "FCL",
+        "ISOCode": "4510",
+        "ClientCode": "MG1",
+        "GrossWeight": "31.81 MT",
+        "SealNo1": "OM0130728",
+        "IsReefer": "NO",
+        "IsODC": "NO",
+        "IsDamage": "NO",
+        "Vessel": "ALEXANDRA MAERSK",
+        "LICNo": "MH43BX1488",
+        "Driver": "BABALU KUMAR"
+      }
+    },
+    "eir4_gateway_one": {
+      "sha256_12": "08bc5d0485e6",
+      "category": "EIR",
+      "fields": {
+        "ContainerNo": "NYKU4768188",
+        "BATNo": "D391",
+        "Line": "ONE",
+        "TransID": "5614330",
+        "ContainerStatus": "FCL",
+        "ISOCode": "4510",
+        "GroupCode": "BLC",
+        "ClientCode": "11J",
+        "GrossWeight": "29.75 MT",
+        "SealNo1": "U1376237",
+        "IsReefer": "NO",
+        "IsODC": "NO",
+        "IsDamage": "NO",
+        "Vessel": "ONE RECOGNITION",
+        "Via": "S0475",
+        "LICNo": "MH43BX1488",
+        "Driver": "BABALU KUMAR"
+      }
+    }
+  }
+}

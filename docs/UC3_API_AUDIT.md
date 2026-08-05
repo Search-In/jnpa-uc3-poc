@@ -31,7 +31,7 @@ The sections below are the ORIGINAL audit findings (pre-fix) and remain as the r
 | 1 | 🔴 BLOCKER | Gateway image ships a **stale `jnpa_shared`** (missing `iso6346.py` + `assumptions.py`). `journey.py` imports `jnpa_shared.iso6346` at module load. | `journey`, `workflows`, `meta` routers are **not mounted** (all 404). A **fresh `import gateway.main` crashes** → the gateway will **not survive a restart / redeploy**. It only serves now because the running process is a 5-hour-old in-memory copy. |
 | 2 | 🔴 BLOCKER | `gateway/audit_client.py:110` reads `request.content` on a **streaming** request without `read()` → `httpx.RequestNotRead`. | Every gateway→service **multipart image forward 500s**: `/api/anpr/infer`, `/api/violations/detect`, `/api/violations/enforce`. The entire image-based enforcement flow is broken. |
 | 3 | 🟠 HIGH | `FASTAG_DEMO_MODE=true` is in `.env.local` but **absent from the running gateway container env**; no ULIP URL set. | `/api/fastag/balance|transactions|toll-enroute` all **500 (config)**. FASTag write-path unusable until env applied. `toll-enroute` has **no demo path at all**. |
-| 4 | 🟠 HIGH | **`jnpa-minio` container is `Exited (0)`.** | Evidence storage/serving (`/api/evidence`), identity enrolment photo persistence (`/api/identity/enrollments/{id}/approve`), and report-embedded images are degraded/broken. |
+| 4 | 🟠 HIGH | **`jnpa-minio` container is `Exited (0)`.** | Evidence storage/serving (`/api/evidence`), identity enrollment photo persistence (`/api/identity/enrollments/{id}/approve`), and report-embedded images are degraded/broken. |
 | 5 | 🟡 MED | `jnpa-truck-sim` container **unhealthy** (healthz 000). | `/api/trucks/{id}/route` reroute → **502**; `/api/trucks` list still degrades to 200. |
 | 6 | 🟡 MED | ANPR AI service is in **degraded fallback OCR** (`degraded:true`, engine `fallback`, held-out `exact_match = 0.0`). | Plate recognition returns synthetic/low-accuracy reads; real Paddle+YOLO weights not loaded. |
 | 7 | 🟡 MED | `AUTH_ENABLED=false` (dev). Every endpoint is open. | Acceptable for demo; **must** be enabled + `AUTH_JWT_SECRET` rotated for production. |
@@ -134,9 +134,9 @@ Auth column reflects RBAC **when `AUTH_ENABLED=true`** (currently off → all op
 | `/api/identity/identify` | POST | identity.py | 1:N identify | identity 8360, PG | — | `{"image":"<b64>","is_synthetic":true}` |
 | `/api/identity/enrol` | POST | identity.py | Capture template | identity 8360 | — | `{"driver_id":"DRV-001","is_synthetic":true}` |
 | `/api/identity/enrol-request` | POST | identity.py | Driver self-enrol → PENDING | Postgres | — | `{"driver_id":"DRV-9","consent":true,"images":["<b64>"]}` |
-| `/api/identity/enrollments[/{id}]` | GET | identity.py | Enrolment queue/record | Postgres | — | `?status=PENDING` |
+| `/api/identity/enrollments[/{id}]` | GET | identity.py | Enrollment queue/record | Postgres | — | `?status=PENDING` |
 | `/api/identity/enrollments/{id}/approve` | POST | identity.py | Mint template + store photo | identity, **MinIO** | `MINIO_*` | `{}` **← MinIO down (#4)** |
-| `/api/identity/enrollments/{id}/reject\|reenroll` | POST | identity.py | Enrolment decision | Postgres | — | `{"reason":"blurry"}` |
+| `/api/identity/enrollments/{id}/reject\|reenroll` | POST | identity.py | Enrollment decision | Postgres | — | `{"reason":"blurry"}` |
 | `/api/identity/drivers` | GET | identity.py | Active drivers | Postgres | — | — |
 | `/api/identity/gallery`,`/verifications`,`/threshold` | GET | identity.py | Gallery/audit/config | identity/PG | — | — |
 
@@ -240,7 +240,7 @@ Auth column reflects RBAC **when `AUTH_ENABLED=true`** (currently off → all op
 
 - **ANPR** — camera list ✅ (all SYNTHETIC: no live frames on Redis stream). Inference path ❌ (`/infer` 500, audit_client bug #2). Real-vs-synthetic: service `degraded:true`, engine `fallback`, held-out `exact_match 0.0` → effectively synthetic/low-accuracy OCR (#6).
 - **Vahan** — RC lookup ✅ (`MH04AB1234`→LIVE_FALLBACK with record; unseeded→PROVISIONAL admit + alert persisted to `jnpa.alerts`). DL lookup ⚠️ 404 for unseeded numbers (correct — no provisional for licences). Vehicle/driver-intel ✅ RDS aggregates.
-- **Identity** — enrolment ✅ (`enrol-request` PENDING queue). Verification ✅ but always PROVISIONAL `driver_not_enrolled` because `jnpa.driver_faces` = 0 (no persisted templates). Approve path needs MinIO (down, #4).
+- **Identity** — enrollment ✅ (`enrol-request` PENDING queue). Verification ✅ but always PROVISIONAL `driver_not_enrolled` because `jnpa.driver_faces` = 0 (no persisted templates). Approve path needs MinIO (down, #4).
 - **Journey** — container twin chain / events / timestamps ❌ **entire module 404 (#1)**. Code is sound (hash-derived stages, ISO-6346-gated) but never mounted.
 - **Violation** — detect ❌ 500 (#2); commit ✅ (opens case, walks DETECTED→REVIEWED→CONFIRMED, mints immutable `jnpa.challans` row w/ `ECH-YYYY-NNNNNN`); case lifecycle ✅ (validated transitions, 409 on illegal hop); challan generation ✅ but is a **self-issued Postgres record — no real e-Challan/VAHAN backend**; `_auto_classify` is a hash stand-in, not an AI model.
 - **Reports** — PDF generation ✅ **verified real** (Playwright Chromium, 3-page A4, `application/pdf`, no fallback header). Not persisted; streamed inline.

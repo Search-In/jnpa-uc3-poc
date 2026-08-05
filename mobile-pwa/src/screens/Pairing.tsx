@@ -1,224 +1,164 @@
-import { useEffect, useRef, useState } from "react";
-import QRCode from "qrcode";
-import { codeToDeviceId, setPairing, setToken } from "@/lib/device";
-import { api } from "@/lib/api";
+import { useState } from "react";
+import { useTranslation } from "react-i18next";
+import { codeToDeviceId, clearToken, setPairing } from "@/lib/device";
+import { ensureDeviceToken, api } from "@/lib/api";
+import { enablePush } from "@/lib/pwa";
+import { IconTruck, IconChevronRight } from "@/components/icons";
 
-// Derive a stable device id for an OTP login from the mobile number's last 6
-// digits, keeping the TRK-###### shape the rest of the platform expects.
-function mobileToDeviceId(mobile: string): string {
-  const d = mobile.replace(/\D/g, "").slice(-6).padStart(6, "0");
-  return `TRK-${d}`;
+// Production sign-in. The driver authenticates with their assigned Vehicle ID
+// — the in-cab device id the backend keys every driver record on (format
+// TRK-######). There is NO demo path and NO mobile/OTP fallback: the id is
+// validated against the live backend before the session opens.
+//
+//   1. mint the DRIVER-scoped JWT   -> POST /api/auth/device-token   (existing)
+//   2. confirm the vehicle is live  -> GET  /api/trucks/{device_id}  (existing)
+//
+// Only on success do we persist the pairing, register the FCM push token, and
+// enter the app. Everything downstream (assigned vehicle, trips, WebSocket,
+// re-routes, push) is scoped to this id exactly as the gateway models it.
+
+const CANONICAL = /^TRK-\d{6}$/;
+
+// Normalise driver input to the canonical device id. Accepts the full id
+// ("TRK-000123"), or a bare numeric code ("000123" / "123") which maps
+// deterministically to TRK-######, mirroring the truck simulator's id scheme.
+function toDeviceId(raw: string): string | null {
+  const v = raw.trim().toUpperCase();
+  if (CANONICAL.test(v)) return v;
+  if (/^\d{1,6}$/.test(v)) return codeToDeviceId(v);
+  return null;
 }
 
-// Pairing — PoC authentication is a simple device_id pairing: scan the QR (which
-// encodes the PWA URL with ?device=TRK-...) or type the 6-digit code printed on
-// the in-cab unit. No real OTP — but the screen exists and looks right. A code
-// like "000001" maps deterministically to device "TRK-000001" (the ids the
-// truck-sim mints), so the demo pairs without a pairing server.
-
-const DEFAULT_CODE = "000001";
-
 export default function Pairing({ onPaired }: { onPaired: (deviceId: string) => void }) {
-  const [digits, setDigits] = useState<string[]>(Array(6).fill(""));
-  const inputs = useRef<(HTMLInputElement | null)[]>([]);
-  const qrRef = useRef<HTMLCanvasElement>(null);
+  const { t } = useTranslation();
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // Render a QR that pairs a second screen (e.g. evaluator on a laptop) to the
-  // same device via the web variant ?device= param.
-  useEffect(() => {
-    const code = digits.join("") || DEFAULT_CODE;
-    const deviceId = codeToDeviceId(code);
-    const url = `${location.origin}${import.meta.env.BASE_URL}?device=${deviceId}`;
-    if (qrRef.current) {
-      QRCode.toCanvas(qrRef.current, url, { width: 184, margin: 1 }).catch(() => undefined);
-    }
-  }, [digits]);
-
-  const setDigit = (i: number, val: string) => {
-    const v = val.replace(/\D/g, "").slice(-1);
-    setDigits((prev) => {
-      const next = [...prev];
-      next[i] = v;
-      return next;
-    });
-    if (v && i < 5) inputs.current[i + 1]?.focus();
-  };
-
-  const onKeyDown = (i: number, e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Backspace" && !digits[i] && i > 0) inputs.current[i - 1]?.focus();
-  };
-
-  const pair = (code?: string) => {
-    const c = code ?? digits.join("");
-    const deviceId = codeToDeviceId(c || DEFAULT_CODE);
-    setPairing(deviceId);
-    onPaired(deviceId);
-  };
-
-  const ready = digits.every((d) => d !== "");
-
-  // --- OTP login (real device auth; replaces static-only pairing) ----------
-  const [mobile, setMobile] = useState("");
-  const [otp, setOtp] = useState("");
-  const [otpStep, setOtpStep] = useState<"mobile" | "code">("mobile");
-  const [otpBusy, setOtpBusy] = useState(false);
-  const [otpMsg, setOtpMsg] = useState<string | null>(null);
-
-  const requestOtp = async () => {
-    const m = mobile.replace(/\D/g, "");
-    if (m.length < 10) {
-      setOtpMsg("Enter a valid 10-digit mobile");
+  const signIn = async () => {
+    setError(null);
+    const deviceId = toDeviceId(value);
+    if (!deviceId) {
+      setError(t("pairing.invalidId", { defaultValue: "Enter a valid Vehicle ID" }));
       return;
     }
-    setOtpBusy(true);
-    setOtpMsg(null);
-    try {
-      const r = await api.otpRequest(m, mobileToDeviceId(m));
-      setOtpStep("code");
-      setOtpMsg(r.dev_otp ? `OTP sent (demo: ${r.dev_otp})` : "OTP sent to your mobile");
-    } catch (e) {
-      setOtpMsg(String(e));
-    } finally {
-      setOtpBusy(false);
-    }
-  };
 
-  const verifyOtp = async () => {
-    const m = mobile.replace(/\D/g, "");
-    const deviceId = mobileToDeviceId(m);
-    setOtpBusy(true);
-    setOtpMsg(null);
+    setBusy(true);
     try {
-      const r = await api.otpVerify(m, otp.replace(/\D/g, ""), deviceId);
-      if (r.verified && r.access_token) {
-        setToken(r.access_token);
-        setPairing(deviceId);
-        onPaired(deviceId);
-      } else {
-        setOtpMsg("Invalid OTP");
+      // A previous session may have left a token bound to a DIFFERENT device.
+      // Clear it so ensureDeviceToken always mints a fresh DRIVER JWT for the id
+      // being signed in with (the gateway scopes the token to one device_id).
+      clearToken();
+
+      // 1) Acquire the DRIVER-scoped JWT for this device (production seam).
+      const authed = await ensureDeviceToken(deviceId);
+      if (!authed && import.meta.env.PROD) {
+        setError(
+          t("pairing.authFailed", { defaultValue: "Could not sign in. Check your connection." }),
+        );
+        return;
       }
-    } catch {
-      setOtpMsg("Invalid or expired OTP");
+
+      // 2) Validate the id against the live backend. GET /api/trucks/{id} 404s
+      //    for an unknown / inactive vehicle — that is our rejection signal.
+      try {
+        await api.truck(deviceId);
+      } catch (err) {
+        const status = (err as { status?: number })?.status;
+        if (status === 404) {
+          clearToken();
+          setError(
+            t("pairing.notFound", {
+              defaultValue: "This Vehicle ID isn't active. Check the ID and try again.",
+            }),
+          );
+          return;
+        }
+        // Non-404 (network / 5xx): fail closed in production, but let a local
+        // dev build through so the demo works while the truck-sim warms up.
+        if (import.meta.env.PROD) {
+          clearToken();
+          setError(
+            t("pairing.authFailed", { defaultValue: "Could not sign in. Check your connection." }),
+          );
+          return;
+        }
+      }
+
+      setPairing(deviceId);
+      // Register this device for push the moment it signs in. enablePush does the
+      // WebPush/VAPID leg (the primary transport — populates push_subscriptions.webpush)
+      // and, if Firebase is configured, the FCM leg too. Fire-and-forget: the
+      // promise keeps running even after onPaired() unmounts this screen.
+      void enablePush(deviceId);
+      onPaired(deviceId);
     } finally {
-      setOtpBusy(false);
+      setBusy(false);
     }
   };
 
   return (
     <div className="pair-wrap">
-      <div className="brand">
+      {/* Brand + welcome */}
+      <div className="pair-hero">
         <img className="logo" src={`${import.meta.env.BASE_URL}icons/icon.svg`} alt="JNPA" />
         <h1>JNPA Trucking</h1>
-        <p>Login with your mobile OTP to receive gate slots & live re-routes.</p>
+        <p className="pair-welcome">{t("pairing.welcome", { defaultValue: "Driver sign-in" })}</p>
+        <p className="pair-tagline">
+          {t("pairing.tagline", { defaultValue: "Enter your assigned Vehicle ID to sign in." })}
+        </p>
       </div>
 
-      {/* OTP login (primary) */}
-      <div className="otp-box" style={{ width: "100%", maxWidth: 320 }}>
-        {otpStep === "mobile" ? (
-          <>
-            <input
-              inputMode="numeric"
-              placeholder="Mobile number"
-              value={mobile}
-              onChange={(e) => setMobile(e.target.value)}
-              style={{
-                width: "100%",
-                height: 44,
-                fontSize: 18,
-                textAlign: "center",
-                marginBottom: 8,
-              }}
-            />
-            <button
-              className="btn primary"
-              disabled={otpBusy}
-              onClick={requestOtp}
-              style={{ width: "100%" }}
-            >
-              {otpBusy ? "…" : "Send OTP"}
-            </button>
-          </>
-        ) : (
-          <>
-            <input
-              inputMode="numeric"
-              placeholder="6-digit OTP"
-              value={otp}
-              onChange={(e) => setOtp(e.target.value)}
-              maxLength={6}
-              style={{
-                width: "100%",
-                height: 44,
-                fontSize: 22,
-                textAlign: "center",
-                letterSpacing: 6,
-                marginBottom: 8,
-              }}
-            />
-            <button
-              className="btn primary"
-              disabled={otpBusy}
-              onClick={verifyOtp}
-              style={{ width: "100%" }}
-            >
-              {otpBusy ? "…" : "Verify & Login"}
-            </button>
-            <button
-              className="btn ghost"
-              onClick={() => setOtpStep("mobile")}
-              style={{ width: "100%" }}
-            >
-              Change number
-            </button>
-          </>
-        )}
-        {otpMsg && (
-          <div className="muted" style={{ fontSize: 12, textAlign: "center", marginTop: 6 }}>
-            {otpMsg}
+      {/* Vehicle ID sign-in — the only credential */}
+      <div className="login-card">
+        <div className="login-head">
+          <span className="login-head-ico">
+            <IconTruck size={18} />
+          </span>
+          <div>
+            <div className="login-title">
+              {t("pairing.vehicleId", { defaultValue: "Vehicle ID" })}
+            </div>
+            <div className="login-sub">
+              {t("pairing.vehicleIdSub", { defaultValue: "Your assigned in-cab unit ID" })}
+            </div>
+          </div>
+        </div>
+
+        <input
+          className="id-input"
+          data-testid="pair-vehicle-id"
+          inputMode="text"
+          autoCapitalize="characters"
+          autoCorrect="off"
+          spellCheck={false}
+          placeholder={t("pairing.vehicleIdHint", { defaultValue: "TRK-000123" })}
+          aria-label={t("pairing.vehicleId", { defaultValue: "Vehicle ID" })}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !busy) void signIn();
+          }}
+        />
+
+        <button
+          className="btn primary"
+          data-testid="pair-submit"
+          disabled={busy || value.trim() === ""}
+          onClick={() => void signIn()}
+        >
+          {busy
+            ? t("pairing.signingIn", { defaultValue: "Signing in…" })
+            : t("pairing.signIn", { defaultValue: "Sign in" })}{" "}
+          {!busy && <IconChevronRight size={18} />}
+        </button>
+
+        {error && (
+          <div className="login-error" role="alert" data-testid="pair-error">
+            {error}
           </div>
         )}
       </div>
-
-      <div className="muted" style={{ textAlign: "center", fontSize: 12, margin: "14px 0 6px" }}>
-        — or pair an in-cab unit —
-      </div>
-
-      <div className="qr-box">
-        <canvas ref={qrRef} data-testid="pair-qr" />
-      </div>
-
-      <div>
-        <div className="muted" style={{ textAlign: "center", fontSize: 12, marginBottom: 10 }}>
-          Or enter the 6-digit pairing code
-        </div>
-        <div className="code-input">
-          {digits.map((d, i) => (
-            <input
-              key={i}
-              ref={(el) => (inputs.current[i] = el)}
-              inputMode="numeric"
-              maxLength={1}
-              value={d}
-              data-testid={`pair-digit-${i}`}
-              onChange={(e) => setDigit(i, e.target.value)}
-              onKeyDown={(e) => onKeyDown(i, e)}
-            />
-          ))}
-        </div>
-      </div>
-
-      <button
-        className="btn primary"
-        data-testid="pair-submit"
-        disabled={!ready}
-        onClick={() => pair()}
-      >
-        Pair device
-      </button>
-
-      <button className="btn ghost" data-testid="pair-demo" onClick={() => pair(DEFAULT_CODE)}>
-        Use demo device (TRK-000001)
-      </button>
     </div>
   );
 }

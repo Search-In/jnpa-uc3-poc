@@ -2,10 +2,10 @@
 
 Two concerns live here so the sim and live services stay DRY:
 
-* `register_service()` — upsert the caller's row into `jnpa.services` on
+* `register_service()` — upsert the caller's row into `core.ulip_service` on
   startup so the fallback orchestrator (Prompt 4) can discover sim vs. live.
 * `upsert_vehicle_master()` — write back every successful RC lookup into
-  `jnpa.vehicle_master` with `provisional=false` / `provisional_until=null`.
+  `core.vehicle_rc` with `provisional=false` / `provisional_until=null`.
   This is the "verified at the gate" row the dashboard reads.
 
 Both run idempotent `CREATE TABLE IF NOT EXISTS` / `ALTER TABLE` guards first
@@ -13,6 +13,8 @@ so the services also work against a Postgres volume created before this PoC
 stage added the columns (init.sql only runs on a fresh volume).
 """
 from __future__ import annotations
+
+import os
 
 import json
 from typing import Optional
@@ -22,8 +24,8 @@ from .schemas import ServiceRegistration, VahanRecord
 
 # Idempotent schema guards (safe on both fresh + pre-existing volumes).
 _ENSURE_SERVICES = """
-CREATE SCHEMA IF NOT EXISTS jnpa;
-CREATE TABLE IF NOT EXISTS jnpa.services (
+CREATE SCHEMA IF NOT EXISTS core;
+CREATE TABLE IF NOT EXISTS core.ulip_service (
     name          text NOT NULL,
     kind          text NOT NULL,
     base_url      text NOT NULL,
@@ -36,7 +38,7 @@ CREATE TABLE IF NOT EXISTS jnpa.services (
 """
 
 _ENSURE_VM_COLUMNS = """
-ALTER TABLE jnpa.vehicle_master
+ALTER TABLE core.vehicle_rc
     ADD COLUMN IF NOT EXISTS owner_name_masked  text,
     ADD COLUMN IF NOT EXISTS vehicle_class      text,
     ADD COLUMN IF NOT EXISTS fuel_type          text,
@@ -51,6 +53,9 @@ ALTER TABLE jnpa.vehicle_master
 
 async def ensure_schema(*, dsn: Optional[str] = None) -> None:
     """Create the services table + vehicle_master columns if missing."""
+    if os.getenv("JNPA_RUNTIME_DDL", "0") != "1":
+        # schema-v3: DDL is owned by infra/postgres/v3 migrations, never runtime.
+        return
     # asyncpg/SQLAlchemy text() runs one statement per call; split on ';'.
     for stmt in (_ENSURE_SERVICES, _ENSURE_VM_COLUMNS):
         for piece in (s.strip() for s in stmt.split(";")):
@@ -59,10 +64,10 @@ async def ensure_schema(*, dsn: Optional[str] = None) -> None:
 
 
 async def register_service(reg: ServiceRegistration, *, dsn: Optional[str] = None) -> None:
-    """Upsert the caller into jnpa.services (PK = name+kind)."""
+    """Upsert the caller into core.ulip_service (PK = name+kind)."""
     await execute(
         """
-        INSERT INTO jnpa.services (name, kind, base_url, healthy, enabled, registered_at, meta)
+        INSERT INTO core.ulip_service (name, kind, base_url, healthy, enabled, registered_at, meta)
         VALUES (:name, :kind, :base_url, :healthy, :enabled, now(), CAST(:meta AS jsonb))
         ON CONFLICT (name, kind) DO UPDATE SET
             base_url      = EXCLUDED.base_url,
@@ -84,7 +89,7 @@ async def register_service(reg: ServiceRegistration, *, dsn: Optional[str] = Non
 
 
 async def upsert_vehicle_master(rec: VahanRecord, *, dsn: Optional[str] = None) -> None:
-    """Upsert a verified RC into jnpa.vehicle_master.
+    """Upsert a verified RC into core.vehicle_rc.
 
     Sets provisional=false and provisional_until=null — this row represents a
     *confirmed* registration the dashboard can show as verified at the gate.
@@ -92,7 +97,7 @@ async def upsert_vehicle_master(rec: VahanRecord, *, dsn: Optional[str] = None) 
     plate = rec.plate_number
     await execute(
         """
-        INSERT INTO jnpa.vehicle_master (
+        INSERT INTO core.vehicle_rc (
             plate, rc_type, owner_hash, fitness_valid_to, puc_valid_to,
             fastag_status, provisional, provisional_until,
             owner_name_masked, vehicle_class, fuel_type, insurance_valid_to,
@@ -146,7 +151,7 @@ async def upsert_vehicle_master(rec: VahanRecord, *, dsn: Optional[str] = None) 
 
 
 async def vehicle_master_count(*, dsn: Optional[str] = None) -> int:
-    row = await fetch_one("SELECT count(*) AS n FROM jnpa.vehicle_master", dsn=dsn)
+    row = await fetch_one("SELECT count(*) AS n FROM core.vehicle_rc", dsn=dsn)
     return int(row["n"]) if row else 0
 
 

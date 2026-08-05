@@ -4,9 +4,9 @@ The ADDITIVE layer that turns the detection/reporting platform into a traffic
 enforcement system of record. It owns three NEW tables (never touches existing
 ones) and the rules that bind them:
 
-    jnpa.violation_cases  — one row per case; the lifecycle anchor.
-    jnpa.challans         — immutable-after-issue, sequenced legal record.
-    jnpa.case_audit       — hash-chained, append-only transition log.
+    core.violation_case  — one row per case; the lifecycle anchor.
+    core.challan         — immutable-after-issue, sequenced legal record.
+    core.case_audit       — hash-chained, append-only transition log.
 
 Plus:
   * a state machine (DETECTED → REVIEWED → CONFIRMED → CHALLAN_ISSUED → PAID →
@@ -20,6 +20,8 @@ volume gains the tables without an init.sql re-run — mirroring gateway/enrollm
 Nothing here imports or alters the ANPR / identity / model code.
 """
 from __future__ import annotations
+
+import os
 
 import hashlib
 import json
@@ -61,9 +63,9 @@ class InvalidTransition(ValueError):
 
 # --- schema (idempotent; lazily applied) ------------------------------------
 _DDL = """
-CREATE SCHEMA IF NOT EXISTS jnpa;
-CREATE SEQUENCE IF NOT EXISTS jnpa.challan_seq START 1001;
-CREATE TABLE IF NOT EXISTS jnpa.violation_cases (
+CREATE SCHEMA IF NOT EXISTS core;
+CREATE SEQUENCE IF NOT EXISTS core.challan_seq START 1001;
+CREATE TABLE IF NOT EXISTS core.violation_case (
     case_id           uuid PRIMARY KEY,
     vehicle_number    text,
     driver_id         text,
@@ -79,10 +81,10 @@ CREATE TABLE IF NOT EXISTS jnpa.violation_cases (
     confidence        double precision
 );
 CREATE INDEX IF NOT EXISTS idx_violation_cases_status
-    ON jnpa.violation_cases (status, last_updated_at DESC);
+    ON core.violation_case (status, last_updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_violation_cases_plate
-    ON jnpa.violation_cases (vehicle_number, first_detected_at DESC);
-CREATE TABLE IF NOT EXISTS jnpa.challans (
+    ON core.violation_case (vehicle_number, first_detected_at DESC);
+CREATE TABLE IF NOT EXISTS core.challan (
     challan_id      uuid PRIMARY KEY,
     challan_no      text UNIQUE,
     case_id         uuid NOT NULL UNIQUE,
@@ -97,8 +99,8 @@ CREATE TABLE IF NOT EXISTS jnpa.challans (
     evidence_sha256 text,
     created_by      text
 );
-CREATE INDEX IF NOT EXISTS idx_challans_case ON jnpa.challans (case_id);
-CREATE TABLE IF NOT EXISTS jnpa.case_audit (
+CREATE INDEX IF NOT EXISTS idx_challans_case ON core.challan (case_id);
+CREATE TABLE IF NOT EXISTS core.case_audit (
     id          bigserial PRIMARY KEY,
     case_id     uuid NOT NULL,
     event       text NOT NULL,
@@ -110,14 +112,14 @@ CREATE TABLE IF NOT EXISTS jnpa.case_audit (
     hash        text,
     ts          timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS idx_case_audit_case ON jnpa.case_audit (case_id, id);
+CREATE INDEX IF NOT EXISTS idx_case_audit_case ON core.case_audit (case_id, id);
 """
 # Defence-in-depth idempotency: at most one console-issued alert per (case, kind).
 # A partial unique index, so non-enforcement alerts (anomaly, customs, …) are
-# completely unaffected. Created separately because it references jnpa.alerts.
+# completely unaffected. Created separately because it references core.alert.
 _ALERTS_DEDUP_DDL = (
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_alerts_case_kind "
-    "ON jnpa.alerts ((payload->>'case_id'), kind) "
+    "ON core.alert ((payload->>'case_id'), kind) "
     "WHERE payload->>'source' = 'violation-console'"
 )
 
@@ -126,6 +128,9 @@ _SCHEMA_READY: Dict[str, bool] = {}
 
 async def ensure_schema(dsn: str) -> None:
     """Apply the idempotent enforcement DDL once per DSN (best-effort cached)."""
+    if os.getenv("JNPA_RUNTIME_DDL", "0") != "1":
+        # schema-v3: DDL is owned by infra/postgres/v3 migrations, never runtime.
+        return
     if _SCHEMA_READY.get(dsn):
         return
     from jnpa_shared.db import execute  # lazy import
@@ -201,35 +206,89 @@ async def _audit(
     from_status: Optional[str] = None, to_status: Optional[str] = None,
     actor: Optional[str] = None, detail: Optional[dict] = None,
 ) -> str:
-    """Append a tamper-evident audit row; returns the new chain hash."""
-    from jnpa_shared.db import execute, fetch_one
+    """Append a tamper-evident audit row; returns the new chain hash.
 
-    prev = await fetch_one(
-        "SELECT hash FROM jnpa.case_audit WHERE case_id = CAST(:c AS uuid) "
-        "ORDER BY id DESC LIMIT 1",
-        {"c": case_id}, dsn=dsn,
-    )
-    prev_hash = (prev or {}).get("hash")
+    Atomic per case: prev-hash read and insert run in ONE transaction with the
+    parent case row locked ``FOR UPDATE``, so two concurrent audits on the same
+    case serialize instead of both reading the same prev hash and forking the
+    chain (the old two-statement autocommit version had exactly that race).
+    """
+    from sqlalchemy import text
+    from jnpa_shared.db import get_engine
+
     stamp = datetime.now(timezone.utc).isoformat()
+    engine = get_engine(dsn)
+    async with engine.begin() as conn:
+        # Serialize audits per case (row may not exist yet for the very first
+        # OPEN audit — that insert races nothing, the case insert precedes it).
+        await conn.execute(
+            text("SELECT id FROM core.violation_case "
+                 "WHERE id = CAST(:c AS uuid) FOR UPDATE"),
+            {"c": case_id},
+        )
+        prev = (await conn.execute(
+            text("SELECT hash FROM core.case_audit WHERE case_id = CAST(:c AS uuid) "
+                 "ORDER BY id DESC LIMIT 1"),
+            {"c": case_id},
+        )).mappings().first()
+        prev_hash = (prev or {}).get("hash")
+        chain = chain_hash(prev_hash, event=event, from_status=from_status,
+                           to_status=to_status, actor=actor,
+                           detail=detail or {}, at=stamp)
+        await conn.execute(
+            text("""
+            INSERT INTO core.case_audit
+                (case_id, event, from_status, to_status, actor, detail, prev_hash, hash)
+            VALUES (CAST(:c AS uuid), :event, :frm, :to, :actor,
+                    CAST(:detail AS jsonb), :prev, :hash)
+            """),
+            {"c": case_id, "event": event, "frm": from_status, "to": to_status,
+             "actor": actor, "detail": json.dumps({**(detail or {}), "at": stamp}),
+             "prev": prev_hash, "hash": chain},
+        )
+    return chain
+
+
+def chain_hash(prev_hash: Optional[str], *, event: str,
+               from_status: Optional[str], to_status: Optional[str],
+               actor: Optional[str], detail: dict, at: str) -> str:
+    """Canonical chain-hash computation — the writer and the verifier MUST use
+    this one function so verification can never drift from the write path."""
     body = json.dumps(
         {"event": event, "from": from_status, "to": to_status, "actor": actor,
-         "detail": detail or {}, "at": stamp},
+         "detail": detail, "at": at},
         sort_keys=True, separators=(",", ":"),
     )
-    chain = hashlib.sha256(((prev_hash or "") + body).encode()).hexdigest()
-    await execute(
-        """
-        INSERT INTO jnpa.case_audit
-            (case_id, event, from_status, to_status, actor, detail, prev_hash, hash)
-        VALUES (CAST(:c AS uuid), :event, :frm, :to, :actor,
-                CAST(:detail AS jsonb), :prev, :hash)
-        """,
-        {"c": case_id, "event": event, "frm": from_status, "to": to_status,
-         "actor": actor, "detail": json.dumps({**(detail or {}), "at": stamp}),
-         "prev": prev_hash, "hash": chain},
-        dsn=dsn,
+    return hashlib.sha256(((prev_hash or "") + body).encode()).hexdigest()
+
+
+async def verify_chain(dsn: str, case_id: str) -> dict:
+    """Recompute the case's audit hash chain from row 1 and compare.
+
+    Returns {valid, length, broken_at?} — broken_at is the first audit row id
+    whose stored hash/prev_hash disagrees with the recomputation (i.e. the row
+    where tampering or a fork would have occurred).
+    """
+    from jnpa_shared.db import fetch_all
+
+    rows = await fetch_all(
+        "SELECT id, event, from_status, to_status, actor, detail, prev_hash, hash "
+        "FROM core.case_audit WHERE case_id = CAST(:c AS uuid) ORDER BY id",
+        {"c": case_id}, dsn=dsn,
     )
-    return chain
+    prev: Optional[str] = None
+    for r in rows:
+        detail = r.get("detail") or {}
+        if isinstance(detail, str):
+            detail = json.loads(detail)
+        at = detail.pop("at", None)
+        expected = chain_hash(prev, event=r["event"], from_status=r["from_status"],
+                              to_status=r["to_status"], actor=r["actor"],
+                              detail=detail, at=at or "")
+        if r["prev_hash"] != prev or r["hash"] != expected:
+            return {"valid": False, "length": len(rows), "broken_at": r["id"]}
+        prev = r["hash"]
+    return {"valid": True, "length": len(rows)}
 
 
 # --- case operations --------------------------------------------------------
@@ -244,7 +303,7 @@ async def open_or_get_case(
 
     await execute(
         """
-        INSERT INTO jnpa.violation_cases
+        INSERT INTO core.violation_case
             (case_id, vehicle_number, driver_id, gate_id, evidence_url,
              evidence_sha256, confidence, status)
         VALUES (CAST(:c AS uuid), :veh, :drv, :gate, :ev, :sha, :conf, 'DETECTED')
@@ -255,14 +314,14 @@ async def open_or_get_case(
         dsn=dsn,
     )
     row = await fetch_one(
-        "SELECT * FROM jnpa.violation_cases WHERE case_id = CAST(:c AS uuid)",
+        "SELECT * FROM core.violation_case WHERE case_id = CAST(:c AS uuid)",
         {"c": case_id}, dsn=dsn,
     )
     created = bool(row) and row.get("status") == "DETECTED" and row.get("total_fine", 0) == 0
     # Audit CASE_OPENED only on genuine creation (first_detected within this call):
     # detect via a marker row absence is unreliable, so we check the audit log.
     has_open = await fetch_one(
-        "SELECT 1 AS x FROM jnpa.case_audit WHERE case_id = CAST(:c AS uuid) "
+        "SELECT 1 AS x FROM core.case_audit WHERE case_id = CAST(:c AS uuid) "
         "AND event = 'CASE_OPENED' LIMIT 1",
         {"c": case_id}, dsn=dsn,
     )
@@ -280,7 +339,7 @@ async def existing_violations(dsn: str, case_id: str) -> Dict[str, dict]:
         """
         SELECT kind, id::text AS id,
                COALESCE((payload->>'fine_inr')::int, 0) AS fine
-        FROM jnpa.alerts
+        FROM core.alert
         WHERE payload->>'case_id' = :c AND payload->>'source' = 'violation-console'
         """,
         {"c": case_id}, dsn=dsn,
@@ -292,14 +351,14 @@ async def insert_violation_alert(
     dsn: str, *, alert_id: str, case_id: str, kind: str, severity: str,
     gate_id: Optional[str], plate: Optional[str], payload: dict,
 ) -> bool:
-    """Insert one jnpa.alerts row (backward-compatible). False if it already
+    """Insert one core.alert row (backward-compatible). False if it already
     existed (unique-index race) — caller treats that as an idempotent skip."""
     from jnpa_shared.db import execute
 
     try:
         await execute(
             """
-            INSERT INTO jnpa.alerts (id, ts, kind, severity, gate_id, plate, payload, ack)
+            INSERT INTO core.alert (id, ts, kind, severity, gate_id, plate, payload, ack)
             VALUES (CAST(:id AS uuid), now(), :kind, :severity, :gate, :plate,
                     CAST(:payload AS jsonb), false)
             """,
@@ -326,7 +385,7 @@ async def advance_to(dsn: str, case_id: str, target: str, *, actor: str) -> str:
     from jnpa_shared.db import execute, fetch_one
 
     row = await fetch_one(
-        "SELECT status FROM jnpa.violation_cases WHERE case_id = CAST(:c AS uuid)",
+        "SELECT status FROM core.violation_case WHERE case_id = CAST(:c AS uuid)",
         {"c": case_id}, dsn=dsn,
     )
     if not row:
@@ -339,7 +398,7 @@ async def advance_to(dsn: str, case_id: str, target: str, *, actor: str) -> str:
         if not can_transition(cur, nxt):
             raise InvalidTransition(f"{cur} -> {nxt}")
         await execute(
-            "UPDATE jnpa.violation_cases SET status = :s, last_updated_at = now() "
+            "UPDATE core.violation_case SET status = :s, last_updated_at = now() "
             "WHERE case_id = CAST(:c AS uuid)",
             {"s": nxt, "c": case_id}, dsn=dsn,
         )
@@ -359,7 +418,7 @@ async def set_case_totals(
 
     await execute(
         """
-        UPDATE jnpa.violation_cases SET
+        UPDATE core.violation_case SET
             total_fine      = :total,
             vehicle_number  = COALESCE(vehicle_number, :veh),
             driver_id       = COALESCE(driver_id, :drv),
@@ -393,7 +452,7 @@ async def issue_challan(
     from jnpa_shared.db import execute, fetch_one
 
     existing = await fetch_one(
-        "SELECT * FROM jnpa.challans WHERE case_id = CAST(:c AS uuid)",
+        "SELECT * FROM core.challan WHERE case_id = CAST(:c AS uuid)",
         {"c": case_id}, dsn=dsn,
     )
     if existing:
@@ -402,12 +461,12 @@ async def issue_challan(
     challan_id = str(_uuid.uuid4())
     await execute(
         """
-        INSERT INTO jnpa.challans
+        INSERT INTO core.challan
             (challan_id, challan_no, case_id, vehicle_number, total_fine, status,
              mva_section, issued_at, pdf_url, evidence_sha256, created_by)
         VALUES (CAST(:cid AS uuid),
                 'ECH-' || to_char(now(), 'YYYY') || '-' ||
-                    lpad(nextval('jnpa.challan_seq')::text, 6, '0'),
+                    lpad(nextval('core.challan_seq')::text, 6, '0'),
                 CAST(:case AS uuid), :veh, :fine, 'ISSUED', :sec, now(),
                 :pdf, :sha, :by)
         ON CONFLICT (case_id) DO NOTHING
@@ -417,7 +476,7 @@ async def issue_challan(
         dsn=dsn,
     )
     row = await fetch_one(
-        "SELECT * FROM jnpa.challans WHERE case_id = CAST(:c AS uuid)",
+        "SELECT * FROM core.challan WHERE case_id = CAST(:c AS uuid)",
         {"c": case_id}, dsn=dsn,
     )
     await _audit(dsn, case_id, "CHALLAN_ISSUED", to_status="CHALLAN_ISSUED", actor=actor,
@@ -438,7 +497,7 @@ async def transition_case(
     from jnpa_shared.db import execute, fetch_one
 
     row = await fetch_one(
-        "SELECT status FROM jnpa.violation_cases WHERE case_id = CAST(:c AS uuid)",
+        "SELECT status FROM core.violation_case WHERE case_id = CAST(:c AS uuid)",
         {"c": case_id}, dsn=dsn,
     )
     if not row:
@@ -448,14 +507,14 @@ async def transition_case(
         raise InvalidTransition(f"{cur} -> {to_status}")
 
     await execute(
-        "UPDATE jnpa.violation_cases SET status = :s, last_updated_at = now() "
+        "UPDATE core.violation_case SET status = :s, last_updated_at = now() "
         "WHERE case_id = CAST(:c AS uuid)",
         {"s": to_status, "c": case_id}, dsn=dsn,
     )
     # Reflect onto the (otherwise immutable) challan's status + payment_ref only.
     if to_status in ("PAID", "CLOSED", "DISPUTED"):
         await execute(
-            "UPDATE jnpa.challans SET status = :s, "
+            "UPDATE core.challan SET status = :s, "
             "payment_ref = COALESCE(:pref, payment_ref) "
             "WHERE case_id = CAST(:c AS uuid)",
             {"s": to_status, "pref": payment_ref, "c": case_id}, dsn=dsn,
@@ -470,7 +529,7 @@ async def get_case_bundle(dsn: str, case_id: str) -> dict:
     from jnpa_shared.db import fetch_all, fetch_one
 
     case = await fetch_one(
-        "SELECT * FROM jnpa.violation_cases WHERE case_id = CAST(:c AS uuid)",
+        "SELECT * FROM core.violation_case WHERE case_id = CAST(:c AS uuid)",
         {"c": case_id}, dsn=dsn,
     )
     if not case:
@@ -480,19 +539,19 @@ async def get_case_bundle(dsn: str, case_id: str) -> dict:
         SELECT id::text AS id, kind, severity, ts,
                COALESCE((payload->>'fine_inr')::int, 0) AS fine_inr,
                payload->>'section' AS section
-        FROM jnpa.alerts
+        FROM core.alert
         WHERE payload->>'case_id' = :c AND payload->>'source' = 'violation-console'
         ORDER BY ts
         """,
         {"c": case_id}, dsn=dsn,
     )
     challan = await fetch_one(
-        "SELECT * FROM jnpa.challans WHERE case_id = CAST(:c AS uuid)",
+        "SELECT * FROM core.challan WHERE case_id = CAST(:c AS uuid)",
         {"c": case_id}, dsn=dsn,
     )
     audit = await fetch_all(
         "SELECT event, from_status, to_status, actor, ts, hash "
-        "FROM jnpa.case_audit WHERE case_id = CAST(:c AS uuid) ORDER BY id",
+        "FROM core.case_audit WHERE case_id = CAST(:c AS uuid) ORDER BY id",
         {"c": case_id}, dsn=dsn,
     )
     return {

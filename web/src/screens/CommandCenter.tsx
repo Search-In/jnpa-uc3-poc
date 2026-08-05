@@ -23,12 +23,19 @@ import {
   Leaf,
   RefreshCw,
   ChevronRight,
+  AlertTriangle,
+  TrafficCone,
+  Gauge,
+  Snowflake,
+  Repeat,
+  Camera,
 } from "lucide-react";
 import { getAdapter } from "@/data";
 import { api } from "@/lib/api";
 import { ArcgisMap } from "@/components/map/ArcgisMap";
 import { Card } from "@/components/ui/card";
 import { LastUpdated, LoadingState, ErrorState, EmptyState } from "@/components/ui/misc";
+import { AutoRefreshControl } from "@/components/ui/AutoRefreshControl";
 import { useMapSettings } from "@/lib/mapSettings";
 import { severityColour, severityRank } from "@/lib/palette";
 import { STATUS } from "@/lib/tokens";
@@ -58,28 +65,23 @@ export default function CommandCenter() {
   const gatesQ = useQuery({
     queryKey: ["gates"],
     queryFn: () => getAdapter().gates(),
-    refetchInterval: 10_000,
   });
   const zonesQ = useQuery({ queryKey: ["zones"], queryFn: () => getAdapter().zones() });
   const snapsQ = useQuery({
     queryKey: ["snapshots"],
     queryFn: () => getAdapter().trafficSnapshots(),
-    refetchInterval: 8_000,
   });
   const trucksQ = useQuery({
     queryKey: ["trucks", "live-map"],
     queryFn: () => getAdapter().trucks(undefined, 500),
-    refetchInterval: 5_000,
   });
   const queuedQ = useQuery({
     queryKey: ["trucks", "AT_GATE_QUEUE"],
     queryFn: () => getAdapter().trucks("AT_GATE_QUEUE", 500),
-    refetchInterval: 6_000,
   });
   const parkingAvailQ = useQuery({
     queryKey: ["parking-availability"],
     queryFn: () => getAdapter().parkingAvailability(),
-    refetchInterval: 10_000,
   });
   // Customs Flags + AI Incidents read the SAME endpoints the Customs / Reports /
   // Geo screens use, so these KPIs match those screens exactly. Alerts share the
@@ -88,23 +90,19 @@ export default function CommandCenter() {
   const customsQ = useQuery({
     queryKey: ["customs-history"],
     queryFn: () => api.customsHistory(200),
-    refetchInterval: 15_000,
   });
   const aiQ = useQuery({
     queryKey: ["ai-events"],
     queryFn: () => api.aiEvents(undefined, 200),
-    refetchInterval: 15_000,
   });
   const alertsQ = useQuery({
     queryKey: ["alerts-seed"],
     queryFn: () => getAdapter().alerts({ limit: 100 }),
-    refetchInterval: 15_000,
   });
   const carbonQ = useQuery({ queryKey: ["carbon"], queryFn: () => getAdapter().carbonRollup() });
   const leoQ = useQuery({
     queryKey: ["leo-queue"],
     queryFn: () => getAdapter().leoQueue(),
-    refetchInterval: 15_000,
   });
   const enrollQ = useQuery({
     queryKey: ["enrollments"],
@@ -115,12 +113,35 @@ export default function CommandCenter() {
     queryFn: () => getAdapter().policeReport(),
   });
 
+  // --- UC-III KPI cards (additive) — reuse the existing api methods only ----
+  const accidentQ = useQuery({
+    queryKey: ["cc-accident-dashboard"],
+    queryFn: () => api.accidentDashboard(),
+  });
+  const bottlenecksQ = useQuery({
+    queryKey: ["cc-bottlenecks", 3],
+    queryFn: () => api.bottlenecks(3),
+  });
+  const trtQ = useQuery({ queryKey: ["cc-trt-summary"], queryFn: () => api.trtSummary() });
+  const reeferQ = useQuery({
+    queryKey: ["cc-reefer-availability"],
+    queryFn: () => api.reeferAvailability(),
+  });
+  const doubleTripQ = useQuery({
+    queryKey: ["cc-double-trip-stats"],
+    queryFn: () => api.doubleTripStatistics(),
+  });
+  const cameraQ = useQuery({
+    queryKey: ["cc-camera-dashboard"],
+    queryFn: () => api.cameraDashboard(),
+  });
+
   const trucks = trucksQ.data ?? [];
   const gates = gatesQ.data ?? [];
   const alerts = alertsQ.data ?? [];
   const enrollments = enrollQ.data ?? [];
 
-  // plate → driver name, from the enrolment register (real RDS link).
+  // plate → driver name, from the enrollment register (real RDS link).
   const driverByPlate = useMemo(() => {
     const m = new Map<string, string>();
     for (const e of enrollments)
@@ -249,6 +270,95 @@ export default function CommandCenter() {
     },
   ];
 
+  // UC-III cards derive defensively from `any` payloads so they never crash and
+  // degrade to 0 / "—" on error or while loading.
+  const accOpen = Number(accidentQ.data?.open ?? 0);
+  const accTotal = Number(accidentQ.data?.total ?? 0);
+
+  const bottleneckList: any[] = bottlenecksQ.data?.bottlenecks ?? [];
+  const topJam = bottleneckList[0];
+  const topJamLabel = topJam ? (topJam.name ?? topJam.segment_id ?? "—") : null;
+
+  const trtMin = trtQ.data?.avg_trt_min != null ? Math.round(Number(trtQ.data.avg_trt_min)) : null;
+  const trtLive = trtQ.data?.source === "live";
+
+  const reeferTotals = reeferQ.data?.totals ?? {};
+  const reeferAvail = Number(reeferTotals.available ?? 0);
+  const reeferTotal = Number(reeferTotals.total ?? 0);
+  const reeferFreePct =
+    reeferTotals.free_pct != null ? Math.round(Number(reeferTotals.free_pct)) : null;
+
+  const dtCycles = Number(doubleTripQ.data?.double_trip_cycles ?? 0);
+  const dtTotal = Number(doubleTripQ.data?.total_cycles ?? 0);
+
+  const camValid = Number(cameraQ.data?.container_reads?.valid ?? 0);
+  const camTrailer = Number(cameraQ.data?.trailer_reads ?? 0);
+
+  const uc3Cards: {
+    key: string;
+    icon: typeof Truck;
+    value: string;
+    label: string;
+    tone: Tone;
+    loading: boolean;
+    to: string;
+  }[] = [
+    {
+      key: "activeAccidents",
+      icon: AlertTriangle,
+      value: fmt(accOpen),
+      label: `Active Accidents · ${fmt(accTotal)} total`,
+      tone: accOpen > 0 ? "critical" : "ok",
+      loading: accidentQ.isLoading,
+      to: "/alerts?tab=accidents",
+    },
+    {
+      key: "activeBottlenecks",
+      icon: TrafficCone,
+      value: fmt(bottleneckList.length),
+      label: topJamLabel ? `Bottlenecks · ${topJamLabel}` : "Active Bottlenecks",
+      tone: bottleneckList.length > 0 ? "warn" : "ok",
+      loading: bottlenecksQ.isLoading,
+      to: "/geofencing?tab=bottlenecks",
+    },
+    {
+      key: "ecyTrt",
+      icon: Gauge,
+      value: trtMin != null ? `${trtMin} min` : "—",
+      label: `ECY TRT · ${trtLive ? "Live" : "Baseline"}`,
+      tone: "info",
+      loading: trtQ.isLoading,
+      to: "/live?tab=trt",
+    },
+    {
+      key: "reefer",
+      icon: Snowflake,
+      value: `${fmt(reeferAvail)} / ${fmt(reeferTotal)}`,
+      label: reeferFreePct != null ? `Reefer · ${reeferFreePct}% free` : "Reefer Available",
+      tone: "ok",
+      loading: reeferQ.isLoading,
+      to: "/parking?tab=reefer",
+    },
+    {
+      key: "doubleTrip",
+      icon: Repeat,
+      value: `${fmt(dtCycles)} / ${fmt(dtTotal)}`,
+      label: "Double-Trip Cycles",
+      tone: "info",
+      loading: doubleTripQ.isLoading,
+      to: "/live?tab=double-trip",
+    },
+    {
+      key: "cameraAi",
+      icon: Camera,
+      value: fmt(camValid),
+      label: `Camera AI · ${fmt(camTrailer)} trailer`,
+      tone: "info",
+      loading: cameraQ.isLoading,
+      to: "/gate-customs",
+    },
+  ];
+
   // Top-20 active vehicles: queued first, then soonest ETA.
   const topVehicles = useMemo(() => {
     return [...trucks]
@@ -284,6 +394,7 @@ export default function CommandCenter() {
         </div>
         <div className="ml-auto flex items-center gap-3">
           <LastUpdated at={lastUpdated || undefined} isFetching={anyFetching} />
+          <AutoRefreshControl />
           <button
             type="button"
             onClick={refreshAll}
@@ -293,6 +404,71 @@ export default function CommandCenter() {
             {t("commandCenter.refresh")}
           </button>
         </div>
+      </div>
+
+      {/* Needs Attention — Phase-9 priority band. Reuses the queries already
+          fetched above (no new API calls); surfaces only what an operator must
+          act on now, most-critical first, each deep-linking to its screen. */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/30 px-4 py-2">
+        <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <AlertTriangle className="h-3.5 w-3.5 text-amber-600" /> Needs Attention
+        </span>
+        {(() => {
+          const items: { label: string; crit: boolean; to: string }[] = [];
+          const openAcc = (accidentQ.data as any)?.open ?? 0;
+          if (openAcc > 0)
+            items.push({
+              label: `${openAcc} open accident${openAcc > 1 ? "s" : ""}`,
+              crit: true,
+              to: "/alerts?tab=accidents",
+            });
+          const crit = ((alertsQ.data as any)?.alerts ?? []).filter(
+            (a: any) => a?.severity === "critical",
+          ).length;
+          if (crit > 0)
+            items.push({
+              label: `${crit} critical alert${crit > 1 ? "s" : ""}`,
+              crit: true,
+              to: "/alerts",
+            });
+          const q = (queuedQ.data as any)?.count ?? (queuedQ.data as any)?.devices?.length ?? 0;
+          if (q >= 15) items.push({ label: `Gate queue ${q}`, crit: false, to: "/live" });
+          const bn = (bottlenecksQ.data as any)?.bottlenecks?.[0];
+          if (bn && (bn.jam_factor ?? 0) >= 6)
+            items.push({
+              label: `Bottleneck: ${bn.name ?? bn.segment_id}`,
+              crit: false,
+              to: "/geofencing",
+            });
+          // Only raise the TRT banner from MEASURED data. /api/trt/summary
+          // returns a hardcoded baseline (135 min) with source:"baseline" when
+          // no TRT records exist — surfacing that as an operator alert would
+          // report a placeholder as a live condition.
+          const trt = (trtQ.data as any)?.avg_trt_min ?? 0;
+          const trtMeasured = (trtQ.data as any)?.source === "live";
+          if (trtMeasured && trt >= 120)
+            items.push({ label: `TRT ${Math.round(trt)} min`, crit: false, to: "/live?tab=trt" });
+          if (items.length === 0)
+            return (
+              <span className="rounded-full border border-emerald-300 bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700">
+                All clear
+              </span>
+            );
+          return items.map((it, i) => (
+            <Link
+              key={i}
+              to={it.to}
+              className={
+                "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-opacity hover:opacity-80 " +
+                (it.crit
+                  ? "border-red-300 bg-red-50 text-red-700"
+                  : "border-amber-300 bg-amber-50 text-amber-700")
+              }
+            >
+              {it.label}
+            </Link>
+          ));
+        })()}
       </div>
 
       {/* KPI tiles ------------------------------------------------------- */}
@@ -306,6 +482,18 @@ export default function CommandCenter() {
             tone={k.tone}
             loading={k.loading}
           />
+        ))}
+        {/* UC-III KPI cards (additive) — each links into its host screen. */}
+        {uc3Cards.map((c) => (
+          <Link key={c.key} to={c.to} className="block transition-opacity hover:opacity-90">
+            <KpiTile
+              icon={c.icon}
+              label={c.label}
+              value={c.value}
+              tone={c.tone}
+              loading={c.loading}
+            />
+          </Link>
         ))}
       </div>
 

@@ -45,6 +45,9 @@ export default defineConfig({
       },
       injectManifest: {
         globPatterns: ["**/*.{js,css,html,svg,png}"],
+        // The ArcGIS Maps SDK produces a large vendor chunk (~2 MB); raise the
+        // precache ceiling so the driver map still works fully offline.
+        maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
       },
     }),
   ],
@@ -69,5 +72,9 @@ export default defineConfig({
       "/api": { target: GATEWAY, changeOrigin: true },
     },
   },
+  // The ArcGIS Maps SDK code-splits itself into many small lazy chunks — leave
+  // Rollup's default chunking alone (a manual arcgis chunk would collapse those
+  // lazy chunks into one ~13 MB eager bundle). The precache ceiling above is
+  // raised only for the ~2 MB app entry chunk.
   build: { outDir: "dist", sourcemap: false, target: "es2020" },
 });

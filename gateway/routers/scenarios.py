@@ -2,7 +2,7 @@
 
 The scenario service is built in a later PoC stage (Prompt 9). Until it is up,
 the gateway exposes the same surface but degrades to reading/writing
-``jnpa.scenarios`` directly so the route exists and the dashboard can list and
+``core.scenario`` directly so the route exists and the dashboard can list and
 start demo scenarios. Once the dedicated service is running on
 ``GATEWAY_SCENARIOS_URL`` the gateway forwards to it transparently.
 """
@@ -46,7 +46,7 @@ async def list_scenarios(state: GatewayState = Depends(get_state)) -> dict:
     if ok:
         REQUESTS.labels("scenarios", "ok").inc()
         return {"source": "scenarios", "scenarios": data}
-    # Degrade: read jnpa.scenarios.
+    # Degrade: read core.scenario.
     rows = await _db_scenarios(state)
     REQUESTS.labels("scenarios", "ok").inc()
     return {"source": "db", "scenarios": rows}
@@ -78,7 +78,7 @@ async def reset_scenario(name: str, body: Dict[str, Any] = Body(default_factory=
 @router.get("/handles")
 async def list_scenario_handles(limit: int = 50,
                                 state: GatewayState = Depends(get_state)) -> dict:
-    """List recent scenario RUN handles (jnpa.scenario_handles) for the What-If
+    """List recent scenario RUN handles (core.scenario_handle) for the What-If
     demo picker — including seeded demo timelines. Read-only; does not touch the
     live simulation flow (which mints its own handles on run)."""
     from jnpa_shared.db import fetch_all
@@ -87,8 +87,8 @@ async def list_scenario_handles(limit: int = 50,
         rows = await fetch_all(
             """
             SELECT h.handle_id, h.name, h.status, h.trace_id, h.started_at, h.ended_at,
-                   (SELECT count(*) FROM jnpa.scenario_steps s WHERE s.handle_id = h.handle_id) AS step_count
-            FROM jnpa.scenario_handles h
+                   (SELECT count(*) FROM core.scenario_step s WHERE s.handle_id = h.handle_id) AS step_count
+            FROM core.scenario_handle h
             ORDER BY h.started_at DESC NULLS LAST
             LIMIT :limit
             """,
@@ -111,20 +111,20 @@ async def list_scenario_handles(limit: int = 50,
 
 
 async def _db_timeline(state: GatewayState, handle_id: str) -> dict | None:
-    """Read a run timeline straight from RDS (jnpa.scenario_handles + steps).
+    """Read a run timeline straight from RDS (core.scenario_handle + steps).
     Powers demo/seeded timelines the live service never minted, and backstops a
     down scenario service. Returns None if the handle isn't in RDS."""
     from jnpa_shared.db import fetch_all, fetch_one
 
     try:
         head = await fetch_one(
-            "SELECT handle_id, name, status, trace_id FROM jnpa.scenario_handles WHERE handle_id = :h",
+            "SELECT handle_id, name, status, trace_id FROM core.scenario_handle WHERE handle_id = :h",
             {"h": handle_id}, dsn=state.cfg.postgres_dsn,
         )
         rows = await fetch_all(
             """
             SELECT handle_id, step_no, ts, title, status, trigger, detail
-            FROM jnpa.scenario_steps WHERE handle_id = :h ORDER BY step_no
+            FROM core.scenario_step WHERE handle_id = :h ORDER BY step_no
             """,
             {"h": handle_id}, dsn=state.cfg.postgres_dsn,
         )
@@ -168,7 +168,7 @@ async def _db_scenarios(state: GatewayState) -> list:
     from jnpa_shared.db import fetch_all
     try:
         rows = await fetch_all(
-            "SELECT id, name, started_at, ended_at, params FROM jnpa.scenarios ORDER BY started_at DESC NULLS LAST",
+            "SELECT id, name, started_at, ended_at, params FROM core.scenario ORDER BY started_at DESC NULLS LAST",
             dsn=state.cfg.postgres_dsn,
         )
     except Exception as exc:  # pragma: no cover - infra-timing dependent

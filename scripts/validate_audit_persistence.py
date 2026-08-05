@@ -10,9 +10,11 @@ rows land in each of the five tables. Proves the acceptance criteria:
   * every notification has delivery history     -> notifications
   * decisions are durable (survive restart)     -> decision_audit
 
-Run against the running stack (Postgres published on localhost:5433):
+Run against the running stack. POSTGRES_DSN is REQUIRED (AWS RDS,
+jnpa_schema_v3) — there is no local-postgres fallback:
 
-    POSTGRES_DSN='postgresql+asyncpg://postgres:jnpa_pw@localhost:5433/postgres' \
+    POSTGRES_DSN='postgresql+asyncpg://postgres:<pw>@database-1.__RDS_HOST__\
+ap-south-1.rds.amazonaws.com:5432/jnpa_schema_v3?ssl=require' \
         .venv/bin/python scripts/validate_audit_persistence.py
 
 Exit code 0 = all checks passed.
@@ -31,10 +33,12 @@ _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "shared"))
 
-DSN = os.environ.get(
-    "POSTGRES_DSN",
-    "postgresql+asyncpg://postgres:jnpa_pw@localhost:5433/postgres",
-)
+DSN = os.environ.get("POSTGRES_DSN", "").strip()
+if not DSN:
+    raise SystemExit(
+        "POSTGRES_DSN is not set. Point it at the RDS database (jnpa_schema_v3); "
+        "there is no local-postgres fallback."
+    )
 os.environ["POSTGRES_DSN"] = DSN
 
 from gateway import audit  # noqa: E402
@@ -42,7 +46,7 @@ from jnpa_shared.db import fetch_one  # noqa: E402
 
 
 async def _count(table: str) -> int:
-    row = await fetch_one(f"SELECT count(*) AS n FROM jnpa.{table}", dsn=DSN)
+    row = await fetch_one(f"SELECT count(*) AS n FROM core.{table}", dsn=DSN)
     return int(row["n"]) if row else -1
 
 
@@ -128,7 +132,7 @@ async def main() -> int:
         ok = ok and passed
     for t in ("api_audit_log", "digital_twin_events", "notifications",
               "decision_audit", "geofence_events", "anpr_reads"):
-        print(f"  rows in jnpa.{t}: {await _count(t)}")
+        print(f"  rows in core.{t}: {await _count(t)}")
     print("=== RESULT:", "ALL PASS ===" if ok else "FAILURES PRESENT ===")
     return 0 if ok else 1
 

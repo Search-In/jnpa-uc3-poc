@@ -141,7 +141,7 @@ class _FastagBase(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# 1) Toll Enroute API  ->  jnpa.toll_enroute
+# 1) Toll Enroute API  ->  core.toll_enroute
 # ---------------------------------------------------------------------------
 class TollPlazaDetail(_FastagBase):
     """One toll plaza on an enroute route. ``cost`` is money (Decimal); ``lat``/
@@ -170,7 +170,7 @@ class TollPlazaDetail(_FastagBase):
 
 class TollEnrouteResponse(_FastagBase):
     """RC/route -> full list of toll plazas + trip metadata. Maps 1:1 to
-    ``jnpa.toll_enroute`` (``toll_plaza_details`` persists as JSONB)."""
+    ``core.toll_enroute`` (``toll_plaza_details`` persists as JSONB)."""
 
     client_id: Optional[str] = Field(default=None, validation_alias="clientId")
     source_state: Optional[str] = Field(default=None, validation_alias="sourceState")
@@ -192,11 +192,11 @@ class TollEnrouteResponse(_FastagBase):
 
 
 # ---------------------------------------------------------------------------
-# 2) RC -> FASTag Balance API  ->  jnpa.fastag_balance
+# 2) RC -> FASTag Balance API  ->  core.fastag_balance
 # ---------------------------------------------------------------------------
 class FastagBalanceResponse(_FastagBase):
     """ULIP-compliant RC-keyed balance snapshot. Maps 1:1 to
-    ``jnpa.fastag_balance``. ``model_name`` is optional per vendor spec."""
+    ``core.fastag_balance``. ``model_name`` is optional per vendor spec."""
 
     rc_number: Optional[str] = Field(default=None, validation_alias="rcNumber")
     tag_id: Optional[str] = Field(default=None, validation_alias="tagId")
@@ -228,7 +228,7 @@ class FastagBalanceResponse(_FastagBase):
 
 
 # ---------------------------------------------------------------------------
-# 3) RC -> FASTag Transaction API  ->  jnpa.fastag_transactions
+# 3) RC -> FASTag Transaction API  ->  core.fastag_transaction
 # ---------------------------------------------------------------------------
 class FastagTransactionItem(_FastagBase):
     """A single plaza crossing. ``seq_no`` is the vendor idempotency key

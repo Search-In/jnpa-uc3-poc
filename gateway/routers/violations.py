@@ -8,12 +8,12 @@ police-visible incident the existing Reports page + PDF export render unchanged.
 Reused, never rebuilt:
   * ANPR plate read        -> ai/anpr (the same upstream /api/anpr/infer proxies),
                               degrading to the gateway's synthetic read.
-  * Vehicle registry       -> jnpa.vehicle_master (owner / class / RTO / FASTag).
-  * Driver mapping         -> jnpa.drivers / jnpa.driver_enrollments (vehicle_no).
+  * Vehicle registry       -> core.vehicle_rc (owner / class / RTO / FASTag).
+  * Driver mapping         -> core.driver_identity / core.driver_enrollment (vehicle_no).
   * Fine schedule          -> reports._CHALLAN (single source of truth for the
                               MVA section + ₹ fine per kind).
   * Evidence store         -> MinIO `evidence` bucket (same bucket ai/anomaly uses).
-  * Incident store         -> jnpa.alerts (so /api/reports/police picks them up
+  * Incident store         -> core.alert (so /api/reports/police picks them up
                               automatically — no schema change, no new table).
 
     POST /api/violations/detect  (multipart image)  -> run ANPR + vehicle/driver
@@ -22,7 +22,7 @@ Reused, never rebuilt:
         violation(s) before issuing a challan.
 
     POST /api/violations/commit  (json)             -> persist the confirmed
-        violation(s) as jnpa.alerts rows (one per kind, each carrying its own
+        violation(s) as core.alert rows (one per kind, each carrying its own
         e-Challan fine) that share one case_id + evidence_url, and return the
         aggregated incident (vehicle, driver, violations[], fine_total, ...).
 
@@ -147,7 +147,7 @@ async def _run_anpr(
 
 
 async def _lookup_vehicle(state: GatewayState, plate: Optional[str]) -> Optional[dict]:
-    """Owner / class / RTO / FASTag from jnpa.vehicle_master (best-effort)."""
+    """Owner / class / RTO / FASTag from core.vehicle_rc (best-effort)."""
     if not plate:
         return None
     from jnpa_shared.db import fetch_one
@@ -157,7 +157,7 @@ async def _lookup_vehicle(state: GatewayState, plate: Optional[str]) -> Optional
             """
             SELECT plate, owner_name_masked, vehicle_class, state, rto_code,
                    fastag_status, blacklist_status
-            FROM jnpa.vehicle_master
+            FROM core.vehicle_rc
             WHERE plate = :plate
             """,
             {"plate": plate}, dsn=state.cfg.postgres_dsn,
@@ -183,7 +183,7 @@ async def _lookup_driver(state: GatewayState, plate: Optional[str]) -> Optional[
         row = await fetch_one(
             """
             SELECT driver_id, name, status, vehicle_no
-            FROM jnpa.drivers
+            FROM core.driver_identity
             WHERE upper(replace(vehicle_no, ' ', '')) = :norm
             ORDER BY enrolled_at DESC
             LIMIT 1
@@ -194,7 +194,7 @@ async def _lookup_driver(state: GatewayState, plate: Optional[str]) -> Optional[
             row = await fetch_one(
                 """
                 SELECT driver_id, name, status, vehicle_no
-                FROM jnpa.driver_enrollments
+                FROM core.driver_enrollment
                 WHERE upper(replace(vehicle_no, ' ', '')) = :norm
                 ORDER BY submitted_at DESC
                 LIMIT 1
@@ -314,7 +314,7 @@ async def _zone_kind(state: GatewayState, zone_id: Optional[str]) -> Optional[st
 
     try:
         row = await fetch_one(
-            "SELECT kind FROM jnpa.geofence_zones WHERE id = :z",
+            "SELECT kind FROM core.geofence_zone WHERE id = :z",
             {"z": zone_id}, dsn=state.cfg.postgres_dsn,
         )
     except Exception as exc:  # pragma: no cover - infra-timing dependent
@@ -331,7 +331,7 @@ async def commit(
 ) -> dict:
     """Persist the operator-confirmed violation(s) as an enforcement CASE.
 
-    Flow (all idempotent): open/get the case → attach one jnpa.alerts row per kind
+    Flow (all idempotent): open/get the case → attach one core.alert row per kind
     (deduped on case_id+kind, so a re-submit is a no-op) → advance the lifecycle
     DETECTED→REVIEWED→CONFIRMED → (default) issue the immutable challan and advance
     to CHALLAN_ISSUED. Alert rows keep their existing shape so the Reports page +
@@ -457,7 +457,7 @@ async def _commit_case(
     """Shared enforcement core used by BOTH /commit (manual) and /enforce (auto).
 
     Idempotent throughout: ensure schema → open/get case → dedup-insert one
-    jnpa.alerts row per kind → walk lifecycle to CONFIRMED → (if issue) mint the
+    core.alert row per kind → walk lifecycle to CONFIRMED → (if issue) mint the
     immutable challan and advance to CHALLAN_ISSUED. Raises on DB failure; the
     calling endpoint maps that to a 503 (never a fabricated enforcement record).
     """
@@ -628,12 +628,53 @@ async def enforce(
         "alert_ids": res["alert_ids"],
         "ts": ts.isoformat(),
     }
+    # Resolve the offending driver's device BEFORE the WS fan-out so the frame can
+    # be ADDRESSED. Without this the frame carried the plate, driver name, fine and
+    # challan number of one driver to every connected PWA socket: the payload has
+    # no device_id, so the client-side `isForOtherDevice` filter cannot drop it and
+    # the data arrives even though no notification is raised.
+    device_id = None
+    try:
+        from . import push
+
+        device_id = await push.resolve_device(state, driver_id=driver_id, vehicle_id=plate)
+    except Exception as exc:  # noqa: BLE001 — resolution failure must not block enforcement
+        log.debug("violations_device_resolve_failed", case_id=case_id, error=str(exc))
+    if device_id:
+        notification["device_id"] = device_id
+
     notified = False
     try:
-        await state.ws.broadcast("violation_enforced", notification)
+        # Addressed when we know the driver: control room + that driver only.
+        # Unaddressed (control-room-wide) when the vehicle has no paired device —
+        # the dashboard behaviour every enforcement console relies on is unchanged.
+        await state.ws.broadcast("violation_enforced", notification, device_id=device_id)
         notified = True
     except Exception as exc:  # noqa: BLE001 — notification is non-critical
         log.warning("violations_notify_failed", case_id=case_id, error=str(exc))
+
+    # Additionally push the enforcement to the driver's device over WebPush + FCM
+    # (ws=False: the "violation_enforced" WS frame above is unchanged and NOT
+    # duplicated). Best-effort — a driver with no registered device is a no-op.
+    try:
+        from .. import notifications
+
+        if device_id:
+            fine = res["case_total"]
+            challan_no = (challan or {}).get("challan_no")
+            await notifications.dispatch_alert(
+                state, device_id,
+                kind="VIOLATION_ENFORCED",
+                title="Enforcement notice",
+                body=(f"e-Challan {challan_no} issued — fine ₹{fine}." if challan_no
+                      else f"A traffic violation was recorded — fine ₹{fine}."),
+                category="compliance", href="#/profile",
+                extra={"case_id": case_id, "plate": plate, "challan_no": challan_no,
+                       "alert_ids": res["alert_ids"]},
+                ws=False,
+            )
+    except Exception as exc:  # noqa: BLE001 — device push is non-critical
+        log.warning("violations_device_push_failed", case_id=case_id, error=str(exc))
 
     await state.record_decision(
         api="violations", decision_path="ENFORCED", key=case_id, source="violations",
@@ -684,6 +725,24 @@ async def get_case(case_id: str, state: GatewayState = Depends(get_state)) -> di
         raise HTTPException(status_code=404, detail={"error": "case_not_found"})
     REQUESTS.labels("violations", "ok").inc()
     return bundle
+
+
+@router.get("/cases/{case_id}/verify-chain")
+async def verify_chain(case_id: str, state: GatewayState = Depends(get_state)) -> dict:
+    """Recompute the case's append-only audit hash chain and report integrity.
+
+    The committee-facing "offer to verify the chain" beat: recomputes every
+    row's hash from the canonical writer function; any tampered/forked row is
+    named via ``broken_at``.
+    """
+    dsn = state.cfg.postgres_dsn
+    try:
+        result = await enforcement.verify_chain(dsn, case_id)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("violations_verify_failed", case_id=case_id, error=str(exc))
+        raise HTTPException(status_code=503, detail={"error": "case_store_unavailable"})
+    REQUESTS.labels("violations", "ok").inc()
+    return {"case_id": case_id, **result}
 
 
 @router.post("/cases/{case_id}/transition")

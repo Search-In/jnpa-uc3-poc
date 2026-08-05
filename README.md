@@ -1,4 +1,4 @@
-# JNPA Digital Twin — Use Case III PoC
+# JNPT Digital Twin — Use Case III PoC
 
 ***Traffic Monitoring & Vehicular Decongestion*** along the NH-348 corridor from
 JNPA (Jawaharlal Nehru Port Authority) to Karal Phata.
@@ -15,10 +15,34 @@ bootstrap self-test that prints `BOOTSTRAP OK`.
 
 ---
 
-## One-command bring-up
+## Bring-up on a fresh machine
 
 ```bash
-cp .env.local.example .env.local && make venv && make up && make bootstrap-check
+make env-init                 # .env.local + generated secrets (never overwrites)
+#   -> then fill __RDS_HOST__ / __RDS_USER__ / __RDS_PASSWORD__ by hand.
+#      Read docs/RDS_SECURITY.md FIRST — the endpoint is not committed, and the
+#      app must not connect as the postgres superuser.
+make env-check                # validates every required var + the auth posture
+make venv                     # host virtualenv (once)
+make migrate                  # apply infra/postgres/v3 migrations (idempotent)
+make up                       # start the stack
+make bootstrap-check          # end-to-end self-test
+```
+
+`make env-init` replaces the old `cp .env.local.example .env.local`: the example
+now ships `__GENERATE_ME__` placeholders for `AUTH_JWT_SECRET` and
+`PWA_PAIRING_SECRET`, and a copied-but-unfilled file leaves the gateway refusing
+to start and every driver unable to log in. `make env-check` reports exactly
+which values are still missing, and is also run automatically at gateway boot
+(warnings are logged, never fatal).
+
+On a database that was migrated BY HAND before the runner existed, adopt it once
+instead of re-running the backfills:
+
+```bash
+make migrate-status                     # see what the ledger thinks
+make migrate-baseline VERSION=0203      # record 0101..0203 as applied
+make migrate                            # then apply only what is genuinely new
 ```
 
 `make up` starts the stack in the background; give it ~25 s to become healthy
@@ -46,9 +70,13 @@ BOOTSTRAP OK
   bootstrap-check`; if you prefer your own environment, run
   `pip install -e "shared[dev]"` there instead.
 
-> **Host port note:** the container Postgres is published on host **5433**
-> (not 5432) to avoid clashing with a Postgres you may already run locally.
-> Containers on the `jnpa` network still use `postgres:5432`.
+> **Database:** the application database is **AWS RDS PostgreSQL**
+> (`database-1.…ap-south-1.rds.amazonaws.com:5432/jnpa_schema_v3`) in every
+> environment. Set `POSTGRES_DSN` + `RFID_/TRUCK_/CONGESTION_/ANOMALY_POSTGRES_DSN`
+> in `.env.local` (see `.env.local.example`); there is no local-postgres
+> fallback — a missing DSN fails the container/compose run instead.
+> A local sandbox DB is still available for offline work, opt-in only:
+> `docker compose --profile localdb up -d postgres` (published on host 5433).
 
 ---
 
@@ -138,12 +166,29 @@ file documents where to obtain each key:
 | `HERE_API_KEY`          | https://platform.here.com/                        |
 | `TOMTOM_API_KEY`        | https://developer.tomtom.com/                     |
 | `OPENWEATHER_API_KEY`   | https://openweathermap.org/api                    |
+| `WORLDTIDES_API_KEY`    | https://www.worldtides.info/developer             |
 | `SUREPASS_API_TOKEN`    | https://surepass.io/ (Vahan / FASTag / RC)        |
 | `ULIP_API_KEY`          | https://www.ulip.dpiit.gov.in/                    |
 | `BHUVAN_API_KEY`        | https://bhuvan.nrsc.gov.in/                        |
 
 The skeleton runs fully without any external keys — they are only needed once
 the ingest/AI services start calling live providers in later PoC stages.
+
+### HERE (Traffic Flow v7 + Routing v8) activation
+
+Setting `HERE_API_KEY=<value>` in `.env.local` is sufficient — no code change:
+
+- **congestion service** — the `google → here → tomtom → stale → synthetic`
+  cascade automatically promotes configured (live-capable) providers ahead of
+  keyless ones, so HERE goes live for segment speeds immediately.
+- **truck-sim** — HERE Routing v8 becomes the route/ETA fallback behind OSRM.
+
+If live fetches time out on a slow network, raise the cascade's per-source
+budget (default 1 s): `CONGESTION_SOURCE_TIMEOUT_S=3`. Apply with
+`make up` (compose reads `--env-file .env.local`), or restart just the two
+consumers: `docker compose --env-file .env.local up -d congestion truck-sim`.
+The key is backend-only; never put it in a `VITE_*` variable, and note that
+adapters redact it from all logs and error text.
 
 ---
 
@@ -201,7 +246,8 @@ route browser traffic through the proxy so bearer tokens never traverse plain HT
 
 | Service              | Image                                   | Host port(s)        | Inspect at                                      |
 | -------------------- | --------------------------------------- | ------------------- | ----------------------------------------------- |
-| Postgres / Timescale | `timescale/timescaledb-ha:pg15-latest`  | `5433` → 5432       | `make psql`                                     |
+| Postgres (AWS RDS)   | managed — `jnpa_schema_v3`              | remote `5432` (TLS) | `make psql`                                     |
+| Postgres (dev sandbox, opt-in) | `timescale/timescaledb-ha:pg15-latest` | `5433` → 5432 (profile `localdb`) | `docker compose --profile localdb up -d postgres` |
 | Redis                | `redis:7-alpine`                        | `6379`              | `make redis-cli`                                |
 | Zookeeper            | `confluentinc/cp-zookeeper:7.6.0`       | (internal)          | —                                               |
 | Kafka                | `confluentinc/cp-kafka:7.6.0`           | `9092` (int), `29092` (host) | via Kafka-UI                           |
@@ -601,7 +647,7 @@ so the next `make up` serves instantly without retraining. For a full teardown
 | `make down`             | `docker compose down -v` (removes volumes)      |
 | `make logs`             | tail all service logs                           |
 | `make ps`               | container status                                |
-| `make psql`             | open `psql` in the Postgres container           |
+| `make psql`             | open `psql` against the RDS database             |
 | `make redis-cli`        | open `redis-cli` in the Redis container         |
 | `make install-shared`   | `pip install -e shared`                         |
 | `make test`             | `pytest -x shared tests`                        |

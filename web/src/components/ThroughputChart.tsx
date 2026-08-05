@@ -10,7 +10,6 @@ export function ThroughputChart() {
   const q = useQuery({
     queryKey: ["kpi", "throughput-trend"],
     queryFn: () => getAdapter().kpiStrip(),
-    refetchInterval: 30_000,
   });
 
   const kpi = (q.data ?? []).find((k) => k.key === "gate_throughput");

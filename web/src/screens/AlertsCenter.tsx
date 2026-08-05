@@ -6,7 +6,7 @@
 // customs flags — no backend change. Clicking an alert focuses it on the live map.
 
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, RefreshCw, ChevronRight } from "lucide-react";
@@ -14,8 +14,11 @@ import { getAdapter } from "@/data";
 import { useSocket } from "@/hooks/SocketContext";
 import { mergeAlerts, alertKey } from "@/lib/alerts";
 import { alertFocusStore } from "@/lib/alertFocus";
+import { useIncomingSearch } from "@/lib/searchStore";
 import { severityColour, severityRank } from "@/lib/palette";
 import { Card } from "@/components/ui/card";
+import { SegmentedTabs, Embedded } from "@/components/ui/dtccc";
+import Accidents from "@/screens/Accidents";
 import { LoadingState, ErrorState, EmptyState, LastUpdated } from "@/components/ui/misc";
 import { relativeAge } from "@/lib/utils";
 import { cn } from "@/lib/utils";
@@ -32,6 +35,11 @@ import type { Alert } from "@/lib/types";
 const CATEGORIES = ALERT_CATEGORIES;
 const RANGES = TIME_RANGES;
 
+// Camera AI and Blacklist were also mounted here; each now has ONE home
+// (/gate-customs and /vehicles). Accidents stays — an accident is an alert.
+type TabKey = "alerts" | "accidents";
+const TAB_KEYS: TabKey[] = ["alerts", "accidents"];
+
 export default function AlertsCenter() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -39,10 +47,29 @@ export default function AlertsCenter() {
   const [category, setCategory] = useState<Category>("all");
   const [range, setRange] = useState<Range>("7d");
 
+  // Tab strip (additive) — the existing alerts experience is the default tab.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabParam = searchParams.get("tab");
+  const activeTab: TabKey = (TAB_KEYS as string[]).includes(tabParam ?? "")
+    ? (tabParam as TabKey)
+    : "alerts";
+  const setTab = (key: TabKey) =>
+    setSearchParams(
+      (prev) => {
+        if (key === "alerts") prev.delete("tab");
+        else prev.set("tab", key);
+        return prev;
+      },
+      { replace: true },
+    );
+  const TABS: { key: TabKey; label: string }[] = [
+    { key: "alerts", label: "Alerts" },
+    { key: "accidents", label: "Accidents" },
+  ];
+
   const seedQ = useQuery({
     queryKey: ["alerts-seed"],
     queryFn: () => getAdapter().alerts({ limit: 100 }),
-    refetchInterval: 15_000,
   });
   const merged = useMemo(
     () => mergeAlerts(liveAlerts, seedQ.data ?? [], 200),
@@ -71,13 +98,26 @@ export default function AlertsCenter() {
     return c;
   }, [inRange]);
 
+  // Header Global Search hand-off (entity "alert"). Previously the omnibox
+  // navigated here with ?q= and the query was dropped, so the operator saw the
+  // full unfiltered list and assumed the search had failed.
+  const incomingSearch = useIncomingSearch(["alert"]);
+
   const filtered = useMemo(() => {
     const list = category === "all" ? inRange : inRange.filter((a) => categoryOf(a) === category);
-    return [...list].sort(
+    const needle = incomingSearch.trim().toLowerCase();
+    const matched = needle
+      ? list.filter((a) =>
+          `${a.kind} ${a.severity} ${a.plate ?? ""} ${a.gate_id ?? ""}`
+            .toLowerCase()
+            .includes(needle),
+        )
+      : list;
+    return [...matched].sort(
       (a, b) =>
         severityRank(b.severity) - severityRank(a.severity) || Date.parse(b.ts) - Date.parse(a.ts),
     );
-  }, [inRange, category]);
+  }, [inRange, category, incomingSearch]);
 
   function focus(a: Alert) {
     alertFocusStore.focus(a);
@@ -107,68 +147,86 @@ export default function AlertsCenter() {
         </div>
       </div>
 
-      {/* Filters */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-border bg-card px-4 py-2.5">
-        <div className="flex flex-wrap gap-1.5">
-          {CATEGORIES.map((c) => (
-            <button
-              key={c}
-              type="button"
-              onClick={() => setCategory(c)}
-              className={cn(
-                "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors",
-                category === c
-                  ? "border-primary bg-primary text-primary-foreground"
-                  : "border-border bg-background text-foreground hover:bg-muted",
-              )}
-            >
-              {t(`alertsCenter.cat.${c}`)}
-              <span
-                className={cn(
-                  "rounded-full px-1 text-[10px] font-bold tabular-nums",
-                  category === c ? "bg-white/20" : "bg-muted",
-                )}
-              >
-                {counts[c]}
-              </span>
-            </button>
-          ))}
-        </div>
-        <div className="ml-auto flex gap-1 rounded-md border border-border bg-background p-0.5">
-          {RANGES.map((r) => (
-            <button
-              key={r}
-              type="button"
-              onClick={() => setRange(r)}
-              className={cn(
-                "rounded px-2.5 py-1 text-xs font-medium transition-colors",
-                range === r
-                  ? "bg-primary text-primary-foreground"
-                  : "text-foreground hover:bg-muted",
-              )}
-            >
-              {t(`alertsCenter.range.${r}`)}
-            </button>
-          ))}
-        </div>
+      {/* Tab strip (additive — default tab preserves the existing experience) */}
+      <div className="border-b border-border bg-card px-4 py-2">
+        <SegmentedTabs tabs={TABS} value={activeTab} onChange={setTab} />
       </div>
 
-      {/* List */}
-      <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        {seedQ.isLoading ? (
-          <LoadingState />
-        ) : seedQ.isError ? (
-          <ErrorState onRetry={() => seedQ.refetch()} detail={(seedQ.error as Error)?.message} />
-        ) : filtered.length === 0 ? (
-          <EmptyState>{t("alertsCenter.empty")}</EmptyState>
-        ) : (
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
-            {filtered.map((a, i) => (
-              <AlertCard key={`${alertKey(a)}-${i}`} alert={a} onClick={() => focus(a)} />
-            ))}
+      {activeTab === "accidents" ? (
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          <Embedded>
+            <Accidents />
+          </Embedded>
+        </div>
+      ) : (
+        <>
+          {/* Filters */}
+          <div className="flex flex-wrap items-center gap-2 border-b border-border bg-card px-4 py-2.5">
+            <div className="flex flex-wrap gap-1.5">
+              {CATEGORIES.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setCategory(c)}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                    category === c
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border bg-background text-foreground hover:bg-muted",
+                  )}
+                >
+                  {t(`alertsCenter.cat.${c}`)}
+                  <span
+                    className={cn(
+                      "rounded-full px-1 text-[10px] font-bold tabular-nums",
+                      category === c ? "bg-white/20" : "bg-muted",
+                    )}
+                  >
+                    {counts[c]}
+                  </span>
+                </button>
+              ))}
+            </div>
+            <div className="ml-auto flex gap-1 rounded-md border border-border bg-background p-0.5">
+              {RANGES.map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  onClick={() => setRange(r)}
+                  className={cn(
+                    "rounded px-2.5 py-1 text-xs font-medium transition-colors",
+                    range === r
+                      ? "bg-primary text-primary-foreground"
+                      : "text-foreground hover:bg-muted",
+                  )}
+                >
+                  {t(`alertsCenter.range.${r}`)}
+                </button>
+              ))}
+            </div>
           </div>
-        )}
-      </div>
+
+          {/* List */}
+          <div className="min-h-0 flex-1 overflow-y-auto p-4">
+            {seedQ.isLoading ? (
+              <LoadingState />
+            ) : seedQ.isError ? (
+              <ErrorState
+                onRetry={() => seedQ.refetch()}
+                detail={(seedQ.error as Error)?.message}
+              />
+            ) : filtered.length === 0 ? (
+              <EmptyState>{t("alertsCenter.empty")}</EmptyState>
+            ) : (
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                {filtered.map((a, i) => (
+                  <AlertCard key={`${alertKey(a)}-${i}`} alert={a} onClick={() => focus(a)} />
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }

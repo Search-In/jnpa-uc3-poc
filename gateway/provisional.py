@@ -4,12 +4,12 @@ When every Vahan rung above PROVISIONAL has failed (live primary down, sim down,
 nothing in the 12 h cache), the gateway must still let the vehicle through the
 gate rather than block port operations — but on a leash:
 
-* a row is written to ``jnpa.vehicle_master`` with ``provisional=true`` and
+* a row is written to ``core.vehicle_rc`` with ``provisional=true`` and
   ``provisional_until = now() + 24h`` (the cure window), and
 * an ``Alert(kind="PROVISIONAL_VEHICLE")`` is raised so the control room knows a
   vehicle was admitted on trust and must be reconciled before the window closes.
 
-Alerts are persisted to ``jnpa.alerts`` (best-effort) and, when a Kafka producer
+Alerts are persisted to ``core.alert`` (best-effort) and, when a Kafka producer
 is available, published to the shared ``alerts`` topic so the anomaly/alert
 pipeline and the dashboard see them on the same channel as everything else.
 """
@@ -41,7 +41,7 @@ async def admit_provisional(
     window_h: int = 24,
     reason: str = "all_vahan_paths_exhausted",
 ) -> datetime:
-    """Write the provisional ``jnpa.vehicle_master`` row; return provisional_until.
+    """Write the provisional ``core.vehicle_rc`` row; return provisional_until.
 
     Idempotent on the plate PK: a repeated admission refreshes the cure window.
     Best-effort against the DB — a Postgres outage logs and re-raises so the
@@ -51,7 +51,7 @@ async def admit_provisional(
     until = _utcnow() + timedelta(hours=window_h)
     await execute(
         """
-        INSERT INTO jnpa.vehicle_master (plate, provisional, provisional_until, updated_at)
+        INSERT INTO core.vehicle_rc (plate, provisional, provisional_until, updated_at)
         VALUES (:plate, true, :until, now())
         ON CONFLICT (plate) DO UPDATE SET
             provisional       = true,
@@ -65,10 +65,10 @@ async def admit_provisional(
 
 
 async def persist_alert(alert: Alert, *, dsn: Optional[str] = None) -> None:
-    """Insert an Alert into jnpa.alerts (payload JSON-encoded)."""
+    """Insert an Alert into core.alert (payload JSON-encoded)."""
     await execute(
         """
-        INSERT INTO jnpa.alerts (id, ts, kind, severity, gate_id, plate, payload, ack)
+        INSERT INTO core.alert (id, ts, kind, severity, gate_id, plate, payload, ack)
         VALUES (:id, :ts, :kind, :severity, :gate_id, :plate, CAST(:payload AS jsonb), :ack)
         ON CONFLICT (id) DO NOTHING
         """,

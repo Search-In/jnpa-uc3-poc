@@ -19,7 +19,7 @@ those allocations drives the **TRT-for-empty-from-ECD** KPI.
 The books are generated deterministically (seed-hashed, no `Date.now()` / RNG),
 so the same bring-up always yields the same allocations and the same KPI — the
 demo is reproducible run-to-run and host-to-host. The service registers itself
-in ``jnpa.services`` on startup (best-effort; the API stays up if the DB is not).
+in ``core.ulip_service`` on startup (best-effort; the API stays up if the DB is not).
 """
 from __future__ import annotations
 
@@ -124,7 +124,7 @@ async def _lifespan(_app: FastAPI):
     OPEN_DEMAND.set(len(_all_demand()))
     log.info("books_built", depots=len(_SUPPLY), demand=len(_DEMAND))
 
-    # Best-effort: register in jnpa.services + ensure schema. DB may not be up
+    # Best-effort: register in core.ulip_service + ensure schema. DB may not be up
     # yet in some local bring-up orders; don't crash the API if so.
     try:
         from jnpa_shared.vahan_db import ensure_schema, register_service

@@ -13,12 +13,18 @@ import PoliceReports from "@/screens/PoliceReports";
 import Fastag from "@/screens/Fastag";
 import GateCustoms from "@/screens/GateCustoms";
 import Intelligence from "@/screens/Intelligence";
-import FollowTheBox from "@/screens/FollowTheBox";
+import Uc3Lifecycle from "@/screens/Uc3Lifecycle";
+import TruckOperations from "@/screens/TruckOperations";
 import ParkingManagement from "@/screens/ParkingManagement";
 import SystemHealth from "@/screens/SystemHealth";
 import WhatIfConsole from "@/screens/WhatIfConsole";
 import DemoConsole from "@/screens/DemoConsole";
 import DriverEnrollments from "@/screens/DriverEnrollments";
+import VehicleManagement from "@/screens/VehicleManagement";
+import CfsEcyMovements from "@/screens/CfsEcyMovements";
+import ShippingLines from "@/screens/ShippingLines";
+import Berthing from "@/screens/berthing/Berthing";
+import PerformanceReports from "@/screens/PerformanceReports";
 import WorkflowComposer from "@/screens/WorkflowComposer";
 import SimulatorPage from "@/sim/SimulatorPage";
 import Launcher from "@/screens/Launcher";
@@ -163,13 +169,24 @@ function DashboardShell({
             }
           />
           <Route
-            path="/follow-the-box"
+            path="/truck-ops"
             element={
-              <Guard path="/follow-the-box">
-                <FollowTheBox />
+              <Guard path="/truck-ops">
+                <TruckOperations />
               </Guard>
             }
           />
+          <Route
+            path="/uc3-lifecycle"
+            element={
+              <Guard path="/uc3-lifecycle">
+                <Uc3Lifecycle />
+              </Guard>
+            }
+          />
+          {/* Follow-The-Box is out of scope (client clarification); its former
+              route now resolves to the UC-3 Lifecycle console. */}
+          <Route path="/follow-the-box" element={<Navigate to="/uc3-lifecycle" replace />} />
           <Route
             path="/parking"
             element={
@@ -234,6 +251,75 @@ function DashboardShell({
                 <DriverEnrollments />
               </Guard>
             }
+          />
+          <Route
+            path="/vehicles"
+            element={
+              <Guard path="/vehicles">
+                <VehicleManagement />
+              </Guard>
+            }
+          />
+          <Route
+            path="/cfs-ecy"
+            element={
+              <Guard path="/cfs-ecy">
+                <CfsEcyMovements />
+              </Guard>
+            }
+          />
+          <Route
+            path="/shipping-lines"
+            element={
+              <Guard path="/shipping-lines">
+                <ShippingLines />
+              </Guard>
+            }
+          />
+          <Route
+            path="/berthing"
+            element={
+              <Guard path="/berthing">
+                <Berthing />
+              </Guard>
+            }
+          />
+          <Route
+            path="/performance"
+            element={
+              <Guard path="/performance">
+                <PerformanceReports />
+              </Guard>
+            }
+          />
+          {/* --- UC-III features now live inside their host screens; the old
+              standalone routes redirect into the host (+tab) so deep-links and
+              Command-Center/Demo shortcuts keep resolving (no sidebar entry). --- */}
+          <Route path="/accidents" element={<Navigate to="/alerts?tab=accidents" replace />} />
+          <Route
+            path="/transporters"
+            element={<Navigate to="/vehicles?tab=transporters" replace />}
+          />
+          <Route path="/camera-ai" element={<Navigate to="/gate-customs?tab=camera" replace />} />
+          {/* Document OCR is hosted by Reports & Enforcement, not UC-3 Lifecycle. */}
+          <Route
+            path="/document-ocr"
+            element={<Navigate to="/reports?tab=document_ocr" replace />}
+          />
+          <Route path="/nvr" element={<Navigate to="/health?tab=nvr" replace />} />
+          <Route path="/trt" element={<Navigate to="/truck-ops?tab=trt" replace />} />
+          <Route
+            path="/bottlenecks"
+            element={<Navigate to="/geofencing?tab=bottlenecks" replace />}
+          />
+          <Route path="/reefer" element={<Navigate to="/parking?tab=reefer" replace />} />
+          <Route
+            path="/integrations"
+            element={<Navigate to="/health?tab=integrations" replace />}
+          />
+          <Route
+            path="/double-trip"
+            element={<Navigate to="/truck-ops?tab=double-trip" replace />}
           />
           <Route path="*" element={<Navigate to="/command-center" replace />} />
         </Routes>

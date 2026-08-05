@@ -7,10 +7,13 @@ the single place speed and the state machine evolve; ``telemetry()`` snapshots
 the current position with GPS noise applied into a ``TruckTelemetry`` event.
 
 State machine (spec):
-    EN_ROUTE_TO_PORT -> AT_GATE_QUEUE -> INSIDE_PORT -> EN_ROUTE_HOME -> IDLE
+    EN_ROUTE_TO_PORT -> AT_GATE_QUEUE -> GATE_TRANSACTION -> INSIDE_PORT
+    -> EN_ROUTE_HOME -> IDLE
 and back to EN_ROUTE_TO_PORT for the next trip. Routes for each leg are supplied
 by the fleet (it owns the async Router); the truck signals when it needs one via
-``needs_route``.
+``needs_route``. AT_GATE_QUEUE (waiting in line) and GATE_TRANSACTION (the boom
+processing itself) are split so the two Appendix-C gate KPIs — *queue wait* and
+*transaction time* — are each measured as a distinct phase rather than lumped.
 """
 from __future__ import annotations
 
@@ -33,6 +36,7 @@ LatLon = Tuple[float, float]
 class TruckState(str, Enum):
     EN_ROUTE_TO_PORT = "EN_ROUTE_TO_PORT"
     AT_GATE_QUEUE = "AT_GATE_QUEUE"
+    GATE_TRANSACTION = "GATE_TRANSACTION"
     INSIDE_PORT = "INSIDE_PORT"
     EN_ROUTE_HOME = "EN_ROUTE_HOME"
     IDLE = "IDLE"
@@ -68,6 +72,10 @@ class Truck:
     rng: random.Random
 
     state: TruckState = TruckState.EN_ROUTE_TO_PORT
+    # Monotonic per-device trip counter. Bumped on each gate arrival so all four
+    # gate lifecycle events of one port visit share a stable trip id — the key
+    # the KPI views group on to pair (arrival, txn-start, gate-in, gate-out).
+    trip_seq: int = 0
     # Active route polyline + how far along it we are (km from the route start).
     route_points: List[LatLon] = field(default_factory=list)
     route_cum_km: List[float] = field(default_factory=list)  # cumulative km per point
@@ -84,6 +92,11 @@ class Truck:
     def __post_init__(self) -> None:
         if self.position == (0.0, 0.0):
             self.position = self.profile.origin
+
+    @property
+    def trip_id(self) -> str:
+        """Stable id for the current port visit — groups this trip's gate events."""
+        return f"{self.profile.device_id}:{self.trip_seq}"
 
     # -- route binding ------------------------------------------------------
     @property
@@ -154,6 +167,7 @@ class Truck:
         if self.state == TruckState.EN_ROUTE_TO_PORT:
             self.position = gates.GATE_COORDS[self.profile.gate_id]
             self.dwell_left_s = self._jittered(self.cfg.gate_queue_dwell_s)
+            self.trip_seq += 1  # a new port visit begins at the gate queue
             return self._enter(TruckState.AT_GATE_QUEUE)
         # EN_ROUTE_HOME -> arrived home -> IDLE
         self.position = self.profile.origin
@@ -162,6 +176,11 @@ class Truck:
 
     def _on_dwell_done(self) -> TruckState:
         if self.state == TruckState.AT_GATE_QUEUE:
+            # Queue cleared -> the boom transaction (weigh/scan/verify) begins.
+            self.dwell_left_s = self._jittered(self.cfg.gate_txn_dwell_s)
+            return self._enter(TruckState.GATE_TRANSACTION)
+        if self.state == TruckState.GATE_TRANSACTION:
+            # Transaction complete (boom clear) -> admitted into the port.
             self.dwell_left_s = self._jittered(self.cfg.inside_port_dwell_s)
             return self._enter(TruckState.INSIDE_PORT)
         if self.state == TruckState.INSIDE_PORT:

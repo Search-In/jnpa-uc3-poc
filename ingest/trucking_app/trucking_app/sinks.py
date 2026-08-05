@@ -9,7 +9,7 @@ Three independent, fault-tolerant sinks fed by the simulator:
   * ``KafkaSink`` — wraps the shared confluent-kafka producer; non-blocking
     ``produce`` + periodic ``poll`` so delivery callbacks fire. JSON+snappy.
   * ``DbSink`` — buffers ``TruckTelemetry`` rows and flushes them to
-    ``jnpa.truck_telemetry`` with asyncpg ``copy_records_to_table`` (binary COPY)
+    ``core.truck_telemetry`` with asyncpg ``copy_records_to_table`` (binary COPY)
     every ``db_flush_interval_s`` — the high-throughput write path the spec asks
     for. Postgres connect is retried; failed flushes are retried, never silently
     dropped beyond a bounded buffer.
@@ -27,6 +27,7 @@ import aiomqtt
 import asyncpg
 
 from jnpa_shared import kafka_io
+from jnpa_shared.config import require_dsn
 from jnpa_shared.logging import get_logger
 from jnpa_shared.schemas import TruckTelemetry
 
@@ -204,11 +205,20 @@ _COPY_COLUMNS = (
 
 
 class DbSink:
-    """Buffers telemetry and flushes via asyncpg binary COPY every N seconds."""
+    """Buffers telemetry and flushes via asyncpg binary COPY every N seconds.
+
+    Also carries a small, separate buffer of *gate lifecycle events* (a few rows
+    per port visit, not the high-rate position stream). These are the raw
+    event-capture the Appendix-C gate KPIs are computed from: the KPI views pair
+    consecutive events per trip to measure queue wait, transaction time and
+    turn-around time inside the port. They are written with a plain INSERT
+    (low volume) in the same flush cycle as the telemetry COPY.
+    """
 
     def __init__(self, cfg: TruckConfig) -> None:
         self.cfg = cfg
         self._buf: List[tuple] = []
+        self._gate_buf: List[tuple] = []
         self._lock = asyncio.Lock()
         self._pool: Optional[asyncpg.Pool] = None
         self._stop = asyncio.Event()
@@ -246,18 +256,60 @@ class DbSink:
             PUBLISH_ERRORS.labels("db").inc()
             log.warning("db_buffer_overflow_dropped", dropped=drop)
 
+    def enqueue_gate_event(
+        self,
+        ts,
+        device_id: str,
+        plate: str,
+        gate_id: str,
+        trip_id: str,
+        event_type: str,
+        lat: float,
+        lon: float,
+    ) -> None:
+        """Append a gate lifecycle event (arrival / txn-start / gate-in / gate-out)."""
+        self._gate_buf.append(
+            (ts, device_id, plate, gate_id, trip_id, event_type, lat, lon)
+        )
+
     async def flush(self) -> int:
-        """COPY the buffered rows to Timescale. Returns rows written."""
+        """COPY the buffered rows to Timescale. Returns telemetry rows written.
+
+        Gate events (low volume) are flushed alongside via a plain INSERT.
+        """
         if self._pool is None:
             return 0
         async with self._lock:
-            if not self._buf:
-                return 0
             rows = self._buf
             self._buf = []
+            gate_rows = self._gate_buf
+            self._gate_buf = []
         DB_QUEUE_DEPTH.set(0)
+        if gate_rows:
+            await self._insert_gate_events(gate_rows)
+        if not rows:
+            return 0
         written = await self._copy(rows)
         return written
+
+    async def _insert_gate_events(self, rows: List[tuple]) -> None:
+        """Best-effort INSERT of gate events; re-buffer once on failure."""
+        if self._pool is None:
+            self._gate_buf = rows + self._gate_buf
+            return
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.executemany(
+                    "INSERT INTO core.gate_event "
+                    "(ts, device_id, plate, gate_id, trip_id, event_type, lat, lon) "
+                    "VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+                    rows,
+                )
+        except Exception as exc:  # noqa: BLE001
+            PUBLISH_ERRORS.labels("db").inc()
+            log.warning("gate_event_insert_retry", error=str(exc), n=len(rows))
+            async with self._lock:
+                self._gate_buf = rows + self._gate_buf
 
     async def _copy(self, rows: List[tuple]) -> int:
         assert self._pool is not None
@@ -268,7 +320,7 @@ class DbSink:
                 async with self._pool.acquire() as conn:
                     await conn.copy_records_to_table(
                         "truck_telemetry",
-                        schema_name="jnpa",
+                        schema_name="core",
                         columns=_COPY_COLUMNS,
                         records=rows,
                     )
@@ -288,11 +340,14 @@ class DbSink:
         return 0
 
     async def _connect_pool(self) -> asyncpg.Pool:
+        # Raise (don't retry) on a missing DSN: without it asyncpg would fall
+        # back to libpq defaults (local socket) instead of the RDS database.
+        dsn = require_dsn(self.cfg.postgres_dsn, "POSTGRES_DSN_LIBPQ")
         delay = 1.0
         while not self._stop.is_set():
             try:
                 pool = await asyncpg.create_pool(
-                    dsn=self.cfg.postgres_dsn,
+                    dsn=dsn,
                     min_size=self.cfg.db_pool_min,
                     max_size=self.cfg.db_pool_max,
                 )

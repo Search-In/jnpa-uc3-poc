@@ -3,7 +3,7 @@
 Pipeline:
   1. Build the corridor graph (graph.py).
   2. Generate ~14 days of synthetic 60-s history (synthetic.py); if Postgres is
-     reachable, enrich the most-recent tail with real ``jnpa.traffic_snapshots``
+     reachable, enrich the most-recent tail with real ``core.traffic_snapshot``
      joined with RFID/ANPR/trucking-derived counts.
   3. Build the dense feature tensor + sliding windows with onset labels
      (features.py). The held-out split is the LAST ``val_hours`` (24 h) of
@@ -27,6 +27,7 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
+from jnpa_shared.config import require_dsn
 from jnpa_shared.logging import configure_logging, get_logger
 
 from . import metrics as M
@@ -53,13 +54,15 @@ def load_real_tail(cfg: CongestionConfig, graph: CorridorGraph) -> List[HistoryR
         return []
     rows: List[HistoryRow] = []
     try:
-        with psycopg.connect(cfg.postgres_dsn_libpq, connect_timeout=3) as conn:
+        with psycopg.connect(
+            require_dsn(cfg.postgres_dsn_libpq, "CONGESTION_POSTGRES_DSN"), connect_timeout=3
+        ) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     SELECT date_trunc('minute', ts) AS bucket, segment_id,
                            avg(speed_kmh) AS speed, avg(jam_factor) AS jam
-                    FROM jnpa.traffic_snapshots
+                    FROM core.traffic_snapshot
                     WHERE ts > now() - interval '14 days'
                     GROUP BY 1, 2 ORDER BY 1
                     """

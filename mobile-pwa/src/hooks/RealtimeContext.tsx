@@ -11,6 +11,8 @@ import RealtimeWorker from "@/workers/realtime.worker?worker";
 import { api } from "@/lib/api";
 import { getToken } from "@/lib/device";
 import { appendAdvisories, loadAdvisories } from "@/lib/store";
+import { alertToNotification, notifyDriver } from "@/lib/notify";
+import { isForThisDriver } from "@/lib/addressing";
 import type { Advisory, RerouteAdvisory, WsFrame } from "@/lib/types";
 
 // One realtime hub for the whole app. It:
@@ -40,12 +42,21 @@ interface RealtimeCtx {
 
 const Ctx = createContext<RealtimeCtx | null>(null);
 
-function wsUrl(): string {
+function wsUrl(deviceId: string): string {
   // Carry the DRIVER token as a query param: the WS handshake can't set an
   // Authorization header from the browser, so the gateway validates ?token=
   // when AUTH_ENABLED=true (and ignores it when auth is off).
+  //
+  // `device` binds the socket to this driver AT HANDSHAKE, so the gateway can
+  // address advisories to it from the very first frame (with auth on, the
+  // token's device_id claim wins and this is ignored). Without a binding the
+  // gateway cannot tell a driver socket from a dashboard and would fall back to
+  // sending it everything.
+  const params = new URLSearchParams();
   const token = getToken();
-  const q = token ? `?token=${encodeURIComponent(token)}` : "";
+  if (token) params.set("token", token);
+  if (deviceId) params.set("device", deviceId);
+  const q = params.toString() ? `?${params.toString()}` : "";
   // When VITE_GATEWAY_URL is set (statically-served build), point the socket at
   // the gateway directly; else same-origin (dev proxy / nginx /pwa).
   const base = (import.meta.env.VITE_GATEWAY_URL || "").replace(/\/$/, "");
@@ -133,14 +144,29 @@ export function RealtimeProvider({
         ingestReroute(frame.payload as RerouteAdvisory);
       } else if (frame.type === "alert") {
         const a = frame.payload as any;
-        // Only surface alerts relevant to this device/plate, plus broadcast-y ones.
-        if (!a.plate || !plate || a.plate === plate) {
+        // Only surface alerts this driver is actually addressed by. An alert
+        // must POSITIVELY match — an unaddressed alert is NOT ours.
+        if (isForThisDriver(a, deviceId, plate)) {
           appendAdvisories([alertToAdvisory(a)]).then(setAdvisories);
+          // Raise an on-device notification / toast for this live alert. handleFrame
+          // fires ONLY for live WS + push frames (never cache hydration), so this
+          // won't replay history. Covers the congestion / parking / compliance /
+          // emergency categories the backend detects but doesn't yet push.
+          const kind = a.kind || a.payload?.kind || "ALERT";
+          const body = a.payload?.message || a.payload?.detail || a.detail;
+          notifyDriver(alertToNotification(String(kind), body));
         }
       }
     },
-    [ingestReroute, plate],
+    [ingestReroute, deviceId, plate],
   );
+
+  // The boot effect below re-runs only on deviceId, so read handleFrame through
+  // a ref: the addressing filter it closes over depends on `plate`, which is
+  // learned asynchronously (DriverSession). A stale closure would drop alerts
+  // addressed to us by plate.
+  const handleFrameRef = useRef(handleFrame);
+  handleFrameRef.current = handleFrame;
 
   // --- boot: hydrate cache, start worker, wire SW push messages ---
   useEffect(() => {
@@ -151,16 +177,18 @@ export function RealtimeProvider({
     worker.onmessage = (ev: MessageEvent) => {
       const m = ev.data || {};
       if (m.kind === "status") setStatus(m.status as Status);
-      else if (m.kind === "frame") handleFrame(m.frame as WsFrame);
+      else if (m.kind === "frame") handleFrameRef.current(m.frame as WsFrame);
     };
-    worker.postMessage({ cmd: "connect", url: wsUrl(), deviceId });
+    worker.postMessage({ cmd: "connect", url: wsUrl(deviceId), deviceId });
 
     const onSwMessage = (ev: MessageEvent) => {
       if (ev.data?.source === "push" && ev.data.frame) {
         const f = ev.data.frame;
         if (f.type === "reroute") ingestReroute(f as RerouteAdvisory);
-        else handleFrame({ type: f.type, payload: f } as WsFrame);
+        else handleFrameRef.current({ type: f.type, payload: f } as WsFrame);
       }
+      // A notificationclick asked us to deep-link the focused window.
+      if (ev.data?.navigate) location.hash = String(ev.data.navigate);
     };
     navigator.serviceWorker?.addEventListener?.("message", onSwMessage);
 

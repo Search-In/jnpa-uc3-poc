@@ -68,10 +68,23 @@ const SCENARIOS: { id: ScenarioId; runner: string; blurb: string; params: Record
       id: "MONSOON-FRIDAY",
       runner: "monsoon_friday",
       blurb:
-        "Master scenario: monsoon rain + Friday peak → congestion → demand surge → gate queue → reroute → carbon impact.",
+        "Heavy Rain — cascades to driver & fuel shortage + reactive recommendations. Monsoon rain + Friday peak → congestion → demand surge → gate queue → reroute → carbon impact.",
       params: { gate_id: "G-NSICT", rain_intensity: "heavy", demand_trucks: 120 },
     },
   ];
+
+// Display-only theme labels that make the requested scenario themes
+// discoverable in the UI. These NEVER change the backend `runner` name or the
+// run/reset wiring — they only annotate the shared SCENARIO_LABELS title. Any
+// id without an override falls back to SCENARIO_LABELS unchanged.
+const SCENARIO_THEME: Partial<Record<ScenarioId, string>> = {
+  "TFC-1": "Port Congestion",
+  "MONSOON-FRIDAY": "Heavy Rain",
+};
+function displayLabel(id: ScenarioId): string {
+  const theme = SCENARIO_THEME[id];
+  return theme ? `${SCENARIO_LABELS[id]} · ${theme}` : SCENARIO_LABELS[id];
+}
 
 function stepTone(status: string): Tone {
   if (status === "failed") return "critical";
@@ -104,7 +117,6 @@ export default function WhatIfConsole() {
     queryKey: ["timeline", activeHandle],
     queryFn: () => getAdapter().scenarioTimeline(activeHandle!),
     enabled: !!activeHandle,
-    refetchInterval: 4000,
   });
 
   const steps: ScenarioStep[] = useMemo(() => {
@@ -135,7 +147,6 @@ export default function WhatIfConsole() {
   const handlesQ = useQuery({
     queryKey: ["scenario-handles"],
     queryFn: () => api.scenarioHandles(50),
-    refetchInterval: 15000,
   });
   function previewHandle(h: { handle_id: string; name: string }) {
     tourStore.stopScenario();
@@ -218,7 +229,7 @@ export default function WhatIfConsole() {
             return (
               <Card key={s.id} className={`p-3 ${active ? "border-primary" : ""}`}>
                 <div className="mb-2 flex items-center justify-between">
-                  <h3 className="text-sm font-semibold">{SCENARIO_LABELS[s.id]}</h3>
+                  <h3 className="text-sm font-semibold">{displayLabel(s.id)}</h3>
                   {active && <StatusChip label={t("whatIf.running")} tone="ok" />}
                 </div>
                 <p className="mb-2 text-xs text-muted-foreground">{t(`whatIf.blurb.${s.id}`)}</p>
@@ -250,6 +261,15 @@ export default function WhatIfConsole() {
           })}
         </div>
 
+        {/* Theme coverage caption — keeps the catalogue honest: Driver Shortage
+            and Fuel Shortage are not standalone runs, they are modelled as
+            cascading sub-effects inside Heavy Rain; Major Accident has no
+            backend scenario yet. */}
+        <p className="mt-2 text-[11px] text-muted-foreground">
+          Driver Shortage and Fuel Shortage are sub-effects modelled inside Heavy Rain (Monsoon
+          Friday). Major Accident is planned — no live scenario yet.
+        </p>
+
         {/* Scenario comparison */}
         <Card className="mt-3 overflow-hidden">
           <div className="flex items-center gap-2 border-b border-border px-3 py-2">
@@ -272,7 +292,7 @@ export default function WhatIfConsole() {
                   const [k, v] = Object.entries(s.params)[0];
                   return (
                     <tr key={s.id}>
-                      <td className="px-3 py-2 font-medium">{SCENARIO_LABELS[s.id]}</td>
+                      <td className="px-3 py-2 font-medium">{displayLabel(s.id)}</td>
                       <td className="px-3 py-2 font-mono text-xs text-muted-foreground">
                         {s.runner}
                       </td>
@@ -347,7 +367,10 @@ export default function WhatIfConsole() {
       )}
 
       {/* Reactive timeline */}
-      <div className="min-h-0 flex-1 border-t border-border p-4" data-guided-id="whatif-timeline">
+      {/* shrink-0 (not flex-1/min-h-0): inside the page's scrolling flex column
+          a flex-grow item collapses below its content height once the page
+          overflows, letting this section's list paint over the panel below. */}
+      <div className="shrink-0 border-t border-border p-4" data-guided-id="whatif-timeline">
         <div className="mb-3 flex items-center justify-between">
           <div>
             <h2 className="flex items-center gap-2 text-sm font-semibold">
@@ -420,7 +443,75 @@ export default function WhatIfConsole() {
       <div className="px-4 pb-6">
         <ReactiveGuidePanel scenarioId={activeHandle ? scenario : null} />
       </div>
+
+      {/* Cross-twin XT-2 proof surface: DeferredArrivalWindow events consumed
+          from UC-II (Kafka jnpa.crosstwin.deferred-arrival) -> TAS metering. */}
+      <div className="px-4 pb-6">
+        <DeferredWindowsCard />
+      </div>
     </PageContainer>
+  );
+}
+
+function DeferredWindowsCard() {
+  const q = useQuery({
+    queryKey: ["tas-deferred-windows"],
+    queryFn: api.tasDeferredWindows,
+    refetchInterval: 10_000,
+  });
+  const windows = q.data?.windows ?? [];
+  return (
+    <Card className="p-4">
+      <div className="mb-2 flex items-center justify-between">
+        <div className="text-sm font-semibold">
+          UC-II Deferred-Arrival Windows (cross-twin TAS metering)
+        </div>
+        <StatusChip
+          tone={windows.length ? ("warn" as Tone) : ("ok" as Tone)}
+          label={windows.length ? `${windows.length} active` : "none consumed"}
+        />
+      </div>
+      {windows.length === 0 ? (
+        <div className="text-xs text-muted-foreground">
+          No DeferredArrivalWindow consumed yet — publish one on Kafka topic{" "}
+          <code>jnpa.crosstwin.deferred-arrival</code> (e.g. UC-II scenario S2) and it will appear
+          here with its TAS re-slots and booking cap.
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="text-left text-muted-foreground">
+              <tr>
+                <th className="py-1 pr-3">Correlation</th>
+                <th className="py-1 pr-3">Gate</th>
+                <th className="py-1 pr-3">Window (UTC)</th>
+                <th className="py-1 pr-3">Slots re-scheduled</th>
+                <th className="py-1 pr-3">Bookings (cap)</th>
+                <th className="py-1 pr-3">Source</th>
+              </tr>
+            </thead>
+            <tbody>
+              {windows.map((w: any) => (
+                <tr key={w.correlation_id} className="border-t border-border/50">
+                  <td className="py-1 pr-3 font-mono">{w.correlation_id}</td>
+                  <td className="py-1 pr-3">{w.gate_id ?? "all"}</td>
+                  <td className="py-1 pr-3">
+                    {String(w.window_start).slice(11, 16)}–{String(w.window_end).slice(11, 16)} (
+                    {w.window_min} min)
+                  </td>
+                  <td className="py-1 pr-3">{w.applied_slots?.length ?? 0}</td>
+                  <td className="py-1 pr-3">
+                    {w.booked} / {w.slot_cap}
+                    {w.booked >= w.slot_cap ? " — refusing" : ""}
+                  </td>
+                  <td className="py-1 pr-3">{w.source}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
   );
 }
 

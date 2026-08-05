@@ -132,6 +132,12 @@ export interface KpiResult {
   direction: "lower_is_better" | "higher_is_better";
   onTarget: boolean;
   trend: number[];
+  // Provenance: "live" = aggregated from real event data; "baseline" = no data
+  // yet, showing the configured placeholder. Optional so mock fixtures (which
+  // are demonstrative by construction) default to "live" in the demo build.
+  source?: "live" | "baseline";
+  // Sample count behind a live value (trips/vehicles aggregated).
+  n?: number;
 }
 
 // --- Appendix-C capability wire types (gateway routers) ---
@@ -169,6 +175,80 @@ export interface AutoLeoResult {
   lon?: number;
 }
 
+// Customs document view for one container (GET /api/customs/containers/{cn}).
+// Aggregates the existing customs_* tables (module 5) — surfaced in the ICEGATE
+// details drawer on the Customs & Gate page. All fields are read-only.
+export interface CustomsContainerStatus {
+  container_no: string;
+  igm_no: string | null;
+  declared_igm: boolean | null;
+  rms_selected: boolean | null;
+  ooc_cleared: boolean | null;
+  smtp_bonded: boolean | null;
+}
+
+export interface CustomsContainerVessel {
+  igm_no: string | null;
+  igm_date: string | null;
+  vessel_code: string | null;
+  voyage_no: string | null;
+  shipping_line_code: string | null;
+  port_of_arrival: string | null;
+  expected_arrival: string | null;
+  entry_inward: string | null;
+  message_id: number | null;
+}
+
+export interface CustomsEvent {
+  id: number;
+  event: string;
+  module: string;
+  reference: string | null;
+  container_no: string | null;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface CustomsContainerView {
+  container_no: string;
+  status: CustomsContainerStatus | null;
+  vessel: CustomsContainerVessel | null;
+  message_id: number | null;
+  igm: Array<{
+    igm_no: string;
+    line_no: string | number | null;
+    container_no: string;
+    seal_no: string | null;
+    container_status: string | null;
+    iso_size_type: string | null;
+  }>;
+  ooc: Array<{
+    bill_of_entry_no: string | null;
+    out_of_charge_no: string | null;
+    out_of_charge_date: string | null;
+    importer_name: string | null;
+  }>;
+  smtp: Array<{
+    smtp_no: string | null;
+    bond_no: string | null;
+    destination_code: string | null;
+    consignee_name: string | null;
+  }>;
+  rms: Array<{
+    igm_no: string | null;
+    scan_machine: string | null;
+    scan_location: string | null;
+    cfs_name: string | null;
+  }>;
+  workflow: {
+    import_stage: "MANIFESTED" | "SCAN_SELECTED" | "OUT_OF_CHARGE" | null;
+    transhipment: "BONDED" | null;
+    cleared_for_release: boolean;
+  };
+  last_event: CustomsEvent | null;
+  import_export: "IMPORT" | "TRANSHIPMENT" | null;
+}
+
 // Identity / face-recognition (/api/identity)
 export type IdentitySimMode = "genuine" | "impostor" | "unknown";
 
@@ -190,7 +270,7 @@ export interface IdentityVerifyResult {
   provider?: string;
 }
 
-export interface IdentityEnrolResult {
+export interface IdentityEnrollResult {
   enrolled: boolean;
   driver_id: string;
   provider?: string;
@@ -322,7 +402,7 @@ export interface ViolationEnforcedEvent {
   ts: string;
 }
 
-// Driver enrolment request lifecycle (Driver PWA submit -> admin approve).
+// Driver enrollment request lifecycle (Driver PWA submit -> admin approve).
 export type EnrollmentStatus = "PENDING" | "ACTIVE" | "REJECTED" | "REENROLL" | string;
 
 export interface DriverEnrollment {
@@ -344,10 +424,102 @@ export interface DriverEnrollment {
   documents?: { kind: string; image: string }[];
   template_dim?: number | null;
   provider?: string | null;
+  /** Provenance: "PWA" (driver self-service) or "ADMIN" (Control-Room created). */
+  source?: string | null;
+  /** Admin actor who created the profile (ADMIN source only). */
+  created_by?: string | null;
   submitted_at?: string;
   reviewed_at?: string | null;
   reviewed_by?: string | null;
   rejection_reason?: string | null;
+}
+
+// A fleet vehicle available for admin assignment (Control-Room dropdown).
+export interface AvailableVehicle {
+  vehicle_id: string;
+  plate?: string | null;
+  vehicle_type?: string | null;
+  state?: string | null;
+}
+
+// Vehicle Master lifecycle status.
+export type VehicleStatus = "ACTIVE" | "INACTIVE" | "MAINTENANCE" | string;
+
+// A registered vehicle in the Vehicle Master (jnpa.fleet_vehicles).
+export interface FleetVehicle {
+  vehicle_id: string;
+  vehicle_number?: string | null;
+  vehicle_type?: string | null;
+  chassis_number?: string | null;
+  rfid_fastag_id?: string | null;
+  status: VehicleStatus;
+  created_by?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  /** Active driver currently assigned this vehicle (joined server-side). */
+  assigned_driver?: { driver_id: string; name?: string | null } | null;
+}
+
+// Vehicle Master dashboard counters.
+export interface VehicleStats {
+  total: number;
+  active: number;
+  assigned: number;
+  available: number;
+}
+
+// Payload to register a vehicle in the master. The Vehicle ID is generated by the
+// backend (TRK sequence) and is never sent by the client; vehicle_number (plate)
+// is the required, dedup'd identifier.
+export interface CreateVehicleInput {
+  vehicle_number: string;
+  vehicle_type?: string;
+  chassis_number?: string;
+  rfid_fastag_id?: string;
+  status?: VehicleStatus;
+}
+
+// Patch a vehicle's editable fields / status.
+export interface UpdateVehicleInput {
+  vehicle_number?: string;
+  vehicle_type?: string;
+  chassis_number?: string;
+  rfid_fastag_id?: string;
+  status?: VehicleStatus;
+}
+
+// Payload for admin-originated driver-profile creation.
+export interface CreateDriverInput {
+  name: string;
+  vehicle_no: string;
+  license_no?: string;
+  mobile?: string;
+  emergency_contact?: string;
+}
+
+// Vehicle Intelligence — Identity face-match result (POST /api/vehicle/{n}/identity).
+export interface VehicleIdentityResult {
+  driver_name: string | null;
+  driver_id?: string | null;
+  vehicle_number?: string | null;
+  vehicle_id?: string | null;
+  confidence: number;
+  status: "MATCHED" | "NOT_MATCHED" | string;
+  matched: boolean;
+  decision?: string;
+  reason?: string | null;
+  message?: string;
+}
+
+// Vehicle Intelligence — ANPR detection result (POST /api/vehicle/detection).
+export interface VehicleDetectionResult {
+  detected_vehicle: string | null;
+  confidence: number;
+  /** null when no expected plate was supplied (client compares instead). */
+  match: boolean | null;
+  expected?: string | null;
+  decision_path?: string;
+  message?: string;
 }
 
 // Parking (/api/parking)
@@ -559,13 +731,19 @@ export interface ParkingFacilityRow {
   free_pct: number | null;
   status: string;
 }
+// GET /api/parking/summary — the gateway maps the RDS rollup through
+// `_summary_contract`, which emits the shared ParkingBoard header contract
+// (total_* / full_count), NOT capacity/occupied/full. Typed accurately here so a
+// future consumer reads the real field names. (The Parking Management KPI cards
+// no longer depend on this — they roll up the per-facility availability data.)
 export interface ParkingMgmtSummary {
   source?: string;
-  capacity: number;
-  occupied: number;
-  available: number;
-  facilities: number;
-  full: number;
+  decision_path?: string;
+  total_capacity: number;
+  total_occupied: number;
+  total_available: number;
+  full_count: number;
+  utilization_pct?: number;
 }
 export interface ParkingAllocation {
   allocated: boolean;
@@ -678,4 +856,325 @@ export interface DriverIntel {
   activity: Record<string, unknown>[];
   vehicle_no: string | null;
   violations: Record<string, unknown>[];
+}
+
+/** NLDS/LDB truck Port Events payload used by Vehicle Management → Track. */
+export interface LdbTruckEvent {
+  eventName?: string;
+  locName?: string;
+  containerNumber?: string;
+  eventTime?: string | number;
+  eventTimeLabel?: string;
+  dateMarker?: string;
+  transportMode?: string;
+  locLat?: string;
+  locLong?: string;
+}
+
+export interface LdbTruckTracking {
+  truckNumber: string;
+  truckType?: string;
+  alert?: string | null;
+  latest?: LdbTruckEvent | null;
+  events: LdbTruckEvent[];
+  terminals: Array<{ locName: string; events: LdbTruckEvent[] }>;
+  /** In-app vehicle compliance snapshot (no external redirect). */
+  compliance?: {
+    status: "COMPLIANT" | "NON_COMPLIANT" | "UNKNOWN";
+    owner?: string;
+    vehicleClass?: string;
+    fitnessValidUpto?: string;
+    insuranceValidUpto?: string;
+    pucValidUpto?: string;
+    chassisNumber?: string;
+    engineNumber?: string;
+    notes?: string;
+  };
+}
+
+export interface LdbTruckTrackingResponse {
+  source: string;
+  tracking: LdbTruckTracking;
+}
+// --- Weather (Open-Meteo weather + marine, /api/weather) ---------------------
+// Mirrors services/weather/service.py's response contract. `status` / `source` /
+// `decision_path` carry the LIVE → CACHED → SYNTHETIC fallback provenance; the
+// endpoint never 5xxes for an upstream outage, it degrades and says so here.
+export interface WeatherBlock {
+  temperature: number | null; // °C
+  wind_speed: number | null; // km/h
+  wind_direction: number | null; // degrees
+  wind_gusts: number | null; // km/h
+  visibility: number | null; // metres
+  precipitation: number | null; // mm
+  weather_code: number | null; // WMO code
+  condition: string | null;
+  observed_at: string | null;
+  synthetic?: boolean;
+}
+export interface MarineBlock {
+  wave_height: number | null; // metres
+  wave_period: number | null; // seconds
+  swell_wave_height: number | null; // metres
+  sea_level_height: number | null; // metres
+  observed_at: string | null;
+  synthetic?: boolean;
+}
+// OpenWeatherMap enrichment (integrations/openweather). `null` on the parent
+// response when the provider is disabled (no OPENWEATHER_API_KEY configured) —
+// the surface then behaves exactly as the Open-Meteo-only build.
+export interface OpenWeatherBlock {
+  temperature: number | null; // °C
+  feels_like: number | null; // °C
+  humidity: number | null; // %
+  pressure: number | null; // hPa
+  rain: number | null; // mm over the last hour (0 = not raining)
+  clouds: number | null; // % cloud cover
+  condition: string | null; // e.g. "Cloudy"
+  condition_id: number | null; // OpenWeatherMap condition code
+  description: string | null; // e.g. "scattered clouds"
+  label: string | null; // operational label: CLEAR/CLOUDY/RAIN/STORM/…
+  wind_speed: number | null; // km/h (converted from m/s)
+  wind_direction: number | null; // degrees
+  visibility: number | null; // metres
+  station: string | null;
+  observed_at: string | null;
+  // Cross-provider temperature validation vs the Open-Meteo block.
+  temperature_delta?: number | null; // °C (openweather − open-meteo)
+  temperature_consistent?: boolean | null; // |delta| within tolerance
+  synthetic?: boolean;
+}
+export interface WeatherForecastHour {
+  time: string;
+  temperature: number | null;
+  wind_speed: number | null;
+  wind_direction: number | null;
+  wind_gusts: number | null;
+  visibility: number | null;
+  precipitation: number | null;
+  weather_code: number | null;
+  condition: string | null;
+}
+export interface WeatherCurrent {
+  status: "LIVE" | "DEGRADED" | "OFFLINE";
+  source: "OPEN_METEO+OPENWEATHER" | "OPEN_METEO" | "OPEN_METEO_CACHE" | "SYNTHETIC";
+  decision_path: "LIVE" | "CACHED" | "SYNTHETIC";
+  location: { latitude: number; longitude: number };
+  weather: WeatherBlock;
+  marine: MarineBlock;
+  // null when OPENWEATHER_API_KEY is not configured (sources.openweather = "DISABLED").
+  openweather: OpenWeatherBlock | null;
+  sources: { weather: string; marine: string; openweather: string };
+  cache_age_s: number | null;
+  units: Record<string, string>;
+  timestamp: string;
+  forecast?: WeatherForecastHour[];
+}
+export interface WeatherHealth {
+  system: string;
+  provider: string; // "OPEN_METEO" | "OPEN_METEO + OPENWEATHER"
+  providers: string[];
+  configured: boolean;
+  api_key_required: boolean;
+  weather_url: string;
+  marine_url: string;
+  timeout_s: number;
+  retries: number;
+  openweather: {
+    configured: boolean;
+    api_key_required: boolean;
+    url: string;
+    timeout_s: number;
+    retries: number;
+  };
+  cache_ttl_s: number;
+  default_location: { latitude: number; longitude: number };
+}
+
+// --- Traffic (TomTom flow + incidents, /api/traffic/current) -----------------
+// Mirrors services/traffic/service.py's response contract. `status` / `source` /
+// `decision_path` carry the LIVE → CACHED → DATABASE → SYNTHETIC fallback
+// provenance; the endpoint never 5xxes for a TomTom outage, it degrades and
+// says so here. Distinct from TrafficSnapshot (per-segment sim map overlay).
+export type CongestionLevel = "LOW" | "MEDIUM" | "HIGH" | "SEVERE" | "UNKNOWN";
+export interface TrafficBlock {
+  current_speed: number | null; // km/h
+  free_flow_speed: number | null; // km/h
+  current_travel_time: number | null; // seconds
+  free_flow_travel_time: number | null; // seconds
+  congestion_level: CongestionLevel;
+  delay_seconds: number | null; // seconds vs free flow
+  road_closure: boolean;
+  confidence: number | null; // 0..1 (TomTom flow confidence)
+  road_class: string | null; // functional road class, e.g. "FRC0"
+  synthetic?: boolean;
+}
+export interface TrafficIncident {
+  type: string; // ACCIDENT / JAM / ROAD_WORKS / ROAD_CLOSED / …
+  description: string | null;
+  severity: string; // MINOR / MODERATE / MAJOR / CLOSURE / UNKNOWN
+  road: string | null;
+  delay: number | null; // seconds
+}
+export interface TrafficCurrent {
+  status: "LIVE" | "DEGRADED" | "OFFLINE";
+  source: "TOMTOM" | "TOMTOM_CACHE" | "TOMTOM_DB" | "SYNTHETIC";
+  decision_path: "LIVE" | "CACHED" | "DATABASE" | "SYNTHETIC";
+  location: { latitude: number; longitude: number };
+  traffic: TrafficBlock;
+  incidents: TrafficIncident[];
+  incident_count: number;
+  sources: { traffic: string; incidents: string };
+  cache_age_s: number | null;
+  units: Record<string, string>;
+  timestamp: string;
+}
+export interface TrafficHealth {
+  system: string; // "TRAFFIC"
+  provider: string; // "TOMTOM"
+  configured: boolean;
+  api_key_required: boolean;
+  flow_url: string;
+  incidents_url: string;
+  timeout_s: number;
+  retries: number;
+  cache_ttl_s: number;
+  default_location: { latitude: number; longitude: number };
+}
+
+// --- Air quality (OpenAQ, /api/air-quality/current) ---------------------------
+// Mirrors services/air_quality/service.py's response contract. `status` /
+// `source` / `decision_path` carry the LIVE → CACHED → DATABASE → SYNTHETIC
+// fallback provenance; the endpoint never 5xxes for an OpenAQ outage, it
+// degrades and says so here. All concentrations are µg/m³.
+export type AqStatus = "GOOD" | "MODERATE" | "UNHEALTHY" | "VERY_UNHEALTHY" | "UNKNOWN";
+export interface AirQualityBlock {
+  pm25: number | null;
+  pm10: number | null;
+  no2: number | null;
+  so2: number | null;
+  co: number | null;
+  o3: number | null;
+  air_quality_status: AqStatus;
+  source: string; // "OPENAQ" | "SYNTHETIC"
+  observed_at: string | null; // newest station timestamp (UTC ISO)
+  stations?: string[]; // contributing OpenAQ station names
+  synthetic?: boolean;
+}
+export interface AirQualityCurrent {
+  status: "LIVE" | "DEGRADED" | "OFFLINE";
+  source: "OPENAQ" | "OPENAQ_CACHE" | "OPENAQ_DB" | "SYNTHETIC";
+  decision_path: "LIVE" | "CACHED" | "DATABASE" | "SYNTHETIC";
+  location: { latitude: number; longitude: number };
+  air_quality: AirQualityBlock;
+  cache_age_s: number | null;
+  units: Record<string, string>;
+  timestamp: string;
+}
+export interface AirQualityHealth {
+  system: string; // "AIR_QUALITY"
+  provider: string; // "OPENAQ"
+  configured: boolean;
+  api_key_required: boolean; // always false — OpenAQ needs no key
+  api_key_present: boolean;
+  base_url: string;
+  timeout_s: number;
+  retries: number;
+  radius_m: number;
+  cache_ttl_s: number;
+  default_location: { latitude: number; longitude: number };
+}
+
+// --- Logistics (ULIP, /api/logistics/*) ---------------------------------------
+// Mirrors services/logistics/service.py's response contract. `status` /
+// `source` / `decision_path` carry the LIVE → CACHED → DATABASE → FALLBACK
+// provenance; the endpoints never 5xx for a ULIP outage — they degrade and say
+// so here. The FALLBACK rung is explicitly EMPTY (data_available: false):
+// the logistics surface never fabricates shipment data.
+export type LogisticsTrackingStatus = "IN_TRANSIT" | "IDLE" | "UNKNOWN";
+export interface LogisticsEvent {
+  ref_type: "VEHICLE" | "CONTAINER";
+  ref_id: string;
+  event_type: string; // "TOLL_CROSSING" | "CONTAINER_MOVEMENT"
+  event_ts: string | null;
+  location: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  source: string; // "ULIP"
+  source_api: string | null; // "FASTAG" | "LDB"
+}
+export interface LogisticsTrackedRef {
+  ref_type: "VEHICLE" | "CONTAINER";
+  ref_id: string;
+  status: LogisticsTrackingStatus;
+  last_event: string | null;
+  last_location: string | null;
+  last_event_ts: string | null;
+  event_count: number;
+  updated_at: string | null;
+}
+export interface LogisticsSummaryBlock {
+  window_h: number;
+  event_count: number;
+  vehicle_count: number;
+  container_count: number;
+  events_by_type: Record<string, number>;
+  last_event_ts: string | null;
+  latest_events: LogisticsEvent[];
+  tracked: LogisticsTrackedRef[];
+  data_available: boolean;
+}
+export interface LogisticsCurrent {
+  status: "LIVE" | "DEGRADED" | "OFFLINE";
+  source: "ULIP" | "ULIP_CACHE" | "ULIP_DB" | "NONE";
+  decision_path: "LIVE" | "CACHED" | "DATABASE" | "FALLBACK";
+  logistics: LogisticsSummaryBlock;
+  ulip: {
+    configured: boolean;
+    last_call_at: string | null;
+    last_call_ok: boolean | null;
+    fresh: boolean;
+  };
+  cache_age_s: number | null;
+  timestamp: string;
+}
+export interface LogisticsTrackingBlock {
+  ref_id: string;
+  ref_type: "VEHICLE" | "CONTAINER";
+  tracking_status: LogisticsTrackingStatus;
+  last_event: string | null;
+  last_location: string | null;
+  last_event_ts: string | null;
+  event_count: number;
+  events: LogisticsEvent[];
+  data_available: boolean;
+}
+export interface LogisticsTracking {
+  status: "LIVE" | "DEGRADED" | "OFFLINE";
+  source: "ULIP" | "ULIP_CACHE" | "ULIP_DB" | "NONE";
+  decision_path: "LIVE" | "CACHED" | "DATABASE" | "FALLBACK";
+  tracking: LogisticsTrackingBlock;
+  cache_age_s: number | null;
+  timestamp: string;
+}
+export interface LogisticsEventsPage {
+  events: LogisticsEvent[];
+  count: number;
+  total: number;
+  limit: number;
+  offset: number;
+}
+export interface LogisticsHealth {
+  system: string; // "LOGISTICS"
+  provider: string; // "ULIP"
+  configured: boolean;
+  auth_mode: "static" | "login" | "none";
+  api_url: string;
+  apis: { vehicle: string; container: string };
+  timeout_s: number;
+  retries: number;
+  cache_ttl_s: number;
+  last_call_at: string | null;
+  last_call_ok: boolean | null;
+  fresh: boolean;
 }

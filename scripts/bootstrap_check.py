@@ -5,10 +5,10 @@ Runs from the *host* against the docker-compose stack and exercises the full
 "hello-trace" path:
 
   1. Read .env.local (fail loudly if missing).
-  2. Connect to Postgres and verify jnpa.gates has 4 rows.
+  2. Connect to Postgres and verify core.gate has 4 rows.
   3. Publish one AnprRead JSON message to topic "anpr.reads".
   4. Consume it back with a fresh consumer group.
-  5. Write the same record into jnpa.anpr_reads and read it back.
+  5. Write the same record into core.anpr_read and read it back.
   6. Cache and read a key in Redis.
   7. Publish one MQTT message to rfid/readers/R-01 and confirm a subscriber
      receives it.
@@ -62,14 +62,24 @@ for k, v in _env.items():
 
 # Host-facing overrides: container hostnames -> localhost:<published port>.
 # These take precedence over whatever .env.local set, so we overwrite.
-# Postgres is published on 5433 (not 5432) to avoid clashing with a local
-# Postgres that may already own host 5432.
+#
+# POSTGRES_DSN is deliberately NOT rewritten: the application database is AWS
+# RDS (jnpa_schema_v3) and the same DSN works from host and container. Set
+# BOOTSTRAP_PG_LOCAL=1 to aim the check at the dev-only local container instead
+# (compose profile "localdb", published on host port 5433).
 HOST = os.environ.get("BOOTSTRAP_HOST", "localhost")
-PG_HOST_PORT = os.environ.get("PG_HOST_PORT", "5433")
-os.environ["POSTGRES_DSN"] = (
-    f"postgresql+asyncpg://postgres:"
-    f"{os.environ.get('POSTGRES_PASSWORD', 'jnpa_pw')}@{HOST}:{PG_HOST_PORT}/postgres"
-)
+if os.environ.get("BOOTSTRAP_PG_LOCAL"):
+    PG_HOST_PORT = os.environ.get("PG_HOST_PORT", "5433")
+    os.environ["POSTGRES_DSN"] = (
+        f"postgresql+asyncpg://postgres:"
+        f"{os.environ.get('POSTGRES_PASSWORD', 'jnpa_pw')}@{HOST}:{PG_HOST_PORT}/postgres"
+    )
+elif not os.environ.get("POSTGRES_DSN", "").strip():
+    _fail(
+        "POSTGRES_DSN is not set.\n"
+        "  Point it at the RDS database (jnpa_schema_v3) in .env.local, or run the\n"
+        "  dev sandbox with:  BOOTSTRAP_PG_LOCAL=1 python scripts/bootstrap_check.py"
+    )
 os.environ["REDIS_URL"] = f"redis://{HOST}:6379/0"
 os.environ["KAFKA_BROKERS"] = f"{HOST}:29092"   # EXTERNAL listener
 os.environ["MQTT_BROKER"] = f"{HOST}:1883"
@@ -129,7 +139,7 @@ def check_env() -> None:
 
 async def check_postgres_gates() -> None:
     try:
-        rows = await db.fetch_all("SELECT count(*) AS n FROM jnpa.gates")
+        rows = await db.fetch_all("SELECT count(*) AS n FROM core.gate")
         n = int(rows[0]["n"]) if rows else -1
         R.record("2. postgres gates == 4", n == 4, f"found {n} rows")
     except Exception as exc:  # noqa: BLE001
@@ -196,7 +206,7 @@ async def check_postgres_write_read(record: AnprRead | None) -> None:
         record = _build_anpr()
     try:
         await db.insert_row(
-            "jnpa.anpr_reads",
+            "core.anpr_read",
             {
                 "ts": record.ts,
                 "camera_id": record.camera_id,
@@ -209,7 +219,7 @@ async def check_postgres_write_read(record: AnprRead | None) -> None:
             },
         )
         row = await db.fetch_one(
-            "SELECT plate, conf FROM jnpa.anpr_reads WHERE plate = :p ORDER BY ts DESC LIMIT 1",
+            "SELECT plate, conf FROM core.anpr_read WHERE plate = :p ORDER BY ts DESC LIMIT 1",
             {"p": TEST_PLATE},
         )
         ok = bool(row and row["plate"] == TEST_PLATE)

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "@/lib/api";
+import { notifyDriver } from "@/lib/notify";
 
 // Driver geo-fence awareness — pushes the device location to the DB-driven
 // geo-fence engine and surfaces: current zone(s), allowed vs restricted zones,
@@ -56,6 +57,26 @@ export default function Zones({ deviceId, plate }: { deviceId: string; plate?: s
       if (newWarns.length) {
         setWarnings((w) => [...newWarns, ...w].slice(0, 10));
         if (navigator.vibrate) navigator.vibrate(200);
+        // Escalate restricted-zone / no-parking events to a driver notification
+        // so they land even if the driver isn't looking at the Zones tab.
+        for (const w of newWarns) {
+          if (w.kind === "restricted")
+            notifyDriver({
+              category: "emergency",
+              title: t("zones.restricted", { defaultValue: "Restricted zone" }),
+              body: w.text,
+              href: "#/zones",
+              tag: `zone-restricted:${w.text}`,
+            });
+          else if (w.kind === "noparking")
+            notifyDriver({
+              category: "emergency",
+              title: t("zones.noParkingZones", { defaultValue: "No-parking zone" }),
+              body: w.text,
+              href: "#/zones",
+              tag: `zone-noparking:${w.text}`,
+            });
+        }
       }
     } catch (e) {
       setErr(String(e));

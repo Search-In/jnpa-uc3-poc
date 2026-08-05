@@ -17,7 +17,7 @@
 //
 // Colours come exclusively from src/lib/tokens.ts (single source of truth).
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 // Register the <arcgis-map> custom element + bundle its runtime locally. The
 // React wrapper below only creates the React→element binding; this side-effect
@@ -26,6 +26,8 @@ import "@arcgis/map-components/components/arcgis-map";
 import { ArcgisMap as ArcgisMapWC } from "@arcgis/map-components-react";
 import { Layers as LayersIcon, X as XIcon } from "lucide-react";
 import GraphicsLayer from "@arcgis/core/layers/GraphicsLayer";
+import FeatureLayer from "@arcgis/core/layers/FeatureLayer";
+import HeatmapRenderer from "@arcgis/core/renderers/HeatmapRenderer";
 import Graphic from "@arcgis/core/Graphic";
 import Point from "@arcgis/core/geometry/Point";
 import Polyline from "@arcgis/core/geometry/Polyline";
@@ -35,7 +37,14 @@ import SimpleLineSymbol from "@arcgis/core/symbols/SimpleLineSymbol";
 import SimpleFillSymbol from "@arcgis/core/symbols/SimpleFillSymbol";
 import TextSymbol from "@arcgis/core/symbols/TextSymbol";
 import type MapView from "@arcgis/core/views/MapView";
+import type WMSLayer from "@arcgis/core/layers/WMSLayer";
 import esriConfig from "@arcgis/core/config";
+
+// Bhuvan (ISRO/NRSC) WMS overlay — gateway-configured (/api/bhuvan), rendered
+// client-side as an ArcGIS WMSLayer. Pure state helpers + the layer factory
+// live in src/map/ so the lifecycle stays unit-testable without a DOM.
+import { createBhuvanWmsLayer, fetchBhuvanConfig, loadBhuvanLayer } from "@/map/BhuvanWmsLayer";
+import { bhuvanReducer, initialBhuvanState } from "@/map/bhuvan";
 
 import type {
   CorridorGeometry,
@@ -46,7 +55,19 @@ import type {
   Zone,
 } from "@/lib/types";
 import { gateColour, jamColour, MAP_TOKENS, parkingStatusColour, zoneColour } from "@/lib/tokens";
-import { JNPA_CENTER, JNPA_ZOOM } from "@/lib/basemap";
+import {
+  incidentsNear,
+  summariseIncidents,
+  type IncidentPoint,
+  type IncidentSummary,
+} from "@/lib/incidents";
+import { fmtDateTimeIST } from "@/lib/utils";
+import {
+  SATELLITE_BASEMAP,
+  applyCorridorView,
+  CORRIDOR_CENTER,
+  CORRIDOR_ZOOM,
+} from "@/lib/mapConfig";
 import {
   snapPathToRoads,
   buildPathIndex,
@@ -60,7 +81,7 @@ import { useClickOutside } from "@/hooks/useClickOutside";
 // a pure view change over one data source (no separate page, no simulator/mock).
 import { Scene3D } from "./scene3d/Scene3D";
 
-const DEFAULT_BASEMAP = "dark-gray-vector";
+const DEFAULT_BASEMAP = SATELLITE_BASEMAP;
 // Soft outer road "shoulder" drawn under the corridor casing so the ribbon has a
 // graduated, anti-aliased edge (a real-road look) instead of a hard boundary.
 // Purely cosmetic; kept local alongside the other map-only colour constants.
@@ -70,10 +91,23 @@ const HIGHLIGHT_COLOUR = "#56B4E9";
 // Alert-focus halo colour (CB-safe orange) — distinct from the tour spotlight.
 const FOCUS_COLOUR = "#E69F00";
 
+// Click radius (metres) used to aggregate violation/event incidents into a
+// single hotspot popup — the heatmap surface has no per-feature popup, so a
+// click gathers everything within this radius of the map point.
+const HOTSPOT_RADIUS_M = 500;
+
 // Operator-toggleable operational layers, surfaced in the floating Layers
 // control (GIS-5). The tour-driven `highlight` layer is intentionally omitted.
-type ToggleLayerKey = "gates" | "corridor" | "trucks" | "heatmap" | "zones" | "parking";
+type ToggleLayerKey =
+  | "violationHeatmap"
+  | "gates"
+  | "corridor"
+  | "trucks"
+  | "heatmap"
+  | "zones"
+  | "parking";
 const LAYER_DEFS: { key: ToggleLayerKey; label: string }[] = [
+  { key: "violationHeatmap", label: "Violation heatmap" },
   { key: "gates", label: "Gates" },
   { key: "corridor", label: "NH-348 corridor" },
   { key: "trucks", label: "Trucks (1:50)" },
@@ -96,6 +130,12 @@ export interface ArcgisMapProps {
   /** Parking facilities. */
   parkingFacilities?: ParkingFacility[];
   /**
+   * Geolocated violation / AI / entry-exit incidents that drive the Esri
+   * HeatmapRenderer violation-density layer. Already resolved to lat/lon by the
+   * caller (see lib/incidents.resolveIncidents). Empty/omitted = no heat layer.
+   */
+  incidents?: IncidentPoint[];
+  /**
    * Asset ids the guided What-If tour is spotlighting for the current step
    * (gate ids / corridor segment ids). The map rings each with a halo and
    * pans/zooms to frame them — the direct analog of the reference project's
@@ -115,7 +155,7 @@ export interface ArcgisMapProps {
    * the highlight layer; null clears it.
    */
   focusPoint?: { lat: number; lon: number } | null;
-  /** Override basemap (default "dark-gray-vector" — no API key needed in dev). */
+  /** Override basemap (default "satellite" — Esri World Imagery, no API key). */
   basemap?: string;
   /** Map centre [lon, lat]; defaults to the JNPA corridor mid-point. */
   center?: [number, number];
@@ -151,12 +191,13 @@ export function ArcgisMap({
   snapshots = [],
   trucks = [],
   parkingFacilities = [],
+  incidents = [],
   highlights = [],
   highlightLabels = {},
   focusPoint = null,
   basemap = DEFAULT_BASEMAP,
-  center = JNPA_CENTER,
-  zoom = JNPA_ZOOM,
+  center = CORRIDOR_CENTER,
+  zoom = CORRIDOR_ZOOM,
   onGateClick,
   onViewReady,
   className,
@@ -173,6 +214,7 @@ export function ArcgisMap({
   const [viewReady, setViewReady] = useState(false);
   const layers = useRef<{
     heatmap: GraphicsLayer;
+    violationHeatmap: FeatureLayer;
     zones: GraphicsLayer;
     corridor: GraphicsLayer;
     parking: GraphicsLayer;
@@ -182,6 +224,19 @@ export function ArcgisMap({
     pulse: GraphicsLayer;
   } | null>(null);
   const clickHandle = useRef<ViewHandle | null>(null);
+  // Live copy of the resolved incidents for the click handler (which closes over
+  // stale props otherwise), plus edit bookkeeping for the client-side heatmap
+  // FeatureLayer: a monotonic objectId sequence + the ids currently on the layer,
+  // so each refresh deletes exactly the previous batch and adds a fresh one.
+  const incidentsRef = useRef<IncidentPoint[]>(incidents);
+  incidentsRef.current = incidents;
+  const heatOidSeq = useRef(0);
+  const heatOids = useRef<number[]>([]);
+  const heatEditing = useRef(false);
+  // zone_id → display name, kept current for the hotspot popup title (the click
+  // handler is created once and would otherwise close over the initial zones).
+  const zoneNameRef = useRef<Map<string, string>>(new Map());
+  zoneNameRef.current = new Map(zones.map((z) => [z.id, z.name]));
   // Snapped road geometry for the corridor (OSRM, render-time only). Null until
   // the route resolves, or permanently if OSRM is unreachable — callers then
   // fall back to the authored straight-line geometry.
@@ -193,6 +248,13 @@ export function ArcgisMap({
   );
   const layersCtrlRef = useRef<HTMLDivElement>(null);
   useClickOutside(layersCtrlRef, () => setLayersOpen(false), layersOpen);
+  // Bhuvan WMS overlay: toggle → lazy config fetch (/api/bhuvan/layers) →
+  // WMSLayer at the bottom of the operational stack. Nothing is fetched and no
+  // layer exists until the operator first enables it, so the default map is
+  // byte-for-byte the pre-Bhuvan build.
+  const [bhuvan, dispatchBhuvan] = useReducer(bhuvanReducer, initialBhuvanState);
+  const bhuvanLayerRef = useRef<WMSLayer | null>(null);
+  const bhuvanBusy = useRef(false);
   // Last spotlight id-set we framed, so we only re-zoom when it changes — exactly
   // the reference PortMap's lastZoomKey guard.
   const lastZoomKey = useRef<string>("");
@@ -208,8 +270,12 @@ export function ArcgisMap({
       if (!view || !view.map) return;
       viewRef.current = view;
 
-      // GIS-5 UX: continuous (non-stepped) wheel/pinch zoom for a smooth feel.
-      if (view.constraints) view.constraints.snapToZoom = false;
+      // GIS-5 UX + corridor lock: frame the view on the JNPA operational corridor
+      // AND hard-clamp pan/zoom to it (extent geometry + minZoom, rotation off,
+      // continuous zoom) so the operator only ever sees the port corridor, never
+      // the wider Navi Mumbai / Uran region. applyCorridorView also goTo()s the
+      // corridor so the first painted frame is already tight on it.
+      applyCorridorView(view);
 
       // Ensure the native zoom (+/−) and attribution widgets are present at the
       // top-left corner (canonical ArcGIS default UI). Idempotent — keeps exactly
@@ -220,6 +286,11 @@ export function ArcgisMap({
       const mk = (id: string) => new GraphicsLayer({ id, title: id });
       const set = {
         heatmap: mk("uc3-heatmap"),
+        // Real Esri HeatmapRenderer layer (violation/event density). A
+        // client-side FeatureLayer so the density surface is genuine kernel
+        // density, not a scatter of markers. Sits just above the congestion
+        // cue and below the zone outlines so both stay legible.
+        violationHeatmap: makeViolationHeatmapLayer(),
         zones: mk("uc3-zones"),
         corridor: mk("uc3-corridor"),
         parking: mk("uc3-parking"),
@@ -234,6 +305,7 @@ export function ArcgisMap({
       layers.current = set;
       view.map.addMany([
         set.heatmap,
+        set.violationHeatmap,
         set.zones,
         set.corridor,
         set.parking,
@@ -242,18 +314,59 @@ export function ArcgisMap({
         set.highlight,
         set.pulse,
       ]);
+      // Restore the operator's toggle state onto the freshly-created layers so a
+      // remount (e.g. guided-tour navigation) doesn't silently re-show a layer
+      // the operator had hidden.
+      set.violationHeatmap.visible = layerVis.violationHeatmap ?? true;
+      // Re-attach the Bhuvan WMS overlay across canvas remounts (2D↔3D toggle
+      // recreates the MapView) so the operator's toggle survives. Index 0 keeps
+      // it above the basemap but below every GraphicsLayer.
+      if (bhuvanLayerRef.current) view.map.add(bhuvanLayerRef.current, 0);
 
-      // Gate click → callback.
+      // Click routing (all via hitTest):
+      //   1. gate graphic → onGateClick callback (unchanged);
+      //   2. any graphic that carries its own popupTemplate (zone/corridor/
+      //      parking/gate) → ArcGIS's default popup handles it, we stay out;
+      //   3. otherwise → aggregate the violation/event incidents around the
+      //      click point into a single hotspot popup (the heatmap surface has no
+      //      per-feature popup of its own).
       clickHandle.current?.remove();
       clickHandle.current = view.on("click", (e) => {
         void view.hitTest(e).then((res) => {
-          const hit = res.results.find(
-            (r) => r.type === "graphic" && r.graphic?.layer === layers.current?.gates,
-          );
-          if (hit && hit.type === "graphic") {
-            const gateId = hit.graphic.getAttribute("id") as string | undefined;
+          const graphics = res.results.filter((r) => r.type === "graphic");
+          const gateHit = graphics.find((r) => r.graphic?.layer === layers.current?.gates);
+          if (gateHit && gateHit.type === "graphic") {
+            const gateId = gateHit.graphic.getAttribute("id") as string | undefined;
             if (gateId) onGateClickRef.current?.(gateId);
           }
+          // A templated graphic under the cursor owns the popup — don't stack the
+          // hotspot popup on top of a zone/gate/segment popup.
+          const templated = graphics.some((r) => r.type === "graphic" && r.graphic?.popupTemplate);
+          if (templated) return;
+          const mp = e.mapPoint;
+          if (!mp || !layers.current?.violationHeatmap.visible) {
+            view.closePopup();
+            return;
+          }
+          const near = incidentsNear(
+            incidentsRef.current,
+            mp.longitude,
+            mp.latitude,
+            HOTSPOT_RADIUS_M,
+          );
+          if (near.length === 0) {
+            view.closePopup();
+            return;
+          }
+          const summary = summariseIncidents(near);
+          const zoneName = summary.dominantZone
+            ? (zoneNameRef.current.get(summary.dominantZone) ?? summary.dominantZone)
+            : null;
+          view.openPopup({
+            title: hotspotTitle(summary, zoneName),
+            location: mp,
+            content: hotspotContent(summary),
+          });
         });
       });
 
@@ -272,6 +385,7 @@ export function ArcgisMap({
   // ---- render helpers ---------------------------------------------------
   const renderAll = useCallback(() => {
     renderHeatmap();
+    void renderIncidentHeatmap();
     renderZones();
     renderCorridor();
     renderParking();
@@ -380,6 +494,43 @@ export function ArcgisMap({
           attributes: { segment_id: seg.id, ratio },
         }),
       );
+    }
+  }
+
+  // Push the resolved incidents into the client-side heatmap FeatureLayer. Each
+  // refresh deletes the previous batch (tracked by objectId) and adds the new
+  // one via a single applyEdits, so the HeatmapRenderer re-densifies. A simple
+  // in-flight guard serialises overlapping refreshes; polling keeps it eventually
+  // consistent if one is skipped.
+  async function renderIncidentHeatmap() {
+    const layer = layers.current?.violationHeatmap;
+    if (!layer || heatEditing.current) return;
+    heatEditing.current = true;
+    try {
+      const adds = incidentsRef.current.map((p) => {
+        const oid = ++heatOidSeq.current;
+        return new Graphic({
+          geometry: new Point({ longitude: p.lon, latitude: p.lat, spatialReference: WGS84 }),
+          attributes: {
+            oid,
+            weight: p.weight,
+            event_type: p.event_type,
+            vehicle_id: p.vehicle_id ?? "",
+            zone_id: p.zone_id ?? "",
+            severity: p.severity,
+            status: p.status ?? "",
+            created_at: p.created_at,
+          },
+        });
+      });
+      const deletes = heatOids.current.map((objectId) => ({ objectId }));
+      await layer.applyEdits({ deleteFeatures: deletes, addFeatures: adds });
+      heatOids.current = adds.map((g) => g.attributes.oid as number);
+    } catch {
+      // Client-side applyEdits is best-effort; a failed refresh keeps the
+      // previous surface until the next data tick corrects it.
+    } finally {
+      heatEditing.current = false;
     }
   }
 
@@ -695,6 +846,8 @@ export function ArcgisMap({
   }, [focusPoint]);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => void renderIncidentHeatmap(), [incidents]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => renderZones(), [zones]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => renderGates(), [gates]);
@@ -721,13 +874,107 @@ export function ArcgisMap({
     setLayerVis((v) => ({ ...v, [key]: next }));
   }
 
+  // Toggle the Bhuvan WMS overlay. First enable lazily fetches the gateway
+  // config and creates the WMSLayer (loading state while it resolves); later
+  // toggles only flip visibility. Any failure — gateway down, integration
+  // disabled, WMS endpoint unreachable — lands in the error state and unchecks
+  // the box; the rest of the map is untouched.
+  async function toggleBhuvan() {
+    if (bhuvanBusy.current) return;
+    const existing = bhuvanLayerRef.current;
+    if (bhuvan.visible) {
+      if (existing) existing.visible = false;
+      dispatchBhuvan({ type: "toggle" });
+      return;
+    }
+    dispatchBhuvan({ type: "toggle" });
+    if (existing) {
+      existing.visible = true;
+      return;
+    }
+    bhuvanBusy.current = true;
+    dispatchBhuvan({ type: "loadStart" });
+    try {
+      const config = await fetchBhuvanConfig();
+      if (!config) {
+        throw new Error(t("map.bhuvanDisabled", "Bhuvan WMS is not enabled on the gateway"));
+      }
+      const layer = createBhuvanWmsLayer(config, bhuvan.opacity);
+      // load() + pin the GetMap endpoint to the same-origin relay (the
+      // capabilities document's own href points at nrsc.gov.in — CORS-blocked).
+      await loadBhuvanLayer(layer, config);
+      const map = viewRef.current?.map;
+      if (!map) throw new Error("map is not ready");
+      map.add(layer, 0);
+      bhuvanLayerRef.current = layer;
+      dispatchBhuvan({ type: "loadSuccess" });
+    } catch (err) {
+      dispatchBhuvan({
+        type: "loadError",
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      bhuvanBusy.current = false;
+    }
+  }
+
+  // Opacity control for the Bhuvan overlay (0–1, applied live to the layer).
+  function setBhuvanOpacity(value: number) {
+    dispatchBhuvan({ type: "setOpacity", opacity: value });
+    const layer = bhuvanLayerRef.current;
+    if (layer) layer.opacity = Math.min(1, Math.max(0, value));
+  }
+
   // The initial centre Point (the prop's getter type is Point, not a tuple).
-  // Only the FIRST value is honoured by the element, so we memoise on mount.
+  // Memoised on mount so it is only ever handed to the element once (see the
+  // memoised <ArcgisMapWC> element below for why that matters).
   const initialCenter = useMemo(
     () => new Point({ longitude: center[0], latitude: center[1] }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
+
+  // The 2D map element is created EXACTLY ONCE and reused across re-renders.
+  //
+  // Root-cause guard: the @arcgis/map-components-react wrapper is generated by
+  // @lit/react, whose setProperty does `node[name] = value` with NO dirty check,
+  // inside a useLayoutEffect with NO dependency array — so it re-applies every
+  // element property (including `center` and `zoom`) on EVERY React re-render.
+  // Because the host screen re-renders on each live-data refetch (trucks 5s,
+  // snapshots 8s, gates 10s, …), that would re-command the view camera every few
+  // seconds and snap it back to the initial JNPA framing — undoing any manual
+  // pan/zoom the operator just performed.
+  //
+  // Freezing the element (stable reference) makes React skip re-rendering this
+  // subtree, so the wrapper's property-setting effect runs only at mount: the
+  // initial camera is applied once (the single allowed auto-zoom), and every
+  // later live update flows through the GraphicsLayers only — never the camera.
+  // `basemap` stays reactive via the imperative effect below (changing it here
+  // would recreate the element and re-clobber the camera).
+  const mapElement = useMemo(
+    () => (
+      <ArcgisMapWC
+        basemap={basemap}
+        center={initialCenter}
+        zoom={zoom}
+        onArcgisViewReadyChange={handleReady}
+        style={{ height: "100%", width: "100%" }}
+      />
+    ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  // Keep the basemap reactive WITHOUT recreating the memoised map element (which
+  // would re-run the wrapper and re-command the camera). Swap it on the live view
+  // directly instead; the element's initial basemap prop is only read at mount.
+  useEffect(() => {
+    const view = viewRef.current;
+    if (view?.map && basemap) {
+      // Map.basemap autocasts a well-known string id at runtime.
+      (view.map as unknown as { basemap: unknown }).basemap = basemap;
+    }
+  }, [basemap]);
 
   return (
     <div
@@ -737,17 +984,7 @@ export function ArcgisMap({
     >
       {/* 2D canvas — the existing MapView. Kept mounted only in 2D so a single
           heavy ArcGIS view exists at a time. */}
-      {mode === "2d" && (
-        <ArcgisMapWC
-          basemap={basemap}
-          // The typed `center` prop is a Point (the element's getter type), so we
-          // build one from the [lon, lat] tuple rather than passing the array.
-          center={initialCenter}
-          zoom={zoom}
-          onArcgisViewReadyChange={handleReady}
-          style={{ height: "100%", width: "100%" }}
-        />
-      )}
+      {mode === "2d" && mapElement}
 
       {/* 3D canvas — the SceneView, fed the SAME live-data props. Replaces only
           the map canvas; the host screen's panels/KPIs are unchanged. */}
@@ -834,6 +1071,52 @@ export function ArcgisMap({
                   {t(`map.layer.${d.key}`)}
                 </label>
               ))}
+              {/* Bhuvan (ISRO) WMS overlay — gateway-configured, lazily loaded.
+                  Separated by a divider because unlike the GraphicsLayers above
+                  it carries loading/error states and an opacity control. */}
+              <div className="mt-1 border-t border-border pt-1" data-testid="bhuvan-layer-control">
+                <label className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-xs hover:bg-muted">
+                  <input
+                    type="checkbox"
+                    checked={bhuvan.visible}
+                    disabled={bhuvan.status === "loading"}
+                    onChange={() => void toggleBhuvan()}
+                    className="h-3.5 w-3.5 accent-severity-info"
+                  />
+                  {t("map.layer.bhuvan", "Bhuvan Satellite Layer")}
+                  {bhuvan.status === "loading" && (
+                    <span className="ml-auto text-[10px] italic text-muted-foreground">
+                      {t("map.bhuvanLoading", "loading…")}
+                    </span>
+                  )}
+                </label>
+                {bhuvan.status === "error" && (
+                  <div className="px-1 pb-1 text-[10px] text-severity-critical" role="alert">
+                    {t("map.bhuvanError", "Bhuvan layer failed to load")}
+                    {bhuvan.error ? ` — ${bhuvan.error}` : ""}
+                  </div>
+                )}
+                {bhuvan.visible && bhuvan.status === "ready" && (
+                  <label className="flex items-center gap-2 px-1 py-1 text-[10px] text-muted-foreground">
+                    {t("map.bhuvanOpacity", "Opacity")}
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={Math.round(bhuvan.opacity * 100)}
+                      onChange={(e) => setBhuvanOpacity(Number(e.target.value) / 100)}
+                      aria-label={t("map.bhuvanOpacity", "Opacity")}
+                      className="h-1 min-w-0 flex-1 accent-severity-info"
+                    />
+                    <span className="w-8 text-right tabular-nums">
+                      {Math.round(bhuvan.opacity * 100)}%
+                    </span>
+                  </label>
+                )}
+                <div className="px-1 pb-0.5 text-[10px] text-muted-foreground">
+                  {t("map.bhuvanSource", "Source: ISRO Bhuvan WMS")}
+                </div>
+              </div>
             </div>
           )}
         </div>
@@ -843,6 +1126,88 @@ export function ArcgisMap({
 }
 
 export default ArcgisMap;
+
+// ---- violation/event heatmap (Esri HeatmapRenderer) ---------------------
+
+// Empty client-side FeatureLayer carrying the real Esri HeatmapRenderer.
+// Features are streamed in via applyEdits (renderIncidentHeatmap) so the density
+// surface reflects live violation/AI/entry-exit incidents. Colours come from the
+// design tokens (single source of truth); the low stop is transparent so sparse
+// areas fade into the basemap.
+function makeViolationHeatmapLayer(): FeatureLayer {
+  return new FeatureLayer({
+    id: "uc3-violation-heatmap",
+    title: "Violation heatmap",
+    source: [],
+    objectIdField: "oid",
+    geometryType: "point",
+    spatialReference: WGS84,
+    // The aggregated hotspot popup is opened from the map click handler, so the
+    // layer's own per-feature popup stays off (one heat point isn't meaningful).
+    popupEnabled: false,
+    fields: [
+      { name: "oid", type: "oid" },
+      { name: "weight", type: "double" },
+      { name: "event_type", type: "string" },
+      { name: "vehicle_id", type: "string" },
+      { name: "zone_id", type: "string" },
+      { name: "severity", type: "string" },
+      { name: "status", type: "string" },
+      { name: "created_at", type: "string" },
+    ],
+    renderer: new HeatmapRenderer({
+      field: "weight",
+      radius: 40,
+      minDensity: 0,
+      maxDensity: 0.8,
+      colorStops: MAP_TOKENS.heatStops.map((s) => ({ ratio: s.ratio, color: s.color })),
+    }),
+  });
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+// Title for the click-time hotspot popup — the dominant zone name, flagged HIGH
+// ACTIVITY when the cluster is violation-heavy.
+function hotspotTitle(s: IncidentSummary, zoneName: string | null): string {
+  const where = zoneName ?? "Incident hotspot";
+  return s.violations >= 5 ? `${where} — HIGH ACTIVITY` : where;
+}
+
+// HTML body for the hotspot popup: aggregate counts + a short recent-events list.
+// ArcGIS sanitises popup HTML, but data values are escaped here as well.
+function hotspotContent(s: IncidentSummary): string {
+  const row = (label: string, value: string) =>
+    `<div style="display:flex;justify-content:space-between;gap:16px;padding:2px 0">` +
+    `<span style="color:#64748b">${label}</span><span style="font-weight:600">${value}</span></div>`;
+  const recent = s.recent
+    .map(
+      (i) =>
+        `<div style="display:flex;justify-content:space-between;gap:12px;padding:2px 0;font-size:12px">` +
+        `<span>${escapeHtml(i.event_type)}</span>` +
+        `<span style="color:#64748b">${escapeHtml(i.vehicle_id ?? "—")}</span>` +
+        `<span style="color:#64748b">${fmtDateTimeIST(i.created_at)}</span></div>`,
+    )
+    .join("");
+  return (
+    row("Total Events", String(s.total)) +
+    row("Violations", String(s.violations)) +
+    row("Vehicles Impacted", String(s.vehicles)) +
+    row("Top Issue", escapeHtml(s.topIssue ?? "—")) +
+    row("Last Event", s.lastEvent ? fmtDateTimeIST(s.lastEvent) : "—") +
+    (recent
+      ? `<div style="margin-top:6px;border-top:1px solid #e2e8f0;padding-top:4px">` +
+        `<div style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#94a3b8;margin-bottom:2px">Recent</div>` +
+        `${recent}</div>`
+      : "")
+  );
+}
 
 // ---- small geometry / colour helpers ------------------------------------
 function closeRing(ring: [number, number][]): [number, number][] {

@@ -3,7 +3,7 @@
 Params: {gate_id: "G-NSICT", duration_minutes: 120}
 
 Reactive chain (each step idempotent, recorded with its trigger source):
-  1. Mark the gate closed in jnpa.gates (closed_at = now()).
+  1. Mark the gate closed in core.gate (closed_at = now()).
   2. Inject a synthetic high volume of AT_GATE_QUEUE trucks at the gate
      (tagged for reset) + nudge the near-port corridor segments so the build-up
      is real in the data.
@@ -24,7 +24,8 @@ from typing import Any, Dict, List
 from jnpa_shared import tracing
 from jnpa_shared.logging import get_logger
 
-from .base import Upstreams, clear_nudge, nudge_segments, poll_forecaster
+from .base import (Upstreams, clear_nudge, nudge_segments, poll_forecaster,
+                   resolve_scenario_alerts)
 from .config import ScenarioConfig
 from .handle import ScenarioHandle, new_handle_id
 
@@ -35,6 +36,17 @@ NAME = "tfc1"
 SPILLOVER_SEGMENTS = ["SEG-00", "SEG-01", "SEG-02", "SEG-03"]
 SPILLOVER_GATES = ["G-JNPCT", "G-NSIGT"]
 SYNTH_QUEUE = 80  # injected AT_GATE_QUEUE trucks for the first 20 min
+
+
+def stub_cleanup(handle_id: str) -> Dict[str, Any]:
+    """Cleanup dict for a post-restart stub reset.
+
+    Must mint the SAME tag format ``run()`` uses (``TFC-1:{handle_id}``) —
+    the runner's old generic ``{NAME.upper()}:{id}`` stub produced ``TFC1:``
+    tags that matched nothing, so stub resets silently removed zero trucks.
+    """
+    return {"gate_id": "G-NSICT", "truck_tag": f"TFC-1:{handle_id}",
+            "spillover_gates": SPILLOVER_GATES}
 
 
 async def run(params: Dict[str, Any], handle_id: str | None = None) -> ScenarioHandle:
@@ -136,9 +148,9 @@ async def _set_gate_closed(cfg: ScenarioConfig, gate_id: str, *, closed: bool) -
     """Mark a gate closed (closed_at = now()) or reopen it (closed_at = NULL)."""
     from jnpa_shared.db import execute
     sql = (
-        "UPDATE jnpa.gates SET closed_at = now() WHERE id = :id"
+        "UPDATE core.gate SET closed_at = now() WHERE id = :id"
         if closed else
-        "UPDATE jnpa.gates SET closed_at = NULL WHERE id = :id"
+        "UPDATE core.gate SET closed_at = NULL WHERE id = :id"
     )
     try:
         await execute(sql, {"id": gate_id}, dsn=cfg.postgres_dsn)
@@ -170,14 +182,9 @@ async def _reroute_inbound(up: Upstreams, h: ScenarioHandle, gate_id: str) -> Li
 
 
 async def _resolve_alerts(cfg: ScenarioConfig, handle_id: str) -> None:
-    from jnpa_shared.db import execute
-    try:
-        await execute(
-            "UPDATE jnpa.alerts SET ack = true WHERE payload->>'scenario' = :hid",
-            {"hid": handle_id}, dsn=cfg.postgres_dsn,
-        )
-    except Exception as exc:  # noqa: BLE001
-        log.debug("resolve_alerts_failed", error=str(exc))
+    # Shared helper also acks the untagged TRAFFIC_CONGESTION alerts our
+    # segment nudges caused the gateway to auto-raise (reset must not leak).
+    await resolve_scenario_alerts(cfg, handle_id, segment_ids=SPILLOVER_SEGMENTS)
 
 
 async def _rewarm_caches(up: Upstreams) -> None:

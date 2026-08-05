@@ -4,7 +4,7 @@ Builds a corpus of *normal* trajectories and trains the 1D-conv trajectory
 autoencoder, then persists weights + metrics locally and to MinIO. The corpus is
 assembled from, in order of preference:
 
-  1. real ``jnpa.truck_telemetry`` over the last ``ae_train_days`` days, grouped
+  1. real ``core.truck_telemetry`` over the last ``ae_train_days`` days, grouped
      by ``device_id`` into per-trip tracks, and
   2. synthetic normal corridor tracks (always added) so training never starves on
      a fresh stack with no telemetry yet.
@@ -20,6 +20,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
+from jnpa_shared.config import require_dsn
 from jnpa_shared.logging import configure_logging, get_logger
 
 from .autoencoder.features import batch_features
@@ -32,7 +33,7 @@ log = get_logger("anomaly.train")
 
 
 def _telemetry_tracks(cfg: AnomalyConfig, days: int) -> List[Track]:
-    """Group recent ``jnpa.truck_telemetry`` rows into per-device tracks."""
+    """Group recent ``core.truck_telemetry`` rows into per-device tracks."""
     try:
         import psycopg
         from psycopg.rows import dict_row
@@ -41,11 +42,13 @@ def _telemetry_tracks(cfg: AnomalyConfig, days: int) -> List[Track]:
     since = datetime.now(tz=timezone.utc) - timedelta(days=days)
     rows: List[dict] = []
     try:
-        with psycopg.connect(cfg.postgres_dsn_libpq, connect_timeout=3) as conn:
+        with psycopg.connect(
+            require_dsn(cfg.postgres_dsn_libpq, "ANOMALY_POSTGRES_DSN"), connect_timeout=3
+        ) as conn:
             with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(
                     "SELECT device_id, plate, ts, lat, lon, speed_kmh, heading"
-                    " FROM jnpa.truck_telemetry"
+                    " FROM core.truck_telemetry"
                     " WHERE ts >= %s AND device_id IS NOT NULL"
                     " ORDER BY device_id, ts",
                     (since,),

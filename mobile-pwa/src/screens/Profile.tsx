@@ -2,10 +2,30 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "@/lib/api";
 import { Card, Chip, Row, Spinner } from "@/components/ui";
-import { clearPairing, deviceIdToCode } from "@/lib/device";
+import { clearPairing } from "@/lib/device";
 import { enablePush, type PushState } from "@/lib/pwa";
+import { useDriverSession } from "@/hooks/DriverSession";
+import { verifiedLabel } from "@/lib/driverLang";
+import { IconShield, IconLogout, IconBell } from "@/components/icons";
 import i18n, { SUPPORTED_LANGS, LANG_LABELS } from "@/i18n";
-import type { TruckEnvelope, VahanEnvelope } from "@/lib/types";
+import type { DriverProfile, TruckEnvelope, VahanEnvelope } from "@/lib/types";
+
+// ISO timestamp -> DD-MM-YYYY (the driver-facing approval date). "—" when absent.
+function fmtDate(iso?: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getDate())}-${p(d.getMonth() + 1)}-${d.getFullYear()}`;
+}
+
+// Enrollment/vehicle status -> Chip tone.
+function statusTone(s?: string | null): "ok" | "warn" | "down" {
+  const v = (s || "").toUpperCase();
+  if (v === "ACTIVE") return "ok";
+  if (v === "PENDING" || v === "REENROLL" || v === "MAINTENANCE") return "warn";
+  return "down";
+}
 
 // Profile / Vehicle — pulls the VahanRecord through the gateway's orchestrated
 // chain (LIVE_PRIMARY / LIVE_FALLBACK / CACHED / PROVISIONAL) for the truck's
@@ -21,34 +41,29 @@ const PUSH_LABEL: Record<PushState, string> = {
 
 export default function Profile({ deviceId, plate }: { deviceId: string; plate?: string | null }) {
   const { t } = useTranslation();
+  const { session } = useDriverSession();
   const [vahan, setVahan] = useState<VahanEnvelope | null>(null);
   const [resolvedPlate, setResolvedPlate] = useState<string | null>(plate ?? null);
   const [loading, setLoading] = useState(true);
   const [push, setPush] = useState<PushState | null>(null);
   const [pushBusy, setPushBusy] = useState(false);
-  const [compliance, setCompliance] = useState<{
-    name?: string;
-    dlStatus?: string;
-    violations: number;
-  } | null>(null);
+  const [profile, setProfile] = useState<DriverProfile | null>(null);
+  const [profileLoading, setProfileLoading] = useState(true);
 
-  // Driver DL + compliance via the session-bound driver (OTP login) → driver-intel.
+  // Load the driver's OWN approved profile. The gateway resolves it from the
+  // DRIVER token's device binding; deviceId is passed only as an auth-disabled
+  // dev fallback and is ignored server-side for a real DRIVER token.
   useEffect(() => {
     let alive = true;
+    setProfileLoading(true);
     (async () => {
       try {
-        const s = await api.sessionStatus(deviceId);
-        if (!s.bound || !s.driver_id) return;
-        const di = await api.driverIntel(s.driver_id);
-        const dl = di.dl_history?.[0]?.status as string | undefined;
-        if (alive)
-          setCompliance({
-            name: (di.driver as any)?.name,
-            dlStatus: dl,
-            violations: di.violations?.length ?? 0,
-          });
+        const p = await api.driverProfile(deviceId);
+        if (alive) setProfile(p);
       } catch {
-        /* not OTP-bound / offline */
+        if (alive) setProfile(null); // not yet approved / no active assignment
+      } finally {
+        if (alive) setProfileLoading(false);
       }
     })();
     return () => {
@@ -96,8 +111,138 @@ export default function Profile({ deviceId, plate }: { deviceId: string; plate?:
   const path = vahan?.decision_path;
   const provisional = path === "PROVISIONAL" || vahan?.provisional;
 
+  const driverName = session.name || t("home.driver", { defaultValue: "Driver" });
+  const verified = session.status === "ACTIVE";
+
   return (
     <>
+      {/* Driver profile header */}
+      <div className="prof-header">
+        <span className="prof-avatar">{driverName.trim().charAt(0).toUpperCase()}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="prof-name">{driverName}</div>
+          <div className="prof-plate selectable">
+            {resolvedPlate || t("common.noData", { defaultValue: "—" })}
+          </div>
+          <div className="prof-badges">
+            <span className={`prof-badge ${verified ? "ok" : "muted"}`}>
+              <IconShield size={13} />{" "}
+              {verified
+                ? t("home.status.ACTIVE", { defaultValue: "Verified" })
+                : t("home.status.UNVERIFIED", { defaultValue: "Not enrolled" })}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Driver Profile — the approved driver + assigned vehicle + enrollment.
+          Sourced from GET /api/driver/profile (own identity only). */}
+      {profileLoading ? (
+        <Card title={t("driverProfile.title", { defaultValue: "Driver Profile" })}>
+          <div className="muted" style={{ fontSize: 13 }}>
+            <Spinner /> {t("driverProfile.loading", { defaultValue: "Loading profile…" })}
+          </div>
+        </Card>
+      ) : profile ? (
+        <>
+          <Card title={t("driverProfile.driverInfo", { defaultValue: "Driver Information" })}>
+            <Row
+              k={t("driverProfile.name", { defaultValue: "Name" })}
+              v={profile.driver.name || t("common.noData", { defaultValue: "—" })}
+            />
+            <Row
+              k={t("driverProfile.driverId", { defaultValue: "Driver ID" })}
+              v={<span className="selectable">{profile.driver.id || "—"}</span>}
+            />
+            <Row
+              k={t("driverProfile.mobile", { defaultValue: "Mobile" })}
+              v={profile.driver.mobile || "—"}
+            />
+            <Row
+              k={t("driverProfile.licence", { defaultValue: "Licence" })}
+              v={profile.driver.licence || "—"}
+            />
+            <Row
+              k={t("driverProfile.emergency", { defaultValue: "Emergency Contact" })}
+              v={profile.driver.emergency_contact || "—"}
+            />
+            <Row
+              k={t("driverProfile.status", { defaultValue: "Status" })}
+              v={
+                <Chip status={statusTone(profile.driver.status)}>
+                  {profile.driver.status || "—"}
+                </Chip>
+              }
+            />
+          </Card>
+
+          <Card title={t("driverProfile.vehicleInfo", { defaultValue: "Assigned Vehicle" })}>
+            <Row
+              k={t("driverProfile.vehicleId", { defaultValue: "Vehicle ID" })}
+              v={<span className="selectable">{profile.vehicle.vehicle_id || "—"}</span>}
+            />
+            <Row
+              k={t("driverProfile.vehicleNumber", { defaultValue: "Vehicle Number" })}
+              v={profile.vehicle.vehicle_number || "—"}
+            />
+            <Row
+              k={t("driverProfile.vehicleType", { defaultValue: "Type" })}
+              v={profile.vehicle.vehicle_type || "—"}
+            />
+            {profile.vehicle.chassis_number ? (
+              <Row
+                k={t("driverProfile.chassis", { defaultValue: "Chassis Number" })}
+                v={profile.vehicle.chassis_number}
+              />
+            ) : null}
+            {profile.vehicle.rfid_fastag_id ? (
+              <Row
+                k={t("driverProfile.rfid", { defaultValue: "RFID / FASTag ID" })}
+                v={profile.vehicle.rfid_fastag_id}
+              />
+            ) : null}
+            <Row
+              k={t("driverProfile.vehicleStatus", { defaultValue: "Vehicle Status" })}
+              v={
+                <Chip status={statusTone(profile.vehicle.status)}>
+                  {profile.vehicle.status || "—"}
+                </Chip>
+              }
+            />
+          </Card>
+
+          <Card title={t("driverProfile.enrollmentInfo", { defaultValue: "Enrollment Status" })}>
+            <Row
+              k={t("driverProfile.approvalStatus", { defaultValue: "Approval Status" })}
+              v={
+                <Chip status={statusTone(profile.enrollment.status)}>
+                  {profile.enrollment.status || "—"}
+                </Chip>
+              }
+            />
+            <Row
+              k={t("driverProfile.approvedDate", { defaultValue: "Approved Date" })}
+              v={fmtDate(profile.enrollment.approved_at)}
+            />
+            {profile.enrollment.approved_by ? (
+              <Row
+                k={t("driverProfile.approvedBy", { defaultValue: "Approved By" })}
+                v={profile.enrollment.approved_by}
+              />
+            ) : null}
+          </Card>
+        </>
+      ) : (
+        <Card title={t("driverProfile.title", { defaultValue: "Driver Profile" })}>
+          <div className="muted" style={{ fontSize: 13 }}>
+            {t("driverProfile.none", {
+              defaultValue:
+                "No approved profile is linked to this vehicle yet. Complete enrollment and wait for admin approval.",
+            })}
+          </div>
+        </Card>
+      )}
+
       <Card title={t("common.language")}>
         <label
           htmlFor="lang-select"
@@ -124,7 +269,6 @@ export default function Profile({ deviceId, plate }: { deviceId: string; plate?:
 
       <Card title={t("profile.driverDevice")}>
         <Row k={t("profile.deviceId")} v={deviceId} />
-        <Row k={t("profile.pairingCode")} v={deviceIdToCode(deviceId)} />
         <Row k={t("common.plate")} v={resolvedPlate ?? t("common.noData")} />
       </Card>
 
@@ -136,8 +280,8 @@ export default function Profile({ deviceId, plate }: { deviceId: string; plate?:
         ) : vahan ? (
           <>
             <div style={{ marginBottom: 10 }}>
-              <Chip status={provisional ? "warn" : path?.startsWith("LIVE") ? "ok" : "warn"}>
-                {path}
+              <Chip status={verifiedLabel(path).ok ? "ok" : "warn"}>
+                {verifiedLabel(path).label}
               </Chip>
             </div>
             <Row
@@ -187,26 +331,9 @@ export default function Profile({ deviceId, plate }: { deviceId: string; plate?:
         )}
       </Card>
 
-      {compliance && (
-        <Card title={t("profile.compliance", { defaultValue: "Driver & Compliance" })}>
-          <Row
-            k={t("profile.driverName", { defaultValue: "Driver" })}
-            v={compliance.name || t("common.noData")}
-          />
-          <div style={{ margin: "6px 0" }}>
-            <Chip status={compliance.dlStatus === "VALID" ? "ok" : "warn"}>
-              {t("profile.dl", { defaultValue: "DL" })}: {compliance.dlStatus || t("common.noData")}
-            </Chip>
-          </div>
-          <Row
-            k={t("profile.violations", { defaultValue: "Violations" })}
-            v={String(compliance.violations)}
-          />
-        </Card>
-      )}
-
       <Card title={t("profile.notifications")}>
         <button className="btn" disabled={pushBusy || push === "subscribed"} onClick={onEnablePush}>
+          <IconBell size={17} />{" "}
           {pushBusy
             ? t("profile.enabling")
             : push === "subscribed"
@@ -227,19 +354,15 @@ export default function Profile({ deviceId, plate }: { deviceId: string; plate?:
       <Card title={t("profile.session")}>
         <button
           className="btn ghost"
-          onClick={async () => {
-            // Real logout: revoke the device binding server-side (session
-            // revocation), then clear local pairing/token.
-            try {
-              await api.otpLogout(deviceId);
-            } catch {
-              /* offline — clear locally anyway */
-            }
+          onClick={() => {
+            // Sign out: clear the device pairing + DRIVER token locally. The JWT
+            // is short-lived and self-expires; there is no server-side session to
+            // revoke (the token is stateless and device-scoped).
             clearPairing();
             location.reload();
           }}
         >
-          {t("profile.logout", { defaultValue: "Log out from device" })}
+          <IconLogout size={17} /> {t("profile.logout", { defaultValue: "Log out from device" })}
         </button>
       </Card>
     </>

@@ -1,13 +1,13 @@
-// useWebcam — browser camera lifecycle for the driver face-enrolment flow.
+// useWebcam — browser camera lifecycle for the driver face-enrollment flow.
 //
 // Reuse of the dashboard's verification webcam hook (web/src/hooks/useWebcam.ts):
 // same getUserMedia start/stop, the same frame `capture()` (→ JPEG data-URL) and
-// the same `validate()` alignment/liveness gate, so enrolment and verification
+// the same `validate()` alignment/liveness gate, so enrollment and verification
 // share one capture contract. The camera starts only on explicit user action and
 // is always torn down on unmount, releasing the device when the wizard closes.
 //
 // Liveness uses the experimental FaceDetector API when present and otherwise
-// degrades to "unchecked" so enrolment still functions on every device.
+// degrades to "unchecked" so enrollment still functions on every device.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 

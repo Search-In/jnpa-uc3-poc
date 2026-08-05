@@ -6,19 +6,34 @@ import { getToken } from "@/lib/auth";
 import type {
   Alert,
   AutoLeoResult,
+  AvailableVehicle,
   CarbonRollup,
+  CreateDriverInput,
+  CreateVehicleInput,
   DriverEnrollment,
+  FleetVehicle,
+  UpdateVehicleInput,
+  VehicleDetectionResult,
+  VehicleIdentityResult,
+  VehicleStats,
   EmptyAllocation,
   FaultControlResult,
   FaultState,
   IdentityVerifyArg,
   IdentityVerifyResult,
-  IdentityEnrolResult,
+  IdentityEnrollResult,
   KpiResult,
   ParkingFacility,
   ParkingSummary,
 } from "@/lib/types";
-import type { CongestionMetrics, ContainerJourney, DataAdapter, DataMode, OcrEval } from "./types";
+import type {
+  CarbonEmissionRecord,
+  CongestionMetrics,
+  ContainerJourney,
+  DataAdapter,
+  DataMode,
+  OcrEval,
+} from "./types";
 
 // Attach the bearer token when a session exists (auth-enabled builds), mirroring
 // lib/api.ts. When auth is disabled there is no token and the header is omitted.
@@ -55,6 +70,29 @@ async function deleteJson<T>(path: string): Promise<T> {
   return (await res.json()) as T;
 }
 
+// Like postJson but surfaces the gateway's error `detail` (e.g. the 409
+// "vehicle already assigned" message) so mutations show a useful reason.
+async function sendJson<T>(method: string, path: string, body: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method,
+    headers: authHeaders(),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let detail = `${res.status} ${res.statusText}`;
+    try {
+      const j = (await res.json()) as { detail?: unknown };
+      if (typeof j.detail === "string") detail = j.detail;
+      else if (j.detail && typeof j.detail === "object")
+        detail = (j.detail as { message?: string }).message ?? detail;
+    } catch {
+      /* non-JSON error body — keep the status line */
+    }
+    throw new Error(detail);
+  }
+  return (await res.json()) as T;
+}
+
 export class LiveAdapter implements DataAdapter {
   readonly mode: DataMode = "live";
 
@@ -71,14 +109,14 @@ export class LiveAdapter implements DataAdapter {
 
   // The KPI strip comes from the gateway /api/kpi/strip materialiser if present,
   // else we surface whatever the views give. The gateway returns the engine
-  // shape (KpiResult[]); if the route is older, return [].
+  // shape (KpiResult[]). We deliberately DON'T swallow fetch errors into []: the
+  // simulator refetches this key every tick (SimBridge), and returning [] on a
+  // transient failure would overwrite the last-good cache with an empty
+  // "successful" result — blanking the KPI strip mid-sim. Re-throw instead so
+  // React Query keeps the previous data and marks the query errored.
   kpiStrip = async (): Promise<KpiResult[]> => {
-    try {
-      const data = await getJson<{ strip?: KpiResult[] }>("/api/kpi/strip");
-      return data.strip ?? [];
-    } catch {
-      return [];
-    }
+    const data = await getJson<{ strip?: KpiResult[] }>("/api/kpi/strip");
+    return data.strip ?? [];
   };
   sources = async () => (await api.sources()).sources;
   cameras = async () => (await api.cameras()).cameras;
@@ -114,6 +152,12 @@ export class LiveAdapter implements DataAdapter {
   emptyTrtKpi = async (): Promise<KpiResult> =>
     (await getJson<{ kpi: KpiResult }>("/api/empty/kpi")).kpi;
   carbonRollup = (): Promise<CarbonRollup> => getJson<CarbonRollup>("/api/carbon/rollup");
+  carbonHistory = async (vehicleId?: string, limit = 50): Promise<CarbonEmissionRecord[]> => {
+    const path = vehicleId
+      ? `/api/carbon/history/${encodeURIComponent(vehicleId)}?limit=${limit}`
+      : `/api/carbon/history?limit=${limit}`;
+    return (await getJson<{ records: CarbonEmissionRecord[] }>(path)).records ?? [];
+  };
   leoQueue = async (): Promise<AutoLeoResult[]> =>
     (await getJson<{ results: AutoLeoResult[] }>("/api/gate-data/leo/queue")).results;
   customsFlags = async (): Promise<Alert[]> =>
@@ -134,15 +178,15 @@ export class LiveAdapter implements DataAdapter {
       ...body,
     });
   };
-  identityEnrol = (driverId: string, image: string): Promise<IdentityEnrolResult> =>
-    postJson<IdentityEnrolResult>("/api/identity/enrol", {
+  identityEnroll = (driverId: string, image: string): Promise<IdentityEnrollResult> =>
+    postJson<IdentityEnrollResult>("/api/identity/enrol", {
       driver_id: driverId,
       image,
       is_synthetic: true,
       purpose: "ENROLMENT",
     });
 
-  // --- Driver enrolment approval workflow ---
+  // --- Driver enrollment approval workflow ---
   enrollments = async (status?: string): Promise<DriverEnrollment[]> =>
     (
       await getJson<{ enrollments: DriverEnrollment[] }>(
@@ -164,8 +208,58 @@ export class LiveAdapter implements DataAdapter {
   reenrollEnrollment = (driverId: string, reason?: string) =>
     postJson<{ reenroll: boolean }>(
       `/api/identity/enrollments/${encodeURIComponent(driverId)}/reenroll`,
-      { reason: reason ?? "re-enrolment requested" },
+      { reason: reason ?? "re-enrollment requested" },
     );
+  createDriverProfile = (input: CreateDriverInput) =>
+    postJson<{ created: boolean; driver_id: string; status: string }>(
+      "/api/identity/drivers",
+      input,
+    );
+  availableVehicles = async (q?: string, limit = 50): Promise<AvailableVehicle[]> => {
+    const params = new URLSearchParams();
+    if (q) params.set("q", q);
+    params.set("limit", String(limit));
+    // Vehicle Master is now the authoritative dropdown source (no truck-sim read).
+    return (
+      await getJson<{ vehicles: AvailableVehicle[] }>(
+        `/api/vehicles/available?${params.toString()}`,
+      )
+    ).vehicles;
+  };
+
+  // --- Vehicle Master (fleet registry) — /api/vehicles/* ---
+  vehicles = async (q?: string, status?: string): Promise<FleetVehicle[]> => {
+    const params = new URLSearchParams();
+    if (q) params.set("q", q);
+    if (status && status !== "ALL") params.set("status", status);
+    const qs = params.toString();
+    return (await getJson<{ vehicles: FleetVehicle[] }>(`/api/vehicles${qs ? `?${qs}` : ""}`))
+      .vehicles;
+  };
+  vehicleStats = (): Promise<VehicleStats> => getJson<VehicleStats>("/api/vehicles/stats");
+  createVehicle = (input: CreateVehicleInput) =>
+    sendJson<{ created: boolean; vehicle: FleetVehicle }>("POST", "/api/vehicles", input);
+  updateVehicle = (vehicleId: string, input: UpdateVehicleInput) =>
+    sendJson<{ updated: boolean; vehicle: FleetVehicle }>(
+      "PATCH",
+      `/api/vehicles/${encodeURIComponent(vehicleId)}`,
+      input,
+    );
+
+  ldbTruck = (vehicleNumber: string) =>
+    getJson<import("@/lib/types").LdbTruckTrackingResponse>(
+      `/api/ldb/truck/${encodeURIComponent(vehicleNumber.trim().toUpperCase())}`,
+    );
+
+  // --- Vehicle Intelligence Identity & Detection ---
+  vehicleIdentity = (vehicleNumber: string, image: string) =>
+    sendJson<VehicleIdentityResult>(
+      "POST",
+      `/api/vehicle/${encodeURIComponent(vehicleNumber)}/identity`,
+      { image, vehicle_number: vehicleNumber },
+    );
+  vehicleDetection = (image: string, expected?: string) =>
+    sendJson<VehicleDetectionResult>("POST", "/api/vehicle/detection", { image, expected });
   parkingAvailability = async (minuteOfDay?: number): Promise<ParkingFacility[]> =>
     (
       await getJson<{ facilities: ParkingFacility[] }>(
@@ -217,6 +311,8 @@ export class LiveAdapter implements DataAdapter {
         dataset_breakdown?: OcrEval["dataset_breakdown"];
         data_mode?: OcrEval["data_mode"];
         metrics_synthetic?: boolean;
+        capability?: OcrEval["capability"];
+        accuracy_reportable?: boolean;
       }>("/api/anpr/eval");
       // Prefer the explicit per-condition accuracy; fall back to the combined %.
       const acc =
@@ -239,6 +335,10 @@ export class LiveAdapter implements DataAdapter {
         dataset_breakdown: d.dataset_breakdown,
         data_mode: d.data_mode,
         metrics_synthetic: d.metrics_synthetic,
+        capability: d.capability,
+        // Default to the honest reading when the gateway predates this field:
+        // if the engine is degraded, the numbers are not reportable.
+        accuracy_reportable: d.accuracy_reportable ?? !d.degraded,
       };
     } catch {
       return null;

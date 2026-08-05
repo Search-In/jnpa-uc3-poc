@@ -9,19 +9,27 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Box, Search, Ship, Truck, ArrowRight, ArrowDown, Check, Radio } from "lucide-react";
 import { getAdapter, DATA_MODE } from "@/data";
+import { api } from "@/lib/api";
 import { isValidContainerNo } from "@/lib/iso6346";
-import { PageContainer, PageHeader, StatusChip } from "@/components/ui/dtccc";
+import {
+  PageContainer,
+  PageHeader,
+  StatusChip,
+  SegmentedTabs,
+  Embedded,
+} from "@/components/ui/dtccc";
+import DocumentOCR from "@/screens/DocumentOCR";
 import { Card } from "@/components/ui/card";
 import { EmptyState, LoadingState } from "@/components/ui/misc";
 import { STATUS } from "@/lib/tokens";
 import { fmtDateTimeIST } from "@/lib/utils";
 import type { ContainerJourney, JourneyStage } from "@/data/types";
 
-const DEMO_CONTAINER = "MSCU1234566"; // pinned valid ISO 6346 demo box
+const DEMO_CONTAINER = "GESU5123996"; // seeded ISO 6346 box present in jnpa.cargo
 
 function StageItem({ s, accent }: { s: JourneyStage; accent: string }) {
   const { t } = useTranslation();
@@ -241,6 +249,7 @@ export default function FollowTheBox() {
   const [params, setParams] = useSearchParams();
   const [term, setTerm] = useState(params.get("c") || DEMO_CONTAINER);
   const [submitted, setSubmitted] = useState(params.get("c") || DEMO_CONTAINER);
+  const [tab, setTab] = useState<"journey" | "ocr">("journey");
 
   useEffect(() => {
     const c = params.get("c");
@@ -273,60 +282,150 @@ export default function FollowTheBox() {
       <PageHeader title={t("followBox.title")} subtitle={t("followBox.subtitle")} icon={Box} />
 
       <div className="px-4 pt-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-2 rounded-md border border-border bg-card px-2 py-1.5">
-            <Search size={14} className="text-muted-foreground" />
-            <input
-              value={term}
-              onChange={(e) => setTerm(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && go()}
-              placeholder={t("followBox.searchPlaceholder")}
-              className="w-56 bg-transparent text-sm outline-none"
-              spellCheck={false}
-            />
-          </div>
-          <button
-            onClick={go}
-            className="rounded-md bg-primary px-3 py-1.5 text-[13px] font-semibold text-primary-foreground hover:bg-primary/90"
-          >
-            {t("followBox.follow")}
-          </button>
-          {submitted && (
-            <StatusChip
-              label={valid ? t("followBox.isoValid") : t("followBox.isoInvalid")}
-              tone={valid ? "ok" : "critical"}
-            />
-          )}
-          <span className="ml-auto text-[11px] text-muted-foreground">
-            DATA_MODE: <strong className="text-foreground">{q.data?.data_mode ?? DATA_MODE}</strong>
-          </span>
-        </div>
+        <SegmentedTabs
+          value={tab}
+          onChange={setTab}
+          tabs={[
+            { key: "journey", label: "Container Journey", icon: Box },
+            { key: "ocr", label: "OCR Verification", icon: Search },
+          ]}
+        />
       </div>
 
-      <div className="space-y-3 px-4 py-3">
-        {q.isLoading ? (
-          <LoadingState />
-        ) : !q.data ? (
-          <EmptyState>{t("followBox.unavailable")}</EmptyState>
-        ) : (
-          <>
-            <MetaBar j={q.data} />
-            <JourneyStatusBar j={q.data} />
-
-            <div className="grid grid-cols-1 items-stretch gap-3 lg:grid-cols-[1fr_16rem_1fr]">
-              <TwinColumn twin="UC-II" icon={Ship} stages={uc2} />
-              <HandoffCard j={q.data} />
-              <TwinColumn twin="UC-III" icon={Truck} stages={uc3} />
+      {tab === "ocr" ? (
+        <Embedded>
+          <DocumentOCR />
+        </Embedded>
+      ) : (
+        <>
+          <div className="px-4 pt-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-2 rounded-md border border-border bg-card px-2 py-1.5">
+                <Search size={14} className="text-muted-foreground" />
+                <input
+                  value={term}
+                  onChange={(e) => setTerm(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && go()}
+                  placeholder={t("followBox.searchPlaceholder")}
+                  className="w-56 bg-transparent text-sm outline-none"
+                  spellCheck={false}
+                />
+              </div>
+              <button
+                onClick={go}
+                className="rounded-md bg-primary px-3 py-1.5 text-[13px] font-semibold text-primary-foreground hover:bg-primary/90"
+              >
+                {t("followBox.follow")}
+              </button>
+              {submitted && (
+                <StatusChip
+                  label={valid ? t("followBox.isoValid") : t("followBox.isoInvalid")}
+                  tone={valid ? "ok" : "critical"}
+                />
+              )}
+              <span className="ml-auto text-[11px] text-muted-foreground">
+                DATA_MODE:{" "}
+                <strong className="text-foreground">{q.data?.data_mode ?? DATA_MODE}</strong>
+              </span>
             </div>
+          </div>
 
-            {q.data.note && (
-              <p className="text-[11px] leading-snug text-muted-foreground">
-                <strong>Note:</strong> {t("followBox.note")}
-              </p>
+          <div className="space-y-3 px-4 py-3">
+            {q.isLoading ? (
+              <LoadingState />
+            ) : !q.data ? (
+              <EmptyState>{t("followBox.unavailable")}</EmptyState>
+            ) : (
+              <>
+                <MetaBar j={q.data} />
+                <JourneyStatusBar j={q.data} />
+
+                <div className="grid grid-cols-1 items-stretch gap-3 lg:grid-cols-[1fr_16rem_1fr]">
+                  <TwinColumn twin="UC-II" icon={Ship} stages={uc2} />
+                  <HandoffCard j={q.data} />
+                  <TwinColumn twin="UC-III" icon={Truck} stages={uc3} />
+                </div>
+
+                {q.data.note && (
+                  <p className="text-[11px] leading-snug text-muted-foreground">
+                    <strong>Note:</strong> {t("followBox.note")}
+                  </p>
+                )}
+              </>
             )}
-          </>
+
+            {/* Shipping Lines enrichment renders independently of the cross-twin
+                journey, so a container's advance-list facts surface even when the
+                journey feed is empty. Self-hides when the box has no SL history. */}
+            {submitted.trim() && <ShippingLineCard containerNo={submitted} />}
+          </div>
+        </>
+      )}
+    </PageContainer>
+  );
+}
+
+// --- Shipping Lines enrichment (module 4) -------------------------------------
+// Read-only cross-twin enrichment for the container in view. Tries the cargo
+// enrichment endpoint first (/api/cargo/{cn}/shipping-line — the soft cargo link);
+// if the box is not a cargo record it falls back to the shipping-line container
+// view (/api/shipping-lines/container/{cn}). Renders nothing when neither has data,
+// so it never adds visual noise for a container with no advance-list history.
+function ShippingLineCard({ containerNo }: { containerNo: string }) {
+  const cn = containerNo.trim().toUpperCase();
+  const q = useQuery({
+    queryKey: ["ftb-shipping-line", cn],
+    enabled: cn.length > 0,
+    retry: false,
+    queryFn: async () => {
+      try {
+        const c = await api.cargoShippingLine(cn); // cargo-context enrichment (may 404)
+        if (c && (c.advance_lists?.length || c.delivery_orders?.length)) {
+          return { summary: c.shipping_line, advance: c.advance_lists, orders: c.delivery_orders };
+        }
+      } catch {
+        /* not a cargo record — fall back to the shipping-line container view */
+      }
+      const s = await api.shippingLinesContainer(cn);
+      return { summary: s.summary, advance: s.advance_lists, orders: s.delivery_orders };
+    },
+  });
+
+  if (q.isLoading) return null;
+  const d = q.data;
+  const hasData = !!(d && (d.advance?.length || d.orders?.length));
+  if (q.isError || !hasData) return null;
+
+  const s = d!.summary;
+  const primary = s ?? d!.advance?.[0];
+
+  return (
+    <Card className="p-3" style={{ borderColor: STATUS.info + "66" }}>
+      <div className="mb-2 flex items-center gap-2">
+        <Ship size={15} className="text-muted-foreground" />
+        <span className="text-[13px] font-semibold">Shipping Line (advance list)</span>
+        <Link
+          to={`/shipping-lines?container=${encodeURIComponent(cn)}`}
+          className="ml-auto inline-flex items-center gap-1 text-[12px] font-medium text-primary hover:underline"
+        >
+          Open in Shipping Lines <ArrowRight size={12} />
+        </Link>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {primary?.shipping_line_code && (
+          <StatusChip label={`Line ${primary.shipping_line_code}`} tone="ok" />
+        )}
+        {primary?.list_type && <StatusChip label={primary.list_type} tone="info" />}
+        {primary?.terminal && <StatusChip label={`Terminal ${primary.terminal}`} tone="neutral" />}
+        {primary?.category && <StatusChip label={primary.category} tone="warn" />}
+        {primary?.pod && <StatusChip label={`POD ${primary.pod}`} tone="neutral" />}
+        {primary?.bill_of_lading && (
+          <StatusChip label={`BL ${primary.bill_of_lading}`} tone="neutral" />
+        )}
+        {!!d!.orders?.length && (
+          <StatusChip label={`${d!.orders.length} delivery order(s)`} tone="info" />
         )}
       </div>
-    </PageContainer>
+    </Card>
   );
 }

@@ -27,12 +27,27 @@ dependencies = [
     # WebPush delivery for the trucking-app PWA re-route notifications
     # (/api/push). Imported lazily; push degrades to WS/polling if absent.
     "pywebpush==2.*",
+    # Firebase Admin SDK — FCM push transport (/api/push/register-device) + Phone
+    # Auth ID-token verify (/api/auth/otp/firebase-verify). Imported lazily in
+    # gateway/firebase.py; FCM degrades to WebPush/WS when absent/unconfigured.
+    "firebase-admin==6.*",
     # Server-side PDF rendering for /api/reports/police?format=pdf. The Chromium
     # browser binary is installed in the Dockerfile (`playwright install`).
     "playwright==1.47.*",
     # S3/MinIO client for driver-enrolment reference photos (gateway/objectstore).
-    # Imported lazily; enrolment degrades to base64-in-Postgres if absent/unreachable.
+    # Imported lazily; enrollment degrades to base64-in-Postgres if absent/unreachable.
     "minio==7.*",
+    # Spreadsheet readers for in-gateway ingest: the Shipping Lines Data-Upload
+    # endpoints (/api/shipping-lines/validate|upload) and the Customs LEO/Shipping-Bill
+    # parsers read .xlsx via openpyxl and legacy .xls via xlrd. Required in the image —
+    # without them an XLSX/XLS upload 500s (ModuleNotFoundError: openpyxl).
+    "openpyxl==3.1.*",
+    "xlrd==2.0.*",
+    # PDF reader for in-gateway ingest: the Berthing Reports Data-Upload endpoints
+    # (/api/berthing/validate|upload) accept the original per-terminal daily report PDFs
+    # and parse them via services.berthing.pdf_parsers (pdfplumber). Required in the image
+    # — without it a PDF upload degrades to REJECTED ("PDF support unavailable").
+    "pdfplumber==0.11.*",
 ]
 
 [project.optional-dependencies]

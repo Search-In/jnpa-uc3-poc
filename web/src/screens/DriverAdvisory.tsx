@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getAdapter } from "@/data";
+import { api } from "@/lib/api";
 import type { TruckDevice } from "@/lib/types";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -12,12 +13,43 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Spinner, EmptyState } from "@/components/ui/misc";
-import { PageContainer, PageHeader, StatGrid, StatCard } from "@/components/ui/dtccc";
+import { Spinner, EmptyState, ErrorState } from "@/components/ui/misc";
+import { PageContainer, PageHeader, StatGrid, StatCard, StatusChip } from "@/components/ui/dtccc";
+import { DecisionPathBadge } from "@/components/DecisionPathBadge";
 import { fmtEta } from "@/lib/utils";
-import { Navigation, CheckCircle2, AlertCircle, Route, DoorOpen } from "lucide-react";
+import { weatherCondition, weatherHumidityPct, weatherRainMm } from "@/lib/weather";
+import {
+  congestionTone,
+  fmtDelay,
+  fmtSpeed,
+  incidentSeverityTone,
+  trafficStatusTone,
+} from "@/lib/traffic";
+import {
+  Navigation,
+  CheckCircle2,
+  AlertCircle,
+  Route,
+  DoorOpen,
+  AlertTriangle,
+  CloudRain,
+  TrafficCone,
+} from "lucide-react";
 
 const GATES = ["G-NSICT", "G-JNPCT", "G-NSIGT", "G-BMCT"];
+
+// Free-flow highway speed (km/h) used as a client-side safety net when the
+// truck-sim payload lacks `eta_s`. The backend now always supplies one (seeded
+// at inject + a serializer fallback), so this rarely triggers; the value mirrors
+// the backend's speed_highway_kmh so the estimate stays consistent if it does.
+const FREE_FLOW_KMH = 55;
+
+// ETA-to-gate in seconds: prefer the live `eta_s`; otherwise fall back to the
+// remaining distance at free-flow speed (0 km remaining -> ~0 s -> "<1 min").
+function etaSeconds(truck: TruckDevice): number {
+  if (truck.eta_s != null) return truck.eta_s;
+  return (truck.remaining_km / FREE_FLOW_KMH) * 3600;
+}
 
 // Trucks AT_GATE_QUEUE with ETA-to-gate and a re-routing recommendation. The
 // recommendation picks the least-loaded alternative gate; "Push Re-route" forces
@@ -28,10 +60,46 @@ export default function DriverAdvisory() {
   const queued = useQuery({
     queryKey: ["trucks", "AT_GATE_QUEUE", "advisory"],
     queryFn: () => getAdapter().trucks("AT_GATE_QUEUE", 500),
-    refetchInterval: 6000,
   });
 
   const devices = queued.data ?? [];
+
+  // --- Accident Route Advisory (additive) ---------------------------------
+  // Reuse the existing accidents API to surface ACTIVE (REPORTED /
+  // INVESTIGATING) accidents as route hazards. No new data is fabricated.
+  const accReported = useQuery({
+    queryKey: ["accidents", "REPORTED", "advisory"],
+    queryFn: () => api.accidents({ status: "REPORTED", limit: 20 }),
+  });
+  const accInvestigating = useQuery({
+    queryKey: ["accidents", "INVESTIGATING", "advisory"],
+    queryFn: () => api.accidents({ status: "INVESTIGATING", limit: 20 }),
+  });
+  const activeAccidents = [
+    ...(accReported.data?.accidents ?? []),
+    ...(accInvestigating.data?.accidents ?? []),
+  ];
+  const accidentsLoading = accReported.isLoading || accInvestigating.isLoading;
+
+  // --- Weather Advisory (additive) ----------------------------------------
+  // Live port-area conditions from the Open-Meteo integration
+  // (GET /api/weather/current). The endpoint degrades LIVE → CACHED →
+  // SYNTHETIC instead of failing; the panel always shows which rung served
+  // the data so a synthetic reading is never presented as live.
+  const weather = useQuery({
+    queryKey: ["weather-current", "advisory"],
+    queryFn: () => api.weatherCurrent(),
+  });
+
+  // --- Traffic Advisory (additive) ----------------------------------------
+  // Live corridor conditions from the TomTom integration
+  // (GET /api/traffic/current) — real flow + incident data replacing any
+  // static traffic placeholder. Degrades LIVE → CACHED → DATABASE → SYNTHETIC
+  // instead of failing; the panel shows which rung served the data.
+  const traffic = useQuery({
+    queryKey: ["traffic-current", "advisory"],
+    queryFn: () => api.trafficCurrent(),
+  });
 
   // Queue depth per gate -> the recommendation steers toward the shortest queue.
   const depth = new Map<string, number>();
@@ -83,6 +151,10 @@ export default function DriverAdvisory() {
       </div>
 
       <div className="px-4 py-3">
+        <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+          <Route className="h-4 w-4 text-muted-foreground" />
+          {t("advisory.congestionRerouting", "Congestion Rerouting")}
+        </div>
         {queued.isLoading ? (
           <Card className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
             <Spinner /> {t("advisory.loadingQueue")}
@@ -123,8 +195,232 @@ export default function DriverAdvisory() {
           </Card>
         )}
       </div>
+
+      {/* Accident Route Advisory (additive) */}
+      <div className="px-4 py-3">
+        <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+          <AlertTriangle className="h-4 w-4 text-severity-crit" />
+          {t("advisory.accidentAdvisory", "Accident Route Advisory")}
+        </div>
+        <Card>
+          <CardContent className="p-0">
+            {accidentsLoading ? (
+              <div className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
+                <Spinner /> {t("advisory.loadingAccidents", "Checking active accidents…")}
+              </div>
+            ) : activeAccidents.length === 0 ? (
+              <EmptyState>
+                {t("advisory.emptyAccidents", "No active accidents on the corridor.")}
+              </EmptyState>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="border-b border-border bg-muted/60 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+                    <tr>
+                      <th className="px-4 py-2">{t("advisory.colRef", "Ref")}</th>
+                      <th className="px-4 py-2">{t("advisory.colSeverity", "Severity")}</th>
+                      <th className="px-4 py-2">
+                        {t("advisory.colLocation", "Location / Segment")}
+                      </th>
+                      <th className="px-4 py-2">{t("advisory.colPlate")}</th>
+                      <th className="px-4 py-2">{t("advisory.colAdvisory", "Advisory")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {activeAccidents.map((a: any) => (
+                      <tr
+                        key={a.id ?? a.accident_ref}
+                        className="border-b border-border/50 hover:bg-muted/40"
+                      >
+                        <td className="px-4 py-2 font-mono text-xs">
+                          {a.accident_ref ?? a.id ?? "—"}
+                        </td>
+                        <td className="px-4 py-2">{a.severity ?? "—"}</td>
+                        <td className="px-4 py-2">{accidentLocation(a)}</td>
+                        <td className="px-4 py-2 font-mono text-xs">{a.plate ?? "—"}</td>
+                        <td className="px-4 py-2 text-severity-crit">
+                          {t("advisory.avoidSegment", "Avoid affected corridor segment")}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Traffic Advisory — live TomTom corridor conditions with provenance */}
+      <div className="px-4 py-3">
+        <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+          <TrafficCone className="h-4 w-4 text-muted-foreground" />
+          {t("advisory.trafficAdvisory", "Traffic Advisory")}
+        </div>
+        <Card>
+          <CardContent className="space-y-2 p-4 text-sm">
+            {traffic.isLoading ? (
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Spinner /> {t("advisory.loadingTraffic", "Loading corridor traffic…")}
+              </div>
+            ) : traffic.isError || !traffic.data ? (
+              <ErrorState onRetry={() => void traffic.refetch()} />
+            ) : (
+              <>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="inline-flex items-center gap-1.5 font-medium">
+                    {t("advisory.trafficCongestion", "Corridor congestion")}
+                    <StatusChip
+                      label={traffic.data.traffic.congestion_level}
+                      tone={congestionTone(traffic.data.traffic.congestion_level)}
+                    />
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <StatusChip
+                      label={traffic.data.status}
+                      tone={trafficStatusTone(traffic.data.status)}
+                    />
+                    <DecisionPathBadge path={traffic.data.decision_path} />
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums text-foreground">
+                  <span>
+                    {t("advisory.trafficSpeed", "Speed")}:{" "}
+                    {fmtSpeed(traffic.data.traffic.current_speed)}
+                  </span>
+                  <span>
+                    {t("advisory.trafficFreeFlow", "Free flow")}:{" "}
+                    {fmtSpeed(traffic.data.traffic.free_flow_speed)}
+                  </span>
+                  <span>
+                    {t("advisory.trafficDelay", "Delay")}:{" "}
+                    {fmtDelay(traffic.data.traffic.delay_seconds)}
+                  </span>
+                  <span>
+                    {t("advisory.trafficIncidents", "Incidents")}: {traffic.data.incident_count}
+                  </span>
+                </div>
+                {traffic.data.incidents.slice(0, 3).map((inc, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-2 py-1 text-xs"
+                  >
+                    <span className="truncate">
+                      {inc.description ?? inc.type}
+                      {inc.road ? ` · ${inc.road}` : ""}
+                    </span>
+                    <StatusChip label={inc.severity} tone={incidentSeverityTone(inc.severity)} />
+                  </div>
+                ))}
+                <p className="text-xs text-muted-foreground">
+                  {t(
+                    "advisory.trafficCaption",
+                    "Live TomTom feed for the NH-348 JNPA corridor; when the feed is unreachable the last cached reading is shown and labelled.",
+                  )}
+                </p>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Weather Advisory — live Open-Meteo conditions with provenance */}
+      <div className="px-4 py-3">
+        <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+          <CloudRain className="h-4 w-4 text-muted-foreground" />
+          {t("advisory.weatherAdvisory", "Weather Advisory")}
+        </div>
+        <Card>
+          <CardContent className="space-y-2 p-4 text-sm">
+            {weather.isLoading ? (
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Spinner /> {t("advisory.loadingWeather", "Loading port weather…")}
+              </div>
+            ) : weather.isError || !weather.data ? (
+              <ErrorState onRetry={() => void weather.refetch()} />
+            ) : (
+              <>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-medium">
+                    {weatherCondition(weather.data) ??
+                      t("advisory.weatherNoCondition", "Conditions unavailable")}
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <StatusChip
+                      label={weather.data.status}
+                      tone={
+                        weather.data.status === "LIVE"
+                          ? "ok"
+                          : weather.data.status === "DEGRADED"
+                            ? "warn"
+                            : "critical"
+                      }
+                    />
+                    <DecisionPathBadge path={weather.data.decision_path} />
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums text-foreground">
+                  <span>
+                    {t("advisory.weatherTemp", "Temp")}:{" "}
+                    {weather.data.weather.temperature != null
+                      ? `${weather.data.weather.temperature.toFixed(1)} °C`
+                      : "—"}
+                  </span>
+                  <span>
+                    {t("advisory.weatherWind", "Wind")}:{" "}
+                    {weather.data.weather.wind_speed != null
+                      ? `${weather.data.weather.wind_speed.toFixed(0)} km/h`
+                      : "—"}
+                  </span>
+                  <span>
+                    {t("advisory.weatherVisibility", "Visibility")}:{" "}
+                    {weather.data.weather.visibility != null
+                      ? `${(weather.data.weather.visibility / 1000).toFixed(1)} km`
+                      : "—"}
+                  </span>
+                  <span>
+                    {t("advisory.weatherRain", "Rain")}:{" "}
+                    {weatherRainMm(weather.data) != null
+                      ? `${weatherRainMm(weather.data)!.toFixed(1)} mm`
+                      : "—"}
+                  </span>
+                  {weatherHumidityPct(weather.data) != null && (
+                    <span>
+                      {t("advisory.weatherHumidity", "Humidity")}:{" "}
+                      {`${weatherHumidityPct(weather.data)!.toFixed(0)} %`}
+                    </span>
+                  )}
+                  <span>
+                    {t("advisory.weatherWave", "Waves")}:{" "}
+                    {weather.data.marine.wave_height != null
+                      ? `${weather.data.marine.wave_height.toFixed(1)} m`
+                      : "—"}
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {t(
+                    "advisory.weatherCaption",
+                    "Live Open-Meteo + OpenWeather feed for the JNPA port area; when a feed is unreachable the last cached reading is shown and labelled.",
+                  )}
+                </p>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </PageContainer>
   );
+}
+
+// Best-effort human label for an accident's location. `location` may be a JSON
+// object (parsed by the API) or a plain string; fall back to accident_type.
+function accidentLocation(a: any): string {
+  const loc = a?.location;
+  if (typeof loc === "string" && loc) return loc;
+  if (loc && typeof loc === "object") {
+    return loc.name ?? loc.segment ?? loc.detail ?? loc.corridor ?? a?.accident_type ?? "—";
+  }
+  return a?.accident_type ?? "—";
 }
 
 function QueueRow({
@@ -168,7 +464,7 @@ function QueueRow({
       <td className="px-4 py-2 font-mono text-xs">{truck.device_id}</td>
       <td className="px-4 py-2 font-mono text-xs">{truck.plate ?? "—"}</td>
       <td className="px-4 py-2">{truck.gate_id?.replace("G-", "") ?? "—"}</td>
-      <td className="px-4 py-2 tabular-nums">{fmtEta(truck.eta_s)}</td>
+      <td className="px-4 py-2 tabular-nums">{fmtEta(etaSeconds(truck))}</td>
       <td className="px-4 py-2 tabular-nums">{truck.remaining_km.toFixed(1)} km</td>
       <td className="px-4 py-2">
         <Select value={gate} onValueChange={onGateChange} disabled={reroute.isPending}>

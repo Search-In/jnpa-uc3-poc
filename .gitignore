@@ -1,6 +1,27 @@
 # Local environment (never commit real keys)
+.env
 .env.local
 *.env.local
+# Runtime env files and the rolling backups/temp files written by
+# deploy/aws/use-rds.sh — these carry the live RDS password.
+.env.prod
+.env.tmp
+.env*.bak*
+*.env.prod
+# Database dumps (deploy/jnpa-uc3.sh backup writes here)
+backups/
+*.sql.gz
+
+# Firebase Admin service-account keys (never commit — load via
+# FIREBASE_SERVICE_ACCOUNT_PATH / GOOGLE_APPLICATION_CREDENTIALS instead).
+# Keep the `secrets/` dir tracked (it is the default gateway credential mount
+# source) but ignore everything inside it except the placeholder README.
+*firebase-adminsdk*.json
+secrets/*
+!secrets/README.md
+gateway/secrets/
+mobile-pwa/.env
+mobile-pwa/.env.local
 
 # Python
 __pycache__/
@@ -52,3 +73,4 @@ node_modules/
 web/dist/
 mobile-pwa/dist/
 web/_attic/
+.env.migration-test

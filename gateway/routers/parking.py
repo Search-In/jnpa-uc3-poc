@@ -2,7 +2,7 @@
 (Appendix C #1, parking half).
 
 Proxies the ``parking`` service (port 8370). The board is **RDS-backed only**:
-occupancy is computed from real slot state in jnpa.parking_slots /
+occupancy is computed from real slot state in core.parking_slot /
 parking_transactions — there is NO synthetic / sine-curve occupancy fallback
 (removed in the P0 production-readiness pass). If the upstream service is
 unreachable, the gateway reads the same RDS tables directly; only if the
@@ -59,8 +59,8 @@ async def _rds_facilities(dsn: Optional[str]) -> List[dict]:
             SELECT f.id AS facility_id, f.facility_name, f.location, f.capacity, f.status,
                    count(s.*) FILTER (WHERE s.availability_status = 'OCCUPIED')  AS occupied,
                    count(s.*) FILTER (WHERE s.availability_status = 'AVAILABLE') AS available
-            FROM jnpa.parking_facilities f
-            LEFT JOIN jnpa.parking_slots s ON s.facility_id = f.id
+            FROM core.parking_facility f
+            LEFT JOIN core.parking_slot s ON s.facility_id = f.id
             GROUP BY f.id, f.facility_name, f.location, f.capacity, f.status
             ORDER BY f.id
             """,
@@ -92,6 +92,74 @@ async def _rds_facilities(dsn: Optional[str]) -> List[dict]:
     return board
 
 
+async def _rds_history(dsn: Optional[str], vehicle_id: Optional[str], limit: int) -> Optional[List[dict]]:
+    """Entry/exit transactions from RDS (mirrors parking service persistence.history).
+    Returns None if the DB is unreachable (caller keeps the empty contract)."""
+    if not dsn:
+        return None
+    from jnpa_shared.db import fetch_all
+
+    where = "WHERE vehicle_id = :vid" if vehicle_id else ""
+    params: Dict[str, Any] = {"limit": limit}
+    if vehicle_id:
+        params["vid"] = vehicle_id
+    try:
+        rows = await fetch_all(
+            f"""
+            SELECT id, vehicle_id, driver_id, facility_id, slot_id, entry_time, exit_time,
+                   EXTRACT(EPOCH FROM duration) AS duration_s, status
+            FROM core.parking_transaction {where}
+            ORDER BY entry_time DESC LIMIT :limit
+            """,
+            params,
+            dsn=dsn,
+        )
+    except Exception as exc:  # noqa: BLE001 - DB unreachable → keep empty contract
+        log.debug("parking_history_rds_unavailable", error=str(exc))
+        return None
+    out: List[dict] = []
+    for r in rows:
+        d = dict(r)
+        for k in ("entry_time", "exit_time"):
+            if d.get(k) is not None and hasattr(d[k], "isoformat"):
+                d[k] = d[k].isoformat()
+        if d.get("duration_s") is not None:
+            d["duration_s"] = int(d["duration_s"])
+        out.append(d)
+    return out
+
+
+async def _rds_violations(dsn: Optional[str], limit: int) -> Optional[List[dict]]:
+    """Parking violation / overflow events from RDS (mirrors persistence.violations).
+    Returns None if the DB is unreachable (caller keeps the empty contract)."""
+    if not dsn:
+        return None
+    from jnpa_shared.db import fetch_all
+
+    try:
+        rows = await fetch_all(
+            """
+            SELECT id, event_type, vehicle_id, facility_id, detail, created_at
+            FROM core.parking_event
+            WHERE event_type IN ('ILLEGAL_PARKING','NO_PARKING_VIOLATION','OVERFLOW')
+            ORDER BY created_at DESC LIMIT :limit
+            """,
+            {"limit": limit},
+            dsn=dsn,
+        )
+    except Exception as exc:  # noqa: BLE001 - DB unreachable → keep empty contract
+        log.debug("parking_violations_rds_unavailable", error=str(exc))
+        return None
+    out: List[dict] = []
+    for r in rows:
+        d = dict(r)
+        d["detail"] = _loc(d.get("detail"))
+        if d.get("created_at") is not None and hasattr(d["created_at"], "isoformat"):
+            d["created_at"] = d["created_at"].isoformat()
+        out.append(d)
+    return out
+
+
 def _rds_summary(board: List[dict]) -> dict:
     return {
         "capacity": sum(int(r["capacity"]) for r in board),
@@ -99,6 +167,21 @@ def _rds_summary(board: List[dict]) -> dict:
         "available": sum(int(r["available"]) for r in board),
         "facilities": len(board),
         "full": sum(1 for r in board if r["status"] == "FULL"),
+    }
+
+
+def _summary_contract(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Map the RDS/parking-service summary keys to the frontend ParkingSummary
+    contract (total_*/full_count). The web ParkingBoard header reads
+    total_capacity/total_occupied/total_available/full_count; upstream emits
+    capacity/occupied/available/full. Accepts either naming so the header
+    populates on the live path, not only against the local mock adapter."""
+    return {
+        "total_capacity": data.get("total_capacity", data.get("capacity", 0)),
+        "total_occupied": data.get("total_occupied", data.get("occupied", 0)),
+        "total_available": data.get("total_available", data.get("available", 0)),
+        "facilities": data.get("facilities", 0),
+        "full_count": data.get("full_count", data.get("full", 0)),
     }
 
 
@@ -159,14 +242,15 @@ async def summary(
     data = await _upstream(state, "/summary")
     if data is not None:
         REQUESTS.labels("parking", "ok").inc()
-        return {"decision_path": "LIVE", **data}
+        return {"decision_path": "LIVE", **_summary_contract(data)}
     board = await _rds_facilities(state.cfg.postgres_dsn)
     if board:
         REQUESTS.labels("parking", "ok").inc()
-        return {"decision_path": "RDS_DIRECT", "source": "rds", **_rds_summary(board)}
+        return {"decision_path": "RDS_DIRECT", "source": "rds",
+                **_summary_contract(_rds_summary(board))}
     REQUESTS.labels("parking", "error").inc()
     return {"decision_path": "UNAVAILABLE", "source": "unavailable",
-            "capacity": 0, "occupied": 0, "available": 0, "facilities": 0, "full": 0}
+            **_summary_contract({})}
 
 
 @router.get("/facilities")
@@ -219,8 +303,17 @@ async def history(vehicle_id: Optional[str] = Query(default=None),
     """Entry/exit transaction history from RDS."""
     q = {k: v for k, v in {"vehicle_id": vehicle_id, "limit": limit}.items() if v is not None}
     data = await _upstream(state, "/history?" + urlencode(q))
-    REQUESTS.labels("parking", "ok").inc()
-    return data if data is not None else {"count": 0, "transactions": []}
+    if data is not None:
+        REQUESTS.labels("parking", "ok").inc()
+        return {"decision_path": "LIVE", **data}
+    # Upstream (parking service) down → read the same RDS table directly so the
+    # Entry/Exit History and Vehicles tabs survive a parking-service outage.
+    txns = await _rds_history(state.cfg.postgres_dsn, vehicle_id, limit)
+    if txns is not None:
+        REQUESTS.labels("parking", "ok").inc()
+        return {"decision_path": "RDS_DIRECT", "count": len(txns), "transactions": txns}
+    REQUESTS.labels("parking", "error").inc()
+    return {"decision_path": "UNAVAILABLE", "count": 0, "transactions": []}
 
 
 @router.get("/violations")
@@ -228,5 +321,14 @@ async def violations(limit: int = Query(default=100, ge=1, le=1000),
                      state: GatewayState = Depends(get_state)) -> dict:
     """Parking violation / overflow events from RDS."""
     data = await _upstream(state, "/violations?" + urlencode({"limit": limit}))
-    REQUESTS.labels("parking", "ok").inc()
-    return data if data is not None else {"count": 0, "violations": []}
+    if data is not None:
+        REQUESTS.labels("parking", "ok").inc()
+        return {"decision_path": "LIVE", **data}
+    # Upstream (parking service) down → read core.parking_event directly so the
+    # Violations tab never silently shows 0 while the DB actually has rows.
+    viols = await _rds_violations(state.cfg.postgres_dsn, limit)
+    if viols is not None:
+        REQUESTS.labels("parking", "ok").inc()
+        return {"decision_path": "RDS_DIRECT", "count": len(viols), "violations": viols}
+    REQUESTS.labels("parking", "error").inc()
+    return {"decision_path": "UNAVAILABLE", "count": 0, "violations": []}

@@ -134,11 +134,13 @@ def test_facilities_outside_no_park_zones():
 
 
 def test_facilities_inside_geofenced_port_area():
-    # All facilities sit in the JNPA port box near the gates (~18.86..18.95 N,
-    # ~72.95..73.01 E).
+    # All facilities sit in the JNPA port box near the gates (~18.86..18.96 N,
+    # ~72.93..73.01 E). The western bound reaches ~72.938: the BMCT gate lot
+    # follows the BMCT gate, realigned onto the JNPA satellite reference (see
+    # migration 0012_gate_coords / the init.sql gate-centroid fix).
     for f in fac.FACILITIES:
         assert 18.85 <= f.lat <= 18.96
-        assert 72.94 <= f.lon <= 73.02
+        assert 72.93 <= f.lon <= 73.02
 
 
 # --- in-process API checks --------------------------------------------------

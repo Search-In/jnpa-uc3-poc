@@ -21,12 +21,28 @@ volumes:
   congestion-artifacts:
   anomaly-artifacts:
   kafka-data:
+  # ZooKeeper state (the Kafka cluster ID lives here). WITHOUT these, recreating
+  # the ZK container — e.g. the deploy's stale-container force-remove sweep — makes
+  # ZK come up with a NEW cluster ID while Kafka's persisted kafka-data still holds
+  # the old one, so the broker crash-loops on InconsistentClusterIdException.
+  zk-data:
+  zk-log:
 
 services:
   # --------------------------------------------------------------------------
-  # PostgreSQL + TimescaleDB
+  # PostgreSQL + TimescaleDB — LOCAL DEVELOPMENT ONLY (opt-in).
+  #
+  # The application database is AWS RDS (jnpa_schema_v3); every service reads
+  # its DSN from POSTGRES_DSN / *_POSTGRES_DSN and no service depends on or
+  # connects to this container. It is kept behind the "localdb" profile so it
+  # never starts in a demo/production deployment:
+  #
+  #   docker compose --profile localdb up -d postgres   # dev sandbox only
+  #
+  # (`make psql` / `make seed-*` targets also need that profile enabled.)
   # --------------------------------------------------------------------------
   postgres:
+    profiles: ["localdb"]
     image: timescale/timescaledb-ha:pg15-latest
     container_name: jnpa-postgres
     restart: unless-stopped
@@ -89,6 +105,11 @@ services:
       TZ: Etc/UTC
     networks:
       - jnpa
+    # Persist ZK state so the cluster ID is stable across container recreation.
+    # A fresh ZK would mint a new cluster ID and desync Kafka's persisted kafka-data.
+    volumes:
+      - zk-data:/var/lib/zookeeper/data
+      - zk-log:/var/lib/zookeeper/log
     healthcheck:
       # "srvr" is enabled by default; querying it proves ZK is serving on 2181.
       test: ["CMD-SHELL", "echo srvr | nc -w 2 localhost 2181 | grep -q Zookeeper"]
@@ -233,6 +254,20 @@ services:
       # default can never ship.
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      # Postgres datasource -> AWS RDS (see infra/grafana/provisioning/
+      # datasources/datasources.yml, which interpolates these). Never the
+      # dev-only local postgres container.
+      # Grafana's Postgres datasource host:port. REQUIRED — the RDS endpoint is
+      # deliberately not committed (docs/RDS_SECURITY.md); set GRAFANA_PG_HOST in
+      # .env.local rather than restoring a literal default here.
+      GRAFANA_PG_HOST: ${GRAFANA_PG_HOST:?set GRAFANA_PG_HOST (see docs/RDS_SECURITY.md)}
+      GRAFANA_PG_DB: ${GRAFANA_PG_DB:-jnpa_schema_v3}
+      GRAFANA_PG_USER: ${GRAFANA_PG_USER:-postgres}
+      GRAFANA_PG_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set (RDS password, used by the Grafana datasource)}
+      GRAFANA_PG_SSLMODE: ${GRAFANA_PG_SSLMODE:-require}
+      # Query-editor feature hint only (not a connection setting). RDS runs
+      # PostgreSQL 18; 1500 is the highest value older Grafana builds accept.
+      GRAFANA_PG_VERSION: ${GRAFANA_PG_VERSION:-1500}
       GF_USERS_DEFAULT_THEME: dark
       GF_SERVER_HTTP_PORT: "3000"
       TZ: Etc/UTC
@@ -333,7 +368,26 @@ services:
   # CPU-only; degrades to a classical detector + template OCR if paddle/weights
   # are unavailable (the /eval `engine` field reports which path ran).
   # --------------------------------------------------------------------------
+  # --------------------------------------------------------------------------
+  # ANPR (YOLOv8 detector + PaddleOCR PP-OCRv4 recogniser) — host 8301.
+  #
+  # PLATFORM (read before demoing accuracy): paddlepaddle 2.6 publishes NO
+  # linux/arm64 wheel, and ai/anpr/Dockerfile deliberately tolerates the failed
+  # install ("will run degraded"). An image BUILT ON APPLE SILICON therefore ships
+  # without a recogniser and reports 0.0 accuracy — a true number about the
+  # template-matching fallback, not a measurement of this stack.
+  #
+  # To get real accuracy, build for amd64 (Rosetta emulation, slower but works):
+  #     docker compose build --build-arg BUILDKIT_INLINE_CACHE=1 anpr
+  #     # or explicitly:
+  #     docker buildx build --platform linux/amd64 -f ai/anpr/Dockerfile -t jnpa/anpr-ai:0.1.0 .
+  # or run this one service on an x86_64 host.
+  #
+  # Set ANPR_PLATFORM=linux/amd64 in .env.local to force it here.
+  # Check which engine is live:  curl :8301/eval | jq .capability
+  # --------------------------------------------------------------------------
   anpr:
+    platform: ${ANPR_PLATFORM:-}
     build:
       context: .
       dockerfile: ai/anpr/Dockerfile
@@ -380,12 +434,9 @@ services:
     image: jnpa/vahan-sim:0.1.0
     container_name: jnpa-vahan-sim
     restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
     environment:
       PYTHONPATH: /app/ingest
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       VAHAN_BASE_URL: http://vahan-sim:8201
       VAHAN_SERVICE_NAME: vahan
       VAHAN_SERVICE_KIND: sim
@@ -406,6 +457,38 @@ services:
       - jnpa
 
   # --------------------------------------------------------------------------
+  # EIR / gate-slip OCR (Tesseract) — host 8210.
+  # Structured field extraction for terminal EIR photos. WIRED as of 2026-08-04:
+  # the gateway POSTs image uploads with doc_type=EIR|GATE_SLIP to
+  # http://eir-ocr:8210/infer (GATEWAY_EIR_OCR_URL) and uses the returned fields,
+  # falling back to its own reader when this service is unavailable. Still
+  # optional — /api/ocr keeps working without it, just at a lower rung.
+  # Check which rung is live with: GET /api/ocr/health -> active_rung.
+  # --------------------------------------------------------------------------
+  eir-ocr:
+    build:
+      context: .
+      dockerfile: ingest/eir_ocr/Dockerfile
+    image: jnpa/eir-ocr:0.1.0
+    container_name: jnpa-eir-ocr
+    restart: unless-stopped
+    environment:
+      PYTHONPATH: /app/ingest
+      PORT: "8210"
+      EIR_OCR_CACHE_SIZE: ${EIR_OCR_CACHE_SIZE:-64}
+      EIR_IMAGES_DIR: /data/eir
+      LOG_LEVEL: ${EIR_OCR_LOG_LEVEL:-INFO}
+      TZ: Etc/UTC
+    ports:
+      - "8210:8210"
+    volumes:
+      - ./ingest/eir_ocr:/app/ingest/eir_ocr:ro
+      # Workspace EIR photos (outside this repo) — override host path via EIR_HOST_DIR.
+      - ${EIR_HOST_DIR:-../EIR}:/data/eir:ro
+    networks:
+      - jnpa
+
+  # --------------------------------------------------------------------------
   # Vahan live adapter — proxies the same surface to Surepass's commercial KYC
   # API. FastAPI on host 8202. Returns 503 {"error":"live_disabled"} unless
   # SUREPASS_API_TOKEN is set; never falls back to the simulator (that is the
@@ -418,12 +501,9 @@ services:
     image: jnpa/vahan-live:0.1.0
     container_name: jnpa-vahan-live
     restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
     environment:
       PYTHONPATH: /app/ingest
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       VAHAN_BASE_URL: http://vahan-live:8202
       VAHAN_SERVICE_NAME: vahan
       VAHAN_SERVICE_KIND: live
@@ -493,8 +573,6 @@ services:
         condition: service_started
       kafka:
         condition: service_healthy
-      postgres:
-        condition: service_healthy
     command: ["rfid-consumer"]
     environment:
       PYTHONPATH: /app/ingest/rfid
@@ -503,7 +581,7 @@ services:
       KAFKA_BROKERS: kafka:9092
       RFID_TOPIC: rfid.reads
       # asyncpg libpq DSN (no SQLAlchemy "+asyncpg" prefix).
-      POSTGRES_DSN_LIBPQ: ${RFID_POSTGRES_DSN:-postgresql://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN_LIBPQ: ${RFID_POSTGRES_DSN:?RFID_POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       METRICS_PORT: "9102"
       LOG_LEVEL: ${RFID_LOG_LEVEL:-INFO}
       TZ: Etc/UTC
@@ -537,8 +615,6 @@ services:
         condition: service_started
       kafka:
         condition: service_healthy
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
     environment:
@@ -548,13 +624,21 @@ services:
       KAFKA_BROKERS: kafka:9092
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       # asyncpg libpq DSN (no SQLAlchemy "+asyncpg" prefix).
-      POSTGRES_DSN_LIBPQ: ${TRUCK_POSTGRES_DSN:-postgresql://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN_LIBPQ: ${TRUCK_POSTGRES_DSN:?TRUCK_POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       TRUCK_NUM_DEVICES: ${TRUCK_NUM_DEVICES:-20000}
       TRUCK_MAX_DEVICES: ${TRUCK_MAX_DEVICES:-30000}
+      TRUCK_ORIGIN_RADIUS_KM: ${TRUCK_ORIGIN_RADIUS_KM:-100}
       TRUCK_INTERVAL_S: ${TRUCK_INTERVAL_S:-5}
       TRUCK_INTERVAL_GATE_S: ${TRUCK_INTERVAL_GATE_S:-2}
       TRUCK_ETA_INTERVAL_S: ${TRUCK_ETA_INTERVAL_S:-30}
       TRUCK_DB_FLUSH_S: ${TRUCK_DB_FLUSH_S:-30}
+      # Gate lifecycle dwell times (seconds) — feed the Appendix-C gate KPIs.
+      # Lower these (+ TRUCK_ORIGIN_RADIUS_KM) to make gate events appear fast
+      # for a demo/verification without changing production behaviour.
+      TRUCK_GATE_DWELL_S: ${TRUCK_GATE_DWELL_S:-120}
+      TRUCK_GATE_TXN_DWELL_S: ${TRUCK_GATE_TXN_DWELL_S:-90}
+      TRUCK_PORT_DWELL_S: ${TRUCK_PORT_DWELL_S:-300}
+      TRUCK_IDLE_DWELL_S: ${TRUCK_IDLE_DWELL_S:-60}
       OSRM_BASE_URL: ${OSRM_BASE_URL:-https://router.project-osrm.org/route/v1/driving/}
       HERE_API_KEY: ${HERE_API_KEY:-}
       PORT: "8240"
@@ -585,8 +669,6 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
-      postgres:
-        condition: service_healthy
     command: ["rfid-correlator"]
     environment:
       PYTHONPATH: /app/ingest/rfid
@@ -596,7 +678,7 @@ services:
       CONFIRMED_TOPIC: vehicle.confirmed
       RFID_CORRELATION_WINDOW_S: ${RFID_CORRELATION_WINDOW_S:-5.0}
       RFID_CONFIRM_CONFIDENCE: ${RFID_CONFIRM_CONFIDENCE:-0.97}
-      POSTGRES_DSN_LIBPQ: ${RFID_POSTGRES_DSN:-postgresql://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN_LIBPQ: ${RFID_POSTGRES_DSN:?RFID_POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       METRICS_PORT: "9102"
       LOG_LEVEL: ${RFID_LOG_LEVEL:-INFO}
       TZ: Etc/UTC
@@ -631,8 +713,6 @@ services:
     container_name: jnpa-congestion
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
       minio:
@@ -646,6 +726,10 @@ services:
       HERE_API_KEY: ${HERE_API_KEY:-}
       TOMTOM_API_KEY: ${TOMTOM_API_KEY:-}
       # Training / target knobs.
+      # Per-source live-fetch budget for the google->here->tomtom cascade.
+      # Default 1 s is tighter than a cold TLS handshake on slow networks —
+      # override (e.g. 3) in .env.local when live keys are set.
+      CONGESTION_SOURCE_TIMEOUT_S: ${CONGESTION_SOURCE_TIMEOUT_S:-1.0}
       CONGESTION_HISTORY_DAYS: ${CONGESTION_HISTORY_DAYS:-14}
       CONGESTION_EPOCHS: ${CONGESTION_EPOCHS:-50}
       CONGESTION_TARGET_F1: ${CONGESTION_TARGET_F1:-0.85}
@@ -654,7 +738,7 @@ services:
       CONGESTION_PREDICTIONS_TOPIC: ${CONGESTION_PREDICTIONS_TOPIC:-traffic.predictions}
       CONGESTION_PUBLISH_INTERVAL_S: ${CONGESTION_PUBLISH_INTERVAL_S:-60}
       # asyncpg/psycopg libpq DSN (no SQLAlchemy "+asyncpg" prefix).
-      CONGESTION_POSTGRES_DSN: ${CONGESTION_POSTGRES_DSN:-postgresql://postgres:jnpa_pw@postgres:5432/postgres}
+      CONGESTION_POSTGRES_DSN: ${CONGESTION_POSTGRES_DSN:?CONGESTION_POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       KAFKA_BROKERS: kafka:9092
       MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
@@ -724,8 +808,6 @@ services:
     container_name: jnpa-anomaly
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
       kafka:
@@ -739,7 +821,7 @@ services:
       KAFKA_BROKERS: kafka:9092
       ANOMALY_ALERTS_TOPIC: ${ANOMALY_ALERTS_TOPIC:-alerts}
       # psycopg libpq DSN (no SQLAlchemy "+asyncpg" prefix).
-      ANOMALY_POSTGRES_DSN: ${ANOMALY_POSTGRES_DSN:-postgresql://postgres:jnpa_pw@postgres:5432/postgres}
+      ANOMALY_POSTGRES_DSN: ${ANOMALY_POSTGRES_DSN:?ANOMALY_POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       # Trucking-app control plane for the assigned-route lookup (route-deviation).
       ANOMALY_TRUCK_API_URL: ${ANOMALY_TRUCK_API_URL:-http://truck-sim:8240}
       # Rule thresholds (spec defaults; override per deployment).
@@ -815,8 +897,6 @@ services:
     profiles: ["train"]
     restart: "no"
     depends_on:
-      postgres:
-        condition: service_healthy
       minio:
         condition: service_healthy
     environment: *anomaly-env
@@ -853,8 +933,6 @@ services:
     container_name: jnpa-gateway
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
       kafka:
@@ -865,6 +943,11 @@ services:
       PYTHONPATH: /app
       PORT: "8000"
       PWA_PAIRING_SECRET: ${PWA_PAIRING_SECRET}
+      # PWA login eligibility gate. When true, POST /api/auth/device-token only
+      # mints a DRIVER token if the entered Vehicle ID is assigned to an ACTIVE
+      # driver (jnpa.drivers); otherwise 403 "Vehicle is not assigned to an active
+      # driver". Default false for migration safety; set true in production/demo.
+      REQUIRE_DRIVER_PROFILE: ${REQUIRE_DRIVER_PROFILE:-false}
       # Upstream services (jnpa network names).
       GATEWAY_ANPR_URL: ${GATEWAY_ANPR_URL:-http://anpr:8301}
       GATEWAY_VAHAN_SIM_URL: ${GATEWAY_VAHAN_SIM_URL:-http://vahan-sim:8201}
@@ -879,9 +962,18 @@ services:
       GATEWAY_GATE_DATA_URL: ${GATEWAY_GATE_DATA_URL:-http://gate-data:8350}
       GATEWAY_IDENTITY_URL: ${GATEWAY_IDENTITY_URL:-http://identity:8360}
       GATEWAY_PARKING_URL: ${GATEWAY_PARKING_URL:-http://parking:8370}
+      # EIR / gate-slip OCR sidecar. POST /api/ocr/document with doc_type=EIR now
+      # routes here for a REAL structured field read (validated against the four
+      # WhatsApp gate slips) and falls back to the local reader when it is down.
+      # Set empty to disable the LIVE rung entirely.
+      GATEWAY_EIR_OCR_URL: ${GATEWAY_EIR_OCR_URL:-http://eir-ocr:8210}
       # ULIP relay — empty -> mock relay used for the SECONDARY truck rung.
       GATEWAY_ULIP_URL: ${GATEWAY_ULIP_URL:-}
       ULIP_API_KEY: ${ULIP_API_KEY:-}
+      # NOTE: LDB_BASE_URL / LDB_API_KEY are declared ONCE, further down with the
+      # other ULIP/LDB integration vars. They used to be declared here too (two
+      # branches added the same pair independently and the merge kept both),
+      # which made compose fail to parse: duplicate mapping key.
       # FASTag ULIP APIs (/api/fastag/*). All env-driven — NO hardcoded vendor URL.
       # Empty FASTAG_ULIP_URL -> demo fallback (below) when FASTAG_DEMO_MODE=true,
       # else a config error (HTTP 500). Paths + auth scheme stay configurable
@@ -904,18 +996,103 @@ services:
       FASTAG_ULIP_RETRIES: ${FASTAG_ULIP_RETRIES:-2}
       # Surepass token drives the LIVE_PRIMARY vahan rung (empty -> LIVE_FALLBACK).
       SUREPASS_API_TOKEN: ${SUREPASS_API_TOKEN:-}
+      # Open-Meteo Weather + Marine (/api/weather). Free public APIs — no account,
+      # no API key. Empty -> the client's public defaults (api.open-meteo.com /
+      # marine-api.open-meteo.com); set to point at a proxy or self-hosted stack.
+      # Failure never breaks the API: LIVE -> CACHED (Redis/DB) -> SYNTHETIC.
+      OPEN_METEO_WEATHER_URL: ${OPEN_METEO_WEATHER_URL:-}
+      OPEN_METEO_MARINE_URL: ${OPEN_METEO_MARINE_URL:-}
+      OPEN_METEO_TIMEOUT_S: ${OPEN_METEO_TIMEOUT_S:-5}
+      OPEN_METEO_RETRIES: ${OPEN_METEO_RETRIES:-2}
+      # OpenWeatherMap enrichment for /api/weather (openweather block). The key
+      # is BACKEND-ONLY (never a VITE_ variable, never called from the browser).
+      # Empty key -> provider disabled and /api/weather serves Open-Meteo alone;
+      # an OpenWeather outage degrades only its block, never the API.
+      OPENWEATHER_API_KEY: ${OPENWEATHER_API_KEY:-}
+      OPENWEATHER_URL: ${OPENWEATHER_URL:-}
+      OPENWEATHER_TIMEOUT_S: ${OPENWEATHER_TIMEOUT_S:-5}
+      OPENWEATHER_RETRIES: ${OPENWEATHER_RETRIES:-2}
+      # WorldTides tide block for /api/weather (tide heights + next high/low).
+      # The key is BACKEND-ONLY (never a VITE_ variable, never called from the
+      # browser). Empty key -> the WorldTides LIVE rung is disabled and the
+      # tide block degrades through Open-Meteo marine sea level -> CACHED ->
+      # ANALYTIC (clearly-tagged model); an outage never breaks the API.
+      WORLDTIDES_API_KEY: ${WORLDTIDES_API_KEY:-}
+      WORLDTIDES_BASE_URL: ${WORLDTIDES_BASE_URL:-}
+      WORLDTIDES_TIMEOUT_S: ${WORLDTIDES_TIMEOUT_S:-5}
+      WORLDTIDES_RETRIES: ${WORLDTIDES_RETRIES:-2}
+      GATEWAY_CACHE_TTL_WEATHER_S: ${GATEWAY_CACHE_TTL_WEATHER_S:-600}
+      # TomTom Traffic Flow + Incidents for /api/traffic/current. The key is
+      # BACKEND-ONLY (never a VITE_ variable, never called from the browser).
+      # Empty key -> LIVE rung disabled and the surface degrades through
+      # CACHED (Redis) -> DATABASE -> SYNTHETIC; an outage never breaks the API.
+      TOMTOM_API_KEY: ${TOMTOM_API_KEY:-}
+      TOMTOM_FLOW_URL: ${TOMTOM_FLOW_URL:-}
+      TOMTOM_INCIDENTS_URL: ${TOMTOM_INCIDENTS_URL:-}
+      TOMTOM_ROUTING_URL: ${TOMTOM_ROUTING_URL:-}
+      TOMTOM_TIMEOUT_S: ${TOMTOM_TIMEOUT_S:-5}
+      TOMTOM_RETRIES: ${TOMTOM_RETRIES:-2}
+      GATEWAY_CACHE_TTL_TOMTOM_S: ${GATEWAY_CACHE_TTL_TOMTOM_S:-120}
+      # OpenAQ Air Quality (backend-only, /api/air-quality/* surfaces). NO key
+      # required — OPENAQ_API_KEY is optional and only raises the platform
+      # rate limit; an outage degrades LIVE -> CACHED -> DATABASE -> SYNTHETIC.
+      OPENAQ_API_URL: ${OPENAQ_API_URL:-https://api.openaq.org/v3}
+      OPENAQ_API_KEY: ${OPENAQ_API_KEY:-}
+      OPENAQ_TIMEOUT_S: ${OPENAQ_TIMEOUT_S:-5}
+      OPENAQ_RETRIES: ${OPENAQ_RETRIES:-2}
+      GATEWAY_CACHE_TTL_OPENAQ_S: ${GATEWAY_CACHE_TTL_OPENAQ_S:-300}
+      # Bhuvan WMS (ISRO/NRSC geospatial layer, /api/bhuvan). NO key required —
+      # the gateway is control-plane only (GetCapabilities + layer config); the
+      # browser renders the WMS tiles directly. BHUVAN_ENABLED=false hides the
+      # layer from the frontend without touching code.
+      BHUVAN_WMS_URL: ${BHUVAN_WMS_URL:-https://bhuvan-vec1.nrsc.gov.in/bhuvan/wms}
+      BHUVAN_LAYER: ${BHUVAN_LAYER:-india3}
+      BHUVAN_ENABLED: ${BHUVAN_ENABLED:-true}
+      BHUVAN_TIMEOUT_S: ${BHUVAN_TIMEOUT_S:-5}
+      BHUVAN_RETRIES: ${BHUVAN_RETRIES:-2}
+      # ULIP Logistics Intelligence (/api/logistics/*). Credentials are
+      # BACKEND-ONLY (never a VITE_ variable, never called from the browser).
+      # Auth: ULIP_CLIENT_ID + ULIP_CLIENT_SECRET (login-token flow) or the
+      # pre-issued ULIP_API_KEY above. No credential -> LIVE rung disabled and
+      # the surfaces degrade through CACHED (Redis) -> DATABASE -> FALLBACK
+      # (explicitly empty, clearly tagged); an outage never breaks the API.
+      ULIP_API_URL: ${ULIP_API_URL:-}
+      ULIP_CLIENT_ID: ${ULIP_CLIENT_ID:-}
+      ULIP_CLIENT_SECRET: ${ULIP_CLIENT_SECRET:-}
+      ULIP_TIMEOUT_S: ${ULIP_TIMEOUT_S:-5}
+      ULIP_RETRIES: ${ULIP_RETRIES:-2}
+      ULIP_TOKEN_TTL_S: ${ULIP_TOKEN_TTL_S:-1800}
+      ULIP_FASTAG_API: ${ULIP_FASTAG_API:-}
+      ULIP_LDB_API: ${ULIP_LDB_API:-}
+      # Logistics Data Bank / NLDS adapter behind /api/ldb/*. The SOLE definition
+      # of this pair — do not re-declare it in this mapping (duplicate YAML keys
+      # make `docker compose` refuse to parse the file at all).
+      # Set => POST {LDB_BASE_URL}/truck/search runs LIVE; empty => deterministic
+      # MOCK (gateway/integrations.py picks the rung and audits either way).
+      LDB_BASE_URL: ${LDB_BASE_URL:-}
+      LDB_API_KEY: ${LDB_API_KEY:-}
+      # Local/dev: allow gateway modules to self-apply idempotent DDL when the
+      # volume has only init.sql (jnpa.*) and not the schema-v3 core.* migrations.
+      # Keep unset / 0 on RDS/schema-v3 where infra/postgres/v3 owns DDL.
+      JNPA_RUNTIME_DDL: ${JNPA_RUNTIME_DDL:-1}
+      GATEWAY_CACHE_TTL_ULIP_S: ${GATEWAY_CACHE_TTL_ULIP_S:-300}
       # Infra.
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       KAFKA_BROKERS: kafka:9092
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
       # MinIO for driver-enrolment reference photos (gateway/objectstore.py).
-      # Absent creds -> enrolment keeps the base64 frame in Postgres (graceful).
+      # Absent creds -> enrollment keeps the base64 frame in Postgres (graceful).
       MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-}
       MINIO_SECURE: ${MINIO_SECURE:-false}
+      # Browser-reachable S3 host used to MINT presigned photo URLs (the in-network
+      # minio:9000 host is not resolvable from a browser). Set to the public S3
+      # host (e.g. minio.example.com) in prod; empty falls back to MINIO_ENDPOINT.
+      MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-}
+      MINIO_PUBLIC_SECURE: ${MINIO_PUBLIC_SECURE:-}
       DRIVER_ENROL_BUCKET: ${DRIVER_ENROL_BUCKET:-driver-enrolment}
       DRIVER_ENROL_URL_BASE: ${DRIVER_ENROL_URL_BASE:-}
       # Auth + RBAC (SEC-1/SEC-2). APP_ENV drives the fail-fast startup guard in
@@ -927,9 +1104,17 @@ services:
       # Dev-only resilience fallbacks (in-memory store / base64 photo / synthetic
       # identity). Production forces strict regardless; set false belt-and-braces.
       ALLOW_FALLBACK: ${ALLOW_FALLBACK:-true}
-      AUTH_ENABLED: ${AUTH_ENABLED:-false}
+      # Enforcement ON by default. This defaulted to `false`, which meant a
+      # plain `make up` served the whole driver registry (~31.8k real licence
+      # numbers + dates of birth) to any unauthenticated caller. Turning it off
+      # is now the deliberate act, not the accident.
+      AUTH_ENABLED: ${AUTH_ENABLED:-true}
       AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-}
       AUTH_DEV_TOKENS: ${AUTH_DEV_TOKENS:-true}
+      # DPDP PII masking (gateway/pii.py). Opt-OUT and fails closed: with no
+      # principal every response is masked. Only these roles see cleartext.
+      PII_MASKING_ENABLED: ${PII_MASKING_ENABLED:-true}
+      PII_UNMASK_ROLES: ${PII_UNMASK_ROLES:-DTCCC_ADMIN,CUSTOMS}
       AUTH_RATE_LIMIT_PER_MIN: ${AUTH_RATE_LIMIT_PER_MIN:-600}
       AUTH_USERS: ${AUTH_USERS:-}
       # Shared secret accepted from trusted internal services (the scenarios-runner)
@@ -950,6 +1135,17 @@ services:
       VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:ops@jnpa-uc3.example}
+      # Firebase Cloud Messaging (THIRD push transport, added alongside WebPush +
+      # WebSocket). The Admin-SDK service-account JSON is mounted read-only via the
+      # `volumes:` block below (host ${FIREBASE_SECRETS_DIR:-./secrets} ->
+      # /run/secrets/firebase); point FIREBASE_SERVICE_ACCOUNT_PATH at the file,
+      # e.g. /run/secrets/firebase/firebase-adminsdk.json. All blank -> FCM stays
+      # disabled and delivery falls back to WebPush/WS (demo-safe, gateway/firebase.py).
+      # GOOGLE_APPLICATION_CREDENTIALS / FIREBASE_CREDENTIALS_JSON are honoured too.
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
+      FIREBASE_SERVICE_ACCOUNT_PATH: ${FIREBASE_SERVICE_ACCOUNT_PATH:-}
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
+      FIREBASE_CREDENTIALS_JSON: ${FIREBASE_CREDENTIALS_JSON:-}
       LOG_LEVEL: ${GATEWAY_LOG_LEVEL:-INFO}
       OTEL_SERVICE_NAME: gateway
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4317}
@@ -962,6 +1158,15 @@ services:
       # FASTag integration layer — imported by the /api/fastag router. Mounted
       # read-only so local edits are picked up (matches the ./gateway mount).
       - ./services:/app/services:ro
+      # External-API integration packages (Open-Meteo) — imported by
+      # services.weather via PYTHONPATH=/app (matches the ./services mount).
+      - ./integrations:/app/integrations:ro
+      # Firebase Admin-SDK service-account key(s). Host dir (gitignored `secrets/`,
+      # override with FIREBASE_SECRETS_DIR) mounted read-only at /run/secrets/firebase.
+      # Drop the JSON in there and set FIREBASE_SERVICE_ACCOUNT_PATH to its container
+      # path. Absent/empty dir -> no key -> FCM stays disabled (graceful fallback);
+      # Docker auto-creates the dir so `up` never fails when no key is present.
+      - ${FIREBASE_SECRETS_DIR:-./secrets}:/run/secrets/firebase:ro
     networks:
       - jnpa
 
@@ -980,7 +1185,7 @@ services:
     environment:
       PYTHONPATH: /app
       PORT: "8330"
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       LOG_LEVEL: ${EMPTY_CONTAINER_LOG_LEVEL:-INFO}
       TZ: Etc/UTC
     ports:
@@ -1005,7 +1210,7 @@ services:
     environment:
       PYTHONPATH: /app
       PORT: "8340"
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       LOG_LEVEL: ${CARBON_LOG_LEVEL:-INFO}
       TZ: Etc/UTC
     ports:
@@ -1030,9 +1235,14 @@ services:
     environment:
       PYTHONPATH: /app
       PORT: "8350"
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       LOG_LEVEL: ${GATE_DATA_LOG_LEVEL:-INFO}
       TZ: Etc/UTC
+      # Phase 4 — ICEGATE Customs Adapter feature flag. Empty (default) keeps ICEGATE
+      # on the seed simulator (SIM). Set GATE_ICEGATE_ADAPTER=customs to serve REAL
+      # ICEGATE captures from the customs tables (module 5); flip back by clearing it.
+      # e-Seal / Form-13 / Weighbridge are unaffected (remain SIM).
+      GATE_ICEGATE_ADAPTER: ${GATE_ICEGATE_ADAPTER:-}
     ports:
       - "8350:8350"
     volumes:
@@ -1105,7 +1315,7 @@ services:
     environment:
       PYTHONPATH: /app
       PORT: "8370"
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       LOG_LEVEL: ${PARKING_LOG_LEVEL:-INFO}
       TZ: Etc/UTC
     ports:
@@ -1134,8 +1344,6 @@ services:
     container_name: jnpa-scenarios
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
       kafka:
         condition: service_healthy
       gateway:
@@ -1154,7 +1362,7 @@ services:
       SCENARIOS_TRUCK_URL: ${SCENARIOS_TRUCK_URL:-http://truck-sim:8240}
       SCENARIOS_CONGESTION_URL: ${SCENARIOS_CONGESTION_URL:-http://congestion:8311}
       SCENARIOS_ANOMALY_URL: ${SCENARIOS_ANOMALY_URL:-http://anomaly:8321}
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres}
+      POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       KAFKA_BROKERS: kafka:9092
       SCENARIOS_FORECAST_ATTEMPTS: ${SCENARIOS_FORECAST_ATTEMPTS:-6}

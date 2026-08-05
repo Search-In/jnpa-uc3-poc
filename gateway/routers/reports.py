@@ -25,7 +25,7 @@ import html
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from ..logging import get_logger
 from ..metrics import REQUESTS
@@ -64,6 +64,21 @@ _CHALLAN: Dict[str, Dict[str, Any]] = {
 }
 
 
+def _parse_ts(value: str) -> datetime:
+    """Parse an ISO-8601 query param into an aware datetime.
+
+    asyncpg binds ``timestamptz`` params as datetimes, not strings — a raw
+    string here raises inside the driver and the report silently comes back
+    empty. Naive inputs are treated as UTC.
+    """
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=422,
+                            detail={"error": "bad_timestamp", "value": value})
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
 async def _police_alerts(
     state: GatewayState,
     *,
@@ -96,14 +111,14 @@ async def _police_alerts(
         params["severity"] = severity
     if since:
         clauses.append("ts >= :since")
-        params["since"] = since
+        params["since"] = _parse_ts(since)
     if until:
         clauses.append("ts <= :until")
-        params["until"] = until
+        params["until"] = _parse_ts(until)
     where = " AND ".join(clauses)
     sql = f"""
         SELECT id, ts, kind, severity, gate_id, plate, payload, ack
-        FROM jnpa.alerts
+        FROM core.alert
         WHERE {where}
         ORDER BY ts DESC
         LIMIT :limit
@@ -111,7 +126,7 @@ async def _police_alerts(
     try:
         rows = await fetch_all(sql, params, dsn=state.cfg.postgres_dsn)
     except Exception as exc:  # pragma: no cover - infra-timing dependent
-        log.debug("police_alerts_failed", error=str(exc))
+        log.warning("police_alerts_failed", error=str(exc))
         return []
     out = []
     for r in rows:
@@ -134,7 +149,7 @@ async def _enrich_rc(state: GatewayState, plates: List[str]) -> Dict[str, dict]:
             """
             SELECT plate, owner_name_masked, vehicle_class, state, rto_code,
                    fastag_status, blacklist_status
-            FROM jnpa.vehicle_master
+            FROM core.vehicle_rc
             WHERE plate = ANY(:plates)
             """,
             {"plates": plates},

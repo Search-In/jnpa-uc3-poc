@@ -2,7 +2,7 @@
 
 ``AuditingAsyncClient`` is a drop-in ``httpx.AsyncClient`` used by ``GatewayState``.
 It transparently records EVERY external API request/response to
-``jnpa.api_audit_log`` (via gateway.audit.log_api_audit) with:
+``core.api_audit_log`` (via gateway.audit.log_api_audit) with:
 
     request payload · response payload · status code · latency (ms) · error
 

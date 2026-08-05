@@ -14,6 +14,10 @@ import { Card, CardContent } from "@/components/ui/card";
 import { ThroughputChart } from "@/components/ThroughputChart";
 import { KpiStrip } from "@/components/panels/KpiStrip";
 import { CarbonTile } from "@/components/panels/CarbonTile";
+import { WeatherTile } from "@/components/panels/WeatherTile";
+import { TrafficTile } from "@/components/panels/TrafficTile";
+import { AirQualityTile } from "@/components/panels/AirQualityTile";
+import { LogisticsTile } from "@/components/panels/LogisticsTile";
 import { EmptyContainerBoard } from "@/components/panels/EmptyContainerBoard";
 import { TasWidget } from "@/components/panels/TasWidget";
 import { ParkingBoard } from "@/components/panels/ParkingBoard";
@@ -30,6 +34,7 @@ import {
   type Tone,
 } from "@/components/ui/dtccc";
 import { useSocket } from "@/hooks/SocketContext";
+import { useRefresh } from "@/lib/refresh";
 import { severityColour } from "@/lib/palette";
 import { MAP_TOKENS, STATUS } from "@/lib/tokens";
 import { useClickOutside } from "@/hooks/useClickOutside";
@@ -98,39 +103,38 @@ export default function LiveOperations() {
   const gatesQ = useQuery({
     queryKey: ["gates"],
     queryFn: () => getAdapter().gates(),
-    refetchInterval: 10_000,
   });
   const snapsQ = useQuery({
     queryKey: ["snapshots"],
     queryFn: () => getAdapter().trafficSnapshots(),
-    refetchInterval: 8_000,
   });
   const zonesQ = useQuery({ queryKey: ["zones"], queryFn: () => getAdapter().zones() });
   const trucksQ = useQuery({
     queryKey: ["trucks", "live-map"],
     queryFn: () => getAdapter().trucks(undefined, 500),
-    refetchInterval: 5_000,
   });
   const queuedQ = useQuery({
     queryKey: ["trucks", "AT_GATE_QUEUE"],
     queryFn: () => getAdapter().trucks("AT_GATE_QUEUE", 500),
-    refetchInterval: 6_000,
   });
   const parkingQ = useQuery({
     queryKey: ["parking-availability"],
     queryFn: () => getAdapter().parkingAvailability(),
-    refetchInterval: 10_000,
   });
   // Prediction carries a decision_path → surfaced as a LIVE/SYNTHETIC badge.
   const predictQ = useQuery({
     queryKey: ["traffic-predict"],
     queryFn: () => getAdapter().trafficPredict(),
-    refetchInterval: 15_000,
   });
 
-  // --- WebSocket → cache bridge (real-time primary) ------------------------
+  // --- WebSocket → cache bridge (real-time, opt-in) ------------------------
+  // Live push updates re-fetch the map/traffic caches — but ONLY while the user
+  // has Auto-Refresh enabled. With Auto-Refresh Off the socket stays connected
+  // for critical-alert notifications, yet never forces a data refresh, so an
+  // operator can inspect a frozen snapshot without it moving underneath them.
   const qc = useQueryClient();
   const { status: wsStatus, subscribe } = useSocket();
+  const { autoRefreshOn } = useRefresh();
   const lastInvalidatedRef = useRef<Record<string, number>>({});
   const invalidateThrottled = useCallback(
     (key: unknown[], tag: string) => {
@@ -142,6 +146,7 @@ export default function LiveOperations() {
     [qc],
   );
   useEffect(() => {
+    if (!autoRefreshOn) return;
     const unsub = subscribe((frame) => {
       if (frame.type === "truck_position") {
         invalidateThrottled(["trucks"], "trucks");
@@ -150,7 +155,7 @@ export default function LiveOperations() {
       }
     });
     return unsub;
-  }, [subscribe, invalidateThrottled]);
+  }, [subscribe, invalidateThrottled, autoRefreshOn]);
 
   const lastUpdated = Math.max(
     trucksQ.dataUpdatedAt || 0,
@@ -263,145 +268,154 @@ export default function LiveOperations() {
   const mapHighlights = useMemo(() => [...spotlight, ...simHighlights], [spotlight, simHighlights]);
   const effectiveFocus = focusPoint ?? selectedFocus ?? simFocusPoint;
 
+  // ECY TRT and Double Trip moved OUT of this screen to /truck-ops: they are
+  // truck turn-round metrics, not corridor traffic. Legacy ?tab=trt /
+  // ?tab=double-trip links are redirected there so old bookmarks still resolve.
   return (
     <PageContainer>
-      <PageHeader
-        icon={TruckIcon}
-        title={t("navGroup.traffic")}
-        subtitle={t("app.corridor")}
-        updatedAt={lastUpdated}
-        isFetching={anyFetching}
-        onRefresh={() => qc.invalidateQueries()}
-        actions={
-          <div className="flex items-center gap-2">
-            <DecisionPathBadge path={predictQ.data?.decision_path} />
-            <RealtimePill wsOpen={wsStatus === "open"} fetching={anyFetching} />
-          </div>
-        }
-      />
+      <div>
+        <PageHeader
+          icon={TruckIcon}
+          title={t("navGroup.traffic")}
+          subtitle={t("app.corridor")}
+          updatedAt={lastUpdated}
+          isFetching={anyFetching}
+          onRefresh={() => qc.invalidateQueries()}
+          actions={
+            <div className="flex items-center gap-2">
+              <DecisionPathBadge path={predictQ.data?.decision_path} />
+              <RealtimePill wsOpen={wsStatus === "open"} fetching={anyFetching} />
+            </div>
+          }
+        />
 
-      {/* KPI strip */}
-      <div className="border-b border-border px-4 py-2.5">
-        <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          {t("liveOps.corridorKpis")}
-        </h2>
-        <KpiStrip />
-      </div>
+        {/* KPI strip */}
+        <div className="border-b border-border px-4 py-2.5">
+          <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            {t("liveOps.corridorKpis")}
+          </h2>
+          <KpiStrip />
+        </div>
 
-      {/* Gate throughput + queue tiles. */}
-      <div className="grid grid-cols-2 gap-2.5 border-b border-border px-4 py-2.5 md:grid-cols-5">
-        {gates.map((g) => (
-          <Card key={g.id}>
-            <CardContent className="flex flex-col gap-1 py-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-medium text-muted-foreground">
-                  {g.id.replace("G-", "")}
-                </span>
-                <Badge
-                  colour={severityColour(g.utilisation && g.utilisation >= 1 ? "critical" : "ok")}
-                >
-                  {Math.round((g.utilisation ?? 0) * 100)}%
-                </Badge>
-              </div>
-              <div className="text-xl font-semibold tabular-nums">
-                {g.throughput_60min}
-                <span className="ml-1 text-xs font-normal text-muted-foreground">
-                  /{g.target_vph} {t("kpiUnit.vph")}
-                </span>
-              </div>
-              <div className="text-[11px] text-muted-foreground">
-                {t("liveOps.queue")} {queueByGate.get(g.id) ?? 0} · {t("liveOps.target")}{" "}
-                {g.target_vph}/h
+        {/* Gate throughput + queue tiles. */}
+        <div className="grid grid-cols-2 gap-2.5 border-b border-border px-4 py-2.5 md:grid-cols-5">
+          {gates.map((g) => (
+            <Card key={g.id}>
+              <CardContent className="flex flex-col gap-1 py-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    {g.id.replace("G-", "")}
+                  </span>
+                  <Badge
+                    colour={severityColour(g.utilisation && g.utilisation >= 1 ? "critical" : "ok")}
+                  >
+                    {Math.round((g.utilisation ?? 0) * 100)}%
+                  </Badge>
+                </div>
+                <div className="text-xl font-semibold tabular-nums">
+                  {g.throughput_60min}
+                  <span className="ml-1 text-xs font-normal text-muted-foreground">
+                    /{g.target_vph} {t("kpiUnit.vph")}
+                  </span>
+                </div>
+                <div className="text-[11px] text-muted-foreground">
+                  {t("liveOps.queue")} {queueByGate.get(g.id) ?? 0} · {t("liveOps.target")}{" "}
+                  {g.target_vph}/h
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+          <Card className="col-span-2 md:col-span-1">
+            <CardContent className="flex h-full flex-col py-2">
+              <span className="mb-1 text-[11px] font-medium text-muted-foreground">
+                {t("liveOps.throughputTrend")}
+              </span>
+              <div className="min-h-[64px] flex-1">
+                <ThroughputChart />
               </div>
             </CardContent>
           </Card>
-        ))}
-        <Card className="col-span-2 md:col-span-1">
-          <CardContent className="flex h-full flex-col py-2">
-            <span className="mb-1 text-[11px] font-medium text-muted-foreground">
-              {t("liveOps.throughputTrend")}
-            </span>
-            <div className="min-h-[64px] flex-1">
-              <ThroughputChart />
+          {gatesQ.isLoading && (
+            <div className="col-span-full flex items-center gap-2 text-sm text-muted-foreground">
+              <Spinner /> {t("liveOps.loadingGateKpis")}
             </div>
-          </CardContent>
-        </Card>
-        {gatesQ.isLoading && (
-          <div className="col-span-full flex items-center gap-2 text-sm text-muted-foreground">
-            <Spinner /> {t("liveOps.loadingGateKpis")}
+          )}
+          {gatesQ.isError && (
+            <div className="col-span-full">
+              <ErrorState
+                onRetry={() => gatesQ.refetch()}
+                detail={(gatesQ.error as Error)?.message}
+              />
+            </div>
+          )}
+        </div>
+
+        {/* Split layout: filters + vehicle list | large live map. */}
+        <div className="grid grid-cols-1 gap-3 px-4 py-3 lg:grid-cols-[300px_1fr]">
+          <VehicleRail
+            trucks={filteredTrucks}
+            total={allTrucks.length}
+            isLoading={trucksQ.isLoading}
+            isError={trucksQ.isError}
+            onRetry={() => trucksQ.refetch()}
+            fState={fState}
+            setFState={setFState}
+            fGate={fGate}
+            setFGate={setFGate}
+            search={vsearch}
+            setSearch={setVsearch}
+            stateOptions={stateOptions}
+            gateOptions={gateOptions}
+            selected={selected}
+            onSelect={setSelected}
+          />
+          <div className="relative min-h-[520px] overflow-hidden rounded-lg border border-border">
+            <ArcgisMap
+              basemap={basemap}
+              corridor={corridorQ.data}
+              gates={gates}
+              zones={zonesQ.data}
+              snapshots={snapshots}
+              trucks={filteredTrucks}
+              parkingFacilities={parkingQ.data}
+              highlights={mapHighlights}
+              highlightLabels={highlightLabels}
+              focusPoint={effectiveFocus}
+              onViewReady={setView}
+            />
+            <FloatingLegend />
           </div>
-        )}
-        {gatesQ.isError && (
-          <div className="col-span-full">
-            <ErrorState
-              onRetry={() => gatesQ.refetch()}
-              detail={(gatesQ.error as Error)?.message}
+        </div>
+
+        {/* Selected-vehicle detail (Trip / ETA / Driver / History / Violations). */}
+        {selected && (
+          <div className="px-4 pb-3">
+            <VehicleDetail
+              truck={selected}
+              intel={intelQ.data}
+              status={intelQ}
+              onClose={() => setSelected(null)}
             />
           </div>
         )}
-      </div>
 
-      {/* Split layout: filters + vehicle list | large live map. */}
-      <div className="grid grid-cols-1 gap-3 px-4 py-3 lg:grid-cols-[300px_1fr]">
-        <VehicleRail
-          trucks={filteredTrucks}
-          total={allTrucks.length}
-          isLoading={trucksQ.isLoading}
-          isError={trucksQ.isError}
-          onRetry={() => trucksQ.refetch()}
-          fState={fState}
-          setFState={setFState}
-          fGate={fGate}
-          setFGate={setFGate}
-          search={vsearch}
-          setSearch={setVsearch}
-          stateOptions={stateOptions}
-          gateOptions={gateOptions}
-          selected={selected}
-          onSelect={setSelected}
-        />
-        <div className="relative min-h-[520px] overflow-hidden rounded-lg border border-border">
-          <ArcgisMap
-            basemap={basemap}
-            corridor={corridorQ.data}
-            gates={gates}
-            zones={zonesQ.data}
-            snapshots={snapshots}
-            trucks={filteredTrucks}
-            parkingFacilities={parkingQ.data}
-            highlights={mapHighlights}
-            highlightLabels={highlightLabels}
-            focusPoint={effectiveFocus}
-            onViewReady={setView}
-          />
-          <FloatingLegend />
+        {/* Appendix-C capability tiles (DTCCC view) + live port weather/traffic. */}
+        <div className="grid grid-cols-1 gap-2.5 border-t border-border px-4 py-2.5 md:grid-cols-2 lg:grid-cols-3">
+          <WeatherTile />
+          <TrafficTile />
+          <AirQualityTile />
+          <LogisticsTile />
+          <CarbonTile />
+          <ParkingBoard />
+          <EmptyContainerBoard />
         </div>
-      </div>
 
-      {/* Selected-vehicle detail (Trip / ETA / Driver / History / Violations). */}
-      {selected && (
-        <div className="px-4 pb-3">
-          <VehicleDetail
-            truck={selected}
-            intel={intelQ.data}
-            status={intelQ}
-            onClose={() => setSelected(null)}
-          />
+        {/* Operations row — TAS, Auto-LEO gate-out queue, Customs alert feed. */}
+        <div className="grid grid-cols-1 items-stretch gap-2.5 border-t border-border px-4 py-2.5 md:grid-cols-2 lg:grid-cols-3">
+          <TasWidget />
+          <AutoLeoPanel />
+          <CustomsFeedPanel />
         </div>
-      )}
-
-      {/* Appendix-C capability tiles (DTCCC view). */}
-      <div className="grid grid-cols-1 gap-2.5 border-t border-border px-4 py-2.5 md:grid-cols-2 lg:grid-cols-3">
-        <CarbonTile />
-        <ParkingBoard />
-        <EmptyContainerBoard />
-      </div>
-
-      {/* Operations row — TAS, Auto-LEO gate-out queue, Customs alert feed. */}
-      <div className="grid grid-cols-1 items-stretch gap-2.5 border-t border-border px-4 py-2.5 md:grid-cols-2 lg:grid-cols-3">
-        <TasWidget />
-        <AutoLeoPanel />
-        <CustomsFeedPanel />
       </div>
     </PageContainer>
   );

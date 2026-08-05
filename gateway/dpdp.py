@@ -31,7 +31,7 @@ _audit_log = get_logger("gateway.identity.audit")
 ALLOWED_PURPOSES: frozenset[str] = frozenset(
     {
         "GATE_VERIFICATION",   # verify a driver at a gate (primary PoC purpose)
-        "ENROLMENT",           # enrol a consented driver into the gallery
+        "ENROLMENT",           # enroll a consented driver into the gallery
         "AUDIT_REVIEW",        # control-room review of a prior decision
     }
 )

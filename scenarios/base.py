@@ -1,7 +1,7 @@
 """Shared helpers the three scenarios build on.
 
 * HTTP helpers against the gateway / truck-sim / congestion / anomaly.
-* ``nudge_segments`` — writes high-jam ``jnpa.traffic_snapshots`` rows for a set
+* ``nudge_segments`` — writes high-jam ``core.traffic_snapshot`` rows for a set
   of corridor segments so the forecaster's feature window (and the live map
   overlay) actually reflect a build-up. Per the design decision, scenarios are
   "best-effort + nudge": they make the world reflect the scenario, poll the
@@ -109,7 +109,7 @@ async def nudge_segments(
         try:
             await execute(
                 """
-                INSERT INTO jnpa.traffic_snapshots (ts, segment_id, speed_kmh, jam_factor, source)
+                INSERT INTO core.traffic_snapshot (ts, segment_id, speed_kmh, jam_factor, source)
                 VALUES (:ts, :seg, :spd, :jam, :src)
                 """,
                 {"ts": ts, "seg": seg, "spd": speed_kmh, "jam": jam_factor, "src": src},
@@ -127,12 +127,53 @@ async def clear_nudge(cfg: ScenarioConfig, handle_id: str) -> int:
     from jnpa_shared.db import execute
     try:
         return await execute(
-            "DELETE FROM jnpa.traffic_snapshots WHERE source = :src",
+            "DELETE FROM core.traffic_snapshot WHERE source = :src",
             {"src": f"scenario:{handle_id}"}, dsn=cfg.postgres_dsn,
         )
     except Exception as exc:  # noqa: BLE001
         log.warning("clear_nudge_failed", handle=handle_id, error=str(exc))
         return 0
+
+
+async def resolve_scenario_alerts(
+    cfg: ScenarioConfig, handle_id: str, *, segment_ids: Optional[List[str]] = None,
+) -> None:
+    """Ack every alert this scenario caused (reset must be fully reversible).
+
+    Two classes:
+      1. alerts explicitly tagged ``payload.scenario = handle_id`` (stamped by
+         the scenario itself), and
+      2. TRAFFIC_CONGESTION alerts the gateway auto-raised because our nudged
+         snapshots pushed the forecast over threshold — those carry no scenario
+         tag, so we match by nudged ``segment_id`` since the run started
+         (``core.scenario.started_at``; 6 h lookback if the row is missing,
+         e.g. a post-restart stub reset).
+    Best-effort: reset never fails on alert cleanup.
+    """
+    from jnpa_shared.db import execute, fetch_one
+    try:
+        await execute(
+            "UPDATE core.alert SET ack = true WHERE payload->>'scenario' = :hid",
+            {"hid": handle_id}, dsn=cfg.postgres_dsn,
+        )
+        if segment_ids:
+            row = await fetch_one(
+                "SELECT started_at FROM core.scenario WHERE id = :hid",
+                {"hid": handle_id}, dsn=cfg.postgres_dsn,
+            )
+            since = row["started_at"] if row else None
+            await execute(
+                """
+                UPDATE core.alert SET ack = true
+                WHERE ack = false AND kind = 'TRAFFIC_CONGESTION'
+                  AND payload->>'segment_id' = ANY(:segs)
+                  AND ts >= coalesce(CAST(:since AS timestamptz),
+                                     now() - interval '6 hours')
+                """,
+                {"segs": list(segment_ids), "since": since}, dsn=cfg.postgres_dsn,
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("resolve_scenario_alerts_failed", handle=handle_id, error=str(exc))
 
 
 async def poll_forecaster(

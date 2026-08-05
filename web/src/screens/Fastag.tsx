@@ -138,7 +138,6 @@ export default function Fastag() {
   const healthQ = useQuery({
     queryKey: ["fastag-health"],
     queryFn: () => getAdapter().fastagHealth(),
-    refetchInterval: 15000,
     retry: false,
   });
 

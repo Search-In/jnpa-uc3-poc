@@ -20,10 +20,20 @@ import {
   SquareParking,
   CreditCard,
   ScanSearch,
+  ScanFace,
+  Repeat,
+  Camera,
+  BarChart3,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { getAdapter } from "@/data";
+import DoubleTrip from "@/screens/DoubleTrip";
+import CameraAI from "@/screens/CameraAI";
 import { ArcgisMap } from "@/components/map/ArcgisMap";
+import {
+  VehicleIdentityDialog,
+  VehicleDetectionDialog,
+} from "@/components/panels/VehicleIntelChecks";
 import { useMapSettings } from "@/lib/mapSettings";
 import { useGlobalSearch } from "@/lib/searchStore";
 import { Card } from "@/components/ui/card";
@@ -35,6 +45,7 @@ import {
   SegmentedTabs,
   DataTable,
   StatusChip,
+  Embedded,
   type Column,
   type Tone,
 } from "@/components/ui/dtccc";
@@ -42,8 +53,10 @@ import { EmptyState, LoadingState, ErrorState } from "@/components/ui/misc";
 import { fmtDateTimeIST, relativeAge } from "@/lib/utils";
 import type { TruckDevice, VehicleIntel, DriverIntel } from "@/lib/types";
 
-type Mode = "vehicle" | "driver";
+type Mode = "vehicle" | "driver" | "doubletrip" | "cameraai" | "driveranalytics";
 type Row = Record<string, unknown>;
+
+const SEARCH_MODES: Mode[] = ["vehicle", "driver"];
 
 export default function Intelligence() {
   const [mode, setMode] = useState<Mode>("vehicle");
@@ -91,32 +104,49 @@ export default function Intelligence() {
           tabs={[
             { key: "vehicle", label: "Vehicle", icon: Car },
             { key: "driver", label: "Driver", icon: IdCard },
+            { key: "doubletrip", label: "Double Trip Analytics", icon: Repeat },
+            { key: "cameraai", label: "Camera AI Statistics", icon: Camera },
+            { key: "driveranalytics", label: "Driver Analytics", icon: BarChart3 },
           ]}
         />
-        <div className="relative min-w-0 flex-1 sm:max-w-md">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <input
-            value={term}
-            onChange={(e) => setTerm(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && run()}
-            placeholder={
-              mode === "vehicle" ? "Vehicle no / RC e.g. MH04AB1234" : "DL number or driver id"
-            }
-            className="h-9 w-full rounded-md border border-border bg-background pl-9 pr-3 text-[13px] outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
-          />
-        </div>
-        <button
-          onClick={run}
-          className="inline-flex h-9 items-center gap-1.5 rounded-md bg-primary px-4 text-[13px] font-semibold text-primary-foreground hover:bg-primary/90"
-        >
-          <Search className="h-4 w-4" /> Search
-        </button>
+        {SEARCH_MODES.includes(mode) && (
+          <>
+            <div className="relative min-w-0 flex-1 sm:max-w-md">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <input
+                value={term}
+                onChange={(e) => setTerm(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && run()}
+                placeholder={
+                  mode === "vehicle" ? "Vehicle no / RC e.g. MH04AB1234" : "DL number or driver id"
+                }
+                className="h-9 w-full rounded-md border border-border bg-background pl-9 pr-3 text-[13px] outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+              />
+            </div>
+            <button
+              onClick={run}
+              className="inline-flex h-9 items-center gap-1.5 rounded-md bg-primary px-4 text-[13px] font-semibold text-primary-foreground hover:bg-primary/90"
+            >
+              <Search className="h-4 w-4" /> Search
+            </button>
+          </>
+        )}
       </div>
 
       {mode === "vehicle" ? (
         <VehicleProfile plate={submitted} />
-      ) : (
+      ) : mode === "driver" ? (
         <DriverProfile key={submitted} dl={submitted} />
+      ) : mode === "doubletrip" ? (
+        <Embedded>
+          <DoubleTrip />
+        </Embedded>
+      ) : mode === "cameraai" ? (
+        <Embedded>
+          <CameraAI />
+        </Embedded>
+      ) : (
+        <DriverAnalytics />
       )}
     </PageContainer>
   );
@@ -127,6 +157,9 @@ export default function Intelligence() {
 function VehicleProfile({ plate }: { plate: string }) {
   const { basemap } = useMapSettings();
   const enabled = !!plate;
+  // Vehicle Intelligence camera workflows (RC card header actions).
+  const [identityOpen, setIdentityOpen] = useState(false);
+  const [detectionOpen, setDetectionOpen] = useState(false);
 
   const viQ = useQuery({
     queryKey: ["vehicle-intel", plate],
@@ -289,7 +322,28 @@ function VehicleProfile({ plate }: { plate: string }) {
 
       {/* Profile + location */}
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-        <InfoCard title={`RC · ${vi.vehicle_number}`} icon={Car}>
+        <InfoCard
+          title={`RC · ${vi.vehicle_number}`}
+          icon={Car}
+          actions={
+            <>
+              <button
+                type="button"
+                onClick={() => setIdentityOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] font-medium hover:bg-muted"
+              >
+                <ScanFace className="h-3.5 w-3.5" /> Identity
+              </button>
+              <button
+                type="button"
+                onClick={() => setDetectionOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] font-medium hover:bg-muted"
+              >
+                <ShieldAlert className="h-3.5 w-3.5" /> Detection
+              </button>
+            </>
+          }
+        >
           <KV label="Owner" value={rc.owner_name_masked ?? rc.owner_name} />
           <KV label="Vehicle class" value={rc.vehicle_class} />
           <KV label="Fuel" value={rc.fuel_type} />
@@ -299,6 +353,17 @@ function VehicleProfile({ plate }: { plate: string }) {
           <KV label="RTO / State" value={`${rc.rto_code ?? "—"} / ${rc.state ?? "—"}`} />
           <KV label="Blacklist" value={rc.blacklist_status} />
         </InfoCard>
+
+        <VehicleIdentityDialog
+          vehicleNumber={vi.vehicle_number}
+          open={identityOpen}
+          onOpenChange={setIdentityOpen}
+        />
+        <VehicleDetectionDialog
+          vehicleNumber={vi.vehicle_number}
+          open={detectionOpen}
+          onOpenChange={setDetectionOpen}
+        />
 
         <InfoCard title="FASTag" icon={CreditCard}>
           {fbQ.isLoading ? (
@@ -666,15 +731,98 @@ function DriverRecords({ di }: { di: DriverIntel }) {
   );
 }
 
+// --- Driver Analytics (lightweight, reuses existing intel endpoints) --------
+
+function DriverAnalytics() {
+  const vhQ = useQuery({
+    queryKey: ["verification-history", 100],
+    queryFn: () => api.verificationHistory(100),
+  });
+  const dhQ = useQuery({
+    queryKey: ["dl-history", 100],
+    queryFn: () => api.dlHistory(100),
+  });
+
+  const verifications = (vhQ.data?.history ?? []) as Row[];
+  const dlLookups = (dhQ.data?.history ?? []) as Row[];
+
+  const uniquePlates = useMemo(() => {
+    const set = new Set<string>();
+    for (const v of verifications) {
+      const p = String(v.vehicle_number ?? "").trim();
+      if (p) set.add(p.toUpperCase());
+    }
+    return set.size;
+  }, [verifications]);
+
+  if (vhQ.isLoading || dhQ.isLoading)
+    return (
+      <div className="p-6">
+        <LoadingState label="Loading driver analytics…" />
+      </div>
+    );
+  if (vhQ.isError || dhQ.isError)
+    return (
+      <div className="p-6">
+        <ErrorState
+          onRetry={() => {
+            vhQ.refetch();
+            dhQ.refetch();
+          }}
+          detail={((vhQ.error ?? dhQ.error) as Error)?.message}
+        />
+      </div>
+    );
+
+  return (
+    <div className="space-y-3 p-4">
+      <StatGrid className="lg:grid-cols-3">
+        <StatCard
+          icon={ScanSearch}
+          label="Total Verifications"
+          value={vhQ.data?.count ?? verifications.length}
+          tone="info"
+        />
+        <StatCard icon={Car} label="Unique Plates" value={uniquePlates} tone="neutral" />
+        <StatCard
+          icon={IdCard}
+          label="Total DL Lookups"
+          value={dhQ.data?.count ?? dlLookups.length}
+          tone="info"
+        />
+      </StatGrid>
+
+      <Card className="overflow-hidden">
+        <div className="border-b border-border px-3 py-2">
+          <h3 className="text-sm font-semibold text-foreground">Recent Verifications</h3>
+        </div>
+        <RecordsTable
+          rows={verifications}
+          cols={[
+            ["vehicle_number", "Plate"],
+            ["verification_status", "Status"],
+            ["source", "Source"],
+            ["created_at", "When"],
+          ]}
+          empty="No verification activity on record."
+          searchKeys={["vehicle_number", "verification_status", "source"]}
+        />
+      </Card>
+    </div>
+  );
+}
+
 // --- Shared bits -------------------------------------------------------------
 
 function InfoCard({
   title,
   icon: Icon,
+  actions,
   children,
 }: {
   title: string;
   icon: typeof Car;
+  actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
@@ -682,6 +830,7 @@ function InfoCard({
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
         <Icon className="h-4 w-4 text-primary" />
         <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+        {actions && <div className="ml-auto flex items-center gap-1.5">{actions}</div>}
       </div>
       <div className="grid gap-x-6 p-3 sm:grid-cols-2">{children}</div>
     </Card>

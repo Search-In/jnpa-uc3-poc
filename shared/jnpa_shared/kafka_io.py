@@ -7,6 +7,7 @@ kafka_io` and publish/consume in a few lines.
 from __future__ import annotations
 
 import json
+import os
 from datetime import date, datetime
 from typing import Any, Callable, Optional
 
@@ -147,6 +148,27 @@ def headers_to_dict(msg) -> dict:
     return out
 
 
+def broker_configured() -> bool:
+    """True only when a Kafka broker is EXPLICITLY configured for this process.
+
+    ``Settings.kafka_brokers`` defaults to ``kafka:9092``, so it is never falsy
+    and cannot answer this question — the env var must be checked directly.
+
+    Callers use this to avoid building consumers/producers that will only ever
+    retry an unreachable broker. That is wasteful in a CLI or importer and
+    genuinely fatal in the test suite: every librdkafka client spawns several
+    internal threads, and a whole-suite run that leaks them dies with
+    "can't start new thread".
+
+    Every real deployment sets KAFKA_BROKERS (compose and the prod env-file both
+    do), so this returns True wherever it matters.
+    """
+    return bool(
+        (os.getenv("KAFKA_BROKERS") or "").strip()
+        or (os.getenv("KAFKA_BOOTSTRAP_SERVERS") or "").strip()
+    )
+
+
 def get_consumer(group: str, extra_config: Optional[dict] = None) -> Consumer:
     """Create a consumer in the given group, reading from the earliest offset."""
     settings = get_settings()
@@ -218,6 +240,7 @@ def consume(
 
 
 __all__ = [
+    "broker_configured",
     "get_producer",
     "produce",
     "get_consumer",

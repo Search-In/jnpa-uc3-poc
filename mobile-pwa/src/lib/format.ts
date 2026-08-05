@@ -43,3 +43,17 @@ export function fmtRelative(iso?: string | null): string {
 export function gateShort(gateId?: string | null): string {
   return gateId ? gateId.replace(/^G-/, "") : "—";
 }
+
+// Seconds-granular "time ago" for the live-GPS freshness pill. Unlike
+// fmtRelative (minute resolution) this shows "10s ago" so a driver can see the
+// position feed is genuinely live. `ms` is an epoch-millis timestamp.
+export function fmtAgo(ms?: number | null): string {
+  if (ms == null || !Number.isFinite(ms)) return "—";
+  const s = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+  if (s < 5) return "just now";
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  return `${h}h ago`;
+}

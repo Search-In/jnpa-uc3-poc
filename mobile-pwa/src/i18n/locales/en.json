@@ -8,11 +8,12 @@
     "reroute": "Re-route",
     "inbox": "Inbox",
     "vehicle": "Vehicle",
-    "enrol": "Enrol",
+    "enrol": "Enroll",
     "parking": "Parking",
     "zones": "Zones",
     "home": "Home",
     "map": "Map",
+    "navigate": "Navigate",
     "alerts": "Alerts"
   },
   "screens": {
@@ -21,7 +22,7 @@
     "reroute": "Re-route",
     "inbox": "Inbox",
     "vehicle": "Vehicle",
-    "enrol": "Driver Enrolment",
+    "enrol": "Driver Enrollment",
     "parking": "Parking",
     "zones": "Zones",
     "map": "Live Map",
@@ -35,16 +36,16 @@
     "lastVerified": "Last verified",
     "today": "Today",
     "startTrip": "Start Trip",
-    "goToEnrol": "Go to Enrol",
+    "goToEnrol": "Go to Enroll",
     "alerts": "Alerts",
     "vehicleInfo": "Vehicle Info",
-    "completeEnrol": "Complete enrolment",
-    "viewEnrol": "View enrolment status",
+    "completeEnrol": "Complete enrollment",
+    "viewEnrol": "View enrollment status",
     "status": {
       "ACTIVE": "Active",
       "PENDING": "Pending approval",
       "REJECTED": "Rejected",
-      "REENROLL": "Re-enrolment needed",
+      "REENROLL": "Re-enrollment needed",
       "UNVERIFIED": "Not enrolled"
     }
   },
@@ -117,10 +118,16 @@
     "unpair": "Unpair this device"
   },
   "pairing": {
-    "tagline": "Pair your in-cab unit to receive gate slots & live re-routes.",
-    "enterCode": "Or enter the 6-digit pairing code",
-    "pairDevice": "Pair device",
-    "useDemo": "Use demo device (TRK-000001)"
+    "welcome": "Driver sign-in",
+    "tagline": "Enter your assigned Vehicle ID to sign in.",
+    "vehicleId": "Vehicle ID",
+    "vehicleIdSub": "Your assigned in-cab unit ID",
+    "vehicleIdHint": "TRK-000123",
+    "signIn": "Sign in",
+    "signingIn": "Signing in…",
+    "invalidId": "Enter a valid Vehicle ID",
+    "notFound": "This Vehicle ID isn't active. Check the ID and try again.",
+    "authFailed": "Could not sign in. Check your connection."
   },
   "alertKind": {
     "WRONG_WAY": "Wrong-way driving",
@@ -133,7 +140,7 @@
     "ALERT": "Alert"
   },
   "enrol": {
-    "title": "Driver Enrolment",
+    "title": "Driver Enrollment",
     "dpdpNote": "Biometric data is captured with your consent under DPDP and used only for gate identity verification.",
     "completeProfile": "Complete your profile",
     "autofillNote": "Your driver ID, name and vehicle are filled from your session and can't be changed here.",
@@ -162,15 +169,15 @@
     "cameraError": "Camera unavailable.",
     "review": "Review & submit",
     "faces": "Face images",
-    "submit": "Submit enrolment",
+    "submit": "Submit enrollment",
     "next": "Next",
     "back": "Back",
     "resubmit": "Re-capture & re-submit",
     "reason": "Reason",
-    "statusPending": "Your enrolment is pending admin approval. You'll be verifiable at the gate once approved.",
-    "statusActive": "Your enrolment is approved and active. You can now be verified at the gate.",
-    "statusRejected": "Your enrolment was rejected. Please re-submit.",
-    "statusReenroll": "Re-enrolment requested. Please re-capture your reference photos and submit again."
+    "statusPending": "Your enrollment is pending admin approval. You'll be verifiable at the gate once approved.",
+    "statusActive": "Your enrollment is approved and active. You can now be verified at the gate.",
+    "statusRejected": "Your enrollment was rejected. Please re-submit.",
+    "statusReenroll": "Re-enrollment requested. Please re-capture your reference photos and submit again."
   },
   "parking": {
     "title": "Nearby parking",
@@ -200,11 +207,70 @@
     "noLocation": "Location unavailable"
   },
   "alertCenter": {
-    "title": "Alerts"
+    "title": "Alerts",
+    "empty": "No alerts right now. Drive safe."
+  },
+  "gps": {
+    "updated": "Updated",
+    "awaiting": "Awaiting GPS…"
+  },
+  "driverStatus": {
+    "moving": "Moving",
+    "waitingGate": "Waiting at gate",
+    "stopped": "Stopped",
+    "actionRequired": "Action required",
+    "online": "Online",
+    "offline": "Offline",
+    "gpsActive": "GPS active",
+    "gpsSearching": "GPS searching…"
+  },
+  "traffic": {
+    "label": "Traffic",
+    "light": "Light",
+    "medium": "Medium",
+    "heavy": "Heavy"
+  },
+  "command": {
+    "currentTrip": "Current trip",
+    "headingTo": "Heading to",
+    "noTrip": "No active trip yet",
+    "noTripSub": "Your next gate assignment will appear here.",
+    "startNavigation": "Start Navigation",
+    "viewRoute": "View Route",
+    "lastSync": "Last sync"
+  },
+  "emergency": {
+    "sos": "SOS",
+    "title": "Emergency & Help",
+    "subtitle": "Choose an action. Calls work even without internet.",
+    "callControl": "Call Port Control Room",
+    "callControlSub": "JNPA gate operations",
+    "call112": "Emergency 112",
+    "call112Sub": "Police · Fire · Ambulance",
+    "shareLocation": "Share my live location",
+    "shareLocationSub": "Send your GPS position for help",
+    "raiseAlert": "Alert Control Room",
+    "raiseAlertSub": "Flag a breakdown or incident on your trip",
+    "raising": "Alerting…",
+    "raised": "Control room notified ✓",
+    "raiseFailed": "Saved offline — will retry when online",
+    "locating": "Getting your location…",
+    "locationShared": "Location ready to share",
+    "locationFailed": "Location unavailable — call directly",
+    "cancel": "Cancel",
+    "myContact": "My emergency contact"
   },
   "map": {
     "normal": "Normal",
     "medium": "Medium",
-    "heavy": "Heavy"
+    "heavy": "Heavy",
+    "destination": "Destination",
+    "recommended": "Recommended",
+    "fastest": "Fastest",
+    "alt": "Alternate",
+    "noRoute": "Route not available yet",
+    "routeErr": "Route not available right now",
+    "finding": "Finding the fastest route…",
+    "directDistance": "Direct distance to gate"
   }
 }

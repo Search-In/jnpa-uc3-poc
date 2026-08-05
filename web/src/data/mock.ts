@@ -25,8 +25,10 @@ import type {
   Gate,
   IdentityVerifyArg,
   IdentityVerifyResult,
-  IdentityEnrolResult,
+  IdentityEnrollResult,
   KpiResult,
+  LdbTruckTracking,
+  LdbTruckTrackingResponse,
   OperatorBanner,
   ParkingFacility,
   ParkingSummary,
@@ -49,8 +51,25 @@ import type {
   TollEnrouteInput,
 } from "@/lib/types";
 import type { TasSlot } from "@/lib/types";
-import type { DriverEnrollment } from "@/lib/types";
-import type { CongestionMetrics, ContainerJourney, DataAdapter, DataMode, OcrEval } from "./types";
+import type {
+  AvailableVehicle,
+  CreateDriverInput,
+  CreateVehicleInput,
+  DriverEnrollment,
+  FleetVehicle,
+  UpdateVehicleInput,
+  VehicleDetectionResult,
+  VehicleIdentityResult,
+  VehicleStats,
+} from "@/lib/types";
+import type {
+  CarbonEmissionRecord,
+  CongestionMetrics,
+  ContainerJourney,
+  DataAdapter,
+  DataMode,
+  OcrEval,
+} from "./types";
 import { isValidContainerNo } from "@/lib/iso6346";
 import { buildKpiResult } from "@/kpi/compute";
 
@@ -280,7 +299,7 @@ const DRIVERS = [
   { driver_id: "DRV-1006", name: "Prakash More", license_no: "MH14 20210099887" },
 ] as const;
 
-// A tiny placeholder "face" frame (data-URL) so the mock enrolment queue renders
+// A tiny placeholder "face" frame (data-URL) so the mock enrollment queue renders
 // review thumbnails without bundling real images.
 const MOCK_FACE =
   "data:image/svg+xml;base64," +
@@ -288,8 +307,8 @@ const MOCK_FACE =
     '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160"><rect width="160" height="160" fill="#1f78c2"/><circle cx="80" cy="64" r="34" fill="#cfe3f5"/><rect x="36" y="104" width="88" height="56" rx="28" fill="#cfe3f5"/></svg>',
   );
 
-// In-memory enrolment queue for mock mode — seeded with two PENDING requests so
-// the admin Driver Enrolment screen has something to review with no backend.
+// In-memory enrollment queue for mock mode — seeded with two PENDING requests so
+// the admin Driver Enrollment screen has something to review with no backend.
 const MOCK_ENROLLMENTS: DriverEnrollment[] = [
   {
     driver_id: "DRV-2001",
@@ -324,6 +343,157 @@ const MOCK_ENROLLMENTS: DriverEnrollment[] = [
     submitted_at: new Date(NOW - 7200 * 1000).toISOString(),
   },
 ];
+
+// Monotonic counter for admin-created driver ids in the mock store (no Math.random).
+let mockDriverSeq = 0;
+
+/** Normalised Vehicle IDs already held by an ACTIVE driver or open enrollment —
+ *  mirrors the gateway's assigned_vehicles() so the mock dropdown never offers a
+ *  taken vehicle and create() rejects a duplicate. */
+function mockAssignedVehicles(): Set<string> {
+  const taken = new Set<string>();
+  for (const e of MOCK_ENROLLMENTS) {
+    const s = (e.status ?? "").toUpperCase();
+    if (s === "ACTIVE" || s === "PENDING" || s === "REENROLL") {
+      const v = (e.vehicle_no ?? "").trim().toUpperCase();
+      if (v) taken.add(v);
+    }
+  }
+  return taken;
+}
+
+// Mock Vehicle Master — TRK-000001..TRK-000030 seeded ACTIVE, mirroring the
+// gateway's truck-sim migration. Mutable so create/update demo flows persist.
+// TRK-000031 is the NLDS demo plate used for LDB truck tracking (Port Events).
+const MOCK_FLEET: FleetVehicle[] = [
+  ...Array.from({ length: 30 }, (_, i) => {
+    const n = i + 1;
+    return {
+      vehicle_id: `TRK-${String(n).padStart(6, "0")}`,
+      vehicle_number: `MH04${String.fromCharCode(65 + (n % 26))}${String.fromCharCode(
+        65 + ((n * 7) % 26),
+      )}${String((n * 137) % 10000).padStart(4, "0")}`,
+      vehicle_type: "Container Truck",
+      chassis_number: null,
+      rfid_fastag_id: null,
+      status: "ACTIVE" as const,
+      created_by: "system:truck-sim",
+      created_at: new Date(NOW).toISOString(),
+      updated_at: new Date(NOW).toISOString(),
+    };
+  }),
+  {
+    vehicle_id: "TRK-000031",
+    vehicle_number: "MH43CQ0554",
+    vehicle_type: "Container Truck",
+    chassis_number: null,
+    rfid_fastag_id: null,
+    status: "ACTIVE",
+    created_by: "system:nlds-demo",
+    created_at: new Date(NOW).toISOString(),
+    updated_at: new Date(NOW).toISOString(),
+  },
+];
+
+/** Deterministic NLDS-shaped truck Port Events (mirrors /api/ldb/truck MOCK). */
+function buildMockLdbTruck(vehicleNumber: string): LdbTruckTracking {
+  const plate = vehicleNumber.trim().toUpperCase() || "UNKNOWN";
+  // Real NLDS sample for the demo plate captured from ldb.co.in truck/search.
+  if (plate === "MH43CQ0554") {
+    const events = [
+      {
+        eventName: "PORT OUT",
+        locName: "Bharat Mumbai Container Terminals (PSA)",
+        locLat: "18.938916",
+        locLong: "72.939722",
+        containerNumber: "HMMU4963884",
+        transportMode: "TRUCK",
+        eventTime: "1785573715000",
+        eventTimeLabel: "01-08-2026 14:11:55 IST",
+        dateMarker: "01-08-2026",
+      },
+      {
+        eventName: "PORT IN",
+        locName: "Bharat Mumbai Container Terminals (PSA)",
+        locLat: "18.938916",
+        locLong: "72.939722",
+        containerNumber: "HMMU4963884",
+        transportMode: "VESSEL",
+        eventTime: "1785504450000",
+        eventTimeLabel: "31-07-2026 18:57:30 IST",
+        dateMarker: "31-07-2026",
+      },
+    ];
+    return {
+      truckNumber: plate,
+      truckType: "CONTAINERIZED",
+      events,
+      terminals: [{ locName: events[0].locName, events }],
+      latest: events[0],
+      alert: `ALERT! Trailer ${plate} carrying Container No. HMMU4963884`,
+      compliance: {
+        status: "COMPLIANT",
+        owner: "DEMO TRANSPORT LLP",
+        vehicleClass: "Goods Carriage (HMV)",
+        fitnessValidUpto: "31-03-2027",
+        insuranceValidUpto: "15-11-2026",
+        pucValidUpto: "01-02-2027",
+        chassisNumber: "MB1AA12CD3456789",
+        engineNumber: "ENG55CQ054",
+        notes: "In-app compliance snapshot (Vahan-style). No external redirect.",
+      },
+    };
+  }
+
+  const digits = plate.replace(/\D/g, "") || "0000000";
+  const container = `MSMU${digits.slice(-7).padStart(7, "0")}`;
+  const terminal = "Bharat Mumbai Container Terminals (PSA)";
+  const events = [
+    {
+      eventName: "PORT OUT",
+      locName: terminal,
+      locLat: "18.938916",
+      locLong: "72.939722",
+      containerNumber: container,
+      transportMode: "TRUCK",
+      eventTime: String(NOW),
+      eventTimeLabel: new Date(NOW).toLocaleString("en-GB", { timeZone: "Asia/Kolkata" }) + " IST",
+      dateMarker: new Date(NOW).toLocaleDateString("en-GB"),
+    },
+    {
+      eventName: "PORT IN",
+      locName: terminal,
+      locLat: "18.938916",
+      locLong: "72.939722",
+      containerNumber: container,
+      transportMode: "VESSEL",
+      eventTime: String(NOW - 18 * 3600_000),
+      eventTimeLabel:
+        new Date(NOW - 18 * 3600_000).toLocaleString("en-GB", { timeZone: "Asia/Kolkata" }) +
+        " IST",
+      dateMarker: new Date(NOW - 18 * 3600_000).toLocaleDateString("en-GB"),
+    },
+  ];
+  return {
+    truckNumber: plate,
+    truckType: "CONTAINERIZED",
+    events,
+    terminals: [{ locName: terminal, events }],
+    latest: events[0],
+    alert: `ALERT! Trailer ${plate} carrying Container No. ${container}`,
+    compliance: {
+      status: "COMPLIANT",
+      owner: "JNPA DEMO FLEET",
+      vehicleClass: "Goods Carriage (HMV)",
+      fitnessValidUpto: "31-12-2026",
+      insuranceValidUpto: "30-06-2027",
+      pucValidUpto: "31-03-2027",
+      chassisNumber: `CH${digits.slice(-8).padStart(8, "0")}`,
+      engineNumber: `EN${digits.slice(-6).padStart(6, "0")}`,
+      notes: "In-app compliance snapshot. No external redirect.",
+    },
+  };
+}
 
 // --------------------------------------------------------------------------
 // KPI strip — mirrors shared/jnpa_shared/kpi.py KPI_TARGETS exactly. Each value
@@ -414,7 +584,10 @@ function buildKpi(spec: KpiSpec): KpiResult {
         : (rand01(`${spec.key}-trend-${i}`) - 0.5) * (Math.abs(spec.baseline - spec.value) * 0.12);
     trend.push(round(i === 7 ? spec.value : eased + wob, 2));
   }
-  return buildKpiResult(spec, trend);
+  // Provenance: mock values are fabricated (and deliberately near-target), so
+  // they MUST carry a non-live source or KpiStrip's SourceBadge renders nothing
+  // and the operator cannot tell them from measured data.
+  return { ...buildKpiResult(spec, trend), source: "baseline" as const };
 }
 
 // --------------------------------------------------------------------------
@@ -1327,6 +1500,48 @@ export class MockAdapter implements DataAdapter {
     });
   }
 
+  carbonHistory(vehicleId?: string, limit = 50): Promise<CarbonEmissionRecord[]> {
+    // Deterministic sample ledger (mock mode) — no RNG, no fake improvement claims;
+    // just a few recent per-vehicle emission rows so the UI ledger renders offline.
+    const base: CarbonEmissionRecord[] = [
+      {
+        id: 3,
+        vehicle_id: "MH04AB1234",
+        vehicle_type: "HGV",
+        distance_km: 38.0,
+        idle_time_minutes: 42.0,
+        fuel_consumed_litre: 22.4,
+        co2_kg: 60.0,
+        source: "telemetry",
+        created_at: "2026-07-13T09:12:00+00:00",
+      },
+      {
+        id: 2,
+        vehicle_id: "MH12CD5678",
+        vehicle_type: "REEFER",
+        distance_km: 27.5,
+        idle_time_minutes: 65.0,
+        fuel_consumed_litre: 31.9,
+        co2_kg: 85.4,
+        source: "telemetry",
+        created_at: "2026-07-13T08:47:00+00:00",
+      },
+      {
+        id: 1,
+        vehicle_id: "MH04AB1234",
+        vehicle_type: "HGV",
+        distance_km: 40.0,
+        idle_time_minutes: 18.0,
+        fuel_consumed_litre: 19.1,
+        co2_kg: 51.2,
+        source: "manual",
+        created_at: "2026-07-13T07:30:00+00:00",
+      },
+    ];
+    const rows = vehicleId ? base.filter((r) => r.vehicle_id === vehicleId) : base;
+    return Promise.resolve(rows.slice(0, limit));
+  }
+
   leoQueue(): Promise<AutoLeoResult[]> {
     return Promise.resolve(
       buildLeoQueue().map(({ _ts, ...row }) => {
@@ -1400,18 +1615,18 @@ export class MockAdapter implements DataAdapter {
       decision: "PROVISIONAL",
       provisional_until,
       cure_window_h: 24,
-      reason: "No gallery enrolment; provisional entry granted pending KYC.",
+      reason: "No gallery enrollment; provisional entry granted pending KYC.",
       provider,
     });
   }
 
-  identityEnrol(driverId: string, _image: string): Promise<IdentityEnrolResult> {
-    // Mock enrolment — the real reference template is stored server-side; here we
+  identityEnroll(driverId: string, _image: string): Promise<IdentityEnrollResult> {
+    // Mock enrollment — the real reference template is stored server-side; here we
     // just acknowledge so the camera flow works end-to-end in mock mode.
     return Promise.resolve({ enrolled: true, driver_id: driverId, provider: "onnx" });
   }
 
-  // --- Driver enrolment approval workflow (mock store) ---
+  // --- Driver enrollment approval workflow (mock store) ---
   enrollments(status?: string): Promise<DriverEnrollment[]> {
     const want = status?.toUpperCase();
     const out = MOCK_ENROLLMENTS.filter((e) => !want || e.status === want)
@@ -1424,7 +1639,7 @@ export class MockAdapter implements DataAdapter {
 
   enrollmentDetail(driverId: string): Promise<DriverEnrollment> {
     const rec = MOCK_ENROLLMENTS.find((e) => e.driver_id === driverId);
-    if (!rec) return Promise.reject(new Error("enrolment not found"));
+    if (!rec) return Promise.reject(new Error("enrollment not found"));
     return Promise.resolve({ ...rec });
   }
 
@@ -1457,11 +1672,222 @@ export class MockAdapter implements DataAdapter {
     const rec = MOCK_ENROLLMENTS.find((e) => e.driver_id === driverId);
     if (rec) {
       rec.status = "REENROLL";
-      rec.rejection_reason = reason ?? "re-enrolment requested";
+      rec.rejection_reason = reason ?? "re-enrollment requested";
       rec.reviewed_at = new Date(NOW).toISOString();
       rec.reviewed_by = "admin:mock";
     }
     return Promise.resolve({ reenroll: true });
+  }
+
+  createDriverProfile(
+    input: CreateDriverInput,
+  ): Promise<{ created: boolean; driver_id: string; status: string }> {
+    const vehicle = (input.vehicle_no ?? "").trim().toUpperCase();
+    if (!/^TRK-\d{6}$/.test(vehicle))
+      return Promise.reject(new Error("vehicle_no must be a valid Vehicle ID, e.g. TRK-000123"));
+    const taken = mockAssignedVehicles();
+    if (taken.has(vehicle))
+      return Promise.reject(new Error(`Vehicle ${vehicle} is already assigned`));
+    // Deterministic id (no Math.random): monotonically increasing counter.
+    const driver_id = `DRV-${String(9000 + ++mockDriverSeq)}`;
+    MOCK_ENROLLMENTS.unshift({
+      driver_id,
+      name: (input.name ?? "").trim(),
+      license_no: (input.license_no ?? "").trim() || undefined,
+      mobile: (input.mobile ?? "").trim() || undefined,
+      vehicle_no: vehicle,
+      emergency_contact: (input.emergency_contact ?? "").trim() || undefined,
+      status: "PENDING",
+      consent: false,
+      source: "ADMIN",
+      created_by: "admin:mock",
+      documents: [],
+      submitted_at: new Date(NOW).toISOString(),
+    });
+    return Promise.resolve({ created: true, driver_id, status: "PENDING" });
+  }
+
+  availableVehicles(q?: string, limit = 50): Promise<AvailableVehicle[]> {
+    const taken = mockAssignedVehicles();
+    const needle = (q ?? "").trim().toUpperCase();
+    const out: AvailableVehicle[] = [];
+    // Deterministic candidate fleet TRK-000001..TRK-000300.
+    for (let i = 1; i <= 300 && out.length < limit; i++) {
+      const vid = `TRK-${String(i).padStart(6, "0")}`;
+      if (taken.has(vid)) continue;
+      if (needle && !vid.includes(needle)) continue;
+      out.push({ vehicle_id: vid, plate: null, state: "EN_ROUTE" });
+    }
+    return Promise.resolve(out);
+  }
+
+  vehicles(q?: string, status?: string): Promise<FleetVehicle[]> {
+    const drivers = new Map<string, { driver_id: string; name?: string | null }>();
+    for (const e of MOCK_ENROLLMENTS) {
+      if ((e.status ?? "").toUpperCase() === "ACTIVE" && e.vehicle_no) {
+        drivers.set(e.vehicle_no.trim().toUpperCase(), {
+          driver_id: e.driver_id,
+          name: e.name,
+        });
+      }
+    }
+    const needle = (q ?? "").trim().toUpperCase();
+    const st = (status ?? "").trim().toUpperCase();
+    const out = MOCK_FLEET.filter((v) => {
+      if (st && st !== "ALL" && v.status !== st) return false;
+      if (
+        needle &&
+        !v.vehicle_id.toUpperCase().includes(needle) &&
+        !(v.vehicle_number ?? "").toUpperCase().includes(needle)
+      )
+        return false;
+      return true;
+    }).map((v) => ({ ...v, assigned_driver: drivers.get(v.vehicle_id) ?? null }));
+    return Promise.resolve(out);
+  }
+
+  vehicleStats(): Promise<VehicleStats> {
+    const assigned = mockAssignedVehicles();
+    const active = MOCK_FLEET.filter((v) => v.status === "ACTIVE");
+    const assignedN = active.filter((v) => assigned.has(v.vehicle_id)).length;
+    return Promise.resolve({
+      total: MOCK_FLEET.length,
+      active: active.length,
+      assigned: assignedN,
+      available: Math.max(active.length - assignedN, 0),
+    });
+  }
+
+  createVehicle(input: CreateVehicleInput): Promise<{ created: boolean; vehicle: FleetVehicle }> {
+    const number = (input.vehicle_number ?? "").trim();
+    if (!number) return Promise.reject(new Error("vehicle_number is required"));
+    const dup = MOCK_FLEET.find(
+      (v) => (v.vehicle_number ?? "").trim().toUpperCase() === number.toUpperCase(),
+    );
+    if (dup)
+      return Promise.reject(
+        new Error(`Vehicle number ${number} is already registered as ${dup.vehicle_id}.`),
+      );
+    // Backend owns the TRK sequence: max existing suffix + 1.
+    const highest = MOCK_FLEET.reduce((mx, v) => {
+      const m = /^TRK-(\d{6})$/.exec(v.vehicle_id);
+      return m ? Math.max(mx, parseInt(m[1], 10)) : mx;
+    }, 0);
+    const vid = `TRK-${String(highest + 1).padStart(6, "0")}`;
+    const vehicle: FleetVehicle = {
+      vehicle_id: vid,
+      vehicle_number: input.vehicle_number?.trim() || null,
+      vehicle_type: input.vehicle_type?.trim() || null,
+      chassis_number: input.chassis_number?.trim() || null,
+      rfid_fastag_id: input.rfid_fastag_id?.trim() || null,
+      status: (input.status ?? "ACTIVE").toUpperCase(),
+      created_by: "admin:mock",
+      created_at: new Date(NOW).toISOString(),
+      updated_at: new Date(NOW).toISOString(),
+      assigned_driver: null,
+    };
+    MOCK_FLEET.unshift(vehicle);
+    return Promise.resolve({ created: true, vehicle });
+  }
+
+  updateVehicle(
+    vehicleId: string,
+    input: UpdateVehicleInput,
+  ): Promise<{ updated: boolean; vehicle: FleetVehicle }> {
+    const vid = vehicleId.trim().toUpperCase();
+    const rec = MOCK_FLEET.find((v) => v.vehicle_id === vid);
+    if (!rec) return Promise.reject(new Error(`vehicle ${vid} not found`));
+    const nextStatus = input.status?.toUpperCase();
+    if (nextStatus && nextStatus !== "ACTIVE" && mockAssignedVehicles().has(vid))
+      return Promise.reject(
+        new Error("Vehicle is assigned to an active driver; reassign before deactivating."),
+      );
+    if (input.vehicle_number !== undefined) rec.vehicle_number = input.vehicle_number || null;
+    if (input.vehicle_type !== undefined) rec.vehicle_type = input.vehicle_type || null;
+    if (input.chassis_number !== undefined) rec.chassis_number = input.chassis_number || null;
+    if (input.rfid_fastag_id !== undefined) rec.rfid_fastag_id = input.rfid_fastag_id || null;
+    if (nextStatus) rec.status = nextStatus;
+    rec.updated_at = new Date(NOW).toISOString();
+    return Promise.resolve({ updated: true, vehicle: { ...rec } });
+  }
+
+  ldbTruck(vehicleNumber: string): Promise<LdbTruckTrackingResponse> {
+    return Promise.resolve({
+      source: "MOCK",
+      tracking: buildMockLdbTruck(vehicleNumber),
+    });
+  }
+
+  vehicleIdentity(vehicleNumber: string, image: string): Promise<VehicleIdentityResult> {
+    if (!image)
+      return Promise.resolve({
+        driver_name: null,
+        confidence: 0,
+        status: "NOT_MATCHED",
+        matched: false,
+        vehicle_number: vehicleNumber,
+        reason: "no_image",
+        message: "No camera frame captured.",
+      });
+    // Resolve the vehicle -> its ACTIVE assigned driver (server-side in prod).
+    const key = vehicleNumber.trim().toUpperCase();
+    const vehicle = MOCK_FLEET.find(
+      (v) => (v.vehicle_number ?? "").toUpperCase() === key || v.vehicle_id.toUpperCase() === key,
+    );
+    const driver = vehicle
+      ? MOCK_ENROLLMENTS.find(
+          (e) =>
+            (e.status ?? "").toUpperCase() === "ACTIVE" &&
+            (e.vehicle_no ?? "").toUpperCase() === vehicle.vehicle_id.toUpperCase(),
+        )
+      : undefined;
+    if (!driver)
+      return Promise.resolve({
+        driver_name: null,
+        confidence: 0,
+        status: "NOT_MATCHED",
+        matched: false,
+        vehicle_number: vehicleNumber,
+        vehicle_id: vehicle?.vehicle_id ?? null,
+        reason: "no_active_driver",
+        message: "No active driver linked to this vehicle.",
+      });
+    return Promise.resolve({
+      driver_name: driver.name,
+      driver_id: driver.driver_id,
+      vehicle_number: vehicle?.vehicle_number ?? vehicleNumber,
+      vehicle_id: vehicle?.vehicle_id ?? null,
+      confidence: 98,
+      status: "MATCHED",
+      matched: true,
+      decision: "VERIFIED",
+      message: "Identity verified.",
+    });
+  }
+
+  vehicleDetection(image: string, expected?: string): Promise<VehicleDetectionResult> {
+    if (!image)
+      return Promise.resolve({
+        detected_vehicle: null,
+        confidence: 0,
+        match: null,
+        reason: "no_image",
+        message: "No camera frame captured.",
+      } as VehicleDetectionResult);
+    // Deterministic demo read: detect the expected plate (a matching read).
+    const detected = (expected ?? "MH04AB1234").toUpperCase();
+    const match =
+      expected != null
+        ? detected.replace(/[^A-Z0-9]/g, "") === expected.toUpperCase().replace(/[^A-Z0-9]/g, "")
+        : null;
+    return Promise.resolve({
+      detected_vehicle: detected,
+      confidence: 99,
+      match,
+      expected: expected ?? null,
+      decision_path: "SYNTHETIC",
+      message: match ? "Vehicle verified." : "Plate detected.",
+    });
   }
 
   parkingAvailability(minuteOfDay?: number): Promise<ParkingFacility[]> {

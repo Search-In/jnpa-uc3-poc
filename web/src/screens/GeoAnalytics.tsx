@@ -8,16 +8,19 @@
 // screens, so no backend/API changes. The zone editor is reused verbatim
 // (GeofencingManager) to preserve all terra-draw editing + PUT-to-Postgres.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Shapes, MapPinned, LogIn, TriangleAlert, Cpu, Flame, LogOut } from "lucide-react";
+import { Shapes, MapPinned, LogIn, TriangleAlert, Cpu, Flame, LogOut, Gauge } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api } from "@/lib/api";
 import { getAdapter } from "@/data";
 import { Card } from "@/components/ui/card";
 import { ArcgisMap } from "@/components/map/ArcgisMap";
 import { useMapSettings } from "@/lib/mapSettings";
+import { resolveIncidents } from "@/lib/incidents";
 import GeofencingManager from "@/screens/GeofencingManager";
+import RoadBottlenecks from "@/screens/RoadBottlenecks";
 import {
   PageContainer,
   PageHeader,
@@ -26,6 +29,7 @@ import {
   SegmentedTabs,
   DataTable,
   StatusChip,
+  Embedded,
   type Column,
 } from "@/components/ui/dtccc";
 import { EmptyState, LoadingState, ErrorState } from "@/components/ui/misc";
@@ -33,17 +37,42 @@ import { STATUS } from "@/lib/tokens";
 import { fmtDateTimeIST, relativeAge } from "@/lib/utils";
 import type { AiEvent, GeofenceEvent, GeoVehicleInZone } from "@/lib/types";
 
-type TabKey = "zones" | "inside" | "events" | "violations" | "ai" | "heatmap";
+type TabKey = "zones" | "inside" | "events" | "violations" | "ai" | "heatmap" | "bottlenecks";
+
+const TAB_KEYS: TabKey[] = [
+  "zones",
+  "inside",
+  "events",
+  "violations",
+  "ai",
+  "heatmap",
+  "bottlenecks",
+];
 
 export default function GeoAnalytics({ defaultTab = "zones" }: { defaultTab?: TabKey }) {
-  const [tab, setTab] = useState<TabKey>(defaultTab);
+  // `?tab=` wins over the route's defaultTab prop: Command Center and Demo
+  // Console deep-link here (e.g. ?tab=bottlenecks) and previously the param was
+  // ignored, dropping the operator on Live Zones instead.
+  const [params, setParams] = useSearchParams();
+  const urlTab = params.get("tab") as TabKey | null;
+  const [tab, setTabState] = useState<TabKey>(
+    urlTab && TAB_KEYS.includes(urlTab) ? urlTab : defaultTab,
+  );
+  useEffect(() => {
+    if (urlTab && TAB_KEYS.includes(urlTab) && urlTab !== tab) setTabState(urlTab);
+  }, [urlTab]); // eslint-disable-line react-hooks/exhaustive-deps
+  const setTab = (k: TabKey) => {
+    setTabState(k);
+    const next = new URLSearchParams(params);
+    next.set("tab", k);
+    setParams(next, { replace: true });
+  };
 
   // Page-level queries for the summary cards (shared keys with the tab bodies).
   const zonesQ = useQuery({ queryKey: ["geo-zones-active"], queryFn: () => api.geoZonesActive() });
   const insideQ = useQuery({
     queryKey: ["geo-inside"],
     queryFn: () => api.geoVehiclesInZones(),
-    refetchInterval: 8000,
   });
   const violQ = useQuery({ queryKey: ["geo-violations"], queryFn: () => api.geoViolations(200) });
   const aiQ = useQuery({ queryKey: ["ai-events"], queryFn: () => api.aiEvents(undefined, 200) });
@@ -140,6 +169,7 @@ export default function GeoAnalytics({ defaultTab = "zones" }: { defaultTab?: Ta
             },
             { key: "ai", label: "AI Events", icon: Cpu, count: aiQ.data?.events?.length },
             { key: "heatmap", label: "Heatmap", icon: Flame },
+            { key: "bottlenecks", label: "Bottlenecks", icon: Gauge },
           ]}
         />
 
@@ -179,7 +209,18 @@ export default function GeoAnalytics({ defaultTab = "zones" }: { defaultTab?: Ta
             <AiTable rows={aiQ.data?.events ?? []} status={aiQ} onRetry={() => aiQ.refetch()} />
           </Card>
         )}
-        {tab === "heatmap" && <HeatmapTab violations={violQ.data?.violations ?? []} />}
+        {tab === "heatmap" && (
+          <HeatmapTab
+            violations={violQ.data?.violations ?? []}
+            aiEvents={aiQ.data?.events ?? []}
+            events={eventsQ.data?.events ?? []}
+          />
+        )}
+        {tab === "bottlenecks" && (
+          <Embedded>
+            <RoadBottlenecks />
+          </Embedded>
+        )}
       </div>
     </PageContainer>
   );
@@ -458,7 +499,15 @@ function summariseLocation(loc: Record<string, unknown>): string {
 
 // --- Heatmap -----------------------------------------------------------------
 
-function HeatmapTab({ violations }: { violations: GeofenceEvent[] }) {
+function HeatmapTab({
+  violations,
+  aiEvents,
+  events,
+}: {
+  violations: GeofenceEvent[];
+  aiEvents: AiEvent[];
+  events: GeofenceEvent[];
+}) {
   const { basemap } = useMapSettings();
   const corridorQ = useQuery({
     queryKey: ["corridor"],
@@ -468,14 +517,27 @@ function HeatmapTab({ violations }: { violations: GeofenceEvent[] }) {
   const snapsQ = useQuery({
     queryKey: ["snapshots"],
     queryFn: () => getAdapter().trafficSnapshots(),
-    refetchInterval: 8000,
   });
   const zonesQ = useQuery({ queryKey: ["zones"], queryFn: () => getAdapter().zones() });
   const trucksQ = useQuery({
     queryKey: ["trucks", "live-map"],
     queryFn: () => getAdapter().trucks(undefined, 500),
-    refetchInterval: 5000,
   });
+
+  // Geolocate the RDS-backed violations / AI / entry-exit rows into weighted
+  // heatmap points (zone centroid or last-known vehicle position when a row
+  // carries no explicit lat/lon). This is the Esri HeatmapRenderer's data source.
+  const incidents = useMemo(
+    () =>
+      resolveIncidents({
+        violations,
+        aiEvents,
+        events,
+        zones: zonesQ.data,
+        trucks: trucksQ.data,
+      }),
+    [violations, aiEvents, events, zonesQ.data, trucksQ.data],
+  );
 
   // Violations by zone (density) for the accompanying chart.
   const byZone = useMemo(() => {
@@ -498,6 +560,7 @@ function HeatmapTab({ violations }: { violations: GeofenceEvent[] }) {
           snapshots={snapsQ.data}
           zones={zonesQ.data}
           trucks={trucksQ.data}
+          incidents={incidents}
         />
       </Card>
       <Card className="p-3">

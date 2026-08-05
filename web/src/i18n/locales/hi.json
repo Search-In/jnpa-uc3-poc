@@ -10,7 +10,8 @@
   "navSection": {
     "operations": "संचालन",
     "analytics": "विश्लेषण",
-    "administration": "प्रशासन"
+    "administration": "प्रशासन",
+    "lifecycle": "ट्रक और कार्गो जीवनचक्र"
   },
   "navGroup": {
     "traffic": "यातायात संचालन",
@@ -34,7 +35,10 @@
     "whatIf": "व्हाट-इफ कंसोल",
     "simulator": "सिम्युलेटर",
     "demo": "डेमो कंसोल",
-    "enrollments": "चालक नामांकन"
+    "enrollments": "चालक नामांकन",
+    "vehicles": "वाहन प्रबंधन",
+    "uc3Lifecycle": "UC-3 जीवनचक्र",
+    "truckOps": "ट्रक संचालन"
   },
   "followBox": {
     "title": "फॉलो द बॉक्स",
@@ -61,10 +65,16 @@
     "simulated": "सिमुलेटेड",
     "real": "वास्तविक",
     "etaMin": "{{n}} मिनट",
-    "note": "UC-III गेट-क्रॉसिंग तथ्य वास्तविक Auto-LEO कैप्चर हैं; UC-II, क्रॉस-ट्विन इवेंट और व्युत्पन्न UC-III चरण कंटेनर आईडी और क्रॉस-ट्विन रिलीज़ अनुबंध से नियतात्मक रूप से पुनर्निर्मित हैं (सिमुलेटेड क्रॉस-ट्विन ट्रांसपोर्ट)।",
+    "note": "यह यात्रा साझा कार्गो रिकॉर्ड (jnpa.cargo) पर आधारित लाइव है; प्रत्येक UC-II / UC-III चरण वर्तमान कार्गो स्थिति को दर्शाता है। UC-III गेट-क्रॉसिंग तथ्य वास्तविक Auto-LEO कैप्चर हैं।",
     "meta": {
-      "container": "कंटेनर", "correlation": "सहसंबंध", "caseId": "केस आईडी",
-      "vehicle": "वाहन", "gate": "गेट", "eta": "ईटीए", "topic": "टॉपिक", "delivery": "डिलीवरी"
+      "container": "कंटेनर",
+      "correlation": "सहसंबंध",
+      "caseId": "केस आईडी",
+      "vehicle": "वाहन",
+      "gate": "गेट",
+      "eta": "ईटीए",
+      "topic": "टॉपिक",
+      "delivery": "डिलीवरी"
     },
     "stage": {
       "vessel_discharge": "जहाज़ से उतराई",
@@ -388,13 +398,20 @@
     "legend": "संकेत-सूची",
     "toggleLegend": "संकेत-सूची टॉगल करें",
     "layer": {
+      "violationHeatmap": "उल्लंघन हीटमैप",
       "gates": "गेट",
       "corridor": "NH-348 कॉरिडोर",
       "trucks": "ट्रक (1:50)",
       "heatmap": "भीड़ हीटमैप",
       "zones": "जियोफेंस ज़ोन",
-      "parking": "पार्किंग सुविधाएँ"
+      "parking": "पार्किंग सुविधाएँ",
+      "bhuvan": "भुवन सैटेलाइट लेयर"
     },
+    "bhuvanLoading": "लोड हो रहा है…",
+    "bhuvanError": "भुवन लेयर लोड नहीं हो सकी",
+    "bhuvanDisabled": "गेटवे पर भुवन WMS सक्षम नहीं है",
+    "bhuvanOpacity": "अपारदर्शिता",
+    "bhuvanSource": "स्रोत: ISRO भुवन WMS",
     "legendItem": {
       "freeFlow": "मुक्त प्रवाह / लक्ष्य पर",
       "moderate": "मध्यम",
@@ -618,5 +635,14 @@
     "roadmap": "रोडमैप",
     "fleetSize": "फ्लीट आकार",
     "fleetSizeAria": "फ्लीट आकार (अक्षम)"
+  },
+  "refresh": {
+    "auto": "ऑटो",
+    "autoTitle": "ऑटो रिफ़्रेश अंतराल",
+    "off": "बंद",
+    "10s": "10 सेकंड",
+    "30s": "30 सेकंड",
+    "1m": "1 मिनट",
+    "5m": "5 मिनट"
   }
 }

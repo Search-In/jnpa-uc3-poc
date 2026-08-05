@@ -30,7 +30,7 @@ RFID_CONSUMED = Counter(
 )
 RFID_PERSISTED = Counter(
     "rfid_reads_persisted_total",
-    "Total RFID reads written to jnpa.rfid_reads.",
+    "Total RFID reads written to core.rfid_read.",
 )
 RFID_VALIDATION_ERRORS = Counter(
     "rfid_validation_errors_total",

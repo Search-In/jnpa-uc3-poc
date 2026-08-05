@@ -78,25 +78,42 @@ jobs:
           ssh -i ~/.ssh/id_rsa ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }} << 'EOF'
             set -e
             echo "== disk before cleanup =="; df -h / || true
-            # Reclaim Docker space aggressively: stopped containers, unused images,
-            # networks AND the build cache (the big accumulator across --build runs).
+            # Root-volume free space in whole GiB. Gates the destructive,
+            # cache-DESTROYING prunes so they run ONLY under real disk pressure.
+            # -Pk forces POSIX 1K blocks so $4 (available) is portable; grep keeps
+            # the result numeric even if df/awk emit nothing.
+            free_gb() { df -Pk / 2>/dev/null | awk 'NR==2 { print int($4/1024/1024) }' | grep -E '^[0-9]+$' || echo 0; }
+            MIN_FREE_GB=15   # tune to the instance's root volume; below this we reclaim
+
+            # Always-safe, cheap reclamation — never touches live data OR the
+            # reusable layer/build cache: stopped containers, DANGLING images,
+            # unused networks, DANGLING volumes, host logs and stray temp files.
+            # (pgdata, minio-data, kafka-data are NAMED volumes, so never dangling.)
             docker container prune -f || true
-            docker image prune -af || true
-            docker builder prune -af || true
+            docker image prune -f || true
             docker network prune -f || true
-            # Orphaned anonymous volumes from prior container generations (e.g. the
-            # old Kafka log dir) are NOT removed by image/builder prune and can hold
-            # many GB. Only DANGLING (unattached) volumes are removed, so live data
-            # (pgdata, minio-data, kafka-data, ...) is safe.
             docker volume prune -f || true
-            # Reclaim host-level space too — the in-container build's transient
-            # /tmp wheel cache lives on this same root volume, so journal logs and
-            # the apt cache compete with it for space.
             sudo journalctl --vacuum-size=50M 2>/dev/null || true
             sudo apt-get clean 2>/dev/null || true
             rm -rf /tmp/pip-* 2>/dev/null || true
             # Drop stale rsync temp files from any prior failed run.
             find /home/ec2-user/jnpa-uc3-poc -name '.*.??????' -type f -delete 2>/dev/null || true
+
+            # THE BUILD CACHE IS THE DEPLOY'S BIGGEST TIME SAVER. With it warm, an
+            # unchanged service is a cache-hit no-op and only genuinely-changed
+            # layers rebuild (the multi-GB torch/paddle/opencv layers stay cached).
+            # The old UNCONDITIONAL `builder prune -af` + `image prune -af` here
+            # wiped it every run, forcing a full from-scratch rebuild of EVERY image
+            # on EVERY deploy — the "total rebuild / wasted minutes" this fixes. So
+            # reclaim the cache + all unused tagged images ONLY when actually low.
+            FREE="$(free_gb)"; echo "free on /: ${FREE} GiB"
+            if [ "${FREE}" -lt "${MIN_FREE_GB}" ]; then
+              echo "free < ${MIN_FREE_GB} GiB — reclaiming ALL unused images + build cache"
+              docker image prune -af || true
+              docker builder prune -af || true
+            else
+              echo "free >= ${MIN_FREE_GB} GiB — KEEPING build cache so unchanged images skip rebuild"
+            fi
             echo "== disk after cleanup =="; df -h / || true
           EOF
 
@@ -108,6 +125,11 @@ jobs:
           rsync -avz --delete \
             --exclude '.git' \
             --exclude '.github' \
+            --exclude '/.env' \
+            --exclude '/.env.local' \
+            --exclude '/.env.prod' \
+            --exclude '/.env.tmp' \
+            --exclude '/.env*.bak*' \
             --exclude 'node_modules' \
             --exclude '**/node_modules' \
             --exclude '.venv' \
@@ -137,9 +159,9 @@ jobs:
               echo "Creating initial .env file..."
               cp .env.aws.example .env
 
-              # Auto-generate secure random credentials
-              DB_PASS="$(openssl rand -hex 16)"
-              sed -i "s/change-me-postgres/${DB_PASS}/g" .env
+              # NOTE: database credentials are NOT generated here. The app database
+              # is AWS RDS (jnpa_schema_v3) and its DSNs are written from the
+              # RDS_PASSWORD secret in step 1b-RDS below, on every deploy.
 
               MINIO_KEY="$(openssl rand -hex 16)"
               sed -i "s/change-me-minio-key/${MINIO_KEY}/g" .env
@@ -183,6 +205,104 @@ jobs:
             # Both services read INTERNAL_SERVICE_TOKEN from this same .env, so one
             # backfilled value keeps them in lockstep.
             ensure_key INTERNAL_SERVICE_TOKEN "$(openssl rand -hex 32)"
+            # LDB / NLDS (Logistics Data Bank) base URL for /api/ldb/*. Compose
+            # declares it as ${LDB_BASE_URL:-} (optional, empty => MOCK), so an
+            # unset value does NOT abort the deploy — it silently downgrades the
+            # LDB rung to mock data. .env.aws.example carries the real endpoint,
+            # but that template is only copied when .env does not yet exist, so an
+            # .env from an earlier deploy would never gain the key. Backfill it.
+            ensure_key LDB_BASE_URL "https://ldb.co.in/api/ldbv2"
+
+            # 1b-RDS. AWS RDS (jnpa_schema_v3) is the ONLY application database —
+            #     this stack starts no postgres container (it lives behind the
+            #     dev-only "localdb" compose profile). Rewrite POSTGRES_PASSWORD and
+            #     the five DSNs on EVERY deploy: idempotent, and it also repairs a
+            #     .env left over from the local-postgres era (@postgres:5432) or a
+            #     fresh .env still carrying the __RDS_PASSWORD__ placeholder.
+            #     The password comes from the RDS_PASSWORD repository secret; it is
+            #     never committed and GitHub masks it in the logs.
+            RDS_PW='${{ secrets.RDS_PASSWORD }}'
+            if [ -z "${RDS_PW}" ]; then
+              echo "DEPLOY ABORTED: repository secret RDS_PASSWORD is not set." >&2
+              echo "  Add it under Settings > Secrets and variables > Actions." >&2
+              echo "  URL-encode any of  : / ? # [ ] @  before storing it." >&2
+              exit 1
+            fi
+            # The endpoint and application user are secrets too — publishing the
+            # hostname next to a superuser name reduced the whole PII corpus to one
+            # guessed password. See docs/RDS_SECURITY.md.
+            RDS_ENDPOINT='${{ secrets.RDS_HOST }}'
+            if [ -z "${RDS_ENDPOINT}" ]; then
+              echo "DEPLOY ABORTED: repository secret RDS_HOST is not set." >&2
+              echo "  Add the RDS endpoint under Settings > Secrets and variables > Actions." >&2
+              exit 1
+            fi
+            # RDS_USER defaults to the least-privilege application role, NOT the
+            # postgres superuser (docs/RDS_SECURITY.md §3).
+            RDS_APP_USER='${{ secrets.RDS_USER }}'
+            RDS_APP_USER="${RDS_APP_USER:-jnpa_app}"
+            RDS_PASSWORD="${RDS_PW}" \
+            RDS_HOST="${RDS_ENDPOINT}" \
+            RDS_PORT="5432" RDS_DB="jnpa_schema_v3" RDS_USER="${RDS_APP_USER}" \
+              bash deploy/aws/use-rds.sh .env
+            unset RDS_PW
+
+            # 1b-RDS-check. Refuse to deploy unless every DSN really resolves to
+            #     RDS/jnpa_schema_v3 (catches a hand-edited or half-written .env).
+            for v in POSTGRES_DSN RFID_POSTGRES_DSN TRUCK_POSTGRES_DSN \
+                     CONGESTION_POSTGRES_DSN ANOMALY_POSTGRES_DSN; do
+              line="$(grep -E "^${v}=" .env | tail -n1 || true)"
+              case "${line}" in
+                *"${RDS_ENDPOINT}"*"/jnpa_schema_v3"*) : ;;
+                *) echo "DEPLOY ABORTED: ${v} does not point at RDS/jnpa_schema_v3." >&2; exit 1 ;;
+              esac
+            done
+            if grep -qE '@postgres:5432|@localhost:543|@127\.0\.0\.1:543' .env; then
+              echo "DEPLOY ABORTED: .env still contains a local-postgres DSN." >&2
+              exit 1
+            fi
+            # Placeholder left in a VALUE (comments in the template legitimately
+            # mention it, so only assignment lines are inspected).
+            if grep -qE '^[A-Za-z_][A-Za-z0-9_]*=.*__RDS_PASSWORD__' .env; then
+              echo "DEPLOY ABORTED: .env still carries the __RDS_PASSWORD__ placeholder." >&2
+              exit 1
+            fi
+            echo "Database posture OK: all five DSNs -> RDS jnpa_schema_v3 (no local fallback)."
+
+            # 1b-GRAFANA. Grafana's Postgres datasource points at the SAME RDS
+            #     instance, so DERIVE it from the values just resolved rather
+            #     than carrying a second copy of the endpoint in another secret
+            #     that can silently drift out of sync.
+            #
+            #     Why this block exists: docker-compose.yml declares
+            #     GRAFANA_PG_HOST as ${GRAFANA_PG_HOST:?} (required, no default).
+            #     Nothing wrote it — not .env.aws.example, not ensure_key, not
+            #     this workflow — so compose aborted the WHOLE stack on
+            #     "required variable GRAFANA_PG_HOST is missing a value".
+            #     Compose interpolation is evaluated for every service before any
+            #     container starts, so one unset monitoring variable took down all
+            #     30 services.
+            #
+            #     set_key (not ensure_key): these must be REWRITTEN every deploy.
+            #     ensure_key only appends when absent, which would pin a stale
+            #     endpoint or user after a rotation.
+            set_key() {
+              local key="$1" val="$2"
+              # Drop any existing assignment, then append the current value.
+              grep -v "^${key}=" .env > .env.tmp && mv .env.tmp .env
+              echo "${key}=${val}" >> .env
+              chmod 600 .env
+            }
+            set_key GRAFANA_PG_HOST "${RDS_ENDPOINT}:5432"
+            set_key GRAFANA_PG_DB "jnpa_schema_v3"
+            # Same least-privilege role the application uses. Grafana only reads.
+            set_key GRAFANA_PG_USER "${RDS_APP_USER}"
+            set_key GRAFANA_PG_SSLMODE "require"
+            # NOTE: compose reads the datasource PASSWORD from POSTGRES_PASSWORD
+            # (already written by use-rds.sh), not from a GRAFANA_PG_PASSWORD
+            # variable — see the grafana service in docker-compose.yml. A
+            # GRAFANA_PG_PASSWORD secret would be silently ignored.
+            echo "Grafana datasource -> ${RDS_ENDPOINT}:5432/jnpa_schema_v3 as ${RDS_APP_USER}"
 
             # 1c. Fail the deploy fast if the auth posture is unsafe. This mirrors
             #     gateway/auth.validate_auth_config() so a misconfigured .env is
@@ -214,47 +334,119 @@ jobs:
             bash scripts/fetch_face_model.sh || \
               echo "WARN: face model fetch failed (no egress?) — identity will crash-loop until models are placed in data/models/"
 
-            # 2. Build EVERY service ONE AT A TIME. The root volume is too small to
-            #    absorb many concurrent `pip install` /tmp unpacks: the default
-            #    parallel `up --build` exhausts it (Errno 28) even on tiny services
-            #    like asyncpg/setuptools. Serialising caps the transient peak to a
-            #    single build at a time.
+            # 2. Build services ONE AT A TIME (serial). The root volume can't absorb
+            #    many concurrent `pip install` /tmp unpacks: the default parallel
+            #    `up --build` exhausts it (Errno 28) even on tiny services. Serialising
+            #    caps the transient peak to a single build. CRUCIALLY we no longer
+            #    prune the build cache between builds — with it warm, an unchanged
+            #    service's `build` is a cache-hit no-op (seconds) and only
+            #    genuinely-changed layers rebuild.
             COMPOSE="docker compose -f docker-compose.yml -f docker-compose.aws.yml"
 
+            # Reclaim the build cache ONLY when the root volume is genuinely low —
+            # keeping it warm is the whole point. Checked BEFORE each heavy build so
+            # there is headroom for that build's transient peak.
+            free_gb() { df -Pk / 2>/dev/null | awk 'NR==2 { print int($4/1024/1024) }' | grep -E '^[0-9]+$' || echo 0; }
+            MIN_FREE_GB=15   # keep in sync with the pre-sync cleanup step
+            reclaim_if_low() {
+              local free; free="$(free_gb)"; echo "  free on /: ${free} GiB"
+              if [ "${free}" -lt "${MIN_FREE_GB}" ]; then
+                echo "  free < ${MIN_FREE_GB} GiB — pruning build cache + dangling images"
+                docker builder prune -af || true
+                docker image prune -f || true
+              fi
+            }
+
             # 2a. Heavy AI images first (each pulls torch/torchvision/paddle/
-            #     ultralytics + opencv) — built when the most disk is free, before
-            #     the other images commit their layers.
+            #     ultralytics + opencv) — built while the most disk is free. Their
+            #     Dockerfiles layer these multi-GB deps ABOVE the source COPY, so an
+            #     unchanged service reuses those layers instead of recompiling them.
             for svc in anpr anomaly congestion; do
+              reclaim_if_low
               echo "== building ${svc} =="
               ${COMPOSE} build "${svc}"
               df -h / || true
             done
 
-            # 2b. Reclaim the heavy BuildKit cache (torch/paddle wheels, several GB)
-            #     now that those images are committed. The committed images survive;
-            #     we start with `up -d` (NOT --build) below, so the cache is no
-            #     longer needed and is pure reclaimable space for the builds below.
-            docker builder prune -af || true
-            df -h / || true
-
-            # 2c. Build the remaining (light) services one at a time too. Image-only
+            # 2b. Build the remaining (light) services one at a time too. Image-only
             #     services (postgres, redis, kafka, ...) have no build context and
-            #     are skipped by `build`. Prune dangling cache between each to keep
-            #     the transient footprint flat across the whole sweep.
+            #     are skipped by `build`. These are small and share the cached python
+            #     base layer, so no per-service prune is needed.
             for svc in $(${COMPOSE} config --services); do
               case "${svc}" in anpr|anomaly|congestion) continue;; esac
               echo "== building ${svc} =="
               ${COMPOSE} build "${svc}"
-              docker builder prune -f || true
             done
 
-            # 2d. Start the stack. Everything is already built above, so DO NOT pass
-            #     --build (that would rebuild all services in parallel and re-create
-            #     the disk spike). `up -d` just creates/starts the containers.
-            ${COMPOSE} up -d
+            # 2d. Clear any stale fixed-name containers left by a prior partial or
+            #     failed `up`. Every service pins a container_name (jnpa-web, ...),
+            #     so a leftover container whose compose labels no longer match this
+            #     project makes `up -d` try to CREATE a duplicate name — which the
+            #     daemon rejects with "container name already in use". `down` alone
+            #     can't clear it (it only removes containers carrying THIS project's
+            #     labels), so force-remove by name. Named volumes (pgdata, minio-data,
+            #     kafka-data, ...) are NOT tied to containers and persist untouched.
+            docker ps -aq --filter 'name=^/jnpa-' | xargs -r docker rm -f || true
 
-            # 3. Reclaim space again post-build (old image layers + build cache).
-            docker image prune -af || true
-            docker builder prune -af || true
+            # 2e. Bring up ZooKeeper + Kafka FIRST, with a one-time self-heal for a
+            #     stale broker cluster ID. A kafka-data volume created before ZK state
+            #     was persisted holds an OLD cluster ID; against a fresh ZK the broker
+            #     crash-loops on InconsistentClusterId, its healthcheck never passes,
+            #     and the full `up -d` below aborts under `set -e` on the dependency
+            #     wait. So reconcile Kafka here: if it won't go healthy AND its log
+            #     shows the mismatch, reset kafka-data ONCE (it holds only transient
+            #     event streams — 6h retention — so this is safe) and restart. This
+            #     is idempotent: once ZK state is persisted the mismatch never recurs.
+            #     `up -d kafka` waits for ZK to be healthy, then returns after Kafka
+            #     starts (it does not block on Kafka's own healthcheck).
+            ${COMPOSE} up -d kafka || true
+            for _ in $(seq 1 18); do
+              status="$(docker inspect -f '{{.State.Health.Status}}' jnpa-kafka 2>/dev/null || echo none)"
+              [ "${status}" = "healthy" ] && { echo "Kafka healthy."; break; }
+              if docker logs jnpa-kafka 2>&1 | grep -qi 'InconsistentClusterId'; then
+                echo "Kafka cluster-id mismatch detected — resetting kafka-data volume once."
+                ${COMPOSE} rm -sf kafka || true
+                docker volume rm jnpa-uc3-poc_kafka-data 2>/dev/null || \
+                  docker volume ls -q --filter name=kafka-data | xargs -r docker volume rm || true
+                ${COMPOSE} up -d kafka || true
+              fi
+              sleep 10
+            done
+
+            # 2f. Free host ports 80/443 before starting the web container, which
+            #     terminates TLS by binding them directly (docker-compose.aws.yml).
+            #     nginx runs INSIDE the web image, so that container is the ONLY
+            #     intended owner of 80/443 — nothing on the host should compete. A
+            #     prior partial deploy can leave a container still publishing them, or
+            #     a force-removed container's docker-proxy can stay bound, so web's
+            #     bind fails with "address already in use". Remove any container
+            #     publishing them (safe), then force-free any residual holder so the
+            #     bind below always succeeds. pgdata/minio-data/etc. are untouched.
+            for p in 80 443; do
+              cids="$(docker ps -q --filter "publish=${p}")"
+              if [ -n "${cids}" ]; then
+                echo "Freeing host port ${p}: removing container(s) ${cids}"
+                docker rm -f ${cids} || true
+              fi
+              # Kill any residual holder (lingering docker-proxy / stray host process)
+              # still bound to the port. On a dedicated PoC host the web container is
+              # the sole intended owner, so this is safe and decisive.
+              sudo fuser -k "${p}/tcp" 2>/dev/null || \
+                { pid="$(sudo ss -ltnpH "sport = :${p}" 2>/dev/null | grep -oE 'pid=[0-9]+' | head -n1 | cut -d= -f2)"; \
+                  [ -n "${pid}" ] && { echo "Killing PID ${pid} holding port ${p}"; sudo kill -9 "${pid}" || true; }; }
+            done
+
+            # 2g. Start the rest of the stack. Kafka is already healthy above, so the
+            #     dependent services' `service_healthy` waits pass. DO NOT pass --build
+            #     (that would rebuild all services in parallel and re-create the disk
+            #     spike). `up -d` just creates/starts the remaining containers.
+            ${COMPOSE} up -d --remove-orphans
+
+            # 3. Reclaim only DANGLING image layers — superseded image versions become
+            #    untagged after a rebuild and are freed here (cheap, safe). DO NOT nuke
+            #    the build cache: keeping it warm is exactly what makes the NEXT deploy
+            #    incremental instead of another full from-scratch rebuild. A genuinely
+            #    tight volume is handled by the conditional reclaim above.
+            docker image prune -f || true
             echo "== disk after deploy =="; df -h / || true
           EOF

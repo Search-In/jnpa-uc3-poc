@@ -1,11 +1,12 @@
-// Device pairing for the PWA. Authentication in the PoC is a simple device_id
-// pairing (QR + 6-digit code) — no real OTP — so "paired" just means we have a
-// device_id persisted. Two entry points set it:
+// Device pairing for the PWA. A driver signs in with their assigned Vehicle ID
+// (the in-cab device id, TRK-######); "paired" means that id + its DRIVER token
+// are persisted. Two entry points set it:
 //
-//   * the Pairing screen (driver scans a QR / types the 6-digit code), and
-//   * the WEB VARIANT (?device=TRK-...): an evaluator without a phone opens
-//     http://localhost:3000/pwa?device=TRK-000001 and is paired instantly so the
-//     re-route push can be demoed live.
+//   * the sign-in screen (driver enters their Vehicle ID — validated against the
+//     live backend before the session opens), and
+//   * the WEB VARIANT (?device=TRK-...): opening the PWA with an explicit device
+//     id in the URL pairs it directly (used to open a second, pre-authorised
+//     screen against a known vehicle).
 //
 // The id is kept in localStorage under a stable key.
 
@@ -29,11 +30,6 @@ export const DEVICE_PREFIX = "TRK-";
 export function codeToDeviceId(code: string): string {
   const digits = code.replace(/\D/g, "").padStart(6, "0").slice(-6);
   return `${DEVICE_PREFIX}${digits}`;
-}
-
-export function deviceIdToCode(deviceId: string): string {
-  const m = deviceId.match(/(\d{1,6})$/);
-  return (m ? m[1] : "000000").padStart(6, "0");
 }
 
 function fromQuery(): string | null {

@@ -18,6 +18,7 @@ import type {
   TruckDevice,
 } from "@/lib/types";
 import { deltaPct as kpiDeltaPct, isOnTarget } from "@/kpi/compute";
+import { gateRoadHeading } from "@/lib/basemap";
 import type { SimState } from "./simStore";
 
 const round1 = (x: number) => Math.round(x * 10) / 10;
@@ -78,13 +79,36 @@ export function applySnapshots(base: TrafficSnapshot[], sim: SimState): TrafficS
 // ---- Trucks (gate queues + injection) -------------------------------------
 
 /** A JNPA-area fallback point so injected trucks without a gate anchor still
- *  land in the right region rather than at (0,0). */
+ *  land in the right region rather than at (0,0). Sits ~140 m off corridor
+ *  waypoint 00 (JNPA Gate-1), i.e. the port end of the NH-348 corridor. */
 const FALLBACK_POINT = { lat: 18.95, lon: 72.95 };
+
+/** Down-corridor compass bearing (deg) at the port end of NH-348 — OSM: the
+ *  JNPT Road / NH-348 legs out of JNPA bear 142–145°. Injected corridor inflow
+ *  is spread back along this line so it lands on the corridor the 3D scene
+ *  actually draws, instead of in a blob over Thane Creek. */
+const CORRIDOR_BEARING_DEG = 144;
+/** Metres between consecutive injected vehicles along the corridor. */
+const INJECT_SPACING_M = 160;
+const M_PER_DEG_LAT = 110_574;
+const M_PER_DEG_LON = 111_320 * Math.cos((18.95 * Math.PI) / 180);
 
 function jitter(seed: number, scale = 0.01): number {
   // Deterministic pseudo-jitter in [-scale, +scale] from an integer seed.
   const x = Math.sin(seed * 12.9898) * 43758.5453;
   return (x - Math.floor(x) - 0.5) * 2 * scale;
+}
+
+/** Point `alongM` metres down-corridor from `FALLBACK_POINT`, offset `acrossM`
+ *  metres across it (lane spread). Keeps injected traffic on the corridor. */
+function alongCorridor(alongM: number, acrossM: number): { lat: number; lon: number } {
+  const brg = (CORRIDOR_BEARING_DEG * Math.PI) / 180;
+  const north = alongM * Math.cos(brg) - acrossM * Math.sin(brg);
+  const east = alongM * Math.sin(brg) + acrossM * Math.cos(brg);
+  return {
+    lat: FALLBACK_POINT.lat + north / M_PER_DEG_LAT,
+    lon: FALLBACK_POINT.lon + east / M_PER_DEG_LON,
+  };
 }
 
 /**
@@ -115,9 +139,13 @@ export function applyTrucks(base: TruckDevice[], sim: SimState, state?: string):
           plate: null,
           gate_id: gateId,
           state: "AT_GATE_QUEUE",
-          position: { lat: lat + jitter(s), lon: lon + jitter(s + 7) },
+          // Scatter across the gate apron (±~22 m), not ±0.01° (±~1.1 km),
+          // which threw queued trucks onto the quay, the yard stacks and the
+          // creek. Facing = the gate's OSM access-road bearing, so the queue
+          // lines up with the lane instead of pointing north.
+          position: { lat: lat + jitter(s, 0.0002), lon: lon + jitter(s + 7, 0.0002) },
           speed_kmh: 0,
-          heading: 0,
+          heading: gateRoadHeading(gateId),
           remaining_km: 0,
           eta_s: 0,
           segment_id: null,
@@ -134,12 +162,14 @@ export function applyTrucks(base: TruckDevice[], sim: SimState, state?: string):
         plate: null,
         gate_id: null,
         state: "EN_ROUTE_TO_PORT",
-        position: {
-          lat: FALLBACK_POINT.lat + jitter(i, 0.05),
-          lon: FALLBACK_POINT.lon + jitter(i + 3, 0.05),
-        },
+        // Queued back down the corridor at ~160 m spacing with a ±6 m lane
+        // spread, replacing a ±0.05° (±~5.5 km) blob that put injected traffic
+        // in Thane Creek and the Arabian Sea.
+        position: alongCorridor(400 + i * INJECT_SPACING_M, jitter(i + 3, 6)),
         speed_kmh: 24 + Math.round(jitter(i, 8)),
-        heading: 135,
+        // Port-bound, so it faces UP-corridor (144° + 180°) — the old 135° drew
+        // every injected "EN_ROUTE_TO_PORT" truck driving away from the port.
+        heading: (CORRIDOR_BEARING_DEG + 180) % 360,
         remaining_km: 6,
         eta_s: 900,
         segment_id: null,

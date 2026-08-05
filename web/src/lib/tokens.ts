@@ -13,13 +13,24 @@ import {
   severityRank,
   jamColour,
   gateColour,
+  GATE_ID_COLOUR,
+  gateIdColour,
   sourceStateColour,
 } from "./palette";
 
 // ---------------------------------------------------------------------------
 // Re-exports — palette ramps stay the canonical, colour-blind-safe source.
 // ---------------------------------------------------------------------------
-export { SEVERITY_COLOUR, severityColour, severityRank, jamColour, gateColour, sourceStateColour };
+export {
+  SEVERITY_COLOUR,
+  severityColour,
+  severityRank,
+  jamColour,
+  gateColour,
+  GATE_ID_COLOUR,
+  gateIdColour,
+  sourceStateColour,
+};
 
 // ---------------------------------------------------------------------------
 // Okabe–Ito palette (colour-blind safe). The atomic literals live ONLY here.

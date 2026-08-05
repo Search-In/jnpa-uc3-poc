@@ -34,6 +34,11 @@ def _parse_movement(root: ET.Element, *, message: str, source_file: Optional[str
     vcn = ft(root, "VCN")
     via_no = ft(root, "VoyageNumber")
     rotation_no = ft(root, "RotationNumber")
+    # IMO is what the SECOND call-resolution tier matches on (VCN -> imo+voyage -> VIA in
+    # VesselCallRepository._resolve_call_id). Omitting it left that tier permanently dead,
+    # so an actual whose VCN had not been seen yet became an 'unresolved_call' row error
+    # even when its vessel and voyage were already on file. BERALT already supplies it.
+    imo_no = ft(root, "IMONumber")
     berth_code = ft(root, "BerthNumber")
     vessel_name = ft(root, "VesselName")
     common_ref = ft(root, "CommonRefNumber")
@@ -50,6 +55,7 @@ def _parse_movement(root: ET.Element, *, message: str, source_file: Optional[str
             # Call-resolution keys — resolved to call_id downstream (not here).
             "vcn": vcn,
             "via_no": via_no,
+            "imo_no": imo_no,
             "rotation_no": rotation_no,
             "vessel_name": vessel_name,
             "event_type": event_type,

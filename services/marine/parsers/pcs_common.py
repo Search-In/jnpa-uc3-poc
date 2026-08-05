@@ -99,3 +99,54 @@ def ft(el: Any, tag: str) -> Optional[str]:
     if el is None:
         return None
     return clean(el.findtext(f".//{tag}"))
+
+
+# --------------------------------------------------------------------------- call lifecycle
+# Vocabulary for core.vessel_call.status, set by the message that ADVANCES the call.
+# Migration 0038 [D8] leaves the column free-text on purpose, so these are conventions
+# owned by the parser layer, not a DB constraint — a later message family (VESARR/VESDEP)
+# adds its own terms without a migration.
+CALL_STATUS_PLANNED = "Planned"                # CALINF: voyage registered, no VCN yet
+CALL_STATUS_VCN_ALLOTTED = "VCN Allotted"      # CALINV: PCS allots the VCN (ALLOTMENTOFVCN)
+CALL_STATUS_BERTH_PLANNED = "Berth Planned"    # BERMAN: berth application lodged against the VCN
+CALL_STATUS_BERTH_ALLOTTED = "Berth Allotted"  # BERALT: a specific berth is assigned
+
+# VCN terminal infix -> canonical core.ref_terminal.code.
+# A full PCS VCN is IN + NSA1 + <terminal infix (2)> + 0 + <series><serial>, e.g.
+# 'INNSA1BM0R3119' -> 'BM' -> BMCT. Corpus-verified over the BERMAN sample (NS/BM/ND/NF);
+# GT and NG are included from the documented scheme. The map is deliberately CLOSED.
+_VCN_TERMINAL_INFIX = {
+    "NS": "NSICT", "NF": "NSFT", "GT": "APMT",
+    "NG": "NSIGT", "BM": "BMCT", "ND": "NSDT",
+}
+
+
+def terminal_from_vcn(vcn: Any) -> Optional[str]:
+    """Canonical terminal code carried in a full PCS VCN, or None.
+
+    BERMAN carries no DockORTOCode tag — the terminal is encoded ONLY in the VCN infix —
+    so this is the sole terminal source for a berth application. A short VIA form
+    ('S0527'), a truncated value or an unrecognised infix all return None: an absent
+    terminal is recoverable, a wrongly-guessed one is not.
+    """
+    s = clean(vcn)
+    if s is None or len(s) < 8:
+        return None
+    return _VCN_TERMINAL_INFIX.get(s[6:8].upper())
+
+
+def via_from_vcn(vcn: Any) -> Optional[str]:
+    """Short VIA carried in the tail of a full PCS VCN, or None.
+
+    A full VCN is IN + NSA1 + <terminal (2)> + 0 + <VIA>, so the VIA is everything from
+    index 9: 'INNSA1ND0S6544' -> 'S6544'. Verified against the BERALT corpus, where the
+    journal's own VIA_NO column equals this slice on 364 of 364 messages (zero
+    mismatches, every VCN exactly 14 characters).
+
+    Returns None for anything that is not a full VCN, so a short VIA passed in by mistake
+    is never re-sliced into nonsense.
+    """
+    s = clean(vcn)
+    if s is None or len(s) < 10:
+        return None
+    return s[9:].strip().upper() or None

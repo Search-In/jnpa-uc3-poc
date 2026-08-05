@@ -11,7 +11,7 @@ import xml.etree.ElementTree as ET
 from typing import Any, Optional
 
 from .documents import require
-from .pcs_common import MarineParseError, ft, parse_pcs_dt
+from .pcs_common import CALL_STATUS_PLANNED, MarineParseError, ft, parse_pcs_dt
 
 
 def parse_calinf(root: ET.Element, *, source_file: Optional[str] = None) -> list[dict[str, Any]]:
@@ -34,7 +34,12 @@ def parse_calinf(root: ET.Element, *, source_file: Optional[str] = None) -> list
         "call_sign": ft(voyage, "CallSign"),
         "terminal_code": ft(voyage, "DockORTOCode"),  # resolved to terminal_id downstream
         "purpose": ft(voyage, "PurposeOfvisit"),
-        "status": ft(voyage, "Status"),
+        # LIFECYCLE status, not the document's own field. CALINF's <Status> is a PCS
+        # record code ('C'/'F' across the corpus) describing the MESSAGE, not the call's
+        # operational state, so it is kept separately as `doc_status` and the call is
+        # stamped with the stage this message represents.
+        "status": CALL_STATUS_PLANNED,
+        "doc_status": ft(voyage, "Status"),
         "eta": parse_pcs_dt(ft(voyage, "EDTA")),
         "etd": parse_pcs_dt(ft(voyage, "EDTD")),
         "source_note": ft(root, "CommonRefNumber"),

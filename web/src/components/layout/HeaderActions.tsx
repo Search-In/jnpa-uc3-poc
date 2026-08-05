@@ -21,7 +21,7 @@ import type { Alert } from "@/lib/types";
 import { Spinner } from "@/components/ui/misc";
 import { AlertEvidenceDialog } from "@/components/AlertEvidenceDialog";
 import { alertFocusStore } from "@/lib/alertFocus";
-import { alertKey, mergeAlerts } from "@/lib/alerts";
+import { alertKey, alertLocation, mergeAlerts } from "@/lib/alerts";
 import { ALERT_CATEGORIES, categoryOf, type AlertCategory } from "@/lib/alertCategory";
 import { severityColour } from "@/lib/palette";
 import { relativeAge } from "@/lib/utils";
@@ -212,7 +212,7 @@ function NotificationBell({ alerts, loading }: { alerts: Alert[]; loading: boole
             ) : (
               filtered.map((a) => {
                 const sev = severityColour(a.severity);
-                const location = a.gate_id ?? (a.payload?.zone_id as string) ?? "—";
+                const location = alertLocation(a);
                 return (
                   // Tagged by alert kind so the guided tour rings the EXACT alert.
                   // The whole card locates the alert on the map (role=button so it

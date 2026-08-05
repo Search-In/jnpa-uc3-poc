@@ -44,7 +44,7 @@ services:
     environment:
       JNPA_SIM_DATA_DIR: /data/jnpa_dump
     volumes:
-      - "/Users/aniketchopade/Downloads/Digital Twin - Updated/Data:/data/jnpa_dump:ro"
+      - "/Users/pandurangdhage/Downloads/Digital Twin/Data:/data/jnpa_dump:ro"
     ports:
       - "8500:8500"
 

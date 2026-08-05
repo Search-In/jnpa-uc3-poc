@@ -31,6 +31,7 @@ import {
   Camera,
 } from "lucide-react";
 import { getAdapter } from "@/data";
+import { alertLocation } from "@/lib/alerts";
 import { api } from "@/lib/api";
 import { ArcgisMap } from "@/components/map/ArcgisMap";
 import { Card } from "@/components/ui/card";
@@ -755,7 +756,7 @@ function AlertsList({
     <ul className="max-h-[320px] divide-y divide-border overflow-auto">
       {alerts.map((a, i) => {
         const sev = severityColour(a.severity);
-        const loc = a.gate_id ?? (a.payload?.zone_id as string) ?? "—";
+        const loc = alertLocation(a);
         return (
           <li key={`${a.id}-${i}`} className="flex items-start gap-2.5 px-3 py-2 hover:bg-muted/40">
             <span

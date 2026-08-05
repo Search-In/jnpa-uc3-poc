@@ -12,7 +12,7 @@ import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, RefreshCw, ChevronRight } from "lucide-react";
 import { getAdapter } from "@/data";
 import { useSocket } from "@/hooks/SocketContext";
-import { mergeAlerts, alertKey } from "@/lib/alerts";
+import { mergeAlerts, alertKey, alertLocation } from "@/lib/alerts";
 import { alertFocusStore } from "@/lib/alertFocus";
 import { useIncomingSearch } from "@/lib/searchStore";
 import { severityColour, severityRank } from "@/lib/palette";
@@ -234,7 +234,7 @@ export default function AlertsCenter() {
 function AlertCard({ alert: a, onClick }: { alert: Alert; onClick: () => void }) {
   const { t } = useTranslation();
   const sev = severityColour(a.severity);
-  const loc = a.gate_id ?? (a.payload?.zone_id as string) ?? "—";
+  const loc = alertLocation(a);
   return (
     <Card
       role="button"

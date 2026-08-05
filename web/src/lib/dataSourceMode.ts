@@ -1,8 +1,8 @@
 // Data-SOURCE mode — the provenance axis for gateway-served data. SEPARATE from
 // the app's simulated/live scenario state: this switch chooses which backend
 // rows the gateway returns, via an `X-Data-Mode` request header:
-//   LIVE — rows sourced from the live JNPA integration APIs
-//   DEMO — the manually-imported, reliable pre-loaded rows (the default)
+//   LIVE — rows sourced from the live JNPA integration APIs (the default)
+//   DEMO — the manually-imported, reliable pre-loaded rows
 //
 // A tiny framework-free store (get / set / subscribe) persisted in localStorage.
 // The value is injected as the `x-data-mode` header on every gateway request by
@@ -14,8 +14,10 @@ export type DataSourceMode = "LIVE" | "DEMO";
 /** localStorage key — namespaced so it never collides with app state. */
 export const DATA_SOURCE_MODE_KEY = "jnpa.dataSourceMode";
 
-/** Default DEMO: the reliable pre-loaded data, never the unproven live feed. */
-const DEFAULT_MODE: DataSourceMode = "DEMO";
+/** Default LIVE: with the JNPA Port-Data sync running, the dashboards show
+ * the API-ingested corpus out of the box; DEMO (the manually-imported dump)
+ * stays one toggle away for offline/demo sessions. */
+const DEFAULT_MODE: DataSourceMode = "LIVE";
 
 function read(): DataSourceMode {
   try {

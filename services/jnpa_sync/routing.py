@@ -156,6 +156,9 @@ class JnpaRouter:
         elif name == "rail_form11_icd":
             from services.rail.form11_icd_service import Form11IcdService
             svc = Form11IcdService(dsn=self._dsn)
+        elif name == "edi_vessel":
+            from services.edi_vessel import EdiVesselService
+            svc = EdiVesselService(dsn=self._dsn)
         else:
             raise KeyError(f"unknown consumer service {name!r}")
         self._services[name] = svc
@@ -259,11 +262,36 @@ class JnpaRouter:
             return _normalize("rail_form11_icd", result)
 
         if group == "edi-messages":
-            # CODECO/COARRI/COPRAR have no bytes ingest seam
-            # (export_lifecycle is programmatic-only) — land + replay when
-            # one exists.
+            # Live corpus (verified against dt.jnpa.in): CFS-CODECO /
+            # ECY-CODECO gate-move workbooks (same shape as the cfs-ecy
+            # group) and bare CODECO XML gate move reports (the raw-XML
+            # seam in ShippingLinesUploadService). COARRI/COPRAR remain
+            # UNROUTED — no consumer exists (vessel discharge/load ops).
+            mt = (message_type or "").upper()
+            if "CODECO" in mt and mt != "CODECO":
+                facility = cfs_facility(filename) or (
+                    "CFS" if "CFS" in mt else "ECY" if "ECY" in mt else None)
+                if facility is not None:
+                    svc = self._service("cfs_ecy")
+                    result = await svc.import_file(facility, content,
+                                                   filename, UPLOADED_BY)
+                    return _normalize("cfs_ecy", result)
+            if mt == "CODECO" or b"<CODECODetails" in content:
+                svc = self._service("shipping_lines")
+                result = await svc.import_file("EDO", content, filename,
+                                               UPLOADED_BY)
+                return _normalize("shipping_lines", result)
+            if (mt in ("COARRI", "COPRAR")
+                    or b"<ContLoadingNDischargeOder" in content[:2048]
+                    or b"<AdvContainerList" in content[:2048]):
+                # Vessel-side container documents → services.edi_vessel
+                # (core.edi_vessel_container, migration 0123).
+                svc = self._service("edi_vessel")
+                result = await svc.import_file(content, filename, UPLOADED_BY)
+                return _normalize("edi_vessel", result)
             return RouteOutcome(service=group, status="UNROUTED",
-                                detail={"reason": "no consumer wired yet",
+                                detail={"reason": "no consumer for "
+                                                  f"{mt or 'unknown'} yet",
                                         "filename": filename})
 
         return RouteOutcome(service=group, status="UNROUTED",

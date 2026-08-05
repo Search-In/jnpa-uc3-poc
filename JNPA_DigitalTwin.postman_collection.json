@@ -1,0 +1,1224 @@
+{
+ "info": {
+  "name": "JNPA Digital Twin \u2014 Simulated Port Data API",
+  "description": "Two-step contract: request indexed JSON for a data group, then fetch any file by the reference the record carries.\n\n**Set `clientKey` to the key issued to your organisation, run `0 \u00b7 Authentication`, then anything else.**\n\nAll times are Asia/Kolkata (+05:30).",
+  "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+ },
+ "item": [
+  {
+   "name": "0 \u00b7 Authentication",
+   "item": [
+    {
+     "name": "Exchange client key for a token",
+     "request": {
+      "method": "POST",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/v2/auth/token",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "v2",
+        "auth",
+        "token"
+       ]
+      },
+      "description": "Send the client key issued to your organisation. The response carries a short-lived bearer token; the collection stores it in {{accessToken}} automatically. Tokens expire \u2014 re-run this when you get a 401.",
+      "body": {
+       "mode": "raw",
+       "raw": "{\n  \"clientKey\": \"{{clientKey}}\"\n}"
+      }
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "const j = pm.response.json();",
+         "pm.test('token issued', () => pm.expect(j.accessToken).to.be.a('string'));",
+         "pm.collectionVariables.set('accessToken', j.accessToken);",
+         "console.log('Token expires at', j.expiresAt);"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "Rejects an unknown client key",
+     "request": {
+      "method": "POST",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/v2/auth/token",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "v2",
+        "auth",
+        "token"
+       ]
+      },
+      "description": "Negative test. An unrecognised key must return 401 and must not disclose whether the key format was right.",
+      "body": {
+       "mode": "raw",
+       "raw": "{\n  \"clientKey\": \"not-a-real-key\"\n}"
+      }
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test('401', () => pm.response.to.have.status(401));"
+        ]
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "1 \u00b7 Discovery",
+   "item": [
+    {
+     "name": "Service description",
+     "request": {
+      "method": "GET",
+      "header": [],
+      "url": {
+       "raw": "{{baseUrl}}/",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": []
+      },
+      "description": "Entry point. Lists the endpoints and the order to call them in."
+     }
+    },
+    {
+     "name": "Health",
+     "request": {
+      "method": "GET",
+      "header": [],
+      "url": {
+       "raw": "{{baseUrl}}/v2/health",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "v2",
+        "health"
+       ]
+      },
+      "description": "Liveness probe. No token required."
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test('ok', () => pm.expect(pm.response.json().status).to.eql('ok'));"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "List data groups",
+     "request": {
+      "method": "GET",
+      "header": [
+       {
+        "key": "Authorization",
+        "value": "Bearer {{accessToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/v2/groups",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "v2",
+        "groups"
+       ]
+      },
+      "description": "The 13 groups, each with how many records are available at the current simulated time."
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "const j = pm.response.json();",
+         "pm.test('groups returned', () => pm.expect(j.groups.length).to.be.above(0));",
+         "pm.collectionVariables.set('simulatedNow', j.simulatedNow);"
+        ]
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "2 \u00b7 Group records (indexed JSON)",
+   "item": [
+    {
+     "name": "1 \u00b7 NLP Marine",
+     "request": {
+      "method": "GET",
+      "header": [
+       {
+        "key": "Authorization",
+        "value": "Bearer {{accessToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/v2/groups/nlp-marine/records?limit=25",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "v2",
+        "groups",
+        "nlp-marine",
+        "records"
+       ],
+       "query": [
+        {
+         "key": "limit",
+         "value": "25"
+        },
+        {
+         "key": "from",
+         "value": "2026-08-01",
+         "disabled": true
+        },
+        {
+         "key": "type",
+         "value": "IGM",
+         "disabled": true
+        }
+       ]
+      },
+      "description": "Vessel spine: profile, call information, berth request and allotment, arrival and departure.  Delivery: indexed."
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test('200', () => pm.response.to.have.status(200));",
+         "const j = pm.response.json();",
+         "if (j.items.length) pm.collectionVariables.set('fileRef', j.items[0].file.fileRef);",
+         "pm.test('metadata only, with a file reference', () => {",
+         "  j.items.forEach(i => pm.expect(i.file.fileRef).to.be.a('string'));",
+         "});"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "2 \u00b7 Sea Channels and Bathymetry",
+     "request": {
+      "method": "GET",
+      "header": [
+       {
+        "key": "Authorization",
+        "value": "Bearer {{accessToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/v2/groups/bathymetry/records?limit=25",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "v2",
+        "groups",
+        "bathymetry",
+        "records"
+       ],
+       "query": [
+        {
+         "key": "limit",
+         "value": "25"
+        }
+       ]
+      },
+      "description": "Channel geometry and depth survey. Static reference; nothing time-varying was simulated.\n\nDelivery: static."
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test('200', () => pm.response.to.have.status(200));"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "3 \u00b7 Port Craft and Pilot",
+     "request": {
+      "method": "GET",
+      "header": [
+       {
+        "key": "Authorization",
+        "value": "Bearer {{accessToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/v2/groups/port-craft-pilot/records?limit=25",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "v2",
+        "groups",
+        "port-craft-pilot",
+        "records"
+       ],
+       "query": [
+        {
+         "key": "limit",
+         "value": "25"
+        },
+        {
+         "key": "from",
+         "value": "2026-08-01",
+         "disabled": true
+        },
+        {
+         "key": "type",
+         "value": "IGM",
+         "disabled": true
+        }
+       ]
+      },
+      "description": "Pilot memos and craft allocation.  Delivery: indexed."
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test('200', () => pm.response.to.have.status(200));",
+         "const j = pm.response.json();",
+         "if (j.items.length) pm.collectionVariables.set('fileRef', j.items[0].file.fileRef);",
+         "pm.test('metadata only, with a file reference', () => {",
+         "  j.items.forEach(i => pm.expect(i.file.fileRef).to.be.a('string'));",
+         "});"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "4 \u00b7 Shipping Lines",
+     "request": {
+      "method": "GET",
+      "header": [
+       {
+        "key": "Authorization",
+        "value": "Bearer {{accessToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/v2/groups/shipping-lines/records?limit=25",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "v2",
+        "groups",
+        "shipping-lines",
+        "records"
+       ],
+       "query": [
+        {
+         "key": "limit",
+         "value": "25"
+        },
+        {
+         "key": "from",
+         "value": "2026-08-01",
+         "disabled": true
+        },
+        {
+         "key": "type",
+         "value": "IGM",
+         "disabled": true
+        }
+       ]
+      },
+      "description": "Import and export advance lists and electronic delivery orders. IAL and EAL differ per terminal by design.  Delivery: indexed."
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test('200', () => pm.response.to.have.status(200));",
+         "const j = pm.response.json();",
+         "if (j.items.length) pm.collectionVariables.set('fileRef', j.items[0].file.fileRef);",
+         "pm.test('metadata only, with a file reference', () => {",
+         "  j.items.forEach(i => pm.expect(i.file.fileRef).to.be.a('string'));",
+         "});"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "5 \u00b7 Customs",
+     "request": {
+      "method": "GET",
+      "header": [
+       {
+        "key": "Authorization",
+        "value": "Bearer {{accessToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/v2/groups/customs/records?limit=25",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "v2",
+        "groups",
+        "customs",
+        "records"
+       ],
+       "query": [
+        {
+         "key": "limit",
+         "value": "25"
+        },
+        {
+         "key": "from",
+         "value": "2026-08-01",
+         "disabled": true
+        },
+        {
+         "key": "type",
+         "value": "IGM",
+         "disabled": true
+        }
+       ]
+      },
+      "description": "Manifest, assessment and clearance: IGM, out of charge, SMTP, risk management, shipping bill, let export order, EGM.  Delivery: indexed."
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test('200', () => pm.response.to.have.status(200));",
+         "const j = pm.response.json();",
+         "if (j.items.length) pm.collectionVariables.set('fileRef', j.items[0].file.fileRef);",
+         "pm.test('metadata only, with a file reference', () => {",
+         "  j.items.forEach(i => pm.expect(i.file.fileRef).to.be.a('string'));",
+         "});"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "6 \u00b7 EDI Messages",
+     "request": {
+      "method": "GET",
+      "header": [
+       {
+        "key": "Authorization",
+        "value": "Bearer {{accessToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/v2/groups/edi-messages/records?limit=25",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "v2",
+        "groups",
+        "edi-messages",
+        "records"
+       ],
+       "query": [
+        {
+         "key": "limit",
+         "value": "25"
+        },
+        {
+         "key": "from",
+         "value": "2026-08-01",
+         "disabled": true
+        },
+        {
+         "key": "type",
+         "value": "IGM",
+         "disabled": true
+        }
+       ]
+      },
+      "description": "Container discharge and load orders and reports, and gate move reports.  Delivery: indexed."
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test('200', () => pm.response.to.have.status(200));",
+         "const j = pm.response.json();",
+         "if (j.items.length) pm.collectionVariables.set('fileRef', j.items[0].file.fileRef);",
+         "pm.test('metadata only, with a file reference', () => {",
+         "  j.items.forEach(i => pm.expect(i.file.fileRef).to.be.a('string'));",
+         "});"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "7 \u00b7 Daily Berthing Reports",
+     "request": {
+      "method": "GET",
+      "header": [
+       {
+        "key": "Authorization",
+        "value": "Bearer {{accessToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/v2/groups/berthing-reports/records?limit=25",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "v2",
+        "groups",
+        "berthing-reports",
+        "records"
+       ],
+       "query": [
+        {
+         "key": "limit",
+         "value": "25"
+        },
+        {
+         "key": "date",
+         "value": "2026-08-03",
+         "disabled": true
+        },
+        {
+         "key": "terminal",
+         "value": "BMCT",
+         "disabled": true
+        }
+       ]
+      },
+      "description": "Per-terminal daily berthing position. Ground truth, so returned as JSON with full detail rather than PDF.  Delivery: report."
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test('200', () => pm.response.to.have.status(200));",
+         "const j = pm.response.json();",
+         "pm.test('report JSON, no file reference', () => {",
+         "  j.items.forEach(i => pm.expect(i).to.not.have.property('file'));",
+         "});"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "8 \u00b7 Form 13, EIR and PIN",
+     "request": {
+      "method": "GET",
+      "header": [
+       {
+        "key": "Authorization",
+        "value": "Bearer {{accessToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/v2/groups/gate-documents/records?limit=25",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "v2",
+        "groups",
+        "gate-documents",
+        "records"
+       ],
+       "query": [
+        {
+         "key": "limit",
+         "value": "25"
+        },
+        {
+         "key": "from",
+         "value": "2026-08-01",
+         "disabled": true
+        },
+        {
+         "key": "type",
+         "value": "IGM",
+         "disabled": true
+        }
+       ]
+      },
+      "description": "Gate pass, equipment interchange receipt and PIN ticket, per container.  Delivery: indexed."
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test('200', () => pm.response.to.have.status(200));",
+         "const j = pm.response.json();",
+         "if (j.items.length) pm.collectionVariables.set('fileRef', j.items[0].file.fileRef);",
+         "pm.test('metadata only, with a file reference', () => {",
+         "  j.items.forEach(i => pm.expect(i.file.fileRef).to.be.a('string'));",
+         "});"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "9 \u00b7 NLDS and FOIS",
+     "request": {
+      "method": "GET",
+      "header": [
+       {
+        "key": "Authorization",
+        "value": "Bearer {{accessToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/v2/groups/rail-fois/records?limit=25",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "v2",
+        "groups",
+        "rail-fois",
+        "records"
+       ],
+       "query": [
+        {
+         "key": "limit",
+         "value": "25"
+        },
+        {
+         "key": "from",
+         "value": "2026-08-01",
+         "disabled": true
+        },
+        {
+         "key": "type",
+         "value": "IGM",
+         "disabled": true
+        }
+       ]
+      },
+      "description": "Rake pre-advice and train intimation, and the terminal operating system extract.  Delivery: indexed."
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test('200', () => pm.response.to.have.status(200));",
+         "const j = pm.response.json();",
+         "if (j.items.length) pm.collectionVariables.set('fileRef', j.items[0].file.fileRef);",
+         "pm.test('metadata only, with a file reference', () => {",
+         "  j.items.forEach(i => pm.expect(i.file.fileRef).to.be.a('string'));",
+         "});"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "10 \u00b7 Form 11 and ICD Rail",
+     "request": {
+      "method": "GET",
+      "header": [
+       {
+        "key": "Authorization",
+        "value": "Bearer {{accessToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/v2/groups/rail-form11-icd/records?limit=25",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "v2",
+        "groups",
+        "rail-form11-icd",
+        "records"
+       ],
+       "query": [
+        {
+         "key": "limit",
+         "value": "25"
+        },
+        {
+         "key": "from",
+         "value": "2026-08-01",
+         "disabled": true
+        },
+        {
+         "key": "type",
+         "value": "IGM",
+         "disabled": true
+        }
+       ]
+      },
+      "description": "Rake placement memos. The ICD daily report is ground truth and comes back as JSON.  Delivery: indexed."
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test('200', () => pm.response.to.have.status(200));",
+         "const j = pm.response.json();",
+         "if (j.items.length) pm.collectionVariables.set('fileRef', j.items[0].file.fileRef);",
+         "pm.test('metadata only, with a file reference', () => {",
+         "  j.items.forEach(i => pm.expect(i.file.fileRef).to.be.a('string'));",
+         "});"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "11 \u00b7 Transport Data",
+     "request": {
+      "method": "GET",
+      "header": [
+       {
+        "key": "Authorization",
+        "value": "Bearer {{accessToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/v2/groups/transport/records?limit=25",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "v2",
+        "groups",
+        "transport",
+        "records"
+       ],
+       "query": [
+        {
+         "key": "limit",
+         "value": "25"
+        },
+        {
+         "key": "from",
+         "value": "2026-08-01",
+         "disabled": true
+        },
+        {
+         "key": "type",
+         "value": "IGM",
+         "disabled": true
+        }
+       ]
+      },
+      "description": "Transporter and driver particulars behind the road moves.  Delivery: indexed."
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test('200', () => pm.response.to.have.status(200));",
+         "const j = pm.response.json();",
+         "if (j.items.length) pm.collectionVariables.set('fileRef', j.items[0].file.fileRef);",
+         "pm.test('metadata only, with a file reference', () => {",
+         "  j.items.forEach(i => pm.expect(i.file.fileRef).to.be.a('string'));",
+         "});"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "12 \u00b7 Performance and Daily Status Reports",
+     "request": {
+      "method": "GET",
+      "header": [
+       {
+        "key": "Authorization",
+        "value": "Bearer {{accessToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/v2/groups/daily-reports/records?limit=25",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "v2",
+        "groups",
+        "daily-reports",
+        "records"
+       ],
+       "query": [
+        {
+         "key": "limit",
+         "value": "25"
+        },
+        {
+         "key": "date",
+         "value": "2026-08-03",
+         "disabled": true
+        },
+        {
+         "key": "terminal",
+         "value": "BMCT",
+         "disabled": true
+        }
+       ]
+      },
+      "description": "Port-wide daily status. Ground truth, so returned as JSON with full detail rather than PDF.  Delivery: report."
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test('200', () => pm.response.to.have.status(200));",
+         "const j = pm.response.json();",
+         "pm.test('report JSON, no file reference', () => {",
+         "  j.items.forEach(i => pm.expect(i).to.not.have.property('file'));",
+         "});"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "13 \u00b7 CFS and Empty Yard",
+     "request": {
+      "method": "GET",
+      "header": [
+       {
+        "key": "Authorization",
+        "value": "Bearer {{accessToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/v2/groups/cfs-ecy/records?limit=25",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "v2",
+        "groups",
+        "cfs-ecy",
+        "records"
+       ],
+       "query": [
+        {
+         "key": "limit",
+         "value": "25"
+        },
+        {
+         "key": "from",
+         "value": "2026-08-01",
+         "disabled": true
+        },
+        {
+         "key": "type",
+         "value": "IGM",
+         "disabled": true
+        }
+       ]
+      },
+      "description": "CFS gate moves and empty yard positions.  Delivery: indexed."
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test('200', () => pm.response.to.have.status(200));",
+         "const j = pm.response.json();",
+         "if (j.items.length) pm.collectionVariables.set('fileRef', j.items[0].file.fileRef);",
+         "pm.test('metadata only, with a file reference', () => {",
+         "  j.items.forEach(i => pm.expect(i.file.fileRef).to.be.a('string'));",
+         "});"
+        ]
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "3 \u00b7 Files",
+   "item": [
+    {
+     "name": "Download by file reference",
+     "request": {
+      "method": "GET",
+      "header": [
+       {
+        "key": "Authorization",
+        "value": "Bearer {{accessToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/v2/files/{{fileRef}}",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "v2",
+        "files",
+        "{{fileRef}}"
+       ]
+      },
+      "description": "Second step of the contract. The reference comes from a group record; it is signed, so an altered reference is rejected. Send If-None-Match with the ETag to revalidate."
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test('200 or 304', () => pm.expect([200,304]).to.include(pm.response.code));",
+         "pm.test('has a filename', () => pm.expect(pm.response.headers.get('Content-Disposition')).to.include('filename'));"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "Rejects a tampered reference",
+     "request": {
+      "method": "GET",
+      "header": [
+       {
+        "key": "Authorization",
+        "value": "Bearer {{accessToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/v2/files/ref_TAMPERED0000000000",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "v2",
+        "files",
+        "ref_TAMPERED0000000000"
+       ]
+      },
+      "description": "Negative test. References are HMAC-signed; altering one must fail closed."
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test('404', () => pm.response.to.have.status(404));"
+        ]
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "4 \u00b7 Query patterns",
+   "item": [
+    {
+     "name": "Latest first (default)",
+     "request": {
+      "method": "GET",
+      "header": [
+       {
+        "key": "Authorization",
+        "value": "Bearer {{accessToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/v2/groups/customs/records?type=IGM&limit=5",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "v2",
+        "groups",
+        "customs",
+        "records"
+       ],
+       "query": [
+        {
+         "key": "type",
+         "value": "IGM"
+        },
+        {
+         "key": "limit",
+         "value": "5"
+        }
+       ]
+      },
+      "description": "No date bounds: the most recent records come back first, as a live endpoint would."
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "const j=pm.response.json();",
+         "pm.test('newest first',()=>{const p=j.items.map(i=>i.publishedAt);",
+         "  pm.expect(p).to.eql([...p].sort().reverse());});"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "Bounded by date range",
+     "request": {
+      "method": "GET",
+      "header": [
+       {
+        "key": "Authorization",
+        "value": "Bearer {{accessToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/v2/groups/customs/records?from=2026-08-01&to=2026-08-03&limit=50",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "v2",
+        "groups",
+        "customs",
+        "records"
+       ],
+       "query": [
+        {
+         "key": "from",
+         "value": "2026-08-01"
+        },
+        {
+         "key": "to",
+         "value": "2026-08-03"
+        },
+        {
+         "key": "limit",
+         "value": "50"
+        }
+       ]
+      },
+      "description": "from/to are inclusive. A bare date as the upper bound means the end of that day."
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "const j=pm.response.json();",
+         "pm.test('inside the range',()=>j.items.forEach(i=>",
+         "  pm.expect(i.publishedAt.slice(0,10)).to.be.within('2026-08-01','2026-08-03')));"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "Incremental read with since",
+     "request": {
+      "method": "GET",
+      "header": [
+       {
+        "key": "Authorization",
+        "value": "Bearer {{accessToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/v2/groups/nlp-marine/records?since={{lastSeen}}&order=asc&limit=50",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "v2",
+        "groups",
+        "nlp-marine",
+        "records"
+       ],
+       "query": [
+        {
+         "key": "since",
+         "value": "{{lastSeen}}"
+        },
+        {
+         "key": "order",
+         "value": "asc"
+        },
+        {
+         "key": "limit",
+         "value": "50"
+        }
+       ]
+      },
+      "description": "since is exclusive, so you never re-read the last record. Store the last publishedAt and repeat."
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "const j=pm.response.json();",
+         "if(j.items.length) pm.collectionVariables.set('lastSeen', j.items[j.items.length-1].publishedAt);",
+         "console.log('read', j.items.length, 'of', j.matched);"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "Page with the cursor",
+     "request": {
+      "method": "GET",
+      "header": [
+       {
+        "key": "Authorization",
+        "value": "Bearer {{accessToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/v2/groups/gate-documents/records?limit=25",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "v2",
+        "groups",
+        "gate-documents",
+        "records"
+       ],
+       "query": [
+        {
+         "key": "limit",
+         "value": "25"
+        },
+        {
+         "key": "cursor",
+         "value": "{{nextCursor}}",
+         "disabled": true
+        }
+       ]
+      },
+      "description": "When hasMore is true, pass nextCursor back verbatim."
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "const j=pm.response.json();",
+         "if(j.nextCursor) pm.collectionVariables.set('nextCursor', j.nextCursor);"
+        ]
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "variable": [
+  {
+   "key": "baseUrl",
+   "value": "https://dt.jnpa.in/poc-api-data-access",
+   "description": "API base URL"
+  },
+  {
+   "key": "clientKey",
+   "value": "MzQ0MTMzODJiNTE1N2U2ZTY1MTY=",
+   "description": "Key issued to your organisation"
+  },
+  {
+   "key": "accessToken",
+   "value": "",
+   "description": "Set automatically by the auth request"
+  },
+  {
+   "key": "fileRef",
+   "value": "",
+   "description": "Set automatically from the first group record"
+  },
+  {
+   "key": "nextCursor",
+   "value": ""
+  },
+  {
+   "key": "lastSeen",
+   "value": "2026-07-30T00:00:00+05:30"
+  },
+  {
+   "key": "simulatedNow",
+   "value": ""
+  }
+ ]
+}

@@ -427,5 +427,146 @@ class RailRepository:
                 "error_count = :n, updated_at = now() WHERE id = :id"),
                 {"n": error_count, "id": file_id})
 
+    # -------------------------------------------------------------- reads
+    # Router-facing list/summary queries (gateway/routers/rail.py). data_origin
+    # follows the LIVE/DEMO selector convention (gateway/data_mode.py): a value
+    # narrows to that origin, None shows everything.
+
+    async def _paged(self, base_from: str, where: list[str],
+                     params: dict[str, Any], order: str,
+                     limit: int, offset: int) -> tuple[list[dict], int]:
+        clause = f" WHERE {' AND '.join(where)}" if where else ""
+        async with get_engine(self._dsn).connect() as conn:
+            total = int((await conn.execute(text(
+                f"SELECT count(*) FROM {base_from}{clause}"),
+                params)).scalar() or 0)
+            rows = (await conn.execute(text(
+                f"SELECT * FROM {base_from}{clause} ORDER BY {order} "
+                "LIMIT :limit OFFSET :offset"),
+                {**params, "limit": limit, "offset": offset})).mappings().all()
+        return [dict(r) for r in rows], total
+
+    async def list_fois(self, *, data_origin: Optional[str] = None,
+                        loaded_empty: Optional[str] = None,
+                        q: Optional[str] = None,
+                        limit: int = 100, offset: int = 0
+                        ) -> tuple[list[dict], int]:
+        where, params = [], {}
+        if data_origin:
+            where.append("data_origin = :data_origin")
+            params["data_origin"] = data_origin
+        if loaded_empty:
+            where.append("upper(loaded_empty_flag) = :le")
+            params["le"] = loaded_empty.strip().upper()
+        if q:
+            where.append("(rake_id ILIKE :q OR rake_name ILIKE :q "
+                         "OR station_from ILIKE :q OR station_to ILIKE :q)")
+            params["q"] = f"%{q.strip()}%"
+        return await self._paged("core.fois_train_intimation", where, params,
+                                 "eda DESC NULLS LAST, id DESC", limit, offset)
+
+    async def list_form11(self, *, data_origin: Optional[str] = None,
+                          terminal: Optional[str] = None,
+                          q: Optional[str] = None,
+                          limit: int = 100, offset: int = 0
+                          ) -> tuple[list[dict], int]:
+        where, params = [], {}
+        if data_origin:
+            where.append("data_origin = :data_origin")
+            params["data_origin"] = data_origin
+        if terminal:
+            where.append("upper(terminal) = :terminal")
+            params["terminal"] = terminal.strip().upper()
+        if q:
+            where.append("(container_no ILIKE :q OR booking_number ILIKE :q "
+                         "OR icd_location ILIKE :q)")
+            params["q"] = f"%{q.strip()}%"
+        return await self._paged("core.form11_entry", where, params,
+                                 "id DESC", limit, offset)
+
+    async def list_cto(self, *, data_origin: Optional[str] = None,
+                       cto_code: Optional[str] = None,
+                       q: Optional[str] = None,
+                       limit: int = 100, offset: int = 0
+                       ) -> tuple[list[dict], int]:
+        where, params = [], {}
+        if data_origin:
+            where.append("data_origin = :data_origin")
+            params["data_origin"] = data_origin
+        if cto_code:
+            where.append("upper(cto_code) = :cto")
+            params["cto"] = cto_code.strip().upper()
+        if q:
+            where.append("(container_no ILIKE :q OR wagon_no ILIKE :q "
+                         "OR rake_no ILIKE :q OR rake_id ILIKE :q)")
+            params["q"] = f"%{q.strip()}%"
+        return await self._paged("core.cto_manifest_entry", where, params,
+                                 "event_ts DESC NULLS LAST, id DESC",
+                                 limit, offset)
+
+    async def list_uploads(self, *, feed: Optional[str] = None,
+                           limit: int = 50, offset: int = 0
+                           ) -> tuple[list[dict], int]:
+        where, params = [], {}
+        if feed:
+            where.append("feed = :feed")
+            params["feed"] = feed.strip().upper()
+        return await self._paged("core.rail_import_file", where, params,
+                                 "id DESC", limit, offset)
+
+    async def summary(self, *, data_origin: Optional[str] = None) -> dict:
+        """Per-feed KPIs for the rail card: row counts, inbound rakes
+        (eda still ahead), latest activity timestamps."""
+        where, params = "", {}
+        if data_origin:
+            where = " WHERE data_origin = :data_origin"
+            params = {"data_origin": data_origin}
+        async with get_engine(self._dsn).connect() as conn:
+            fois = (await conn.execute(text(
+                "SELECT count(*) AS total, "
+                "count(*) FILTER (WHERE eda >= now()) AS inbound_rakes, "
+                "count(DISTINCT rake_id) AS distinct_rakes, "
+                "max(last_status_time) AS last_status_time, max(eda) AS max_eda "
+                f"FROM core.fois_train_intimation{where}"),
+                params)).mappings().first()
+            form11 = (await conn.execute(text(
+                "SELECT count(*) AS total, "
+                "count(DISTINCT container_no) AS distinct_containers, "
+                "count(DISTINCT terminal) AS terminals "
+                f"FROM core.form11_entry{where}"),
+                params)).mappings().first()
+            cto = (await conn.execute(text(
+                "SELECT count(*) AS total, "
+                "count(DISTINCT COALESCE(rake_no, rake_id)) AS rakes, "
+                "count(*) FILTER (WHERE is_empty) AS empties, "
+                "max(event_ts) AS last_event_ts "
+                f"FROM core.cto_manifest_entry{where}"),
+                params)).mappings().first()
+        return {"fois": dict(fois or {}), "form11": dict(form11 or {}),
+                "cto": dict(cto or {})}
+
+    async def container_rail_view(self, container_no: str, *,
+                                  data_origin: Optional[str] = None) -> dict:
+        """Form 11 + CTO manifest rows for one container (rail leg of the
+        follow-the-box timeline)."""
+        cn = container_no.strip().upper()
+        extra, params = "", {"cn": cn}
+        if data_origin:
+            extra = " AND data_origin = :data_origin"
+            params["data_origin"] = data_origin
+        async with get_engine(self._dsn).connect() as conn:
+            form11 = (await conn.execute(text(
+                "SELECT * FROM core.form11_entry "
+                f"WHERE upper(container_no) = :cn{extra} ORDER BY id DESC"),
+                params)).mappings().all()
+            cto = (await conn.execute(text(
+                "SELECT * FROM core.cto_manifest_entry "
+                f"WHERE upper(container_no) = :cn{extra} "
+                "ORDER BY event_ts DESC NULLS LAST, id DESC"),
+                params)).mappings().all()
+        return {"container_no": cn,
+                "form11": [dict(r) for r in form11],
+                "cto": [dict(r) for r in cto]}
+
 
 __all__ = ["RailRepository", "ensure_rail_schema"]

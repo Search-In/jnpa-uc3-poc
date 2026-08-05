@@ -372,7 +372,11 @@ function DailyTab({ dates, latest }: { dates: string[]; latest: string | null })
   const b = bundleQ.data;
   const status: any[] = b?.status ?? [];
   const traffic: any[] = (b?.traffic ?? []).filter((r: any) => r.period === "DAY");
+  const tonnage: any[] = (b?.tonnage ?? []).filter((r: any) => r.period === "DAY");
   const vessels: any[] = b?.vessels ?? [];
+  const hasRail = traffic.some(
+    (r: any) => r.rakes != null || r.rail_total_teus != null,
+  );
 
   const statusCols: Column<any>[] = [
     {
@@ -419,6 +423,92 @@ function DailyTab({ dates, latest }: { dates: string[]; latest: string | null })
       render: (r) => num(r.reefer_available_slots),
     },
   ];
+  // Rail + TEU traffic per terminal (module 12 §rail — previously received
+  // from /daily but never rendered).
+  const trafficCols: Column<any>[] = [
+    {
+      key: "terminal_code",
+      header: "Terminal",
+      render: (r) => <span className="font-semibold">{r.terminal_code}</span>,
+    },
+    { key: "vessels", header: "Vessels", align: "right", render: (r) => num(r.vessels) },
+    { key: "imp_teus", header: "Imp TEUs", align: "right", render: (r) => num(r.imp_teus) },
+    { key: "exp_teus", header: "Exp TEUs", align: "right", render: (r) => num(r.exp_teus) },
+    { key: "total_teus", header: "Total TEUs", align: "right", render: (r) => num(r.total_teus) },
+    { key: "rakes", header: "Rakes", align: "right", render: (r) => num(r.rakes) },
+    {
+      key: "rail_dis_teus",
+      header: "Rail disch.",
+      align: "right",
+      render: (r) => num(r.rail_dis_teus),
+    },
+    {
+      key: "rail_ldg_teus",
+      header: "Rail load",
+      align: "right",
+      render: (r) => num(r.rail_ldg_teus),
+    },
+    {
+      key: "rail_total_teus",
+      header: "Rail TEUs",
+      align: "right",
+      render: (r) => num(r.rail_total_teus),
+    },
+  ];
+
+  // Cargo tonnage section (liquid / dry bulk / break bulk — previously
+  // received from /daily but never rendered).
+  const TONNAGE_LABELS: Record<string, string> = {
+    BPCL: "BPCL",
+    NSDT: "NSDT",
+    JJLTPL: "JJLTPL",
+    OTHER: "Other",
+    BULK_TOTAL: "Bulk total",
+    CONTAINER_TOTAL: "Container total",
+    JNPA_TOTAL: "JNPA total",
+  };
+  const isTonnageTotal = (c: string) => c?.endsWith("_TOTAL");
+  const tonnageCols: Column<any>[] = [
+    {
+      key: "category",
+      header: "Category",
+      render: (r) => (
+        <span className={isTonnageTotal(r.category) ? "font-semibold" : undefined}>
+          {TONNAGE_LABELS[r.category] ?? r.category}
+        </span>
+      ),
+    },
+    { key: "vessels", header: "Vessels", align: "right", render: (r) => num(r.vessels) },
+    {
+      key: "liquid_tonnes",
+      header: "Liquid (t)",
+      align: "right",
+      render: (r) => num(r.liquid_tonnes),
+    },
+    {
+      key: "dry_bulk_tonnes",
+      header: "Dry bulk (t)",
+      align: "right",
+      render: (r) => num(r.dry_bulk_tonnes),
+    },
+    {
+      key: "break_bulk_tonnes",
+      header: "Break bulk (t)",
+      align: "right",
+      render: (r) => num(r.break_bulk_tonnes),
+    },
+    {
+      key: "total_tonnes",
+      header: "Total (t)",
+      align: "right",
+      render: (r) => (
+        <span className={isTonnageTotal(r.category) ? "font-semibold" : undefined}>
+          {num(r.total_tonnes)}
+        </span>
+      ),
+    },
+  ];
+
   const vesselCols: Column<any>[] = [
     {
       key: "terminal_code",
@@ -441,6 +531,14 @@ function DailyTab({ dates, latest }: { dates: string[]; latest: string | null })
       key: "berthed_on",
       header: "Berthed",
       render: (r) => (r.berthed_on ? String(r.berthed_on).replace("T", " ").slice(0, 16) : "—"),
+    },
+    {
+      key: "expected_completion",
+      header: "Exp. completion",
+      render: (r) =>
+        r.expected_completion
+          ? String(r.expected_completion).replace("T", " ").slice(0, 16)
+          : "—",
     },
   ];
 
@@ -494,6 +592,99 @@ function DailyTab({ dates, latest }: { dates: string[]; latest: string | null })
           </ResponsiveContainer>
         </div>
       </Card>
+
+      <Card className="p-0">
+        <div className="border-b border-border px-3 py-2 text-sm font-semibold text-foreground">
+          TEU &amp; rail traffic (day) — by terminal
+          {!hasRail && (
+            <span className="ml-2 text-[11px] font-normal text-muted-foreground">
+              (no rail figures reported for this date)
+            </span>
+          )}
+        </div>
+        <DataTable
+          columns={trafficCols}
+          rows={traffic}
+          rowKey={(r) => `${r.report_date}-${r.terminal_code}-${r.period}`}
+          status={mergeStatus(bundleQ)}
+          onRetry={() => bundleQ.refetch()}
+          emptyLabel="No traffic rows for this date."
+          pageSize={10}
+          toolbar={
+            <Toolbar
+              onExport={() =>
+                exportCsv(
+                  `daily-traffic-${active}.csv`,
+                  [
+                    "terminal",
+                    "vessels",
+                    "imp_teus",
+                    "exp_teus",
+                    "total_teus",
+                    "rakes",
+                    "rail_dis_teus",
+                    "rail_ldg_teus",
+                    "rail_total_teus",
+                  ],
+                  traffic.map((r) => [
+                    r.terminal_code,
+                    r.vessels,
+                    r.imp_teus,
+                    r.exp_teus,
+                    r.total_teus,
+                    r.rakes,
+                    r.rail_dis_teus,
+                    r.rail_ldg_teus,
+                    r.rail_total_teus,
+                  ]),
+                )
+              }
+            />
+          }
+        />
+      </Card>
+
+      {tonnage.length > 0 && (
+        <Card className="p-0">
+          <div className="border-b border-border px-3 py-2 text-sm font-semibold text-foreground">
+            Cargo tonnage (day) — liquid / dry bulk / break bulk
+          </div>
+          <DataTable
+            columns={tonnageCols}
+            rows={tonnage}
+            rowKey={(r) => `${r.report_date}-${r.category}-${r.period}`}
+            status={mergeStatus(bundleQ)}
+            onRetry={() => bundleQ.refetch()}
+            emptyLabel="No tonnage rows for this date."
+            pageSize={10}
+            toolbar={
+              <Toolbar
+                onExport={() =>
+                  exportCsv(
+                    `daily-tonnage-${active}.csv`,
+                    [
+                      "category",
+                      "vessels",
+                      "liquid_tonnes",
+                      "dry_bulk_tonnes",
+                      "break_bulk_tonnes",
+                      "total_tonnes",
+                    ],
+                    tonnage.map((r) => [
+                      r.category,
+                      r.vessels,
+                      r.liquid_tonnes,
+                      r.dry_bulk_tonnes,
+                      r.break_bulk_tonnes,
+                      r.total_tonnes,
+                    ]),
+                  )
+                }
+              />
+            }
+          />
+        </Card>
+      )}
 
       <Card className="p-0">
         <div className="border-b border-border px-3 py-2 text-sm font-semibold text-foreground">

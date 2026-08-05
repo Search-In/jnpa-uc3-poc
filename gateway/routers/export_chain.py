@@ -140,6 +140,44 @@ async def list_coarri(
     return res
 
 
+@router.get("/cutoffs", response_model=Page,
+            summary="Vessel gate-open / cut-off windows (the EC-1 input)")
+async def list_cutoffs(
+    request: Request,
+    response: Response,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+) -> Page:
+    """Gate open → dry cut-off → reefer cut-off, per vessel call.
+
+    The precondition of edge case EC-1 (shutout risk): "scan ETA vs vessel
+    cut-off". Backfilled from the terminals' VESSELS EXPECTED panels by
+    scripts/ingest_berthing_cutoffs.py in the dashboard repo.
+
+    ⚠ Only NSICT and NSIGT publish these times, so this is 139 of 775 vessel
+    rows, of which 46 carry a cut-off.
+
+    ⚠ This is VESSEL-level only. No container in the corpus can be tied to a
+    vessel that has a cut-off — the export advance lists' vessel visits appear in
+    neither core.berthing_report_vessel nor core.vessel_call. So the per-box
+    shutout-risk list EC-1 describes is NOT derivable; this endpoint serves the
+    half that is.
+    """
+    res = await _page(
+        _dsn(request),
+        "SELECT v.id, v.vessel_name, v.via_no, v.section, v.eta, v.gate_open_ts, "
+        "       v.cutoff_dry_ts, v.cutoff_reefer_ts, v.service, v.line_code, "
+        "       r.report_date, t.code AS terminal_code",
+        "core.berthing_report_vessel v "
+        "JOIN core.berthing_report r ON r.report_id = v.report_id "
+        "LEFT JOIN core.ref_terminal t ON t.terminal_id = r.terminal_id",
+        response, order="v.cutoff_dry_ts NULLS LAST, v.gate_open_ts",
+        limit=limit, offset=offset,
+        where="WHERE v.gate_open_ts IS NOT NULL OR v.cutoff_dry_ts IS NOT NULL")
+    REQUESTS.labels("export_chain", "ok").inc()
+    return res
+
+
 @router.get("/synthetic", summary="SYNTHETIC end-to-end export chains (schema synth)")
 async def list_synthetic(
     request: Request,

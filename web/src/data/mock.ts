@@ -431,17 +431,8 @@ function buildMockLdbTruck(vehicleNumber: string): LdbTruckTracking {
       terminals: [{ locName: events[0].locName, events }],
       latest: events[0],
       alert: `ALERT! Trailer ${plate} carrying Container No. HMMU4963884`,
-      compliance: {
-        status: "COMPLIANT",
-        owner: "DEMO TRANSPORT LLP",
-        vehicleClass: "Goods Carriage (HMV)",
-        fitnessValidUpto: "31-03-2027",
-        insuranceValidUpto: "15-11-2026",
-        pucValidUpto: "01-02-2027",
-        chassisNumber: "MB1AA12CD3456789",
-        engineNumber: "ENG55CQ054",
-        notes: "In-app compliance snapshot (Vahan-style). No external redirect.",
-      },
+      // No fabricated compliance — LIVE path fetches LDB Vahan details.
+      compliance: null,
     };
   }
 
@@ -481,17 +472,7 @@ function buildMockLdbTruck(vehicleNumber: string): LdbTruckTracking {
     terminals: [{ locName: terminal, events }],
     latest: events[0],
     alert: `ALERT! Trailer ${plate} carrying Container No. ${container}`,
-    compliance: {
-      status: "COMPLIANT",
-      owner: "JNPA DEMO FLEET",
-      vehicleClass: "Goods Carriage (HMV)",
-      fitnessValidUpto: "31-12-2026",
-      insuranceValidUpto: "30-06-2027",
-      pucValidUpto: "31-03-2027",
-      chassisNumber: `CH${digits.slice(-8).padStart(8, "0")}`,
-      engineNumber: `EN${digits.slice(-6).padStart(6, "0")}`,
-      notes: "In-app compliance snapshot. No external redirect.",
-    },
+    compliance: null,
   };
 }
 

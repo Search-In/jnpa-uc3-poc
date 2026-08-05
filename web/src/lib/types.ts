@@ -878,18 +878,19 @@ export interface LdbTruckTracking {
   latest?: LdbTruckEvent | null;
   events: LdbTruckEvent[];
   terminals: Array<{ locName: string; events: LdbTruckEvent[] }>;
-  /** In-app vehicle compliance snapshot (no external redirect). */
+  /** LIVE LDB Vahan compliance (GET /vahan/get/vahanDetails/{plate}). Never mocked. */
   compliance?: {
     status: "COMPLIANT" | "NON_COMPLIANT" | "UNKNOWN";
-    owner?: string;
-    vehicleClass?: string;
-    fitnessValidUpto?: string;
-    insuranceValidUpto?: string;
-    pucValidUpto?: string;
-    chassisNumber?: string;
-    engineNumber?: string;
-    notes?: string;
-  };
+    vehicleClass?: string | null;
+    fuelType?: string | null;
+    fitnessValidUpto?: string | null;
+    taxValidUpto?: string | null;
+    insuranceValidUpto?: string | null;
+    pucValidUpto?: string | null;
+    permitValidUpto?: string | null;
+    vehicleCategory?: string | null;
+    source?: string;
+  } | null;
 }
 
 export interface LdbTruckTrackingResponse {

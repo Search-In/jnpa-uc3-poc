@@ -374,9 +374,7 @@ function DailyTab({ dates, latest }: { dates: string[]; latest: string | null })
   const traffic: any[] = (b?.traffic ?? []).filter((r: any) => r.period === "DAY");
   const tonnage: any[] = (b?.tonnage ?? []).filter((r: any) => r.period === "DAY");
   const vessels: any[] = b?.vessels ?? [];
-  const hasRail = traffic.some(
-    (r: any) => r.rakes != null || r.rail_total_teus != null,
-  );
+  const hasRail = traffic.some((r: any) => r.rakes != null || r.rail_total_teus != null);
 
   const statusCols: Column<any>[] = [
     {
@@ -536,9 +534,7 @@ function DailyTab({ dates, latest }: { dates: string[]; latest: string | null })
       key: "expected_completion",
       header: "Exp. completion",
       render: (r) =>
-        r.expected_completion
-          ? String(r.expected_completion).replace("T", " ").slice(0, 16)
-          : "—",
+        r.expected_completion ? String(r.expected_completion).replace("T", " ").slice(0, 16) : "—",
     },
   ];
 

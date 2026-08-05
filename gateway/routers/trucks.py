@@ -150,6 +150,74 @@ async def _secondary_ulip(state: GatewayState, device_id: str) -> Optional[dict]
     return None
 
 
+async def _list_secondary_rds(state: GatewayState, limit: int) -> Optional[list[dict]]:
+    """SECONDARY for the fleet LIST: the persisted telemetry tail from RDS.
+
+    ``core.truck_telemetry`` is where the trucking app's MQTT position stream
+    lands, so the latest row per device is the SAME observation the truck-sim
+    control plane would have served — read from the durable tail instead of the
+    sim's memory. This is not a synthesised fleet: a device only appears here
+    because it actually reported a position.
+
+    Returns None when the DSN is unset or the query fails, so the caller can fall
+    through to the next rung. Ordered newest-device-first and capped by ``limit``.
+    """
+    dsn = getattr(state.cfg, "postgres_dsn", None)
+    if not dsn:
+        return None
+    from jnpa_shared.db import fetch_all
+
+    try:
+        rows = await fetch_all(
+            """
+            SELECT DISTINCT ON (device_id)
+                   device_id, plate, lat, lon, speed_kmh, heading, ts
+            FROM core.truck_telemetry
+            WHERE ts > now() - interval '24 hours'
+            ORDER BY device_id, ts DESC
+            LIMIT :limit
+            """,
+            {"limit": limit}, dsn=dsn,
+        )
+    except Exception as exc:  # noqa: BLE001 — a dead rung must fall through
+        log.warning("trucks_list_secondary_failed", error=str(exc))
+        return None
+    devices = []
+    for r in rows:
+        d = dict(r)
+        ts = d.pop("ts", None)
+        devices.append({
+            "device_id": d.get("device_id"), "plate": d.get("plate"),
+            "lat": d.get("lat"), "lon": d.get("lon"),
+            "speed_kmh": d.get("speed_kmh"), "heading": d.get("heading"),
+            "last_seen": ts.isoformat() if isinstance(ts, datetime) else ts,
+            # The telemetry tail carries no TruckState — say so rather than
+            # inventing one. See the state-filter note in list_trucks().
+            "state": None,
+            "source": "rds-telemetry",
+        })
+    return devices or None
+
+
+def _list_tertiary_checkins(limit: int) -> Optional[list[dict]]:
+    """TERTIARY for the fleet LIST: the manual web check-ins already held in
+    memory — the same rung ``GET /api/trucks/{id}`` falls back to. A vehicle here
+    is admitted under elevated scrutiny (see the module docstring)."""
+    if not CHECKINS:
+        return None
+    devices = []
+    for device_id, rec in list(CHECKINS.items())[:limit]:
+        devices.append({
+            "device_id": device_id, "plate": rec.get("plate"),
+            "lat": rec.get("lat"), "lon": rec.get("lon"),
+            "speed_kmh": None, "heading": None,
+            "last_seen": rec.get("submitted_at"),
+            "state": None,
+            "source": "web-checkin", "elevated_scrutiny": True,
+        })
+    return devices or None
+
+
 @router.get("")
 @router.get("/")
 async def list_trucks(
@@ -157,26 +225,88 @@ async def list_trucks(
     limit: int = Query(default=200, ge=1, le=2000),
     gw: GatewayState = Depends(get_state),
 ) -> dict:
-    """Sampled list of live trucks for the dashboard (proxies truck-sim).
+    """Sampled list of live trucks for the dashboard.
 
     ``state=AT_GATE_QUEUE`` powers the Driver-Advisory queue. Each device carries
     ``eta_s`` and ``remaining_km`` so the dashboard can render ETA-to-gate
     without a second round-trip.
+
+    FALLBACK CHAIN. This endpoint used to proxy the truck-sim and nothing else:
+    a sim outage returned ``{count: 0, devices: [], degraded: true}``, so the
+    whole fleet vanished from the dashboard even though the position stream was
+    sitting in RDS. It now follows the SAME ladder the single-device read below
+    already implements:
+
+        PRIMARY   -> truck-sim /devices/list      (live control plane)
+        SECONDARY -> core.truck_telemetry          (persisted position tail)
+        TERTIARY  -> in-memory /checkin submissions (elevated scrutiny)
+
+    STATE FILTER. Only the PRIMARY rung knows a device's ``TruckState``. When a
+    caller asks for one (``state=AT_GATE_QUEUE``) and the sim is unavailable, the
+    fallback rungs are SKIPPED and the response degrades to empty — returning the
+    unfiltered fleet would answer a different question than the one asked. The
+    response says so via ``state_filter_supported``.
     """
     url = gw.cfg.truck_api_url.rstrip("/") + "/devices/list"
     params: Dict[str, str] = {"limit": str(limit)}
     if state:
         params["state"] = state
+
+    # --- PRIMARY: the truck-sim control plane -------------------------------
+    t0 = time.perf_counter()
     try:
         resp = await gw.http.get(url, params=params, timeout=TRUCK_UPSTREAM_TIMEOUT_S)
         if resp.status_code == 200:
+            await gw.record_decision(
+                api="trucks", key="fleet-list", decision_path=TruckPath.PRIMARY.value,
+                latency_ms=(time.perf_counter() - t0) * 1000, source="truck-sim",
+                source_state=SourceState.LIVE)
             REQUESTS.labels("trucks", "ok").inc()
-            return resp.json()
+            body = resp.json()
+            if isinstance(body, dict):
+                body.setdefault("decision_path", TruckPath.PRIMARY.value)
+                body.setdefault("source", "truck-sim")
+                body.setdefault("degraded", False)
+                body.setdefault("state_filter_supported", True)
+            return body
         log.info("trucks_list_miss", status=resp.status_code)
     except httpx.HTTPError as exc:
         log.warning("trucks_list_unreachable", url=url, error=str(exc))
+
+    # A state-filtered query cannot be answered by the rungs below (see above).
+    if state:
+        REQUESTS.labels("trucks", "degraded").inc()
+        return {"count": 0, "filter_state": state, "devices": [], "degraded": True,
+                "decision_path": None, "source": None,
+                "state_filter_supported": False,
+                "hint": "TruckState is only known to the truck-sim; start it to "
+                        "filter by state."}
+
+    # --- SECONDARY: the persisted telemetry tail in RDS ---------------------
+    devices = await _list_secondary_rds(gw, limit)
+    if devices:
+        await gw.record_decision(
+            api="trucks", key="fleet-list", decision_path=TruckPath.SECONDARY.value,
+            source="rds-telemetry", source_state=SourceState.DEGRADED)
+        REQUESTS.labels("trucks", "degraded").inc()
+        return {"count": len(devices), "filter_state": None, "devices": devices,
+                "degraded": True, "decision_path": TruckPath.SECONDARY.value,
+                "source": "rds-telemetry", "state_filter_supported": False}
+
+    # --- TERTIARY: manual web check-ins -------------------------------------
+    devices = _list_tertiary_checkins(limit)
+    if devices:
+        await gw.record_decision(
+            api="trucks", key="fleet-list", decision_path=TruckPath.TERTIARY.value,
+            source="web-checkin", source_state=SourceState.DEGRADED)
+        REQUESTS.labels("trucks", "degraded").inc()
+        return {"count": len(devices), "filter_state": None, "devices": devices,
+                "degraded": True, "decision_path": TruckPath.TERTIARY.value,
+                "source": "web-checkin", "state_filter_supported": False}
+
     REQUESTS.labels("trucks", "degraded").inc()
-    return {"count": 0, "filter_state": state, "devices": [], "degraded": True}
+    return {"count": 0, "filter_state": state, "devices": [], "degraded": True,
+            "decision_path": None, "source": None, "state_filter_supported": False}
 
 
 @router.post("/{device_id}/route")
@@ -204,38 +334,37 @@ async def reroute_truck(
 
     All three are fanned out by the notification dispatcher; the client de-dupes
     across them so the driver sees a single banner.
-    """
-    url = gw.cfg.truck_api_url.rstrip("/") + f"/devices/{device_id}/route"
-    try:
-        resp = await gw.http.post(url, json=body, timeout=TRUCK_UPSTREAM_TIMEOUT_S)
-    except httpx.HTTPError as exc:
-        log.warning("trucks_reroute_unreachable", url=url, error=str(exc))
-        raise HTTPException(status_code=502, detail={"error": "truck_sim_unreachable"})
-    if resp.status_code >= 400:
-        raise HTTPException(status_code=resp.status_code, detail=resp.json())
-    data = resp.json()
-    await gw.record_decision(
-        api="trucks", key=device_id, decision_path="REROUTE", source="truck-sim",
-        source_state=SourceState.LIVE, detail={"reroute": body},
-    )
 
-    # Build the driver-facing re-route advisory and dispatch it on both channels.
+    ORDERING (fix T-1). The truck-sim is an OPTIONAL DOWNSTREAM, not a gate. The
+    driver-facing work — persist the advisory, record the decision, push it on
+    every channel — happens FIRST and unconditionally; the sim is told afterwards.
+    The old order called the sim first and raised 502 on a connect error, which
+    dropped the whole advisory on the floor: nothing reached
+    ``core.reroute_advisory``, no decision was audited and the driver was never
+    notified, purely because a simulator was down. A sim failure now degrades the
+    response (``sim.delivered=false`` + ``decision_path="REROUTE_DEGRADED"``)
+    instead of failing the workflow.
+    """
+    # Build the driver-facing advisory from the REQUEST alone, so it never depends
+    # on the sim's reply. `dest`/`route_km` are enriched from the sim below when it
+    # answers in time (the advisory dict is mutated in place, before the response).
     advisory = {
         "type": "reroute",
         "device_id": device_id,
         "ts": _utcnow_iso(),
         "gate_id": body.get("gate_id"),
-        "dest": data.get("dest"),
-        "route_km": data.get("route_km"),
+        "dest": body.get("dest"),
+        "route_km": None,
         "reason": body.get("reason", "Traffic / gate advisory — new gate assigned"),
         "title": "Re-route advisory",
         "body": f"Proceed to {body.get('gate_id') or 'new destination'}.",
         "requires_ack": True,
     }
     LAST_REROUTE[device_id] = advisory
-    # Mirror to RDS (migration 0115) so the advisory survives a gateway restart
-    # and a PWA refresh — the in-memory dict above stays as the hot cache.
+    # Durable first (migration 0115): the advisory survives a gateway restart, a
+    # PWA refresh AND a truck-sim outage. The in-memory dict is only a hot cache.
     await _advisory_repo(gw).save(device_id, advisory)
+
     # Fan out over WebSocket + WebPush + Firebase FCM via the unified dispatcher.
     from .. import notifications
 
@@ -250,10 +379,44 @@ async def reroute_truck(
     phone = body.get("phone") or body.get("driver_phone")
     sms_result = send_sms(phone, advisory_to_sms_text(advisory)) if phone else None
 
-    REQUESTS.labels("trucks", "ok").inc()
+    # ---- OPTIONAL DOWNSTREAM: tell the truck-sim to actually move the vehicle.
+    url = gw.cfg.truck_api_url.rstrip("/") + f"/devices/{device_id}/route"
+    data: Dict[str, object] = {}
+    sim_ok, sim_error = False, None
+    try:
+        resp = await gw.http.post(url, json=body, timeout=TRUCK_UPSTREAM_TIMEOUT_S)
+        if resp.status_code >= 400:
+            sim_error = f"truck_sim_status_{resp.status_code}"
+            log.warning("trucks_reroute_sim_rejected", url=url,
+                        status=resp.status_code)
+        else:
+            data = resp.json()
+            sim_ok = True
+    except httpx.HTTPError as exc:
+        sim_error = "truck_sim_unreachable"
+        log.warning("trucks_reroute_sim_unreachable", url=url, error=str(exc))
+
+    if sim_ok:
+        # Enrich the advisory (and its stored copy) with what only the sim knows.
+        advisory["dest"] = data.get("dest") or advisory["dest"]
+        advisory["route_km"] = data.get("route_km")
+        await _advisory_repo(gw).save(device_id, advisory)
+
+    await gw.record_decision(
+        api="trucks", key=device_id,
+        decision_path="REROUTE" if sim_ok else "REROUTE_DEGRADED",
+        source="truck-sim" if sim_ok else "gateway",
+        source_state=SourceState.LIVE if sim_ok else SourceState.DEGRADED,
+        detail={"reroute": body, "sim_error": sim_error},
+    )
+
+    REQUESTS.labels("trucks", "ok" if sim_ok else "degraded").inc()
     return {
         **data,
         "advisory": advisory,
+        "persisted": True,
+        "decision_path": "REROUTE" if sim_ok else "REROUTE_DEGRADED",
+        "sim": {"delivered": sim_ok, "error": sim_error},
         "push_delivered": push_delivered,
         "dispatch": fanout.as_dict(),
         "sms": {"delivered": sms_result.delivered, "provider": sms_result.provider}
@@ -296,13 +459,36 @@ async def ack_reroute(
     Recorded as a decision so the demo evidence trail shows the round-trip
     (push -> driver -> ACK) and broadcast so the control-room dashboard can mark
     the advisory acknowledged.
+
+    VALIDATION (fix T-2). There must be an advisory to acknowledge.
+    ``AdvisoryRepository.ack()`` already reports whether a row was updated; this
+    route used to discard that and answer ``{"acked": true}`` unconditionally —
+    *and* wrote a REROUTE_ACK decision first — so an ACK for a device that was
+    never pushed anything fabricated a push -> driver -> ACK round-trip in the
+    evidence trail. The ACK is now applied first and a miss is a 404; the decision
+    is only recorded for an ACK that landed on a real advisory.
     """
     state_val = str(body.get("state", "ACK")).upper()
+    # An advisory counts as ack-able if the RDS row was updated OR the hot cache
+    # still holds one for this device (the durable write can be best-effort when
+    # no DSN is configured — the ACK must not 404 on an advisory the driver can
+    # demonstrably see).
+    acked = await _advisory_repo(gw).ack(device_id, state_val)
+    if not acked and device_id in LAST_REROUTE:
+        acked = True
+    if not acked:
+        log.info("trucks_ack_no_advisory", device_id=device_id, state=state_val)
+        REQUESTS.labels("trucks", "not_found").inc()
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "no_advisory_to_ack", "device_id": device_id,
+                    "acked": False,
+                    "message": f"No re-route advisory is on record for {device_id}."},
+        )
     await gw.record_decision(
         api="trucks", key=device_id, decision_path="REROUTE_ACK", source="truck-app",
         source_state=SourceState.LIVE, detail={"state": state_val},
     )
-    await _advisory_repo(gw).ack(device_id, state_val)
     if device_id in LAST_REROUTE:
         LAST_REROUTE[device_id] = {**LAST_REROUTE[device_id], "ack_state": state_val}
     ack = {"type": "reroute_ack", "device_id": device_id, "state": state_val,

@@ -192,8 +192,13 @@ async def test_reroute_ack_is_addressed_to_the_acking_driver(monkeypatch):
         async def record_decision(self, **kw):
             return None
 
-    monkeypatch.setattr(trucks, "_advisory_repo", lambda gw: _FakeAdvisoryRepo())
+    # An ACK now requires an advisory to acknowledge (audit fix T-2), so give the
+    # driver one first. Previously any ACK succeeded, which let the evidence trail
+    # record a push -> driver -> ACK round-trip that had never happened.
+    repo = _FakeAdvisoryRepo()
+    monkeypatch.setattr(trucks, "_advisory_repo", lambda gw: repo)
     trucks.LAST_REROUTE.clear()
+    await repo.save("TRK-000001", {"type": "reroute", "device_id": "TRK-000001"})
 
     await trucks.ack_reroute("TRK-000001", body={"state": "ACK"}, gw=_Gw())
 

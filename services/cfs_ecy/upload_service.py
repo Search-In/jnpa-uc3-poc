@@ -121,17 +121,28 @@ class CfsEcyUploadService:
             await self._repo.mark_partial(file_id, error_count=res.invalid_count)
             status = "PARTIAL"
 
+        # `imported` must report what THIS request persisted (fix E-1, the CFS-ECY
+        # half of G-1). A re-upload of already-ingested content writes nothing and
+        # returns SKIPPED_DUPLICATE, but `imported_count` still carried the ORIGINAL
+        # import's count — so the response claimed rows had landed when none had.
+        # Persistence is untouched (already idempotent by content hash, including
+        # across a filename change); only the reported number is corrected.
+        imported = 0 if status == "SKIPPED_DUPLICATE" else result["imported_count"]
+
         log.info("cfs_ecy_upload.import", extra={"facility": facility, "status": status,
                                                  "file_id": file_id,
-                                                 "imported": result["imported_count"],
+                                                 "imported": imported,
                                                  "invalid": res.invalid_count,
                                                  "ms": round((perf_counter() - t0) * 1000, 1)})
-        return {"file_id": file_id, "status": status,
-                "imported": result["imported_count"],
-                "skipped": result.get("duplicate_count", 0) + res.duplicate_count,
-                "invalid": res.invalid_count,
-                "duplicate_file": result.get("duplicate", False),
-                "summary": summary, "warnings": res.warnings[:200]}
+        out = {"file_id": file_id, "status": status,
+               "imported": imported,
+               "skipped": result.get("duplicate_count", 0) + res.duplicate_count,
+               "invalid": res.invalid_count,
+               "duplicate_file": result.get("duplicate", False),
+               "summary": summary, "warnings": res.warnings[:200]}
+        if status == "SKIPPED_DUPLICATE":
+            out["previously_imported"] = result["imported_count"]
+        return out
 
     # ---------------------------------------------------------------- history
     async def list_uploads(self, filters: Dict[str, Any], *, limit: int, offset: int) -> Dict[str, Any]:

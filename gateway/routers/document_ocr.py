@@ -357,8 +357,15 @@ def _store_document(object_name: str, raw_bytes: bytes, content_type: Optional[s
             bucket, object_name, data=io.BytesIO(raw_bytes), length=len(raw_bytes),
             content_type=content_type or "application/octet-stream",
         )
-        url = f"s3://{bucket}/{object_name}"
-        log.info("ocr_document_stored", object_name=object_name, bytes=len(raw_bytes))
+        # Return the GATEWAY PROXY path, not the internal ``s3://minio…`` URI
+        # (fix G-2). ``s3://{bucket}/{object}`` is unreachable from a browser, so
+        # a stored document could never actually be retrieved from the persisted
+        # reference. ``/api/evidence/{object_name}`` is the same-origin route that
+        # streams the object back (gateway/routers/evidence.py) — the convention
+        # gateway/routers/violations.py:_store_evidence already follows.
+        url = f"/api/evidence/{object_name}"
+        log.info("ocr_document_stored", object_name=object_name, bucket=bucket,
+                 bytes=len(raw_bytes))
         return url
     except Exception as exc:  # noqa: BLE001 — object storage is best-effort
         log.warning("ocr_document_store_failed", object_name=object_name, error=str(exc))
@@ -437,6 +444,11 @@ async def upload_document(
         out["validation"] = validation
     if engine_info:
         out["engine"] = engine_info
+    # Evidence object reference (fix G-2): the bucket-relative key alongside the
+    # resolvable proxy URL already in `storage_url`, so a caller can retrieve the
+    # stored document via GET /api/evidence/{object_path} without parsing the URL.
+    out["object_path"] = object_name if storage_url else None
+    out["object_name"] = file.filename
     return out
 
 

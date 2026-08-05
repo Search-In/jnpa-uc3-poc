@@ -42,6 +42,43 @@ router = APIRouter(prefix="/api/trucks", tags=["trucks"])
 # generous budget so a busy-but-alive sim is never mistaken for a dead one.
 TRUCK_UPSTREAM_TIMEOUT_S = 12.0
 
+# Fleet-LIST probe budget. The Driver-Advisory queue blocks on this call, and a
+# healthy truck-sim answers in single-digit milliseconds on the compose network —
+# so when the sim is down the OLD 12 s timeout was pure dead air: the Advisory
+# table spun for 12 s and then rendered empty. Connect gets 1.5 s (an unreachable
+# host fails the SYN, not the read) and the whole exchange 4 s, so the fallback
+# ladder runs while the page is still interactive. The 12 s budget remains on the
+# single-device probe and the reroute POST, whose callers are not page-blocking.
+TRUCK_LIST_TIMEOUT = httpx.Timeout(4.0, connect=1.5)
+
+# In-process memo of the last GOOD /devices/list payload per (state, limit) —
+# the CACHED rung of the fleet-list ladder (LIVE → CACHED → RDS tail → check-ins).
+#
+#   * FRESH (≤ LIST_CACHE_FRESH_S): served without touching the sim at all. Every
+#     dashboard surface (Advisory, Command Center, maps) polls this endpoint; one
+#     probe per few seconds is enough for data the sim recomputes per tick.
+#   * STALE (≤ LIST_CACHE_STALE_S): served ONLY when the sim probe fails, marked
+#     degraded + CACHED with its age, so a sim blip shows the last real queue
+#     instead of an empty table. This is the rung the state-filtered query never
+#     had — it used to degrade straight to empty.
+#
+# Process-local by design: it must keep working when Redis is down too, and the
+# gateway runs single-process. Values are the exact response bodies served.
+LIST_CACHE_FRESH_S = 3.0
+LIST_CACHE_STALE_S = 600.0
+_LIST_CACHE: Dict[str, tuple[float, dict]] = {}
+
+
+def _list_cache_get(key: str, max_age_s: float) -> Optional[tuple[float, dict]]:
+    """(age_s, body) when a memo no older than ``max_age_s`` exists, else None."""
+    hit = _LIST_CACHE.get(key)
+    if not hit:
+        return None
+    age = time.monotonic() - hit[0]
+    if age > max_age_s:
+        return None
+    return age, hit[1]
+
 # Most-recent /checkin submission per device (TERTIARY source). In-memory ring;
 # the dashboard reads it back through /api/trucks/{id}. Demo-scale.
 CHECKINS: Dict[str, dict] = {}
@@ -238,24 +275,34 @@ async def list_trucks(
     already implements:
 
         PRIMARY   -> truck-sim /devices/list      (live control plane)
+        CACHED    -> last good payload, in-process (sim blip; marked with age)
         SECONDARY -> core.truck_telemetry          (persisted position tail)
         TERTIARY  -> in-memory /checkin submissions (elevated scrutiny)
 
     STATE FILTER. Only the PRIMARY rung knows a device's ``TruckState``. When a
     caller asks for one (``state=AT_GATE_QUEUE``) and the sim is unavailable, the
-    fallback rungs are SKIPPED and the response degrades to empty — returning the
-    unfiltered fleet would answer a different question than the one asked. The
-    response says so via ``state_filter_supported``.
+    CACHED rung still answers it (the memo was recorded state-filtered, and says
+    how old it is); past the memo the remaining rungs are SKIPPED and the
+    response degrades to empty — returning the unfiltered fleet would answer a
+    different question than the one asked. The response says so via
+    ``state_filter_supported``.
     """
     url = gw.cfg.truck_api_url.rstrip("/") + "/devices/list"
     params: Dict[str, str] = {"limit": str(limit)}
     if state:
         params["state"] = state
+    cache_key = f"{state or 'ALL'}:{limit}"
+
+    # --- CACHED (fresh): a probe from the last ~3 s answers as LIVE would ----
+    fresh = _list_cache_get(cache_key, LIST_CACHE_FRESH_S)
+    if fresh is not None:
+        REQUESTS.labels("trucks", "ok").inc()
+        return fresh[1]
 
     # --- PRIMARY: the truck-sim control plane -------------------------------
     t0 = time.perf_counter()
     try:
-        resp = await gw.http.get(url, params=params, timeout=TRUCK_UPSTREAM_TIMEOUT_S)
+        resp = await gw.http.get(url, params=params, timeout=TRUCK_LIST_TIMEOUT)
         if resp.status_code == 200:
             await gw.record_decision(
                 api="trucks", key="fleet-list", decision_path=TruckPath.PRIMARY.value,
@@ -268,10 +315,23 @@ async def list_trucks(
                 body.setdefault("source", "truck-sim")
                 body.setdefault("degraded", False)
                 body.setdefault("state_filter_supported", True)
+                _LIST_CACHE[cache_key] = (time.monotonic(), body)
             return body
         log.info("trucks_list_miss", status=resp.status_code)
     except httpx.HTTPError as exc:
         log.warning("trucks_list_unreachable", url=url, error=str(exc))
+
+    # --- CACHED (stale): the last GOOD payload, served marked, not silently --
+    stale = _list_cache_get(cache_key, LIST_CACHE_STALE_S)
+    if stale is not None:
+        age_s, body = stale
+        await gw.record_decision(
+            api="trucks", key="fleet-list", decision_path=TruckPath.CACHED.value,
+            source="memo", source_state=SourceState.DEGRADED,
+            detail={"age_s": round(age_s, 1)})
+        REQUESTS.labels("trucks", "degraded").inc()
+        return {**body, "degraded": True, "decision_path": TruckPath.CACHED.value,
+                "source": "memo", "cache_age_s": round(age_s, 1)}
 
     # A state-filtered query cannot be answered by the rungs below (see above).
     if state:

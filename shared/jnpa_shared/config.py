@@ -4,10 +4,14 @@ Loads settings from the process environment, falling back to a `.env.local`
 file at the repository root. Every service imports `get_settings()` to obtain
 a cached `Settings` instance.
 
-Service names (``postgres``, ``kafka``, ``redis``, ``mosquitto`` …) resolve on
-the docker ``jnpa`` network. Code running on the *host* (e.g. the bootstrap
-self-test) should set the matching env vars to ``localhost`` first; the helper
+Service names (``kafka``, ``redis``, ``mosquitto`` …) resolve on the docker
+``jnpa`` network. Code running on the *host* (e.g. the bootstrap self-test)
+should set the matching env vars to ``localhost`` first; the helper
 ``Settings.for_host()`` does this rewrite in one call.
+
+Postgres is the exception: the application database is **AWS RDS**
+(``jnpa_schema_v3``), reached by the same DSN from host and container, and it
+has no default — see ``postgres_dsn`` / :func:`require_dsn`.
 """
 from __future__ import annotations
 
@@ -39,9 +43,12 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # --- Postgres / Timescale ---
-    postgres_password: str = "jnpa_pw"
-    postgres_dsn: str = "postgresql+asyncpg://postgres:jnpa_pw@postgres:5432/postgres"
+    # --- Postgres (AWS RDS: jnpa_schema_v3) ---
+    # No default DSN on purpose: the application database is RDS and a missing
+    # POSTGRES_DSN must fail loudly (see jnpa_shared.db.require_dsn) rather than
+    # silently fall back to a local postgres container.
+    postgres_password: str = ""
+    postgres_dsn: str = ""
 
     # --- Redis ---
     redis_url: str = "redis://redis:6379/0"
@@ -142,6 +149,24 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Return a process-wide cached `Settings` instance."""
     return Settings()
+
+
+def require_dsn(dsn: str | None, var: str = "POSTGRES_DSN") -> str:
+    """Return ``dsn``, or raise when it is missing/blank.
+
+    The application database is AWS RDS (``jnpa_schema_v3``) and the stack has
+    no local-postgres fallback. Every driver used here (asyncpg, psycopg,
+    SQLAlchemy) happily falls back to libpq defaults — a local socket or
+    ``localhost:5432`` — when handed an empty DSN, which is exactly the silent
+    wrong-database failure this guard prevents. Lives in ``config`` (not ``db``)
+    so services that only ship asyncpg/psycopg can import it without SQLAlchemy.
+    """
+    if dsn and dsn.strip():
+        return dsn
+    raise RuntimeError(
+        f"{var} is not set. Point it at the RDS database (jnpa_schema_v3); "
+        "there is no local-postgres fallback."
+    )
 
 
 # Constant re-exports for convenience in modules that prefer plain names.

@@ -52,8 +52,21 @@ def _broker_configured() -> bool:
     importers, one-off scripts) and then spends its lifetime retrying an
     unreachable broker — which made the test suite an order of magnitude slower.
     The gateway/compose profiles always set KAFKA_BROKERS, so production is
-    unaffected."""
-    return bool(os.getenv("KAFKA_BROKERS") or os.getenv("KAFKA_BOOTSTRAP_SERVERS"))
+    unaffected.
+
+    Delegates to ``jnpa_shared.kafka_io.broker_configured`` so this rule has ONE
+    definition: gateway/main.py applies the same check before starting its
+    consumer pumps, and the two must not drift.
+    """
+    try:
+        from jnpa_shared.kafka_io import broker_configured
+
+        return broker_configured()
+    except Exception:  # noqa: BLE001 — confluent_kafka may be absent; fall back
+        return bool(
+            (os.getenv("KAFKA_BROKERS") or "").strip()
+            or (os.getenv("KAFKA_BOOTSTRAP_SERVERS") or "").strip()
+        )
 
 
 def _get_producer():

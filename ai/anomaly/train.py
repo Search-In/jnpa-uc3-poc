@@ -20,6 +20,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
+from jnpa_shared.config import require_dsn
 from jnpa_shared.logging import configure_logging, get_logger
 
 from .autoencoder.features import batch_features
@@ -41,7 +42,9 @@ def _telemetry_tracks(cfg: AnomalyConfig, days: int) -> List[Track]:
     since = datetime.now(tz=timezone.utc) - timedelta(days=days)
     rows: List[dict] = []
     try:
-        with psycopg.connect(cfg.postgres_dsn_libpq, connect_timeout=3) as conn:
+        with psycopg.connect(
+            require_dsn(cfg.postgres_dsn_libpq, "ANOMALY_POSTGRES_DSN"), connect_timeout=3
+        ) as conn:
             with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(
                     "SELECT device_id, plate, ts, lat, lon, speed_kmh, heading"

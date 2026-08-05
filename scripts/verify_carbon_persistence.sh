@@ -8,13 +8,31 @@
 #   docker compose build gateway && docker compose up -d gateway
 #   ./scripts/verify_carbon_persistence.sh
 #
-# Requires: curl, python3 (for JSON parsing), and either `docker compose` (to run
-# psql in the postgres container) or a host psql on localhost:5433.
+# Requires: curl, python3 (for JSON parsing), and a psql client — either on the
+# host or via docker (a throwaway postgres image is used automatically).
+#
+# The application database is AWS RDS (jnpa_schema_v3): the SQL check needs the
+# libpq DSN, taken from $RFID_POSTGRES_DSN (or $PGDSN). There is no
+# local-postgres fallback.
 set -euo pipefail
 
 GW="${GATEWAY_URL:-http://localhost:8000}"
 VEH="${VEHICLE_ID:-TRK-000001}"
-PW="${POSTGRES_PASSWORD:-jnpa_pw}"
+DSN="${PGDSN:-${RFID_POSTGRES_DSN:-}}"
+if [ -z "$DSN" ] && [ -f .env.local ]; then
+  DSN="$(grep -E '^RFID_POSTGRES_DSN=' .env.local | tail -1 | cut -d= -f2-)"
+fi
+if [ -z "$DSN" ]; then
+  echo "FAIL: set RFID_POSTGRES_DSN (or PGDSN) to the RDS libpq DSN — no local-postgres fallback." >&2
+  exit 1
+fi
+# Prefer a host psql; otherwise run one in a container.
+if command -v psql >/dev/null 2>&1; then
+  runsql() { psql "$DSN" "$@"; }
+else
+  runsql() { docker run --rm -i -e PGDSN="$DSN" "${PSQL_IMAGE:-postgres:18-alpine}" \
+    sh -c 'exec psql "$PGDSN" "$@"' _ "$@"; }
+fi
 
 say() { printf '\n\033[1;36m== %s ==\033[0m\n' "$*"; }
 jq_get() { python3 -c "import sys,json;print(json.load(sys.stdin).get('$1',''))"; }
@@ -47,15 +65,8 @@ if [ -z "$EID" ] || [ "$EID" = "None" ]; then
 say "4) SQL check — SELECT FROM jnpa.carbon_emission"
 SQL="SELECT id, vehicle_id, distance_km, co2_kg, source, created_at
      FROM jnpa.carbon_emission ORDER BY created_at DESC LIMIT 5;"
-if docker compose ps postgres >/dev/null 2>&1; then
-  docker compose exec -T postgres psql -U postgres -d postgres -c "$SQL"
-  ROWS="$(docker compose exec -T postgres psql -U postgres -d postgres -tAc \
-    "SELECT count(*) FROM jnpa.carbon_emission WHERE vehicle_id='$VEH';")"
-else
-  PGPASSWORD="$PW" psql -h localhost -p 5433 -U postgres -d postgres -c "$SQL"
-  ROWS="$(PGPASSWORD="$PW" psql -h localhost -p 5433 -U postgres -d postgres -tAc \
-    "SELECT count(*) FROM jnpa.carbon_emission WHERE vehicle_id='$VEH';")"
-fi
+runsql -c "$SQL"
+ROWS="$(runsql -tAc "SELECT count(*) FROM jnpa.carbon_emission WHERE vehicle_id='$VEH';")"
 echo "rows for $VEH: $ROWS"
 if [ "${ROWS//[[:space:]]/}" -lt 1 ]; then echo "FAIL: 0 rows persisted"; exit 1; fi
 

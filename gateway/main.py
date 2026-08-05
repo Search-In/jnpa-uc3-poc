@@ -33,6 +33,7 @@ from .mode import ProductionSafetyError, mode_name, production_mode
 from jnpa_shared.schemas import (TOPIC_ALERTS, TOPIC_ANPR, TOPIC_DEFERRED_ARRIVAL,
                                  TOPIC_TRAFFIC, DeferredArrivalWindow)
 from jnpa_shared import tracing
+from jnpa_shared.kafka_io import broker_configured as kafka_configured
 
 from . import audit
 from .config import GatewayConfig
@@ -92,6 +93,7 @@ from .routers import (
     document_ocr,
     double_trip,
     driver_jobs,
+    export_lifecycle,
     gate_documents,
     ldb,
     logistics,
@@ -126,6 +128,48 @@ log = get_logger("gateway")
 # correctly configured deployment and for local development. Raising here aborts
 # process startup with a clear, actionable message.
 validate_auth_config()
+
+
+def _validate_environment() -> None:
+    """Report environment misconfiguration at BOOT, not at first request.
+
+    Complements ``validate_auth_config`` (which owns the fail-fast auth rules)
+    with the broader required-variable sweep from ``scripts/check_env.py`` — the
+    audit found nine variables the stack needs that nothing validated, including
+    ``PWA_PAIRING_SECRET``, whose absence silently 401s every driver login.
+
+    Warnings are LOGGED, never fatal: this must not become a new way for the
+    gateway to refuse to start. The genuinely fatal cases are already covered by
+    ``validate_auth_config`` above. Import failures are swallowed so the gateway
+    still boots in a stripped image that has no scripts/ directory.
+    """
+    try:
+        import pathlib
+        import sys as _sys
+
+        _root = str(pathlib.Path(__file__).resolve().parents[1])
+        if _root not in _sys.path:
+            _sys.path.insert(0, _root)
+        from scripts.check_env import env_source, validate  # type: ignore
+
+        errors, warnings = validate(env_source())
+        for e in errors:
+            log.error("env_config_error", detail=e)
+        for w in warnings:
+            log.warning("env_config_warning", detail=w)
+        if errors:
+            log.error(
+                "env_config_incomplete",
+                errors=len(errors),
+                hint="run `make env-check` for the full report",
+            )
+        else:
+            log.info("env_config_ok", warnings=len(warnings))
+    except Exception as exc:  # noqa: BLE001 — diagnostics must never block boot
+        log.debug("env_validation_skipped", error=str(exc))
+
+
+_validate_environment()
 
 # OpenTelemetry: export spans to Jaeger (no-op if otel deps / endpoint absent).
 # instrument_httpx() makes the gateway's outbound proxy calls continue the trace
@@ -430,26 +474,53 @@ async def _lifespan(app: FastAPI):
     # events and apply them to the TAS slot book. Also broadcast on WS as
     # type=tas so both frontends see the re-slot live.
     async def _apply_deferred(value) -> None:
-        from . import tas_mock
+        from . import crosstwin
         try:
             win = DeferredArrivalWindow(**value)
         except Exception as exc:  # noqa: BLE001 - reject malformed, keep pump alive
             log.warning("deferred_arrival_invalid", error=str(exc))
             return
-        result = tas_mock.apply_deferred_window(win)
-        log.info("deferred_arrival_applied", correlation_id=win.correlation_id,
-                 gate_id=win.gate_id, applied_slots=result["applied_slots"],
-                 slot_cap=win.slot_cap)
+        # One applier for both transports: persists to RDS, fans out to the
+        # dashboard, and pushes the drivers whose slots moved.
+        await crosstwin.apply(app.state.gw, win, transport="KAFKA")
 
     deferred_pump = KafkaPump(
         state, loop, TOPIC_DEFERRED_ARRIVAL, "tas", "jnpa-gateway-tas",
         persist=_apply_deferred,
     )
 
-    alert_pump.start()
-    traffic_pump.start()
-    anpr_pump.start()
-    deferred_pump.start()
+    # Start the pumps ONLY when a broker is actually configured — the same guard
+    # services/lifecycle_bus.py applies to its producer, for the same reason.
+    #
+    # Each KafkaPump runs a daemon thread that retries forever, and every retry
+    # builds a fresh librdkafka Consumer, which itself spawns several internal
+    # threads. In a process with no broker that is pure waste; in the TEST SUITE
+    # it is fatal. Each TestClient(app) triggers this startup, so a whole-suite
+    # run accumulated four leaking pumps per client across ~80 test files until
+    # the process died with "RuntimeError: can't start new thread" — 20 failures
+    # and 36 errors that all passed when the same files ran in isolation.
+    #
+    # The pumps are unconditionally started in every real deployment, because
+    # compose and the prod env-file always set KAFKA_BROKERS.
+    _pumps = (alert_pump, traffic_pump, anpr_pump, deferred_pump)
+    if kafka_configured():
+        for _p in _pumps:
+            _p.start()
+        log.info("kafka_pumps_started", count=len(_pumps))
+    else:
+        log.info(
+            "kafka_pumps_skipped",
+            reason="no KAFKA_BROKERS configured",
+            detail="set KAFKA_BROKERS to enable the alert/traffic/anpr/tas pumps",
+        )
+
+    # Replay persisted cross-twin windows into the in-memory slot book so a
+    # restart does not silently drop UC-II's metering (migration 0115).
+    try:
+        from . import crosstwin
+        await crosstwin.restore(app.state.gw)
+    except Exception as exc:  # noqa: BLE001 - boot must never depend on this
+        log.warning("crosstwin_restore_failed", error=str(exc))
 
     # MQTT truck-position pump (async task) — best-effort.
     mqtt_task = asyncio.create_task(mqtt_truck_pump(state, stop), name="mqtt-truck-pump")
@@ -615,6 +686,7 @@ app.include_router(customs.router)           # Customs docs (module 5: IGM/OOC/S
 app.include_router(gate_documents.router)    # UC-III gate documents (EIR / PIN ticket / Form-13 + TAT)
 app.include_router(container_job.router)     # UC-III job spine: assignment + gate/yard/scan events
 app.include_router(driver_jobs.router)       # DRIVER-scoped job surface for the mobile PWA
+app.include_router(export_lifecycle.router)  # export leg: booking -> Form13 -> VGM -> LEO -> COPRAR -> loaded
 app.include_router(shipping_lines.router)     # Shipping Lines (module 4: IAL/EAL/EDO, read-only + import)
 app.include_router(berthing.router)          # Berthing Reports (module 7: per-terminal vessel calls + upload)
 app.include_router(marine_calls.router)         # UC-I Marine vessel-call spine (module: marine, read-only)

@@ -55,6 +55,10 @@ class GatewayConfig:
     gate_data_url: str = "http://gate-data:8350"
     identity_url: str = "http://identity:8360"
     parking_url: str = "http://parking:8370"
+    # EIR / gate-slip OCR (Tesseract). Validated against the four real WhatsApp
+    # gate slips; /api/ocr/document routes image uploads here for a REAL field
+    # read and falls back to the local extractor when it is unreachable.
+    eir_ocr_url: str = "http://eir-ocr:8210"
 
     # --- Infra ---
     postgres_dsn: str = ""
@@ -200,6 +204,7 @@ class GatewayConfig:
             gate_data_url=os.environ.get("GATEWAY_GATE_DATA_URL", "http://gate-data:8350"),
             identity_url=os.environ.get("GATEWAY_IDENTITY_URL", "http://identity:8360"),
             parking_url=os.environ.get("GATEWAY_PARKING_URL", "http://parking:8370"),
+            eir_ocr_url=os.environ.get("GATEWAY_EIR_OCR_URL", "http://eir-ocr:8210"),
             postgres_dsn=os.environ.get("POSTGRES_DSN", shared.postgres_dsn),
             redis_url=os.environ.get("REDIS_URL", shared.redis_url),
             kafka_brokers=os.environ.get("KAFKA_BROKERS", shared.kafka_brokers),

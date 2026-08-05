@@ -8,7 +8,17 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Truck, Plus, Pencil, Eye, Power, Wrench, CheckCircle2, CircleSlash, MapPinned } from "lucide-react";
+import {
+  Truck,
+  Plus,
+  Pencil,
+  Eye,
+  Power,
+  Wrench,
+  CheckCircle2,
+  CircleSlash,
+  MapPinned,
+} from "lucide-react";
 import { getAdapter } from "@/data";
 import type { FleetVehicle, VehicleStatus } from "@/lib/types";
 import { Card } from "@/components/ui/card";

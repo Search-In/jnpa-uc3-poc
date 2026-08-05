@@ -33,8 +33,10 @@ class _FakeWs:
     def __init__(self) -> None:
         self.frames = []
 
-    async def broadcast(self, type_, payload):
-        self.frames.append((type_, payload))
+    async def broadcast(self, type_, payload, *, device_id=None):
+        # device_id is the addressing kwarg the dispatcher now passes so a
+        # driver advisory reaches only its own driver's socket.
+        self.frames.append((type_, payload, device_id))
 
 
 class _FakeGw:
@@ -78,6 +80,8 @@ def test_dispatch_fans_out_over_all_transports(monkeypatch):
     assert res.ws is True and res.webpush is True and res.fcm is False
     assert calls == {"webpush": 1, "fcm": 1}
     assert gw.ws.frames and gw.ws.frames[0][0] == "reroute"
+    # The WS leg is ADDRESSED to the target device (isolation), not a fan-out.
+    assert gw.ws.frames[0][2] == "TRK-000001"
 
 
 def test_dispatch_alert_noops_without_device():

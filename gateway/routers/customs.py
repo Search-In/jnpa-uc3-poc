@@ -296,3 +296,29 @@ async def reconcile(svc: CustomsService = Depends(get_service)) -> Dict[str, Any
     scan selection marks it UNDER_INSPECTION — only for containers already in core.cargo.
     Idempotent; emits customs events + raises scan-hold notifications on the existing feed."""
     return await svc.reconcile_cargo()
+
+
+@router.post("/materialize", summary="Create cargo rows for manifested containers (IGM -> Cargo)")
+async def materialize(
+    igm_no: Optional[str] = Query(default=None,
+                                  description="restrict to one IGM; omit for every manifest"),
+    limit: int = Query(default=5000, ge=1, le=20000),
+    reconcile_after: bool = Query(default=True,
+                                  description="also run /reconcile so customs_status binds"),
+    svc: CustomsService = Depends(get_service),
+) -> Dict[str, Any]:
+    """Close the IGM -> Cargo gap: give every manifested container a cargo row.
+
+    Without this step the import lifecycle could not start — core.igm_line_container
+    held thousands of real manifested boxes while core.cargo held a handful, so
+    ``/reconcile`` (which only updates rows that already exist) had nothing to
+    bind and no container could be discharged, yard-assigned, verified or
+    released.
+
+    Idempotent: rows are inserted ON CONFLICT DO NOTHING, so a second call creates
+    nothing and never disturbs a container already moving through the yard. Every
+    new row starts at ``CREATED``/``PENDING`` — the state machine is still walked
+    step by step, nothing is fast-forwarded.
+    """
+    return await svc.materialize_cargo(igm_no=igm_no, limit=limit,
+                                       reconcile=reconcile_after)

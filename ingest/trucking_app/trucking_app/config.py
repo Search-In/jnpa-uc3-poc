@@ -99,7 +99,9 @@ class TruckConfig:
     eta_topic: str = KAFKA_ETA_TOPIC
 
     # --- Postgres / Timescale (plain libpq DSN for asyncpg) ---
-    postgres_dsn: str = "postgresql://postgres:jnpa_pw@postgres:5432/postgres"
+    # Empty by default: set POSTGRES_DSN_LIBPQ (TRUCK_POSTGRES_DSN in compose)
+    # to the RDS jnpa_schema_v3 DSN. There is no local-postgres fallback.
+    postgres_dsn: str = ""
     db_pool_min: int = 1
     db_pool_max: int = 4
     db_batch_max: int = 5000             # rows per COPY flush

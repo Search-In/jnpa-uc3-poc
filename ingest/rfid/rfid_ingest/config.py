@@ -74,7 +74,9 @@ class RfidConfig:
 
     # --- Postgres / Timescale ---
     # asyncpg DSN (plain libpq form, not the SQLAlchemy "+asyncpg" form).
-    postgres_dsn: str = "postgresql://postgres:jnpa_pw@postgres:5432/postgres"
+    # Empty by default: set POSTGRES_DSN_LIBPQ (RFID_POSTGRES_DSN in compose) to
+    # the RDS jnpa_schema_v3 DSN. There is no local-postgres fallback.
+    postgres_dsn: str = ""
 
     # --- Correlator ---
     correlation_window_s: float = 5.0   # join window per gate (spec)

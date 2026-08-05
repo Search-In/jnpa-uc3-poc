@@ -93,6 +93,7 @@ from .routers import (
     document_ocr,
     double_trip,
     driver_jobs,
+    edi_vessel,
     export_lifecycle,
     gate_documents,
     jnpa_api,
@@ -113,6 +114,7 @@ from .routers import (
     pdp,
     performance,
     performance_upload,
+    rail,
     reefer,
     rms_tas,
     shipping_lines,
@@ -430,6 +432,16 @@ async def _lifespan(app: FastAPI):
         await ensure_rail_schema(cfg.postgres_dsn or None)
     except Exception as exc:  # noqa: BLE001
         log.warning("rail_schema_boot_failed", error=str(exc))
+
+    # COARRI/COPRAR consumer (edi-messages group): the core.edi_import_file
+    # ledger + edi_vessel_container domain table. Idempotent, additive —
+    # mirrors v3 migration 0123 so a dev DB that never ran it still gets
+    # the objects.
+    try:
+        from services.edi_vessel.repository import ensure_edi_vessel_schema
+        await ensure_edi_vessel_schema(cfg.postgres_dsn or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("edi_vessel_schema_boot_failed", error=str(exc))
 
     # Vehicle Master (fleet registry): ensure the table, then migrate the truck-sim
     # fleet into it (idempotent, never clobbering an operator edit) so no existing
@@ -757,6 +769,8 @@ app.include_router(air_quality.router)       # OpenAQ air quality (LIVE→CACHED
 app.include_router(bhuvan.router)            # Bhuvan WMS geospatial layer (ISRO/NRSC, control-plane only)
 app.include_router(logistics.router)         # ULIP logistics intelligence (LIVE→CACHED→DATABASE→FALLBACK)
 app.include_router(jnpa_api.router)          # JNPA Port-Data API sync (dt.jnpa.in → upload services)
+app.include_router(rail.router)              # Rail feeds (FOIS / Form 11 / CTO — read path for the 0119 tables)
+app.include_router(edi_vessel.router)        # COARRI/COPRAR vessel-side container moves (read path for 0123)
 app.include_router(double_trip.router)       # TT double-trip workflow
 app.include_router(ws.router)
 app.include_router(checkin.router)

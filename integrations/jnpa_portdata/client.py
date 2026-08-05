@@ -16,6 +16,10 @@ integrations.ulip.client):
     JNPA_PORTDATA_TIMEOUT_S    per-attempt budget            (default 15.0)
     JNPA_PORTDATA_RETRIES      retries AFTER the first try   (default 2)
     JNPA_PORTDATA_RATE_BUDGET  client-side req/min ceiling   (default 100)
+    JNPA_PORTDATA_PROXY        optional proxy URL for ALL API traffic, e.g.
+                               socks5://65.2.212.121:1080 — used while the
+                               allowlisted egress IP is only reachable via
+                               the jnpa3 tunnel (unset ⇒ direct)
 
 Auth model: the client key is exchanged at POST /v2/auth/token for a bearer
 valid exactly 3600 s. The token is cached in-process, refreshed PROACTIVELY
@@ -196,6 +200,7 @@ class JnpaPortDataClient:
         api_url: Optional[str] = None,
         *,
         client_key: Optional[str] = None,
+        proxy: Optional[str] = None,
         timeout_s: Optional[float] = None,
         retries: Optional[int] = None,
         backoff_s: float = 0.5,
@@ -220,6 +225,8 @@ class JnpaPortDataClient:
         self.api_url = raw_url
         self.client_key = (client_key if client_key is not None
                            else env.get("JNPA_PORTDATA_CLIENT_KEY", "")).strip()
+        self.proxy = (proxy if proxy is not None
+                      else env.get("JNPA_PORTDATA_PROXY", "")).strip() or None
         self.timeout_s = (timeout_s if timeout_s is not None
                           else _as_float(env.get("JNPA_PORTDATA_TIMEOUT_S"), 15.0))
         self.retries = (retries if retries is not None
@@ -466,6 +473,19 @@ class JnpaPortDataClient:
             return FileFetch(file_ref=file_ref, status=304, etag=resp_etag)
         content = resp.content
         digest = hashlib.sha256(content).hexdigest()
+        # The live deployment gzips on the fly and its front-end appends the
+        # content-coding to the ETag Apache-style ("<sha256>-gzip"); compare
+        # on the base hash and record the deviation instead of failing.
+        etag_cmp = resp_etag
+        if resp_etag:
+            match = re.fullmatch(r"([0-9a-fA-F]{64})-(?:gzip|br|deflate)",
+                                 resp_etag)
+            if match:
+                etag_cmp = match.group(1)
+                self._observe(
+                    "RUNTIME_ETAG_CODING_SUFFIX", f"GET /v2/files/{file_ref}",
+                    f"response ETag carries a content-coding suffix "
+                    f"({resp_etag}); verified against the base hash")
         filename = _filename_from_disposition(
             resp.headers.get("Content-Disposition"))
         if filename is None:
@@ -475,7 +495,7 @@ class JnpaPortDataClient:
                 "terminal/layout from the filename will need routing hints",
                 severity="WARN")
         for label, expected in (("record checksumSha256", expected_sha256),
-                                ("response ETag", resp_etag)):
+                                ("response ETag", etag_cmp)):
             if expected and expected.lower() != digest:
                 self._observe(
                     "RUNTIME_CHECKSUM_MISMATCH", f"GET /v2/files/{file_ref}",
@@ -555,7 +575,9 @@ class JnpaPortDataClient:
     def _client(self) -> tuple[httpx.AsyncClient, bool]:
         if self._http is not None:
             return self._http, False
-        return httpx.AsyncClient(timeout=self.timeout_s), True
+        # SOCKS proxies (socks5://…) need the socksio extra; hostnames are
+        # resolved BY the proxy, so the allowlisted egress also does the DNS.
+        return httpx.AsyncClient(timeout=self.timeout_s, proxy=self.proxy), True
 
     async def _send(self, client: httpx.AsyncClient, method: str, url: str, *,
                     params: Optional[Dict[str, Any]] = None,

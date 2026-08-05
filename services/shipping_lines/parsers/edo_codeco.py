@@ -90,6 +90,18 @@ def _to_int(value: Optional[str]) -> Optional[int]:
     return int(s)
 
 
+def parse_codeco_xml_text(xml_text: str) -> list[dict[str, Any]]:
+    """Parse ONE raw CODECO XML document (the shape the JNPA API's
+    edi-messages group delivers as application/xml) into canonical
+    delivery-order rows. Empty list when the payload is not CODECO."""
+    if "<CODECODetails" not in xml_text:
+        return []
+    try:
+        return _parse_document(xml_text)
+    except ET.ParseError as exc:
+        raise ShippingLineParseError(f"malformed CODECO XML: {exc}") from exc
+
+
 def parse_edo(path: str, *, terminal: str = "OTHER") -> ParsedList:
     """Parse the EDO workbook into canonical delivery-order rows (one per container)."""
     try:

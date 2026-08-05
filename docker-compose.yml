@@ -1105,6 +1105,23 @@ services:
       # Keep unset / 0 on RDS/schema-v3 where infra/postgres/v3 owns DDL.
       JNPA_RUNTIME_DDL: ${JNPA_RUNTIME_DDL:-1}
       GATEWAY_CACHE_TTL_ULIP_S: ${GATEWAY_CACHE_TTL_ULIP_S:-300}
+      # JNPA Simulated Port-Data API (dt.jnpa.in) — credentials are BACKEND-ONLY
+      # (never a VITE_ variable, never called from the browser). Empty CLIENT_KEY
+      # -> the sync loop never starts and /api/integrations/jnpa/health reports
+      # DISABLED (demo-safe). While the allowlisted egress IP is only reachable
+      # through the jnpa3 SOCKS tunnel, set JNPA_PORTDATA_PROXY; from INSIDE a
+      # container "localhost" is the container itself, so on the EC2 use the
+      # host's private address (e.g. socks5://172.31.37.14:1080).
+      JNPA_PORTDATA_API_URL: ${JNPA_PORTDATA_API_URL:-}
+      JNPA_PORTDATA_CLIENT_KEY: ${JNPA_PORTDATA_CLIENT_KEY:-}
+      JNPA_PORTDATA_PROXY: ${JNPA_PORTDATA_PROXY:-}
+      JNPA_PORTDATA_TIMEOUT_S: ${JNPA_PORTDATA_TIMEOUT_S:-15}
+      JNPA_PORTDATA_RETRIES: ${JNPA_PORTDATA_RETRIES:-2}
+      JNPA_PORTDATA_RATE_BUDGET: ${JNPA_PORTDATA_RATE_BUDGET:-100}
+      JNPA_API_MODE: ${JNPA_API_MODE:-LIVE}
+      JNPA_SYNC_ENABLED: ${JNPA_SYNC_ENABLED:-true}
+      JNPA_SYNC_INTERVAL_S: ${JNPA_SYNC_INTERVAL_S:-300}
+      JNPA_STORE_DIR: ${JNPA_STORE_DIR:-data/jnpa_api}
       # Infra.
       POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
@@ -1196,6 +1213,10 @@ services:
       # path. Absent/empty dir -> no key -> FCM stays disabled (graceful fallback);
       # Docker auto-creates the dir so `up` never fails when no key is present.
       - ${FIREBASE_SECRETS_DIR:-./secrets}:/run/secrets/firebase:ro
+      # JNPA Port-Data raw-bytes store (JNPA_STORE_DIR, default data/jnpa_api,
+      # resolved against WORKDIR /app). Host-mounted so downloaded originals
+      # survive container recreation and are inspectable from the host.
+      - ./data/jnpa_api:/app/data/jnpa_api
     networks:
       - jnpa
 

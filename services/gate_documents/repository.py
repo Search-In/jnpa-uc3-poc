@@ -73,6 +73,7 @@ SELECT id,
        payload->>'remarks'          AS remarks,
        payload->>'source_file'      AS source_file,
        (payload->>'import_file_id')::bigint AS import_file_id,
+       object_path, evidence_uri, object_name,
        source_mode, created_at
 FROM core.gate_capture
 """
@@ -101,10 +102,11 @@ def _form13_scope(source: Optional[str] = None) -> tuple[str, dict]:
 _FORM13_INSERT = """
 INSERT INTO core.gate_capture
     (capture_type, container_no, vehicle_plate, gate_id, source_mode, status,
-     captured_at, payload)
+     captured_at, payload, object_path, evidence_uri, object_name)
 VALUES
     ('FORM13', :container_number, :vehicle_no, :in_gate, 'live', 'REGISTERED',
-     coalesce(:issued_at, now()), CAST(:payload AS jsonb))
+     coalesce(:issued_at, now()), CAST(:payload AS jsonb),
+     :object_path, :evidence_uri, :object_name)
 ON CONFLICT (container_no, capture_type, captured_at) DO NOTHING
 """
 
@@ -123,12 +125,31 @@ def _insert_sql(doc_type: str) -> str:
             "ON CONFLICT (row_sha256) WHERE row_sha256 IS NOT NULL DO NOTHING")
 
 
+def evidence_uri_for(object_path: Optional[str]) -> Optional[str]:
+    """Client-facing URL for a stored evidence object (migration 0117 / fix G-2).
+
+    The gateway proxies the private MinIO bucket at ``/api/evidence/{object_path}``
+    (gateway/routers/evidence.py), so the stored reference is the bucket-relative
+    key and the URI is that key behind the proxy — never the internal minio:9000
+    address, which a browser cannot reach. Same convention as
+    gateway/routers/violations.py:_store_evidence.
+    """
+    if not object_path:
+        return None
+    return f"/api/evidence/{str(object_path).lstrip('/')}"
+
+
 def _form13_params(rec: Mapping[str, Any], import_file_id: int) -> dict[str, Any]:
     payload = {k: rec.get(k) for k in _FORM13_PAYLOAD if rec.get(k) is not None}
     payload["import_file_id"] = import_file_id
+    # Evidence reference (fix G-2). Optional: a document-only capture keeps NULL.
+    object_path = rec.get("object_path") or rec.get("image_file") or None
     return {"container_number": rec.get("container_number"),
             "vehicle_no": rec.get("vehicle_no"), "in_gate": rec.get("in_gate"),
-            "issued_at": rec.get("issued_at"), "payload": json.dumps(payload, default=str)}
+            "issued_at": rec.get("issued_at"), "payload": json.dumps(payload, default=str),
+            "object_path": object_path,
+            "evidence_uri": evidence_uri_for(object_path),
+            "object_name": rec.get("object_name") or rec.get("image_file") or None}
 
 
 def _data_origin(uploaded_by: Optional[str]) -> str:

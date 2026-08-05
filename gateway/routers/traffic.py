@@ -283,7 +283,61 @@ def _normalize_congestion_metrics(data: dict) -> dict:
     return out
 
 
+# The congestion service's ``GET /metrics`` does exactly one thing: read the
+# persisted training summary from ``artifacts/metrics.json`` (ai/congestion/infer.py
+# :metrics_summary). That artifact is committed to the repo, so the gateway can
+# read the SAME FILE when the service itself is not running — identical numbers
+# from an identical source, not a synthesised stand-in. Overridable for images
+# that mount it elsewhere.
+_CONGESTION_METRICS_PATH_ENV = "CONGESTION_METRICS_PATH"
+_CONGESTION_METRICS_DEFAULT = "ai/congestion/artifacts/metrics.json"
+
+
+def _congestion_metrics_artifact() -> Optional[dict]:
+    """LOCAL-ARTIFACT rung: the committed training-metrics summary, or None.
+
+    Deliberately NOT a synthetic generator — if the artifact is absent this
+    returns None and the caller still raises 503. Model-performance numbers are
+    evidential; they are never invented here.
+    """
+    import json
+    import os
+    from pathlib import Path
+
+    candidates = []
+    override = os.environ.get(_CONGESTION_METRICS_PATH_ENV, "").strip()
+    if override:
+        candidates.append(Path(override))
+    # Repo root is three parents up from gateway/routers/traffic.py; the container
+    # image copies the artifact to the same relative location (gateway/Dockerfile).
+    repo_root = Path(__file__).resolve().parents[2]
+    candidates.append(repo_root / _CONGESTION_METRICS_DEFAULT)
+    candidates.append(Path("/app") / _CONGESTION_METRICS_DEFAULT)
+
+    for path in candidates:
+        try:
+            if path.is_file():
+                data = json.loads(path.read_text())
+                if isinstance(data, dict) and data:
+                    log.info("traffic_metrics_artifact_hit", path=str(path))
+                    return data
+        except Exception as exc:  # noqa: BLE001 — a bad artifact must not 500
+            log.warning("traffic_metrics_artifact_unreadable", path=str(path),
+                        error=str(exc))
+    return None
+
+
 async def _congestion_metrics(state: GatewayState) -> dict:
+    """Model-performance metrics: LIVE (ai/congestion) -> LOCAL-ARTIFACT -> 503.
+
+    The service was the only source, so a stopped ai/congestion container 503'd
+    this endpoint and blanked the dashboard's model-performance card. Since the
+    service merely serves a committed artifact, the gateway now reads that same
+    artifact as a second rung and labels the provenance
+    (``decision_path: LOCAL_ARTIFACT``) so a cached read can never be mistaken for
+    a live one. If the artifact is missing too, the 503 stands — no fabricated
+    numbers.
+    """
     url = state.cfg.congestion_url.rstrip("/") + "/metrics"
     t0 = time.perf_counter()
     try:
@@ -291,10 +345,25 @@ async def _congestion_metrics(state: GatewayState) -> dict:
         UPSTREAM_LATENCY.labels("traffic", "congestion").observe(time.perf_counter() - t0)
         if resp.status_code == 200:
             REQUESTS.labels("traffic", "ok").inc()
-            return _normalize_congestion_metrics(resp.json())
+            out = _normalize_congestion_metrics(resp.json())
+            if isinstance(out, dict) and "error" not in out:
+                out.setdefault("decision_path", "LIVE")
+                out.setdefault("source", "ai/congestion")
+            return out
         log.info("traffic_metrics_miss", status=resp.status_code)
     except httpx.HTTPError as exc:
         log.warning("traffic_metrics_unreachable", url=url, error=str(exc))
+
+    artifact = _congestion_metrics_artifact()
+    if artifact is not None:
+        REQUESTS.labels("traffic", "degraded").inc()
+        out = _normalize_congestion_metrics(artifact)
+        if isinstance(out, dict) and "error" not in out:
+            out["decision_path"] = "LOCAL_ARTIFACT"
+            out["source"] = "ai/congestion artifacts/metrics.json"
+            out["live_service_available"] = False
+        return out
+
     raise HTTPException(status_code=503, detail={"error": "congestion_metrics_unavailable"})
 
 

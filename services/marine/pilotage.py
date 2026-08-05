@@ -15,6 +15,9 @@ from sqlalchemy import text
 from jnpa_shared.db import get_engine
 from jnpa_shared.logging import get_logger
 
+from . import pilot_status as ps
+from .projection import MarineProjection
+
 log = get_logger("services.marine.pilotage")
 
 _COLUMNS = (
@@ -96,19 +99,42 @@ class PilotageRepository:
 
 class PilotageService:
     def __init__(self, dsn: Optional[str] = None,
-                 repository: Optional[PilotageRepository] = None) -> None:
+                 repository: Optional[PilotageRepository] = None,
+                 projection: Optional[MarineProjection] = None) -> None:
         self._repo = repository or PilotageRepository(dsn)
+        # Lifecycle comes from the shared Marine Projection Layer. This module owns no
+        # query against core.vessel_call* and never calls the state engine.
+        self._projection = projection or MarineProjection(dsn)
+
+    async def _attach_workflow(self, rows: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
+        """Attach each movement's pilot workflow status, from the projection.
+
+        Keyed on VIA rather than call_id: every pilot card carries a VIA, but
+        ``core.pilotage.call_id`` resolves only for rows imported AFTER the matching call
+        existed, so keying on it would leave older cards permanently unenriched.
+
+        One batched lookup per page — never per row. Row set, order and key set are all
+        unchanged, so PilotageOut is untouched.
+        """
+        if not rows:
+            return rows
+        states = await self._projection.by_vias([r.get("via_no") for r in rows])
+        return [ps.apply(r, states.get(str(r.get("via_no") or ""))) for r in rows]
 
     async def list_pilotage(self, filters: Mapping[str, Any], *, sort: str, direction: str,
                             limit: int, offset: int) -> Dict[str, Any]:
         items = await self._repo.list_pilotage(filters, sort=sort, direction=direction,
                                                limit=limit, offset=offset)
+        items = await self._attach_workflow(items)
         total = await self._repo.count(filters)
         return {"items": items, "total": total, "limit": limit, "offset": offset,
                 "count": len(items)}
 
     async def get(self, pilotage_id: int) -> Optional[Dict[str, Any]]:
-        return await self._repo.get(pilotage_id)
+        row = await self._repo.get(pilotage_id)
+        if row is None:
+            return None
+        return (await self._attach_workflow([row]))[0]
 
     async def stats(self, filters: Mapping[str, Any]) -> Dict[str, Any]:
         return await self._repo.stats(filters)

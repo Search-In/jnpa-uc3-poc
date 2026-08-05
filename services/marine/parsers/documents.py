@@ -13,12 +13,14 @@ from typing import Optional
 from .pcs_common import MarineParseError, clean
 
 # Root element → canonical message type, for files that omit <DocumentType>.
+# Every corpus message DOES carry <DocumentType>, so this is the fallback path only.
 _ROOT_TO_TYPE = {
     "VoyageRegistration": "CALINF",
     "BerthManagement": "BERMAN",
     "VesselProfile": "VESPRO",
     "VesselArrival": "VESARR",
     "VesselMovement": "VESDEP",
+    "PilotMemoAcknowledgment": "ACKPLM",
 }
 
 # Bare ampersands that are not part of an entity — customer free-text (owner names).

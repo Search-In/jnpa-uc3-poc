@@ -33,6 +33,10 @@ from sqlalchemy.exc import IntegrityError
 from jnpa_shared.db import get_engine
 from jnpa_shared.logging import get_logger
 
+from .manual_pilot import ManualPilotService
+
+from .state_engine import (EVENT_ARRIVED, EVENT_DEPARTED, in_port_sql, status_order_sql)
+
 log = get_logger("services.marine.repository")
 
 # ---------------------------------------------------------------- column whitelists
@@ -42,14 +46,30 @@ _COLUMNS = (
     "terminal_id", "berth_id", "purpose", "eta", "etd", "etb", "ata", "atd", "atc",
     "status", "igm_no", "source_note", "created_at", "updated_at",
 )
-_SELECT_COLS = ", ".join(f"c.{col}" for col in _COLUMNS)
+# Human-readable label for the terminal_id FK, so a client does not have to carry the
+# reference dimension to render "BMCT" instead of "5". A correlated SCALAR subquery, not a
+# JOIN: it cannot change row multiplicity, so every existing query keeps its FROM clause
+# and its row count unchanged. NULL when terminal_id is unresolved — additive by design.
+_TERMINAL_CODE_EXPR = ("(SELECT t.code FROM core.ref_terminal t "
+                       "WHERE t.terminal_id = c.terminal_id) AS terminal_code")
+# Same shape for the allotted berth (BERALT), so a client can render 'CB05' without
+# carrying core.ref_berth. NULL until a berth is allotted — additive by design.
+_BERTH_CODE_EXPR = ("(SELECT b.code FROM core.ref_berth b "
+                    "WHERE b.berth_id = c.berth_id) AS berth_code")
+_SELECT_COLS = (", ".join(f"c.{col}" for col in _COLUMNS)
+                + ", " + _TERMINAL_CODE_EXPR + ", " + _BERTH_CODE_EXPR)
 
 # core.vessel_call_event, in migration 0038 declaration order.
 _EVENT_COLUMNS = (
     "event_id", "call_id", "event_type", "event_ts", "berth_id", "source_file",
     "created_at",
 )
-_EVENT_SELECT_COLS = ", ".join(f"e.{col}" for col in _EVENT_COLUMNS)
+# Label for the event's berth_id, matching the call projection: a milestone that happened
+# at a berth reads 'CB05', not '12'. Scalar subquery, so row multiplicity is unchanged.
+_EVENT_BERTH_CODE_EXPR = ("(SELECT b.code FROM core.ref_berth b "
+                          "WHERE b.berth_id = e.berth_id) AS berth_code")
+_EVENT_SELECT_COLS = (", ".join(f"e.{col}" for col in _EVENT_COLUMNS)
+                      + ", " + _EVENT_BERTH_CODE_EXPR)
 
 # Exact-match filters: filter key == column name.
 _EQ_FILTERS = ("vcn", "imo_no", "status", "terminal_id", "berth_id")
@@ -92,9 +112,9 @@ class VesselCallRepository:
             conds.append("c.vcn IS NOT NULL")
         elif has_vcn is False:
             conds.append("c.vcn IS NULL")
-        # Arrived but not yet sailed.
+        # Arrived but not yet sailed — definition owned by state_engine.in_port_sql().
         if filters.get("in_port"):
-            conds.append("c.ata IS NOT NULL AND c.atd IS NULL")
+            conds.append(in_port_sql("c"))
         if filters.get("eta_from") is not None:
             conds.append("c.eta >= :eta_from")
             params["eta_from"] = filters["eta_from"]
@@ -202,7 +222,7 @@ class VesselCallRepository:
             "  count(*) FILTER (WHERE c.vcn IS NOT NULL) AS with_vcn, "
             "  count(*) FILTER (WHERE c.vcn IS NULL)     AS without_vcn, "
             "  count(*) FILTER (WHERE c.ata IS NOT NULL) AS arrived, "
-            "  count(*) FILTER (WHERE c.ata IS NOT NULL AND c.atd IS NULL) AS in_port, "
+            f"  count(*) FILTER (WHERE {in_port_sql('c')}) AS in_port, "
             "  count(*) FILTER (WHERE c.atc IS NOT NULL) AS ops_completed, "
             "  count(*) FILTER (WHERE c.atd IS NOT NULL) AS departed, "
             "  count(DISTINCT c.terminal_id) AS terminals, "
@@ -223,7 +243,7 @@ class VesselCallRepository:
                 params)).mappings().all()
             by_terminal = (await conn.execute(text(
                 "SELECT c.terminal_id, count(*) AS n, "
-                "  count(*) FILTER (WHERE c.ata IS NOT NULL AND c.atd IS NULL) AS in_port "
+                f"  count(*) FILTER (WHERE {in_port_sql('c')}) AS in_port "
                 f"FROM core.vessel_call c {clause} "
                 "GROUP BY c.terminal_id ORDER BY c.terminal_id NULLS LAST"),
                 params)).mappings().all()
@@ -354,7 +374,7 @@ class VesselCallRepository:
                       parse_errors: Optional[Sequence[Mapping[str, Any]]] = None,
                       parse_invalid: int = 0, parse_duplicate: int = 0,
                       file_size: Optional[int] = None, uploaded_by: Optional[str] = None,
-                      source: str = "UPLOAD") -> dict:
+                      source: str = "UPLOAD", override: bool = False) -> dict:
         """Persist normalized parser records across core.vessel / core.vessel_call /
         core.vessel_call_event in ONE transaction (multi-target router).
 
@@ -365,10 +385,17 @@ class VesselCallRepository:
         resolve their call_id (VCN → imo+voyage → VIA); an unresolved event becomes a
         row error, never a stub call (decision 2). File-level sha256 dedup unchanged.
 
+        ``override`` re-processes a file already in the ledger. It is NOT a delete: every
+        write below is already an UPSERT (vessel on imo_no, vessel_call on vcn / the
+        pre-VCN key, events ON CONFLICT DO NOTHING), so replaying the same records
+        refreshes the business rows in place and re-runs _PROJECT_CALL_ACTUALS. Nothing is
+        truncated and no historical row is removed. Default False, so the normal import
+        path — including SKIPPED_DUPLICATE — is byte-for-byte unchanged.
+
         Returns the refined counter dict; the existing response keys (status, inserted,
         updated, duplicate_file, success_rows) are preserved and callers read those."""
         existing = await self.find_file_by_hash(file_hash)
-        if existing is not None:
+        if existing is not None and not override:
             return {"file_id": existing["id"], "status": "SKIPPED_DUPLICATE",
                     "inserted": 0, "updated": 0, "duplicate": 0, "failed": 0, "invalid": 0,
                     "success_rows": existing["success_rows"], "duplicate_file": True}
@@ -405,7 +432,16 @@ class VesselCallRepository:
         repo_errors: list[dict] = []
         try:
             async with get_engine(self._dsn).begin() as conn:
-                fid = (await conn.execute(text(_FILE_INSERT), envelope)).mappings().first()["id"]
+                if existing is not None:
+                    # Override: reopen THIS file's ledger row (file_hash is unique, so a
+                    # second row is impossible) and clear the previous run's row errors,
+                    # so the entry reports the run it just performed.
+                    fid = int(existing["id"])
+                    await conn.execute(text(_FILE_REOPEN), {**envelope, "id": fid})
+                    await conn.execute(text(_CLEAR_FILE_ERRORS), {"id": fid})
+                else:
+                    fid = (await conn.execute(text(_FILE_INSERT),
+                                              envelope)).mappings().first()["id"]
 
                 # 1. VESPRO → core.vessel (+ insurance)
                 for v in vessels:
@@ -437,6 +473,8 @@ class VesselCallRepository:
                     ins += bool(r["inserted"]); upd += (not bool(r["inserted"]))
 
                 # 4. VESARR/VESDEP → events (resolve call_id; unresolved → error, no stub)
+                # Calls touched here get their actuals projected in step 4b.
+                touched_calls: set[int] = set()
                 for e in events:
                     cid = await self._resolve_call_id(conn, e)
                     if cid is None:
@@ -448,11 +486,21 @@ class VesselCallRepository:
                         continue
                     r = (await conn.execute(text(_EVENT_INSERT),
                                             {"call_id": cid, "event_type": e.get("event_type"),
-                                             "event_ts": e.get("event_ts")})).mappings().first()
+                                             "event_ts": e.get("event_ts"),
+                                             "berth_code": e.get("berth_code")})).mappings().first()
                     if r is not None:
                         ins += 1
                     else:
                         dup += 1  # ON CONFLICT DO NOTHING — same actual already stored
+                    # Project even on a duplicate: the milestone may be unchanged while the
+                    # call's ata/atd were never back-filled by an earlier build.
+                    touched_calls.add(cid)
+
+                # 4b. Roll the ledger's actuals up onto each touched call (ata / atd only).
+                # Deliberately NOT counted in ins/upd: this is a derived projection of rows
+                # already counted in step 4, and double-counting would misreport the import.
+                for cid in sorted(touched_calls):
+                    await conn.execute(text(_PROJECT_CALL_ACTUALS), {"call_id": cid})
 
                 # 5. PILOT roster (upsert before pilotage so the FK resolves)
                 for p in pilots:
@@ -552,6 +600,20 @@ class VesselCallRepository:
                     "UPDATE core.marine_import_files SET status=:st, success_rows=:s, "
                     "failed_rows=:f, duplicate_rows=:d, updated_at=now() WHERE id=:id"),
                     {"st": status, "s": success, "f": failed, "d": total_dup, "id": fid})
+
+            # IMPORTED DATA ALWAYS WINS. If this import produced pilotage for a call an
+            # operator had manually assigned, that manual row is deactivated now — it is
+            # retained (never deleted) so the operator action stays auditable.
+            #
+            # Runs AFTER the import transaction has committed and is deliberately not
+            # allowed to fail the import: the manual record is subordinate data, and a
+            # problem deactivating it must never roll back real imported pilotage. The
+            # projection's reader independently shadows manual rows behind imported ones,
+            # so a failure here cannot surface stale manual state either.
+            try:
+                await ManualPilotService(self._dsn).supersede_imported()
+            except Exception as exc:  # noqa: BLE001 — subordinate to the import, never fatal
+                log.warning("marine.manual_supersede_failed", extra={"error": str(exc)})
 
             return {"file_id": fid, "status": status, "inserted": ins, "updated": upd,
                     "duplicate": total_dup, "failed": failed, "invalid": parse_invalid,
@@ -696,8 +758,34 @@ INSERT INTO core.marine_import_files
 VALUES
     (:filename, :file_hash, :physical_format, :document_type, :uploaded_by, :total_rows,
      'FAILED', :error_detail, :source)
+ON CONFLICT ON CONSTRAINT uq_marine_import_file_hash DO UPDATE SET
+    status       = 'FAILED',
+    error_detail = EXCLUDED.error_detail,
+    total_rows   = EXCLUDED.total_rows,
+    updated_at   = now()
 RETURNING id
 """
+
+# OVERRIDE re-import: reopen the EXISTING ledger row for this file instead of inserting a
+# second one. `file_hash` is UNIQUE (uq_marine_import_file_hash), so a re-import cannot
+# create a new row without a schema change — and it should not: one source file is one
+# ledger entry, whose counters describe its LATEST processing.
+#
+# The row is NOT deleted and its id is preserved, so every core.marine_import_errors row
+# and every core.port_craft / core.pilotage / core.sea_channel row that references
+# import_file_id stays valid and attached to the same entry.
+_FILE_REOPEN = """
+UPDATE core.marine_import_files
+   SET status = 'PENDING', total_rows = :total_rows, success_rows = 0, failed_rows = 0,
+       duplicate_rows = 0, error_detail = NULL, filename = :filename,
+       document_type = :document_type, uploaded_by = :uploaded_by, updated_at = now()
+ WHERE id = :id
+RETURNING id
+"""
+
+#: Row errors from the PREVIOUS run of this file. Cleared on override so the ledger shows
+#: the errors of the run it currently reports, not a union of every attempt.
+_CLEAR_FILE_ERRORS = "DELETE FROM core.marine_import_errors WHERE import_file_id = :id"
 
 # core.vessel columns written by the VESPRO upsert (imo_no is the PK / conflict target).
 _VESSEL_COLS = (
@@ -707,10 +795,45 @@ _VESSEL_COLS = (
     "stern_thruster", "built_date", "reg_port", "owner_name", "email", "vespro_ref",
 )
 # core.vessel_call columns bound by both call upserts (VCN and pre-VCN).
+# `terminal_code` is NOT a column — it is the PCS code (CALINF DockORTOCode, or the BERMAN
+# VCN infix) that both upserts resolve to terminal_id through ref_terminal(+alias).
 _CALL_COLS = (
     "vcn", "via_no", "imo_no", "vessel_name", "voyage_no", "rotation_no", "purpose",
-    "status", "eta", "etb", "etd", "ata", "atd", "atc", "source_note",
+    "status", "eta", "etb", "etd", "ata", "atd", "atc", "source_note", "terminal_code",
+    "berth_code",
 )
+
+# Resolve-or-NULL terminal lookup, mirroring the imo_no idiom below and the advance-list
+# resolver in services/shipping_lines/repository.py: canonical code first, then the alias
+# table (doc 01 §0 — four berth/terminal naming conventions make the alias table
+# mandatory). An unknown code yields NULL, never a stub terminal row.
+_TERMINAL_LOOKUP = """coalesce(
+     (SELECT t.terminal_id FROM core.ref_terminal t WHERE t.code = upper(:terminal_code)),
+     (SELECT ta.terminal_id FROM core.ref_terminal_alias ta WHERE ta.alias = upper(:terminal_code)))"""
+
+# Same resolve-or-NULL shape for the berth BERALT allots. Codes carry four spellings
+# across the corpus (doc 01 §0 key 7: 'CB05'/'CB-05', 'BMCT04'/'BMCT-4'), so the alias
+# table is consulted second. An unallotted or unknown berth yields NULL, never a stub.
+# Lifecycle ordering for core.vessel_call.status, so a RE-IMPORT cannot move a call
+# BACKWARDS. Without this, replaying a BERMAN file over a call BERALT has already advanced
+# rewrites 'Berth Allotted' back to 'Berth Planned' — the COALESCE takes whatever arrives
+# last, and file order is not lifecycle order.
+#
+# Ranks the KNOWN vocabulary only (parsers/pcs_common.py). Anything else — legacy
+# free-text, a CSV-template value, NULL — ranks 0, which gives the two safe behaviours:
+#   * an unknown/absent incoming status never overwrites a known stage;
+#   * a known stage may still upgrade a row that has no recognised stage yet.
+# VESARR/VESDEP extend this list when their stages land; the column stays free-text
+# (migration 0038 [D8]) so no constraint or migration is involved.
+# Rendered from state_engine.STATUS_ORDER, so the SQL guard and the Python engine cannot
+# drift apart. The ladder itself is defined once, in the engine.
+_STATUS_ORDER = status_order_sql()
+_STATUS_RANK_NEW = f"COALESCE(array_position({_STATUS_ORDER}, EXCLUDED.status), 0)"
+_STATUS_RANK_OLD = f"COALESCE(array_position({_STATUS_ORDER}, core.vessel_call.status), 0)"
+
+_BERTH_LOOKUP = """coalesce(
+     (SELECT b.berth_id FROM core.ref_berth b WHERE b.code = upper(:berth_code)),
+     (SELECT ba.berth_id FROM core.ref_berth_alias ba WHERE ba.alias = upper(:berth_code)))"""
 
 _VESSEL_UPSERT = """
 INSERT INTO core.vessel
@@ -762,21 +885,25 @@ ON CONFLICT (imo_no, pi_club) DO UPDATE SET
 
 # CALINF pre-VCN upsert: vcn is NULL, so the conflict target is the partial unique
 # index uq_vessel_call_imo_voyage_pre_vcn (imo_no, voyage_no) WHERE vcn IS NULL.
-_VESSEL_CALL_PREVCN_UPSERT = """
+_VESSEL_CALL_PREVCN_UPSERT = f"""
 INSERT INTO core.vessel_call
     (vcn, via_no, imo_no, vessel_name, voyage_no, rotation_no, purpose, status,
-     eta, etb, etd, ata, atd, atc, source_note)
+     eta, etb, etd, ata, atd, atc, source_note, terminal_id, berth_id)
 VALUES
     (:vcn, :via_no,
      (SELECT v.imo_no FROM core.vessel v WHERE v.imo_no = :imo_no),
      :vessel_name, :voyage_no, :rotation_no, :purpose, :status,
-     :eta, :etb, :etd, :ata, :atd, :atc, :source_note)
+     :eta, :etb, :etd, :ata, :atd, :atc, :source_note, {_TERMINAL_LOOKUP}, {_BERTH_LOOKUP})
 ON CONFLICT (imo_no, voyage_no) WHERE vcn IS NULL DO UPDATE SET
+    terminal_id = COALESCE(EXCLUDED.terminal_id, core.vessel_call.terminal_id),
+    berth_id    = COALESCE(EXCLUDED.berth_id, core.vessel_call.berth_id),
     via_no      = COALESCE(EXCLUDED.via_no, core.vessel_call.via_no),
     vessel_name = COALESCE(EXCLUDED.vessel_name, core.vessel_call.vessel_name),
     rotation_no = COALESCE(EXCLUDED.rotation_no, core.vessel_call.rotation_no),
     purpose     = COALESCE(EXCLUDED.purpose, core.vessel_call.purpose),
-    status      = COALESCE(EXCLUDED.status, core.vessel_call.status),
+    status      = CASE WHEN {_STATUS_RANK_NEW} >= {_STATUS_RANK_OLD}
+                       THEN COALESCE(EXCLUDED.status, core.vessel_call.status)
+                       ELSE core.vessel_call.status END,
     eta         = COALESCE(EXCLUDED.eta, core.vessel_call.eta),
     etb         = COALESCE(EXCLUDED.etb, core.vessel_call.etb),
     etd         = COALESCE(EXCLUDED.etd, core.vessel_call.etd),
@@ -790,19 +917,80 @@ RETURNING call_id, (xmax = 0) AS inserted
 # BERMAN promotion: stamp the VCN onto an existing pre-VCN seed for this (imo, voyage)
 # so the subsequent VCN upsert enriches ONE row instead of creating a second. imo_no is
 # resolved the same resolve-or-NULL way the seed stored it, so the match is consistent.
+#
+# THE VCN MUST NOT ALREADY BE TAKEN. `vcn` is UNIQUE (vessel_call_vcn_key), and this
+# UPDATE assumes it is the only writer — that a pre-VCN seed for an (imo, voyage) is
+# necessarily the row this VCN belongs to. That is false when a SECOND row already holds
+# the VCN, which is the state 81 seed/holder pairs are in: the seed carries the CALINF
+# schedule and the holder carries the CALINV/BERALT outcome, and they were never merged.
+# Without the guard the UPDATE raises 23505 and, because persist() is ONE transaction,
+# an entire journal import writes zero rows.
+#
+# With the guard the promote simply does not fire in that case, and the very next
+# statement (_VESSEL_CALL_UPSERT, ON CONFLICT (vcn)) enriches the row that already holds
+# the VCN — the correct destination. Where no row holds the VCN the guard is true and
+# behaviour is byte-identical to before, so the merge that CALINF+BERMAN relies on is
+# untouched. This makes a hard abort a no-op; it does NOT merge the pre-existing split
+# pair, which is a data question and deliberately out of scope here.
 _VESSEL_CALL_PROMOTE = """
 UPDATE core.vessel_call
    SET vcn = :vcn
  WHERE vcn IS NULL
    AND voyage_no = :voyage_no
    AND imo_no IS NOT DISTINCT FROM (SELECT v.imo_no FROM core.vessel v WHERE v.imo_no = :imo_no)
+   AND NOT EXISTS (SELECT 1 FROM core.vessel_call x WHERE x.vcn = :vcn)
 """
 
-_EVENT_INSERT = """
-INSERT INTO core.vessel_call_event (call_id, event_type, event_ts)
-VALUES (:call_id, :event_type, :event_ts)
-ON CONFLICT ON CONSTRAINT uq_vessel_call_event DO NOTHING
+# CONFLICT TARGET IS INFERRED FROM COLUMNS, NOT NAMED.
+# The rest of this repo names constraints explicitly, but core.vessel_call* is created by
+# TWO different DDLs that name the SAME uniqueness differently — the boot DDL declares
+# `CONSTRAINT uq_vessel_call_event UNIQUE (...)` while schema.sql (which built the
+# deployed database) declares none at all. `ON CONFLICT ON CONSTRAINT <name>` therefore
+# fails with "constraint does not exist" wherever the other DDL ran. Column inference
+# matches ANY unique index over these columns, whatever it is called, so it survives both
+# schemas and any future rename. See ensure_marine_schema for the index this relies on.
+# berth_id carries the berth the milestone happened AT — BERALT's BERTH_ALLOTTED names the
+# allotted berth, and VESARR's BERTHED will name the same one. Resolved the same
+# resolve-or-NULL way as the call, so an unknown code stores NULL rather than failing.
+#
+# source_file is deliberately NOT written: its FK (fk_vessel_call_event_source_file) points
+# at core.ingest_file(file_id), NOT the core.marine_import_files(id) this import path
+# creates. Binding our ledger id there would violate the FK on every event — the same
+# cross-object mistake that made ON CONFLICT ON CONSTRAINT fail in production. Wiring it
+# needs an ingest_file row first, which is a separate provenance slice.
+_EVENT_INSERT = f"""
+INSERT INTO core.vessel_call_event (call_id, event_type, event_ts, berth_id)
+VALUES (:call_id, :event_type, :event_ts, {_BERTH_LOOKUP})
+ON CONFLICT (call_id, event_type, event_ts) DO NOTHING
 RETURNING event_id
+"""
+
+# Project the VESARR/VESDEP ACTUALS from the event ledger onto the call row, so the KPI
+# aggregates in stats() (arrived / in_port / ops_completed / avg_turnaround /
+# avg_pre_berth_delay) stop reading 0 and NULL. Those columns had NO producer before this:
+# the actuals were written to core.vessel_call_event and never read back.
+#
+# NO SCHEMA CHANGE. Only the existing ata / atd columns are written:
+#   * ata <- the ARRIVED milestone (VESARR DateTimeArrivalVessel)
+#   * atd <- the DEPARTED milestone (VESDEP DateTimeOfDeparture) — the official ATD
+# `atc` is deliberately untouched: no NLP Marine message carries cargo-complete, so
+# Pre-Sailing Delay stays uncomputable and honestly NULL rather than guessed.
+# `atb` is NOT introduced — BERTHED remains an event only, and no KPI formula changes.
+#
+# Derived from the LEDGER, not from the batch, so it is idempotent and self-healing: a
+# re-import writes the same milestones (ON CONFLICT DO NOTHING), min() is stable, and a
+# call whose events arrived across SEVERAL files still resolves correctly. The event value
+# wins over whatever sat in the column, because the actuals ARE the source of truth;
+# COALESCE keeps the existing value when the milestone is absent.
+_PROJECT_CALL_ACTUALS = f"""
+UPDATE core.vessel_call c
+   SET ata = COALESCE(a.arrived,  c.ata),
+       atd = COALESCE(a.departed, c.atd)
+  FROM (SELECT min(event_ts) FILTER (WHERE event_type = '{EVENT_ARRIVED}')  AS arrived,
+               min(event_ts) FILTER (WHERE event_type = '{EVENT_DEPARTED}') AS departed
+          FROM core.vessel_call_event
+         WHERE call_id = :call_id) a
+ WHERE c.call_id = :call_id
 """
 
 _ERROR_INSERT = """
@@ -811,9 +999,18 @@ VALUES (:fid, :rn, :msg, :raw)
 """
 
 _RESOLVE_BY_VCN = "SELECT call_id FROM core.vessel_call WHERE vcn = :vcn LIMIT 1"
+
+# Tiebreak is `eta DESC, call_id DESC` — the SAME rule _RESOLVE_BY_VIA, the berthing
+# LATERAL and MarineProjection.by_vias use, so every consumer that asks "which call" gets
+# the same answer.
+#
+# It was `updated_at DESC`, which is an IDENTITY BUG rather than a tiebreak: updated_at
+# moves every time any import touches a row, so re-running the same file could attach an
+# event to a DIFFERENT call than the first run did. Identity must not depend on write
+# order. `eta` and `call_id` are properties of the call itself and never move.
 _RESOLVE_BY_IMO_VOYAGE = (
     "SELECT call_id FROM core.vessel_call WHERE imo_no = :imo_no AND voyage_no = :voyage_no "
-    "ORDER BY updated_at DESC LIMIT 1"
+    "ORDER BY eta DESC NULLS LAST, call_id DESC LIMIT 1"
 )
 _RESOLVE_BY_VIA = (
     "SELECT call_id FROM core.vessel_call WHERE via_no = :via_no "
@@ -937,26 +1134,38 @@ ON CONFLICT (row_sha256) DO NOTHING
 RETURNING pilotage_id
 """
 
-# VCN upsert. imo_no is resolved against core.vessel (resolve-or-NULL) so the NOT VALID
-# fk_vessel_call_imo is always satisfied; terminal_id / berth_id are left for a later
-# slice. updated_at is set by the trg_vessel_call_updated_at trigger (migration 0038).
-_VESSEL_CALL_UPSERT = """
+# VCN upsert. The conflict target is INFERRED from (vcn) rather than named: the uniqueness
+# is `uq_vessel_call_vcn` under the boot DDL but `vessel_call_vcn_key` on the deployed
+# database (schema.sql declares an inline `vcn text UNIQUE`, which PostgreSQL auto-names).
+# Naming it broke every BERMAN/BERALT upload with "constraint does not exist"; inference
+# matches either. See the note on _EVENT_INSERT.
+#
+# imo_no and terminal_id are both resolve-or-NULL, so the NOT VALID
+# fk_vessel_call_imo / fk_vessel_call_terminal are always satisfied. berth_id is still
+# unset here: BERMAN is the berth APPLICATION and carries no berth field — the allotment
+# arrives with BERALT (not yet ingested). updated_at is set by the
+# trg_vessel_call_updated_at trigger (migration 0038).
+_VESSEL_CALL_UPSERT = f"""
 INSERT INTO core.vessel_call
     (vcn, via_no, imo_no, vessel_name, voyage_no, rotation_no, purpose, status,
-     eta, etb, etd, ata, atd, atc, source_note)
+     eta, etb, etd, ata, atd, atc, source_note, terminal_id, berth_id)
 VALUES
     (:vcn, :via_no,
      (SELECT v.imo_no FROM core.vessel v WHERE v.imo_no = :imo_no),
      :vessel_name, :voyage_no, :rotation_no, :purpose, :status,
-     :eta, :etb, :etd, :ata, :atd, :atc, :source_note)
-ON CONFLICT ON CONSTRAINT uq_vessel_call_vcn DO UPDATE SET
+     :eta, :etb, :etd, :ata, :atd, :atc, :source_note, {_TERMINAL_LOOKUP}, {_BERTH_LOOKUP})
+ON CONFLICT (vcn) DO UPDATE SET
+    terminal_id = COALESCE(EXCLUDED.terminal_id, core.vessel_call.terminal_id),
+    berth_id    = COALESCE(EXCLUDED.berth_id, core.vessel_call.berth_id),
     via_no      = COALESCE(EXCLUDED.via_no, core.vessel_call.via_no),
     imo_no      = COALESCE(EXCLUDED.imo_no, core.vessel_call.imo_no),
     vessel_name = COALESCE(EXCLUDED.vessel_name, core.vessel_call.vessel_name),
     voyage_no   = COALESCE(EXCLUDED.voyage_no, core.vessel_call.voyage_no),
     rotation_no = COALESCE(EXCLUDED.rotation_no, core.vessel_call.rotation_no),
     purpose     = COALESCE(EXCLUDED.purpose, core.vessel_call.purpose),
-    status      = COALESCE(EXCLUDED.status, core.vessel_call.status),
+    status      = CASE WHEN {_STATUS_RANK_NEW} >= {_STATUS_RANK_OLD}
+                       THEN COALESCE(EXCLUDED.status, core.vessel_call.status)
+                       ELSE core.vessel_call.status END,
     eta         = COALESCE(EXCLUDED.eta, core.vessel_call.eta),
     etb         = COALESCE(EXCLUDED.etb, core.vessel_call.etb),
     etd         = COALESCE(EXCLUDED.etd, core.vessel_call.etd),

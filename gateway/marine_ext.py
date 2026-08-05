@@ -150,6 +150,52 @@ _DDL: list[str] = [
     ) AS a(alias, code)
     JOIN core.ref_terminal t ON t.code = a.code
     ON CONFLICT (alias) DO NOTHING""",
+    # The 22 berth codes BERALT actually allots, enumerated from the NLP Outbound message
+    # journals (364 allotments). terminal_id is deliberately LEFT NULL: the corpus does
+    # NOT determine which terminal owns a berth. The two available routes disagree —
+    # CB01 resolves to NSFT by VCN infix (21/21) but JNPCT by DockORTOCode (14/14), and
+    # NSD02 splits NSDT/NSFT — so any mapping here would be invented, not observed.
+    # Note there is no CB03 in the corpus, and LB01 additionally appears as the distinct
+    # sub-berths 'LB01 N' / 'LB01 S'; both are kept verbatim rather than normalised away.
+    """INSERT INTO core.ref_berth (code)
+    SELECT c FROM (VALUES
+        ('CB01'),('CB02'),('CB04'),('CB05'),('CB06'),
+        ('BM01'),('BM02'),('BM03'),('BM04'),('BM05'),('BM06'),
+        ('G1'),('G2'),
+        ('LB01'),('LB01 N'),('LB01 S'),('LB02'),('LB03'),('LB04'),
+        ('NSD02'),('NSD03'),('CCB')
+    ) AS b(c)
+    ON CONFLICT (code) DO NOTHING""",
+    # Berth spelling variants seen elsewhere in the corpus (pilot cards use 'CB-04',
+    # terminal sheets 'BMCT-4'/'BMCT04'), so a later ingest resolves to the same berth.
+    """INSERT INTO core.ref_berth_alias (alias, berth_id)
+    SELECT a.alias, b.berth_id
+    FROM (VALUES
+        ('CB-01','CB01'),('CB-02','CB02'),('CB-04','CB04'),('CB-05','CB05'),('CB-06','CB06'),
+        ('BM-01','BM01'),('BM-02','BM02'),('BM-03','BM03'),
+        ('BM-04','BM04'),('BM-05','BM05'),('BM-06','BM06'),
+        ('BMCT01','BM01'),('BMCT02','BM02'),('BMCT03','BM03'),
+        ('BMCT04','BM04'),('BMCT05','BM05'),('BMCT06','BM06'),
+        ('BMCT-1','BM01'),('BMCT-2','BM02'),('BMCT-3','BM03'),
+        ('BMCT-4','BM04'),('BMCT-5','BM05'),('BMCT-6','BM06'),
+        ('APM01','G1'),('APMT-01','G1'),('APMT-1','G1'),
+        ('APM02','G2'),('APMT-02','G2'),('APMT-2','G2'),
+        ('NSD-02','NSD02'),('NSD-03','NSD03')
+    ) AS a(alias, code)
+    JOIN core.ref_berth b ON b.code = a.code
+    ON CONFLICT (alias) DO NOTHING""",
+    # PCS DockORTOCode aliases — CALINF's only terminal field. Corpus-verified values.
+    # 'INJNP1' is deliberately ABSENT: it is the PORT code (identical to <Portcode> in
+    # every CALINF) and appears on 12 of 20 documents meaning "no terminal declared".
+    # Mapping it to a terminal would invent an allocation the message never made.
+    """INSERT INTO core.ref_terminal_alias (alias, terminal_id)
+    SELECT a.alias, t.terminal_id
+    FROM (VALUES
+        ('INNSA1NSI1', 'NSICT'), ('INNSA1BMC1', 'BMCT'), ('INNSA1JNP1', 'JNPCT'),
+        ('INNSA1NSF1', 'NSFT'),  ('INNSA1GTI1', 'APMT'), ('INNSA1NSG1', 'NSIGT')
+    ) AS a(alias, code)
+    JOIN core.ref_terminal t ON t.code = a.code
+    ON CONFLICT (alias) DO NOTHING""",
 
     # ==================================================================
     # Migration 0041 — vessel master + insurance.
@@ -361,6 +407,43 @@ _DDL: list[str] = [
     END $$""",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_vessel_call_imo_voyage_pre_vcn "
     "ON core.vessel_call (imo_no, voyage_no) WHERE vcn IS NULL",
+
+    # ------------------------------------------------------------------
+    # Repair: the milestone uniqueness core.vessel_call_event relies on.
+    #
+    # It is declared INSIDE the CREATE TABLE above, so on a database whose
+    # vessel_call_event was created by another DDL (schema.sql declares no such
+    # constraint) `CREATE TABLE IF NOT EXISTS` no-ops and the uniqueness never exists.
+    # The event insert then has nothing for ON CONFLICT to infer and every VESARR /
+    # VESDEP / BERALT event write fails — the same defect that broke the VCN upsert.
+    #
+    # FAIL-SAFE BY CONSTRUCTION: ensure_marine_schema executes this whole list in ONE
+    # transaction with no per-statement guard, so a raised exception here would abort
+    # ALL marine DDL at boot. Duplicates therefore emit a NOTICE and skip — never RAISE
+    # (which is why this does not reuse the 0046 pre-VCN guard verbatim).
+    # ------------------------------------------------------------------
+    """DO $$
+    DECLARE v_dups bigint;
+    BEGIN
+        IF to_regclass('core.vessel_call_event') IS NULL THEN
+            RETURN;
+        END IF;
+        -- Already satisfied by the in-table constraint (fresh DB) or by a previous run.
+        IF to_regclass('core.uq_vessel_call_event') IS NOT NULL
+           OR to_regclass('core.uq_vessel_call_event_row') IS NOT NULL THEN
+            RETURN;
+        END IF;
+        SELECT count(*) INTO v_dups FROM (
+            SELECT 1 FROM core.vessel_call_event
+            WHERE call_id IS NOT NULL AND event_type IS NOT NULL AND event_ts IS NOT NULL
+            GROUP BY call_id, event_type, event_ts HAVING count(*) > 1) d;
+        IF v_dups > 0 THEN
+            RAISE NOTICE 'uq_vessel_call_event_row not created: % duplicate (call_id, event_type, event_ts) group(s) present; dedupe and restart to regain event idempotency', v_dups;
+            RETURN;
+        END IF;
+        CREATE UNIQUE INDEX uq_vessel_call_event_row
+            ON core.vessel_call_event (call_id, event_type, event_ts);
+    END $$""",
     "ALTER TABLE core.marine_import_files ADD COLUMN IF NOT EXISTS document_type text",
 
     # ==================================================================

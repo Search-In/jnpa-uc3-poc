@@ -23,6 +23,7 @@ from sqlalchemy.exc import IntegrityError
 from jnpa_shared.db import get_engine
 from jnpa_shared.logging import get_logger
 
+
 log = get_logger("services.berthing.repository")
 
 _LIFECYCLE = ("EXPECTED", "ARRIVED", "BERTH_ASSIGNED", "BERTHING_STARTED",

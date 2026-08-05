@@ -51,6 +51,41 @@ def get_service(request: Request) -> VesselCallService:
 
 
 # --------------------------------------------------------------------- DTOs
+class LifecycleOut(BaseModel):
+    """Business state derived from the call + its events by the Marine Projection Layer.
+
+    Nested rather than flattened: CallOut already carries vcn / via_no / imo_no /
+    vessel_name, and duplicating them here would invite the two copies to drift.
+
+    Null when the projection could not answer — honest rather than defaulted.
+    """
+    model_config = ConfigDict(extra="ignore")
+    status: Optional[str] = None
+    arrival_state: Optional[str] = None
+    berth_state: Optional[str] = None
+    pilot_state: Optional[str] = None
+    departure_state: Optional[str] = None
+    shipping_state: Optional[str] = None
+    portcraft_state: Optional[str] = None
+    is_in_port: bool = False
+    is_at_berth: bool = False
+    #: Highest-RANK milestone reached, not the latest by clock.
+    latest_event: Optional[str] = None
+    latest_event_time: Optional[datetime] = None
+    #: ADDITIVE, optional. Craft currently committed to this call — 'Committed' while any
+    #: commitment is live and unreleased, else 'Idle'. Distinct from `portcraft_state`,
+    #: which is the engine's verdict on whether the movement REQUIRES craft: demand versus
+    #: supply, deliberately not conflated.
+    craft_state: Optional[str] = None
+    #: ADDITIVE, optional. How many craft are committed right now.
+    craft_committed: Optional[int] = None
+    #: ADDITIVE, optional. Where `pilot_state` came from — 'imported' when the event
+    #: ledger supplied it, 'manual' when an operator assignment did, null when there is
+    #: no pilot yet. Lets a consumer distinguish the two sources without inferring it
+    #: from the vocabulary. Existing clients that ignore the field are unaffected.
+    pilot_source: Optional[str] = None
+
+
 class CallOut(BaseModel):
     """core.vessel_call, in migration 0038 declaration order.
 
@@ -66,7 +101,13 @@ class CallOut(BaseModel):
     voyage_no: Optional[str] = None
     rotation_no: Optional[str] = None
     terminal_id: Optional[int] = None
+    #: ADDITIVE read-only label for terminal_id (core.ref_terminal.code, e.g. 'BMCT').
+    #: NULL when the PCS terminal code did not resolve. Never accepted as input.
+    terminal_code: Optional[str] = None
     berth_id: Optional[int] = None
+    #: ADDITIVE read-only label for berth_id (core.ref_berth.code, e.g. 'CB05').
+    #: NULL until BERALT allots a berth. Never accepted as input.
+    berth_code: Optional[str] = None
     purpose: Optional[str] = None
     eta: Optional[datetime] = None
     etd: Optional[datetime] = None
@@ -74,11 +115,24 @@ class CallOut(BaseModel):
     ata: Optional[datetime] = None
     atd: Optional[datetime] = None
     atc: Optional[datetime] = None
+    #: The PARSER stage this call reached ('Planned', 'Berth Allotted'…), exactly as the
+    #: message wrote it. NOT the operational state — see `lifecycle` below.
     status: Optional[str] = None
     igm_no: Optional[int] = None
     source_note: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    #: ADDITIVE and optional — the derived operational state from the Marine Projection.
+    #:
+    #: `status` and `lifecycle.status` are two DIFFERENT facts and both are returned:
+    #: the first is the message stage ('Berth Allotted'), the second is where the vessel
+    #: actually is ('At Berth'). Neither overwrites the other, so the source-vs-derived
+    #: comparison stays visible and the parser's record is preserved.
+    #:
+    #: Populated on the LIST endpoint (one batched projection read per page). None on
+    #: single-call reads, and None for any call the projection cannot answer for — a real
+    #: state, not an error. A client that ignores this field sees no change.
+    lifecycle: Optional[LifecycleOut] = None
 
 
 class CallListResponse(BaseModel):
@@ -96,8 +150,15 @@ class EventOut(BaseModel):
     event_type: Optional[str] = None
     event_ts: Optional[datetime] = None
     berth_id: Optional[int] = None
+    #: ADDITIVE read-only label for berth_id (core.ref_berth.code, e.g. 'CB05').
+    #: Populated for milestones that name a berth, such as BERALT's BERTH_ALLOTTED.
+    berth_code: Optional[str] = None
     source_file: Optional[int] = None
     created_at: Optional[datetime] = None
+    #: ADDITIVE, optional. Where the milestone came from — null/absent for ledger rows
+    #: written by an importer, 'pilotage' for one synthesised from a pilot-card column.
+    #: Lets the Timeline label provenance without treating the two differently.
+    source: Optional[str] = None
 
 
 class EventListResponse(BaseModel):
@@ -109,8 +170,14 @@ class EventListResponse(BaseModel):
 
 
 class TimelineOut(CallOut):
-    """One call plus its actuals, ordered by event_ts (migration 0038 [D6])."""
+    """One call plus its actuals, ordered by event_ts (migration 0038 [D6]).
+
+    ``lifecycle`` is ADDITIVE and optional: it is derived from the call and events this
+    same response already carries, so a client that ignores it sees byte-identical
+    behaviour, and no extra query is issued to produce it.
+    """
     events: List[EventOut] = []
+    lifecycle: Optional[LifecycleOut] = None
 
 
 class ViaLookupResponse(BaseModel):

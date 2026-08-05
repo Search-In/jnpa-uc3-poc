@@ -222,3 +222,70 @@ class TestPersistIntegration:
             assert calls == 0, "an unresolved event created a stub call"
             assert events == 0, "an unresolved event was inserted with a null call"
         _run_isolated(run)
+
+
+class TestOverrideReImport:
+    """Override re-processes a file already in the ledger. It is NOT a delete.
+
+    Static: reads the SQL and the signatures, so no database is needed. The behavioural
+    proof is the live check in the session log (SKIPPED_DUPLICATE -> SUCCESS, same file_id).
+    """
+
+    def test_normal_import_still_short_circuits_on_a_duplicate(self):
+        """The default path must be byte-for-byte unchanged."""
+        import inspect
+        from services.marine.repository import VesselCallRepository
+        src = inspect.getsource(VesselCallRepository.persist)
+        assert "if existing is not None and not override:" in src
+        assert '"status": "SKIPPED_DUPLICATE"' in src
+
+    def test_override_defaults_to_false_everywhere(self):
+        """A caller that does not know about override gets the old behaviour."""
+        import inspect
+        from services.marine.repository import VesselCallRepository
+        from services.marine.upload_service import MarineUploadService
+        for fn in (VesselCallRepository.persist, MarineUploadService.import_file):
+            assert inspect.signature(fn).parameters["override"].default is False
+
+    def test_override_reuses_the_ledger_row_and_never_deletes_it(self):
+        """file_hash is UNIQUE, so a re-import must reopen the SAME row — and the row,
+        with its id, must survive so every import_file_id reference stays valid."""
+        from services.marine import repository as R
+        sql = " ".join(R._FILE_REOPEN.split())
+        assert sql.upper().startswith("UPDATE CORE.MARINE_IMPORT_FILES")
+        assert "WHERE id = :id" in sql
+        assert "DELETE" not in sql.upper()
+        assert "status = 'PENDING'" in sql
+
+    def test_override_clears_only_the_previous_run_s_row_errors(self):
+        """Scoped to this file — never a table-wide delete."""
+        from services.marine import repository as R
+        sql = " ".join(R._CLEAR_FILE_ERRORS.split())
+        assert sql == "DELETE FROM core.marine_import_errors WHERE import_file_id = :id"
+
+    def test_no_business_table_is_ever_truncated_or_deleted(self):
+        """The whole point: override refreshes via UPSERT, it does not wipe anything.
+
+        Matches SQL, not prose — the persist() docstring says the word "truncated" while
+        explaining that nothing is, so a bare keyword scan would flag the explanation.
+        """
+        import re
+        from pathlib import Path
+        src = Path(R_PATH).read_text(encoding="utf-8")
+        for pat, name in ((r"TRUNCATE\s+(?:TABLE\s+)?\w", "TRUNCATE"),
+                          (r"DROP\s+TABLE\s+\w", "DROP TABLE")):
+            assert not re.search(pat, src, re.I), f"import path must never {name}"
+        # The only DELETE permitted is the scoped row-error clear above.
+        deletes = re.findall(r"DELETE\s+FROM\s+core\.(\w+)", src, re.I)
+        assert deletes == ["marine_import_errors"], f"unexpected DELETE targets: {deletes}"
+
+    def test_failed_row_can_be_retried(self):
+        """A FAILED ledger row used to block re-upload forever (its hash was taken).
+        The failure insert now upserts on the hash instead."""
+        from services.marine import repository as R
+        sql = " ".join(R._FILE_INSERT_FAILED.split())
+        assert "ON CONFLICT ON CONSTRAINT uq_marine_import_file_hash DO UPDATE" in sql
+
+
+R_PATH = __import__("pathlib").Path(__file__).resolve().parents[1] / \
+    "services/marine/repository.py"

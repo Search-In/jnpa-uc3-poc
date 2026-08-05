@@ -90,10 +90,14 @@ from .routers import (
     ldb,
     marine_calls,
     marine_imports,
+    marine_manual_craft,
+    marine_manual_pilot,
     marine_pilotage,
     marine_bathymetry,
     marine_port_craft,
     marine_sea_channel,
+    marine_state,
+    marine_vessel,
     nvr,
     pdp,
     performance,
@@ -533,9 +537,13 @@ app.include_router(berthing.router)          # Berthing Reports (module 7: per-t
 app.include_router(marine_calls.router)      # UC-I Marine vessel-call spine (module: marine, read-only)
 app.include_router(marine_imports.router)    # UC-I Marine Data-Upload sub-module (CSV: validate/upload/history)
 app.include_router(marine_pilotage.router)   # UC-I Marine pilotage movements (read-only; XLSX via marine_imports)
+app.include_router(marine_manual_pilot.router)  # UC-I Marine manual pilot assignment (operator fallback; additive paths only)
+app.include_router(marine_manual_craft.router)  # UC-I Marine manual craft assignment (operator fallback; additive paths only)
 app.include_router(marine_port_craft.router) # UC-I Marine port-craft register (read-only; PDF via marine_imports)
 app.include_router(marine_sea_channel.router) # UC-I Marine sea-channel geometry (read-only; SHP zip via marine_imports)
 app.include_router(marine_bathymetry.router) # UC-I Marine bathymetry soundings (read-only; PDF/JSON via marine_imports)
+app.include_router(marine_vessel.router)     # UC-I Marine vessel master (read-only; VESPRO XML via marine_imports)
+app.include_router(marine_state.router)      # UC-I Marine business state (read-only; derived by state_engine)
 app.include_router(performance.router)       # Performance & Daily Reports (module 12, read-only, additive)
 app.include_router(performance_upload.router)  # Performance Data Upload (module 12 sub-module, admin-only, additive)
 app.include_router(bottlenecks.router)       # three-road bottleneck analytics

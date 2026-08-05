@@ -12,9 +12,10 @@ extractors (container / plate / EIR no / weight / …).
 | `GET /healthz` | tesseract readiness |
 | `GET /metrics` | Prometheus |
 
-Default port **8210**. Gateway/UI wiring is intentionally out of scope for this
-slice — call the service directly, or point a future `document_ocr` hook at
-`http://eir-ocr:8210/infer`.
+Default port **8210**. The UC-3 gateway Document OCR route
+(`POST /api/ocr/document`) posts every image upload to
+`http://eir-ocr:8210/infer` via `GATEWAY_EIR_OCR_URL` (LIVE → local Tesseract →
+MOCK). Gate Docs Data Upload also routes PNG/JPG through the same path.
 
 ## Local run
 

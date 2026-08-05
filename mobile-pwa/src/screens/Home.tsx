@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { useDriverSession } from "@/hooks/DriverSession";
+import { displayVehicle, useDriverSession } from "@/hooks/DriverSession";
 import { useRealtime } from "@/hooks/RealtimeContext";
 import MiniMap from "@/components/MiniMap";
 import GpsStatus from "@/components/GpsStatus";
@@ -117,7 +117,10 @@ export default function Home({ deviceId, plate }: { deviceId: string; plate?: st
   const tone = TONE[status.tone];
   const traffic = trafficFromSpeed(speed);
 
-  const vehicle = plate || session.vehicle || null;
+  // Registration only — the identity strip is the driver's own vehicle, and the
+  // internal Vehicle ID means nothing to them (it is kept in the session for the
+  // API calls that need it).
+  const vehicle = plate || displayVehicle(session);
   const gpsFresh = fixAt != null && Date.now() - fixAt < 30_000;
 
   const enableAlerts = async () => {

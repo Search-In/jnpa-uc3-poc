@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { api } from "@/lib/api";
 import { Card, Chip, Row, Spinner } from "@/components/ui";
 import { useWebcam } from "@/hooks/useWebcam";
-import { ENROLL_DRIVER_KEY, useDriverSession } from "@/hooks/DriverSession";
+import { displayVehicle, ENROLL_DRIVER_KEY, useDriverSession } from "@/hooks/DriverSession";
 
 // Driver face-enrollment wizard (Identity / C2). After pairing, a driver completes
 // their profile, uploads identity documents, gives explicit biometric consent,
@@ -66,6 +66,10 @@ export default function Enroll({ plate }: { deviceId: string; plate?: string | n
   const lockDriverId = !!session.driverId;
   const lockName = !!session.name;
   const lockVehicle = !!session.vehicle;
+  // What the driver sees for their vehicle: the registration when the session
+  // knows it, else whatever identifier we do have. Display only — the submitted
+  // value stays `profile.vehicle_no`.
+  const vehicleDisplay = displayVehicle(session) ?? plate ?? "";
 
   const [step, setStep] = useState<Step>("profile");
   const [profile, setProfile] = useState<Profile>({
@@ -312,8 +316,12 @@ export default function Enroll({ plate }: { deviceId: string; plate?: string | n
               <input value={profile.mobile} onChange={set("mobile")} inputMode="tel" />
             </Field>
             <Field label={t("enrol.vehicle")} locked={lockVehicle}>
+              {/* Locked: the vehicle comes from the paired session, so the driver
+                  reads their REGISTRATION while `profile.vehicle_no` keeps holding
+                  the internal Vehicle ID that is submitted. Unlocked (first-time
+                  enrollment with no session vehicle) it stays a plain input. */}
               <input
-                value={profile.vehicle_no}
+                value={lockVehicle ? vehicleDisplay : profile.vehicle_no}
                 onChange={set("vehicle_no")}
                 readOnly={lockVehicle}
               />
@@ -471,7 +479,7 @@ export default function Enroll({ plate }: { deviceId: string; plate?: string | n
           <Row k={t("enrol.name")} v={profile.name} />
           <Row k={t("enrol.license")} v={profile.license_no} />
           <Row k={t("enrol.mobile")} v={profile.mobile || "—"} />
-          <Row k={t("enrol.vehicle")} v={profile.vehicle_no || "—"} />
+          <Row k={t("enrol.vehicle")} v={vehicleDisplay || profile.vehicle_no || "—"} />
           <Row k={t("enrol.emergency")} v={profile.emergency_contact || "—"} />
           <Row k={t("enrol.faces")} v={String(images.length)} />
           <Row k={t("enrol.documents")} v={String(documents.length)} />

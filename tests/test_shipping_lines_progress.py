@@ -107,8 +107,24 @@ class TestSingleSourceOfTruth:
                              self.SVC, re.I)
 
     def test_shipping_lines_repository_is_untouched_by_lifecycle(self):
-        assert "vessel_call" not in self.SL_REPO
+        """The importer may READ a vessel call as reference data — CODECO names a
+        gate number but not the terminal, so the terminal is recovered via
+        codeco.vcn -> core.vessel_call.terminal_id -> core.ref_terminal.code.
+        What it must never do is derive lifecycle state, touch the event ledger,
+        or write to the call itself; that is the projection's job alone. Targeted
+        like test_service_uses_the_projection_only rather than banning the bare
+        substring, which would also forbid the reference lookup.
+        """
+        import re
         assert "derive_state" not in self.SL_REPO
+        for banned in ("EVENT_ORDER", "array_position"):
+            assert banned not in self.SL_REPO, f"repository derives lifecycle: {banned}"
+        # The event ledger is off-limits in any form.
+        assert not re.search(r"(?:FROM|JOIN|INTO|UPDATE)\s+core\.vessel_call_event",
+                             self.SL_REPO, re.I)
+        # Reading the call is allowed; owning it is not.
+        assert not re.search(r"(?:INTO|UPDATE)\s+core\.vessel_call\b",
+                             self.SL_REPO, re.I)
 
     def test_no_via_resolution_lateral_is_re_implemented(self):
         assert "LATERAL" not in self.MOD

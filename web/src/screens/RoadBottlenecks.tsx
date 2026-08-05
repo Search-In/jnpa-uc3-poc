@@ -6,7 +6,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { TrafficCone, Camera, Clock, Gauge } from "lucide-react";
 import { api } from "@/lib/api";
-import { PageContainer, PageHeader } from "@/components/ui/dtccc";
+import { PageContainer, PageHeader, RefreshButton } from "@/components/ui/dtccc";
 import { Card } from "@/components/ui/card";
 import { EmptyState, LoadingState } from "@/components/ui/misc";
 import { STATUS } from "@/lib/tokens";
@@ -230,6 +230,13 @@ export default function RoadBottlenecks() {
             <span className="text-[11px] text-muted-foreground">
               ({historyQ.data?.count ?? snapshots.length})
             </span>
+            {/* Embedded in Geo Analytics' tab (no page header there) — the history
+                table re-fetches itself rather than needing a browser reload. */}
+            <RefreshButton
+              onRefresh={() => void historyQ.refetch()}
+              isRefreshing={historyQ.isFetching}
+              className="ml-auto"
+            />
           </div>
           {historyQ.isLoading ? (
             <LoadingState />

@@ -11,6 +11,7 @@ import { api } from "@/lib/api";
 import {
   PageContainer,
   PageHeader,
+  RefreshButton,
   StatGrid,
   StatCard,
   StatusChip,
@@ -278,7 +279,7 @@ export default function Accidents() {
                 <span className="text-[11px] text-muted-foreground">
                   ({listQ.data?.count ?? accidents.length})
                 </span>
-                <div className="ml-auto">
+                <div className="ml-auto flex items-center gap-2">
                   <select
                     value={statusFilter}
                     onChange={(e) => setStatusFilter(e.target.value)}
@@ -290,6 +291,16 @@ export default function Accidents() {
                     <option value="RESOLVED">Resolved</option>
                     <option value="CLOSED">Closed</option>
                   </select>
+                  {/* Rendered as a tab of Alerts Center / Police Reports, where the
+                      page header is suppressed — so the list re-fetches from here.
+                      The status filter is part of the query key and is preserved. */}
+                  <RefreshButton
+                    onRefresh={() => {
+                      void listQ.refetch();
+                      void dashQ.refetch();
+                    }}
+                    isRefreshing={listQ.isFetching || dashQ.isFetching}
+                  />
                 </div>
               </div>
               {listQ.isLoading ? (

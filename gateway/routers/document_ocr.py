@@ -6,13 +6,11 @@ into a stored, searchable record with extracted key-value fields. RDS-backed
 
 Extraction is a three-rung LIVE -> LOCAL -> MOCK chain (``_extract_async``):
 
-  1. **LIVE** — POST the image to the dedicated EIR OCR service
-     (``ingest/eir_ocr``, Tesseract, host 8210) and use its STRUCTURED fields.
-     This service is validated against the four real WhatsApp gate slips and
-     returns real values (e.g. EIRNo 4339869, LICNo MH43BX1488, ContainerNo
-     MSMU1908508). Until 2026-08-04 it was built by compose but nothing ever
-     called it: the dashboard mirrored `_mock_fields()` under a "field parsing
-     TODO", so a working capability looked fabricated.
+  1. **LIVE** — POST every image to the dedicated EIR OCR service
+     (``ingest/eir_ocr``, Tesseract, host 8210) and use its STRUCTURED fields
+     (+ ``extras`` for unmapped Label:value pairs). Validated against real
+     WhatsApp gate slips (e.g. EIRNo 4339869, LICNo MH43BX1488, ContainerNo
+     MSMU1908508).
   2. **LOCAL** — in-process pytesseract + PIL. Yields real ``raw_text``; fields
      are parsed with the same extractors the service uses when importable.
   3. **MOCK** — deterministic per-doc_type stand-in so a demo never crashes on a
@@ -46,18 +44,40 @@ log = get_logger("gateway.document_ocr")
 router = APIRouter(prefix="/api/ocr", tags=["ocr"])
 
 # Recognised document types (anything else is accepted as UNKNOWN).
-# EIR and GATE_SLIP route to the dedicated OCR service; the rest use the local
-# text read. Both are additive — "UNKNOWN" still accepts anything.
-_DOC_TYPES = {"LR", "INVOICE", "EWAYBILL", "PERMIT", "EIR", "GATE_SLIP", "UNKNOWN"}
+# Image uploads always try the dedicated eir_ocr service first (LIVE rung);
+# structured EIR/GATE_SLIP fields come from ingest/eir_ocr. Non-image / service
+# miss falls through LOCAL pytesseract then MOCK.
+_DOC_TYPES = {
+    "LR", "INVOICE", "EWAYBILL", "PERMIT", "EIR", "GATE_SLIP",
+    "FORM13", "RC", "DL", "UNKNOWN",
+}
 _STATUS = {"UPLOADED", "EXTRACTED", "VERIFIED", "FAILED"}
 
-#: doc_types the dedicated EIR OCR service understands.
-_EIR_DOC_TYPES = {"EIR", "GATE_SLIP"}
+#: doc_types whose primary extractor is the EIR gate-slip engine.
+_EIR_DOC_TYPES = {"EIR", "GATE_SLIP", "FORM13"}
 
 #: Upstream call budget. The service runs several preprocessing variants with an
 #: early exit; ~8s is comfortably above its p99 on the real slips while keeping a
 #: hung sidecar from stalling an operator's upload.
 _EIR_OCR_TIMEOUT_S = 8.0
+
+
+def _is_image_payload(content_type: Optional[str], filename: str = "") -> bool:
+    """True when the upload is an image the eir_ocr service can read."""
+    ctype = (content_type or "").lower()
+    if ctype.startswith("image/"):
+        return True
+    ext = (filename or "").rsplit(".", 1)[-1].lower() if filename and "." in filename else ""
+    return ext in {"jpg", "jpeg", "png", "webp", "tif", "tiff", "bmp", "gif"}
+
+
+def _service_doc_type(doc_type: str) -> str:
+    """Map dashboard doc_type to the eir_ocr form value (defaults to EIR)."""
+    dtype = (doc_type or "EIR").strip().upper()
+    if dtype in _EIR_DOC_TYPES:
+        return "EIR" if dtype == "FORM13" else dtype
+    # Still ask the slip extractor — unknown Label:value pairs land in extras.
+    return "EIR"
 
 
 def _iso(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -111,7 +131,62 @@ def _mock_fields(doc_type: str, seed: str) -> Dict[str, Any]:
         }
     if doc_type == "PERMIT":
         return {"permit_no": f"PMT-{n6:06d}"}
+    if doc_type in _EIR_DOC_TYPES:
+        return {
+            "EIRNo": f"{1000000 + (n6 % 9000000)}",
+            "LICNo": f"MH43BX{(n6 % 10000):04d}",
+            "ContainerNo": f"MSMU{(n6 % 10_000_000):07d}",
+        }
     return {}
+
+
+#: Canonical slip fields — identical to ``eir_ocr.extract.EIR_FIELDS``. Primary
+#: dashboard output is WHITELISTED to this set (same as ``verify.py`` /
+#: ``flat_values(ocr.fields)``). Garbled OCR label misreads never appear here.
+_KNOWN_EIR_FIELDS = (
+    "Terminal",
+    "DocumentType",
+    "Category",
+    "ShippingAgent",
+    "EIRNo",
+    "DateTime",
+    "ContainerNo",
+    "BATNo",
+    "Line",
+    "TransID",
+    "ContainerStatus",
+    "ISOCode",
+    "ContainerSize",
+    "GroupCode",
+    "PN57",
+    "ClientCode",
+    "GrossWeight",
+    "SealNo1",
+    "SealNo2",
+    "Scan",
+    "Haz1",
+    "Haz2",
+    "IsReefer",
+    "IsODC",
+    "IsDamage",
+    "LocSlip",
+    "LICNo",
+    "TruckCompany",
+    "VesselVia",
+    "Vessel",
+    "Via",
+    "ToFrom",
+    "PODPOL",
+    "DL",
+    "Driver",
+    "TrkIn",
+    "TrkOut",
+    "Creator",
+    "YardPosition",
+    "UserLoginID",
+    "Remarks",
+)
+_KNOWN_EIR_FIELD_SET = set(_KNOWN_EIR_FIELDS)
 
 
 def _flatten_fields(raw: Any) -> tuple[Dict[str, Any], Dict[str, float]]:
@@ -144,6 +219,38 @@ def _flatten_fields(raw: Any) -> tuple[Dict[str, Any], Dict[str, float]]:
     return values, confidences
 
 
+def _known_fields_only(
+    values: Dict[str, Any],
+    confidences: Optional[Dict[str, float]] = None,
+) -> tuple[Dict[str, Any], Dict[str, float]]:
+    """Keep only ``EIR_FIELDS``, in verify-report order (``flat_values`` shape)."""
+    ordered: Dict[str, Any] = {}
+    ordered_conf: Dict[str, float] = {}
+    confidences = confidences or {}
+    for key in _KNOWN_EIR_FIELDS:
+        if key not in values:
+            continue
+        ordered[key] = values[key]
+        if key in confidences:
+            ordered_conf[key] = confidences[key]
+    return ordered, ordered_conf
+
+
+def _order_fields_for_response(fields: Any) -> Any:
+    """Re-order jsonb fields for the API (Postgres jsonb does not keep key order).
+
+    When the payload looks like an EIR extract (any known slip key present), drop
+    garbled extras that may have been persisted by older gateway builds — the
+    verify report never shows those.
+    """
+    if not isinstance(fields, dict) or not fields:
+        return fields
+    ordered, _ = _known_fields_only(fields)
+    if ordered:
+        return ordered
+    return fields
+
+
 def _parse_fields_from_text(text: str, doc_type: str) -> Dict[str, Any]:
     """Parse structured fields out of OCR text using the eir_ocr extractors.
 
@@ -157,13 +264,15 @@ def _parse_fields_from_text(text: str, doc_type: str) -> Dict[str, Any]:
     try:
         from eir_ocr.extract import extract_eir_fields, fields_as_dict  # type: ignore
 
-        # extract_eir_fields returns Dict[str, FieldValue] — a dict, but of
-        # dataclasses, not JSON-serialisable scalars. fields_as_dict flattens it
-        # to {name: value}, so it must ALWAYS be applied (an isinstance(dict)
-        # short-circuit here would leak FieldValue objects into the response).
         parsed = extract_eir_fields(text, doc_type="EIR" if doc_type in _EIR_DOC_TYPES else doc_type)
-        values, _conf = _flatten_fields(fields_as_dict(parsed))
-        return values
+        # Mirror verify.py: flat_values(ocr.fields) → known keys only.
+        try:
+            from eir_ocr.extract import flat_values  # type: ignore
+
+            return _known_fields_only(flat_values(parsed))[0]
+        except Exception:  # noqa: BLE001
+            values, _conf = _flatten_fields(fields_as_dict(parsed))
+            return _known_fields_only(values)[0]
     except Exception as exc:  # noqa: BLE001 — extractor is optional in-process
         log.debug("ocr_local_field_parse_unavailable", doc_type=doc_type, error=str(exc))
         return {}
@@ -233,20 +342,28 @@ async def _extract_via_service(state: GatewayState, raw_bytes: bytes,
         log.warning("eir_ocr_bad_json", url=url, error=str(exc))
         return None
 
-    # The service returns the RICH shape {name: {value, conf, evidence}} (it
-    # serialises eir_ocr's FieldValue dataclasses). Flatten to scalars for the
-    # jsonb column and existing clients; keep the per-field confidences.
-    fields, field_conf = _flatten_fields(data.get("fields"))
+    # Mirror verify.py: extracted = flat_values(ocr.fields)  — known keys only.
+    # extras = flat_values(ocr.extras) — kept separate, never mixed into fields.
+    raw_fields, raw_conf = _flatten_fields(data.get("fields"))
+    extras, _extra_conf = _flatten_fields(data.get("extras"))
+    fields, field_conf = _known_fields_only(raw_fields, raw_conf)
+
+    raw_text = (data.get("raw_text") or "").strip()
     if not fields:
         log.info("eir_ocr_no_fields", doc_type=doc_type,
-                 engine_ready=data.get("engine_ready"))
+                 engine_ready=data.get("engine_ready"),
+                 has_raw=bool(raw_text),
+                 raw_field_keys=sorted(raw_fields.keys())[:12])
         return None
 
     log.info("eir_ocr_live", doc_type=doc_type, fields=len(fields),
-             confidence=data.get("confidence"), sha256=data.get("sha256"))
+             extras=len(extras), confidence=data.get("confidence"),
+             sha256=data.get("sha256"))
     return {
-        "raw_text": data.get("raw_text") or "",
+        # Ops UI uses ``fields`` (verify-report shape). raw_text is diagnostic only.
+        "raw_text": raw_text,
         "fields": fields,
+        "extras": extras,
         "confidence": data.get("confidence"),
         "source": "OCR_SERVICE",
         "validation": _validate_fields(fields),
@@ -257,6 +374,8 @@ async def _extract_via_service(state: GatewayState, raw_bytes: bytes,
             "tesseract_version": data.get("tesseract_version"),
             "variants_run": data.get("variants_run"),
             "sha256": data.get("sha256"),
+            "early_exit": data.get("early_exit"),
+            "timings_ms": data.get("timings_ms"),
         },
     }
 
@@ -308,10 +427,15 @@ def _extract_mock(raw_bytes: bytes, doc_type: str) -> Dict[str, Any]:
 async def _extract_async(state: GatewayState, raw_bytes: bytes,
                          content_type: Optional[str], doc_type: str,
                          filename: str = "") -> Dict[str, Any]:
-    """LIVE -> LOCAL -> MOCK. Always returns a usable result; never raises."""
-    if doc_type in _EIR_DOC_TYPES:
+    """LIVE (eir_ocr) -> LOCAL -> MOCK. Always returns a usable result; never raises.
+
+    Any image upload hits ``ingest/eir_ocr`` first so PNG/JPG gate slips always
+    get the validated slip extractors. Non-images skip straight to LOCAL/MOCK.
+    """
+    if _is_image_payload(content_type, filename):
         via_service = await _extract_via_service(
-            state, raw_bytes, content_type, doc_type, filename)
+            state, raw_bytes, content_type,
+            _service_doc_type(doc_type), filename)
         if via_service is not None:
             return via_service
     local = _extract_local(raw_bytes, content_type, doc_type)
@@ -394,6 +518,8 @@ async def upload_document(
 
     validation: Dict[str, Any] = {}
     engine_info: Dict[str, Any] = {}
+    extras: Dict[str, Any] = {}
+    field_confidence: Dict[str, Any] = {}
     try:
         result = await _extract_async(state, raw_bytes, file.content_type, dtype,
                                       file.filename or "")
@@ -404,6 +530,8 @@ async def upload_document(
         source = result["source"]
         validation = result.get("validation") or {}
         engine_info = result.get("engine") or {}
+        extras = result.get("extras") or {}
+        field_confidence = result.get("field_confidence") or {}
     except Exception as exc:  # noqa: BLE001 — the chain should never raise, but be safe
         log.warning("ocr_extract_failed", doc_type=dtype, error=str(exc))
         status = "FAILED"
@@ -429,6 +557,9 @@ async def upload_document(
         raise HTTPException(500, "insert_failed")
     REQUESTS.labels("document_ocr", "ok").inc()
     out = _iso(dict(row))
+    # Prefer the in-memory ordered extract — Postgres jsonb does not preserve
+    # key order, so RETURNING fields would scramble Terminal/Category/EIRNo.
+    out["fields"] = _order_fields_for_response(fields if fields is not None else out.get("fields"))
     # Additive response keys — the persisted columns are unchanged, so no
     # migration and no existing client breaks. `validation` lets the operator see
     # which high-value identifiers parsed cleanly; `engine` says WHICH rung read
@@ -437,6 +568,13 @@ async def upload_document(
         out["validation"] = validation
     if engine_info:
         out["engine"] = engine_info
+    if extras:
+        out["extras"] = extras
+    if field_confidence:
+        out["field_confidence"] = field_confidence
+    # raw_text is diagnostic (multi-pass Tesseract noise). Keep it off the
+    # default upload payload — callers that need it use GET /documents/{id}.
+    out.pop("raw_text", None)
     return out
 
 
@@ -458,12 +596,17 @@ async def list_documents(
         clause = "WHERE doc_type = :dtype"
         params["dtype"] = doc_type.strip().upper()
     rows = await fetch_all(
-        f"""SELECT id, ts, doc_type, source_ref, confidence, status, fields
+        f"""SELECT id, ts, doc_type, source_ref, confidence, status, source, fields
             FROM core.document_ocr {clause} ORDER BY ts DESC LIMIT :limit""",
         params, dsn=dsn,
     )
     REQUESTS.labels("document_ocr", "ok").inc()
-    return {"count": len(rows), "documents": [_iso(dict(r)) for r in rows]}
+    docs = []
+    for r in rows:
+        item = _iso(dict(r))
+        item["fields"] = _order_fields_for_response(item.get("fields"))
+        docs.append(item)
+    return {"count": len(docs), "documents": docs}
 
 
 @router.get("/documents/{doc_id}")
@@ -479,7 +622,9 @@ async def get_document(doc_id: int, state: GatewayState = Depends(get_state)) ->
     if not row:
         raise HTTPException(404, "document_not_found")
     REQUESTS.labels("document_ocr", "ok").inc()
-    return {"document": _iso(dict(row))}
+    doc = _iso(dict(row))
+    doc["fields"] = _order_fields_for_response(doc.get("fields"))
+    return {"document": doc}
 
 
 @router.post("/documents/{doc_id}/verify")

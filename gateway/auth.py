@@ -172,6 +172,10 @@ _PUBLIC: tuple[str, ...] = (
     # Evidence images are loaded by <img>/<video>, which cannot send a bearer
     # token; the route only streams objects already stored in the evidence bucket.
     "/api/evidence",
+    # Driver sign-in bootstrap: resolves the driver-entered registration number to
+    # the internal Vehicle ID the device token is then minted for. Must be pre-auth
+    # for the same reason /api/auth is — no token can exist before it runs.
+    "/api/driver/login",
 )
 
 

@@ -148,6 +148,15 @@ class GateDocumentService:
         return {"items": rows, "total": total, "limit": limit, "offset": offset,
                 "count": len(rows)}
 
+    async def list_source_documents(self, *, category: Optional[str] = None,
+                                    container: Optional[str] = None,
+                                    limit: int, offset: int) -> Dict[str, Any]:
+        """Parsed source gate documents (core.gate_document) — see the repository."""
+        rows, total = await self._repo.list_source_documents(
+            category=category, container=container, limit=limit, offset=offset)
+        return {"items": rows, "total": total, "limit": limit, "offset": offset,
+                "count": len(rows)}
+
     async def docs_for_container(self, container_no: str, *,
                                  source: Optional[str] = None) -> Dict[str, Any]:
         docs = await self._repo.docs_for_container(container_no, source=source)

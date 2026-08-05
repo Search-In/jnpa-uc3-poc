@@ -42,6 +42,7 @@ from .metrics import metrics_asgi_app
 from .pumps import KafkaPump, mqtt_truck_pump
 from .auth import install_auth, validate_auth_config
 from .routers import (
+    export_chain,
     ai_events,
     alerts,
     anpr,
@@ -757,6 +758,7 @@ app.include_router(air_quality.router)       # OpenAQ air quality (LIVE→CACHED
 app.include_router(bhuvan.router)            # Bhuvan WMS geospatial layer (ISRO/NRSC, control-plane only)
 app.include_router(logistics.router)         # ULIP logistics intelligence (LIVE→CACHED→DATABASE→FALLBACK)
 app.include_router(jnpa_api.router)          # JNPA Port-Data API sync (dt.jnpa.in → upload services)
+app.include_router(export_chain.router)      # export-lifecycle reads (Form 11, COPRAR, COARRI, synth)
 app.include_router(double_trip.router)       # TT double-trip workflow
 app.include_router(ws.router)
 app.include_router(checkin.router)

@@ -166,6 +166,51 @@ class GateDocumentRepository:
     def __init__(self, dsn: Optional[str] = None) -> None:
         self._dsn = dsn
 
+    # ------------------------------------------------- parsed source documents
+    async def list_source_documents(self, *, category: Optional[str] = None,
+                                    container: Optional[str] = None,
+                                    limit: int = 100, offset: int = 0) -> tuple[list[dict], int]:
+        """The PARSED SOURCE gate documents in ``core.gate_document``.
+
+        Distinct from the Form-13 read above, which serves ``core.gate_capture``
+        — that store is 202/203 seeded (`source_mode='sim'`), whereas these 13
+        rows are the customer's own Form 13 / EIR / PIN-ticket documents parsed
+        verbatim from the shared corpus, with the full as-filed payload in
+        ``attrs``. Read-only; nothing writes here from the API.
+        """
+        conds, params = [], {}
+        if category:
+            conds.append("doc_category = :cat")
+            params["cat"] = category.strip().upper()
+        if container:
+            conds.append("container_no = :cn")
+            params["cn"] = container.strip().upper()
+        where = ("WHERE " + " AND ".join(conds)) if conds else ""
+        async with get_engine(self._dsn).connect() as conn:
+            total = (await conn.execute(text(
+                f"SELECT count(*) FROM core.gate_document {where}"), params)).scalar()
+            params.update({"limit": limit, "offset": offset})
+            rows = (await conn.execute(text(
+                "SELECT doc_id, doc_category, doc_variant, doc_ref, pin_no, visit_id, doc_ts, "
+                "       container_no, iso_code, load_status, gross_weight_kg, seal1, seal2, "
+                "       vehicle_no, bat_no, driver_name, driver_licence, transporter_name, "
+                "       truck_in_ts, truck_out_ts, gate_no, yard_position, vessel_name, voyage, "
+                "       pol, pod, booking_no, cfs, group_code, attrs "
+                f"FROM core.gate_document {where} "
+                "ORDER BY doc_category, doc_variant LIMIT :limit OFFSET :offset"),
+                params)).mappings().all()
+        out = []
+        for r in rows:
+            d = dict(r)
+            # attrs is jsonb; normalise a string payload so callers always get an object.
+            if isinstance(d.get("attrs"), str):
+                try:
+                    d["attrs"] = json.loads(d["attrs"])
+                except Exception:
+                    pass
+            out.append(d)
+        return out, int(total or 0)
+
     # ---------------------------------------------------------------- dedup
     async def find_file_by_sha(self, sha256: str, *,
                                data_origin: Optional[str] = None) -> Optional[dict]:

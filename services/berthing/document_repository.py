@@ -75,10 +75,17 @@ class BerthingDocumentRepository:
                 "table_count": doc["table_count"], "row_count": doc["row_count"],
                 "duplicate": False}
 
-    async def list_documents(self, *, terminal: Optional[str], limit: int, offset: int) -> dict:
-        where, params = ("", {})
+    async def list_documents(self, *, terminal: Optional[str], limit: int, offset: int,
+                             data_origin: Optional[str] = None) -> dict:
+        # LIVE / DEMO filter — None ⇒ no clause ⇒ SQL identical to the pre-provenance query.
+        clauses: list[str] = []
+        params: dict[str, Any] = {}
         if terminal:
-            where = " WHERE terminal = :terminal"; params["terminal"] = terminal
+            clauses.append("terminal = :terminal"); params["terminal"] = terminal
+        if data_origin:
+            clauses.append("data_origin = :data_origin"); params["data_origin"] = data_origin
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        count_params = dict(params)
         params.update(limit=limit, offset=offset)
         async with get_engine(self._dsn).connect() as conn:
             items = (await conn.execute(text(
@@ -88,16 +95,21 @@ class BerthingDocumentRepository:
                 "ORDER BY id DESC LIMIT :limit OFFSET :offset"), params)).mappings().all()
             total = int((await conn.execute(text(
                 f"SELECT count(*) FROM core.berthing_report_document{where}"),
-                {k: v for k, v in params.items() if k == "terminal"})).scalar() or 0)
+                count_params)).scalar() or 0)
         return {"items": [dict(r) for r in items], "total": total, "limit": limit, "offset": offset}
 
-    async def get_document(self, document_id: int) -> Optional[dict]:
+    async def get_document(self, document_id: int, *,
+                           data_origin: Optional[str] = None) -> Optional[dict]:
+        clause = " AND data_origin = :data_origin" if data_origin else ""
+        params: dict[str, Any] = {"id": document_id}
+        if data_origin:
+            params["data_origin"] = data_origin
         async with get_engine(self._dsn).connect() as conn:
             row = (await conn.execute(text(
                 "SELECT id, file_name, terminal, report_date, page_count, table_count, "
                 "row_count, uploaded_by, created_at "
-                "FROM core.berthing_report_document WHERE id = :id"),
-                {"id": document_id})).mappings().first()
+                "FROM core.berthing_report_document WHERE id = :id" + clause),
+                params)).mappings().first()
         return dict(row) if row else None
 
     async def get_tables(self, document_id: int) -> list[dict]:

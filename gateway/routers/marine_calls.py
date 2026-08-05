@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict
 
+from ..data_mode import data_mode
 from ..metrics import REQUESTS
 from services.marine import VesselCallService
 
@@ -51,6 +52,41 @@ def get_service(request: Request) -> VesselCallService:
 
 
 # --------------------------------------------------------------------- DTOs
+class LifecycleOut(BaseModel):
+    """Business state derived from the call + its events by the Marine Projection Layer.
+
+    Nested rather than flattened: CallOut already carries vcn / via_no / imo_no /
+    vessel_name, and duplicating them here would invite the two copies to drift.
+
+    Null when the projection could not answer — honest rather than defaulted.
+    """
+    model_config = ConfigDict(extra="ignore")
+    status: Optional[str] = None
+    arrival_state: Optional[str] = None
+    berth_state: Optional[str] = None
+    pilot_state: Optional[str] = None
+    departure_state: Optional[str] = None
+    shipping_state: Optional[str] = None
+    portcraft_state: Optional[str] = None
+    is_in_port: bool = False
+    is_at_berth: bool = False
+    #: Highest-RANK milestone reached, not the latest by clock.
+    latest_event: Optional[str] = None
+    latest_event_time: Optional[datetime] = None
+    #: ADDITIVE, optional. Craft currently committed to this call — 'Committed' while any
+    #: commitment is live and unreleased, else 'Idle'. Distinct from `portcraft_state`,
+    #: which is the engine's verdict on whether the movement REQUIRES craft: demand versus
+    #: supply, deliberately not conflated.
+    craft_state: Optional[str] = None
+    #: ADDITIVE, optional. How many craft are committed right now.
+    craft_committed: Optional[int] = None
+    #: ADDITIVE, optional. Where `pilot_state` came from — 'imported' when the event
+    #: ledger supplied it, 'manual' when an operator assignment did, null when there is
+    #: no pilot yet. Lets a consumer distinguish the two sources without inferring it
+    #: from the vocabulary. Existing clients that ignore the field are unaffected.
+    pilot_source: Optional[str] = None
+
+
 class CallOut(BaseModel):
     """core.vessel_call, in migration 0038 declaration order.
 
@@ -66,7 +102,13 @@ class CallOut(BaseModel):
     voyage_no: Optional[str] = None
     rotation_no: Optional[str] = None
     terminal_id: Optional[int] = None
+    #: ADDITIVE read-only label for terminal_id (core.ref_terminal.code, e.g. 'BMCT').
+    #: NULL when the PCS terminal code did not resolve. Never accepted as input.
+    terminal_code: Optional[str] = None
     berth_id: Optional[int] = None
+    #: ADDITIVE read-only label for berth_id (core.ref_berth.code, e.g. 'CB05').
+    #: NULL until BERALT allots a berth. Never accepted as input.
+    berth_code: Optional[str] = None
     purpose: Optional[str] = None
     eta: Optional[datetime] = None
     etd: Optional[datetime] = None
@@ -74,11 +116,24 @@ class CallOut(BaseModel):
     ata: Optional[datetime] = None
     atd: Optional[datetime] = None
     atc: Optional[datetime] = None
+    #: The PARSER stage this call reached ('Planned', 'Berth Allotted'…), exactly as the
+    #: message wrote it. NOT the operational state — see `lifecycle` below.
     status: Optional[str] = None
     igm_no: Optional[int] = None
     source_note: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    #: ADDITIVE and optional — the derived operational state from the Marine Projection.
+    #:
+    #: `status` and `lifecycle.status` are two DIFFERENT facts and both are returned:
+    #: the first is the message stage ('Berth Allotted'), the second is where the vessel
+    #: actually is ('At Berth'). Neither overwrites the other, so the source-vs-derived
+    #: comparison stays visible and the parser's record is preserved.
+    #:
+    #: Populated on the LIST endpoint (one batched projection read per page). None on
+    #: single-call reads, and None for any call the projection cannot answer for — a real
+    #: state, not an error. A client that ignores this field sees no change.
+    lifecycle: Optional[LifecycleOut] = None
 
 
 class CallListResponse(BaseModel):
@@ -96,8 +151,15 @@ class EventOut(BaseModel):
     event_type: Optional[str] = None
     event_ts: Optional[datetime] = None
     berth_id: Optional[int] = None
+    #: ADDITIVE read-only label for berth_id (core.ref_berth.code, e.g. 'CB05').
+    #: Populated for milestones that name a berth, such as BERALT's BERTH_ALLOTTED.
+    berth_code: Optional[str] = None
     source_file: Optional[int] = None
     created_at: Optional[datetime] = None
+    #: ADDITIVE, optional. Where the milestone came from — null/absent for ledger rows
+    #: written by an importer, 'pilotage' for one synthesised from a pilot-card column.
+    #: Lets the Timeline label provenance without treating the two differently.
+    source: Optional[str] = None
 
 
 class EventListResponse(BaseModel):
@@ -109,8 +171,14 @@ class EventListResponse(BaseModel):
 
 
 class TimelineOut(CallOut):
-    """One call plus its actuals, ordered by event_ts (migration 0038 [D6])."""
+    """One call plus its actuals, ordered by event_ts (migration 0038 [D6]).
+
+    ``lifecycle`` is ADDITIVE and optional: it is derived from the call and events this
+    same response already carries, so a client that ignores it sees byte-identical
+    behaviour, and no extra query is issued to produce it.
+    """
     events: List[EventOut] = []
+    lifecycle: Optional[LifecycleOut] = None
 
 
 class ViaLookupResponse(BaseModel):
@@ -148,18 +216,20 @@ class StatsOut(BaseModel):
 
 # ------------------------------------------------------------------- helpers
 def _filters(vcn, via, imo, vessel, voyage, rotation, terminal_id, berth_id,
-             status_, has_vcn, in_port, eta_from, eta_to) -> Dict[str, Any]:
+             status_, has_vcn, in_port, eta_from, eta_to,
+             data_origin=None) -> Dict[str, Any]:
     """Assemble the repository filter map.
 
     No vocabulary validation: migration 0038 [D8] leaves status free-text and
     terminal_id is a numeric FK column whose parent (core.ref_terminal) does not exist
     yet, so there is nothing to validate against. Every value is bound as a parameter
-    by the repository.
+    by the repository. ``data_origin`` is the LIVE/DEMO provenance narrowing (None =
+    unfiltered).
     """
     return {"vcn": vcn, "via": via, "imo_no": imo, "vessel": vessel, "voyage": voyage,
             "rotation": rotation, "terminal_id": terminal_id, "berth_id": berth_id,
             "status": status_, "has_vcn": has_vcn, "in_port": bool(in_port),
-            "eta_from": eta_from, "eta_to": eta_to}
+            "eta_from": eta_from, "eta_to": eta_to, "data_origin": data_origin}
 
 
 def _not_found(error: str, **detail: Any) -> HTTPException:
@@ -190,10 +260,11 @@ async def list_calls(
     direction: str = Query(default="desc"),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    mode: Optional[str] = Depends(data_mode),
     service: VesselCallService = Depends(get_service),
 ) -> CallListResponse:
     filters = _filters(vcn, via, imo, vessel, voyage, rotation, terminal_id, berth_id,
-                       status_, has_vcn, in_port, date_from, date_to)
+                       status_, has_vcn, in_port, date_from, date_to, data_origin=mode)
     res = await service.list_calls(filters, sort=sort, direction=direction,
                                    limit=limit, offset=offset)
     REQUESTS.labels(_API, "ok").inc()
@@ -209,10 +280,11 @@ async def stats(
     in_port: bool = Query(default=False),
     date_from: Optional[datetime] = Query(default=None, alias="from", description="ETA >="),
     date_to: Optional[datetime] = Query(default=None, alias="to", description="ETA <="),
+    mode: Optional[str] = Depends(data_mode),
     service: VesselCallService = Depends(get_service),
 ) -> StatsOut:
     filters = _filters(None, None, None, None, None, None, terminal_id, None,
-                       status_, has_vcn, in_port, date_from, date_to)
+                       status_, has_vcn, in_port, date_from, date_to, data_origin=mode)
     res = await service.stats(filters)
     REQUESTS.labels(_API, "ok").inc()
     return StatsOut(**res)
@@ -221,8 +293,9 @@ async def stats(
 @router.get("/by-vcn/{vcn}", response_model=CallOut,
             summary="Resolve a full PCS VCN to its vessel call")
 async def get_by_vcn(vcn: str,
+                     mode: Optional[str] = Depends(data_mode),
                      service: VesselCallService = Depends(get_service)) -> CallOut:
-    res = await service.get_by_vcn(vcn)
+    res = await service.get_by_vcn(vcn, data_origin=mode)
     if res is None:
         raise _not_found("vessel_call_not_found", vcn=vcn)
     REQUESTS.labels(_API, "ok").inc()
@@ -232,8 +305,9 @@ async def get_by_vcn(vcn: str,
 @router.get("/by-via/{via_no}", response_model=ViaLookupResponse,
             summary="Resolve a short VIA number — may match several calls")
 async def get_by_via(via_no: str,
+                     mode: Optional[str] = Depends(data_mode),
                      service: VesselCallService = Depends(get_service)) -> ViaLookupResponse:
-    items = await service.get_by_via(via_no)
+    items = await service.get_by_via(via_no, data_origin=mode)
     if not items:
         raise _not_found("vessel_call_not_found", via_no=via_no)
     REQUESTS.labels(_API, "ok").inc()
@@ -245,8 +319,9 @@ async def get_by_via(via_no: str,
 # the static /stats, /by-vcn and /by-via prefixes win)
 @router.get("/{call_id}", response_model=CallOut, summary="One UC-I vessel call")
 async def get_call(call_id: int,
+                   mode: Optional[str] = Depends(data_mode),
                    service: VesselCallService = Depends(get_service)) -> CallOut:
-    res = await service.get(call_id)
+    res = await service.get(call_id, data_origin=mode)
     if res is None:
         raise _not_found("vessel_call_not_found", call_id=call_id)
     REQUESTS.labels(_API, "ok").inc()
@@ -256,8 +331,9 @@ async def get_call(call_id: int,
 @router.get("/{call_id}/timeline", response_model=TimelineOut,
             summary="One vessel call + its ordered actuals")
 async def get_timeline(call_id: int,
+                       mode: Optional[str] = Depends(data_mode),
                        service: VesselCallService = Depends(get_service)) -> TimelineOut:
-    res = await service.timeline(call_id)
+    res = await service.timeline(call_id, data_origin=mode)
     if res is None:
         raise _not_found("vessel_call_not_found", call_id=call_id)
     REQUESTS.labels(_API, "ok").inc()
@@ -270,13 +346,14 @@ async def list_events(
     call_id: int,
     limit: int = Query(default=200, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    mode: Optional[str] = Depends(data_mode),
     service: VesselCallService = Depends(get_service),
 ) -> EventListResponse:
     # 404 on an unknown call rather than returning an empty event list, so the caller
     # can distinguish "no such call" from "call exists but has no actuals yet".
-    if await service.get(call_id) is None:
+    if await service.get(call_id, data_origin=mode) is None:
         raise _not_found("vessel_call_not_found", call_id=call_id)
-    items = await service.list_events(call_id, limit=limit, offset=offset)
+    items = await service.list_events(call_id, limit=limit, offset=offset, data_origin=mode)
     REQUESTS.labels(_API, "ok").inc()
     return EventListResponse(call_id=call_id, items=[EventOut(**i) for i in items],
                              limit=limit, offset=offset, count=len(items))

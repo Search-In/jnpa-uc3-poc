@@ -10,6 +10,8 @@ import { Card } from "@/components/ui/card";
 import { LoadingState } from "@/components/ui/misc";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { StatusChip, type Tone } from "@/components/ui/dtccc";
+import { CallFlags, TimeCell } from "@/screens/berthing/cells";
+import { fmtTs, type BerthingField, type BerthingRow } from "@/lib/berthing";
 
 const LIFECYCLE = [
   "EXPECTED",
@@ -41,21 +43,6 @@ export function statusTone(s?: string): Tone {
         : s === "ARRIVED"
           ? "warn"
           : "neutral";
-}
-
-function fmtTs(ts?: string | null): string {
-  if (!ts) return "";
-  try {
-    return new Date(ts).toLocaleString("en-IN", {
-      day: "2-digit",
-      month: "short",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    });
-  } catch {
-    return String(ts);
-  }
 }
 
 export default function BerthingTimelineDialog({
@@ -104,6 +91,7 @@ export default function BerthingTimelineDialog({
               )}
               {data?.shipping_line && <StatusChip label={data.shipping_line} tone="neutral" />}
               <StatusChip label={data?.status} tone={statusTone(data?.status)} />
+              {data && <CallFlags row={data} />}
             </div>
 
             {/* Lifecycle ladder */}
@@ -134,18 +122,18 @@ export default function BerthingTimelineDialog({
               </ol>
             </Card>
 
-            {/* Key timestamps */}
+            {/* Key timestamps — blanks are explained rather than collapsed to a dash */}
             <Card className="p-3 text-[13px]">
               <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                 Reported times (IST)
               </div>
               <dl className="grid grid-cols-2 gap-x-4 gap-y-1">
-                <Field label="ETA" value={fmtTs(data?.eta)} />
-                <Field label="ATA" value={fmtTs(data?.ata)} />
-                <Field label="Berthing" value={fmtTs(data?.berthing_time)} />
-                <Field label="Ops start" value={fmtTs(data?.cargo_operation_start)} />
-                <Field label="Ops end" value={fmtTs(data?.cargo_operation_end)} />
-                <Field label="Departure" value={fmtTs(data?.departure_time)} />
+                <Field label="ETA" row={data} field="eta" />
+                <Field label="ATA" row={data} field="ata" />
+                <Field label="Berthing" row={data} field="berthing_time" />
+                <Field label="Ops start" row={data} field="cargo_operation_start" />
+                <Field label="Ops end" row={data} field="cargo_operation_end" />
+                <Field label="Departure" row={data} field="departure_time" />
               </dl>
             </Card>
           </div>
@@ -155,11 +143,21 @@ export default function BerthingTimelineDialog({
   );
 }
 
-function Field({ label, value }: { label: string; value?: string }) {
+function Field({
+  label,
+  row,
+  field,
+}: {
+  label: string;
+  row?: BerthingRow | null;
+  field: BerthingField;
+}) {
   return (
     <>
       <dt className="text-muted-foreground">{label}</dt>
-      <dd className="text-right font-medium text-foreground">{value || "—"}</dd>
+      <dd className="text-right font-medium text-foreground">
+        {row ? <TimeCell row={row} field={field} /> : "—"}
+      </dd>
     </>
   );
 }

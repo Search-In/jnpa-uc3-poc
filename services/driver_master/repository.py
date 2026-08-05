@@ -178,6 +178,10 @@ def _build_where(f: Mapping[str, Any]) -> Tuple[str, Dict[str, Any]]:
     if f.get("transporter_id") is not None:
         where.append("dm.transporter_id = :transporter_id")
         p["transporter_id"] = f["transporter_id"]
+    # LIVE/DEMO provenance filter — absent ⇒ no predicate (identical SQL).
+    if f.get("data_origin"):
+        where.append("dm.data_origin = :data_origin")
+        p["data_origin"] = f["data_origin"]
     status = (f.get("status") or "").upper()
     # Permit-aware status filters: the actual PDP permit decides; the licence
     # date is only the fallback when the driver has no permit row.

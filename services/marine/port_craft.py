@@ -45,6 +45,11 @@ class PortCraftRepository:
             if val:
                 conds.append(f"p.{col} ILIKE :{key}")
                 params[key] = f"%{str(val).strip()}%"
+        # LIVE / DEMO provenance narrowing; None => unfiltered (byte-identical SQL).
+        data_origin = filters.get("data_origin")
+        if data_origin is not None:
+            conds.append("p.data_origin = :data_origin")
+            params["data_origin"] = data_origin
         clause = ("WHERE " + " AND ".join(conds)) if conds else ""
         return clause, params
 
@@ -66,11 +71,16 @@ class PortCraftRepository:
             return int((await conn.execute(
                 text(f"SELECT count(*) FROM core.port_craft p {clause}"), params)).scalar() or 0)
 
-    async def get(self, craft_id: int) -> Optional[dict]:
+    async def get(self, craft_id: int, *,
+                  data_origin: Optional[str] = None) -> Optional[dict]:
+        frag, extra = ("", {})
+        if data_origin is not None:
+            frag = " AND p.data_origin = :data_origin"
+            extra = {"data_origin": data_origin}
         async with get_engine(self._dsn).connect() as conn:
             row = (await conn.execute(text(
-                f"SELECT {_SELECT} FROM core.port_craft p WHERE p.craft_id = :id"),
-                {"id": craft_id})).mappings().first()
+                f"SELECT {_SELECT} FROM core.port_craft p WHERE p.craft_id = :id{frag}"),
+                {"id": craft_id, **extra})).mappings().first()
         return dict(row) if row else None
 
     async def stats(self, filters: Mapping[str, Any]) -> dict:
@@ -102,8 +112,9 @@ class PortCraftService:
         return {"items": items, "total": total, "limit": limit, "offset": offset,
                 "count": len(items)}
 
-    async def get(self, craft_id: int) -> Optional[Dict[str, Any]]:
-        return await self._repo.get(craft_id)
+    async def get(self, craft_id: int, *,
+                  data_origin: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        return await self._repo.get(craft_id, data_origin=data_origin)
 
     async def stats(self, filters: Mapping[str, Any]) -> Dict[str, Any]:
         return await self._repo.stats(filters)

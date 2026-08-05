@@ -152,7 +152,9 @@ class ParserSpec:
         return self.loader()
 
 
-_PCS_FORMATS = ("XML", "LOG")
+# PCS messages arrive as a standalone XML, inside a .log transmission wrapper, or as a
+# row of a message JOURNAL — all three route per document, none has a whole-file parser.
+_PCS_FORMATS = ("XML", "LOG", "JOURNAL")
 
 
 def _pcs(document_type: str) -> ParserSpec:
@@ -182,10 +184,17 @@ PARSER_REGISTRY: dict[str, ParserSpec] = {
         sniff=_sniff_bathymetry),
     # --- PCS message types: per-message routed inside parse_marine ---
     "CALINF": _pcs("CALINF"),
+    "CALINV": _pcs("CALINV"),
     "BERMAN": _pcs("BERMAN"),
+    "BERALT": _pcs("BERALT"),
     "VESPRO": _pcs("VESPRO"),
     "VESARR": _pcs("VESARR"),
     "VESDEP": _pcs("VESDEP"),
+    # Pilot allotment. PILOTAGE (above) is the XLSX pilot card and keeps its own name;
+    # this is the PCS message for the same table, so it is a separate document type rather
+    # than an alias — declaring `document_type=PILOTAGE` must still mean the XLSX.
+    # PLTMEM is parsed but not routed; see the REGISTRY note in __init__.py.
+    "ACKPLM": _pcs("ACKPLM"),
 }
 
 # Envelope format -> DEFAULT canonical document type, for the IMPLICIT (historical) path.

@@ -36,6 +36,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict
 
+from ..data_mode import data_mode
 from ..metrics import REQUESTS
 from services.performance import PerformanceService
 
@@ -97,8 +98,9 @@ async def meta(service: PerformanceService = Depends(get_service)) -> Dict[str, 
 
 @router.get("/kpi", summary="Headline KPIs + day-over-day deltas for a report date (latest if omitted)")
 async def kpi(date_: Optional[date] = Query(default=None, alias="date"),
+              mode: Optional[str] = Depends(data_mode),
               service: PerformanceService = Depends(get_service)) -> Dict[str, Any]:
-    res = await service.kpi(date_)
+    res = await service.kpi(date_, mode)
     if res is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "no_daily_reports"})
@@ -109,8 +111,9 @@ async def kpi(date_: Optional[date] = Query(default=None, alias="date"),
 # ------------------------------------------------------------------- daily
 @router.get("/daily", summary="Full daily report bundle (all sections) for a date")
 async def daily(date_: date = Query(..., alias="date"),
+                mode: Optional[str] = Depends(data_mode),
                 service: PerformanceService = Depends(get_service)) -> Dict[str, Any]:
-    res = await service.daily_bundle(date_)
+    res = await service.daily_bundle(date_, mode)
     if res is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "report_not_found", "date": str(date_)})
@@ -129,10 +132,11 @@ async def daily_traffic(
     direction: str = Query(default="desc"),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    mode: Optional[str] = Depends(data_mode),
     service: PerformanceService = Depends(get_service),
 ) -> ListResponse:
     filters = {"date_from": date_from, "date_to": date_to, "terminal": _terminal(terminal),
-               "period": _upper_in(period, _PERIODS, "period")}
+               "period": _upper_in(period, _PERIODS, "period"), "data_origin": mode}
     res = await service.list_traffic(filters, sort=sort, direction=direction,
                                      limit=limit, offset=offset)
     REQUESTS.labels("performance", "ok").inc()
@@ -146,10 +150,12 @@ async def daily_status(
     terminal: Optional[str] = Query(default=None),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    mode: Optional[str] = Depends(data_mode),
     service: PerformanceService = Depends(get_service),
 ) -> ListResponse:
-    res = await service.list_status({"date": date_, "terminal": _terminal(terminal)},
-                                    limit=limit, offset=offset)
+    res = await service.list_status(
+        {"date": date_, "terminal": _terminal(terminal), "data_origin": mode},
+        limit=limit, offset=offset)
     REQUESTS.labels("performance", "ok").inc()
     return ListResponse(**res)
 
@@ -160,10 +166,12 @@ async def daily_vessels(
     terminal: Optional[str] = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    mode: Optional[str] = Depends(data_mode),
     service: PerformanceService = Depends(get_service),
 ) -> ListResponse:
-    res = await service.list_vessels({"date": date_, "terminal": _terminal(terminal)},
-                                     limit=limit, offset=offset)
+    res = await service.list_vessels(
+        {"date": date_, "terminal": _terminal(terminal), "data_origin": mode},
+        limit=limit, offset=offset)
     REQUESTS.labels("performance", "ok").inc()
     return ListResponse(**res)
 
@@ -178,10 +186,11 @@ async def monthly_teu(
     direction: str = Query(default="asc"),
     limit: int = Query(default=200, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
+    mode: Optional[str] = Depends(data_mode),
     service: PerformanceService = Depends(get_service),
 ) -> ListResponse:
     filters = {"fiscal_year": fiscal_year, "terminal": _terminal(terminal),
-               "date_from": date_from, "date_to": date_to}
+               "date_from": date_from, "date_to": date_to, "data_origin": mode}
     res = await service.list_monthly(filters, sort=sort, direction=direction,
                                      limit=limit, offset=offset)
     REQUESTS.labels("performance", "ok").inc()
@@ -196,6 +205,7 @@ async def trends(
     terminal: Optional[str] = Query(default=None),
     date_from: Optional[date] = Query(default=None, alias="from"),
     date_to: Optional[date] = Query(default=None, alias="to"),
+    mode: Optional[str] = Depends(data_mode),
     service: PerformanceService = Depends(get_service),
 ) -> Dict[str, Any]:
     g = grain.strip().lower()
@@ -203,7 +213,7 @@ async def trends(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail={"error": "invalid_grain", "grain": grain})
     res = await service.trends(metric.strip(), grain=g, terminal=_terminal(terminal),
-                               date_from=date_from, date_to=date_to)
+                               date_from=date_from, date_to=date_to, data_origin=mode)
     REQUESTS.labels("performance", "ok").inc()
     return res
 
@@ -212,9 +222,10 @@ async def trends(
 async def stats(
     date_from: Optional[date] = Query(default=None, alias="from"),
     date_to: Optional[date] = Query(default=None, alias="to"),
+    mode: Optional[str] = Depends(data_mode),
     service: PerformanceService = Depends(get_service),
 ) -> Dict[str, Any]:
-    res = await service.stats(date_from, date_to)
+    res = await service.stats(date_from, date_to, mode)
     REQUESTS.labels("performance", "ok").inc()
     return res
 
@@ -226,11 +237,13 @@ async def dwell(
     terminal: Optional[str] = Query(default=None),
     cycle: Optional[str] = Query(default=None, description="IMPORT | EXPORT"),
     segment: Optional[str] = Query(default=None, description="OVERALL | TRUCK | TRAIN"),
+    mode: Optional[str] = Depends(data_mode),
     service: PerformanceService = Depends(get_service),
 ) -> Dict[str, Any]:
     filters = {"report_month": report_month, "terminal_code": _terminal(terminal),
                "cycle": _upper_in(cycle, _CYCLES, "cycle"),
-               "segment": _upper_in(segment, ("OVERALL", "TRUCK", "TRAIN"), "segment")}
+               "segment": _upper_in(segment, ("OVERALL", "TRUCK", "TRAIN"), "segment"),
+               "data_origin": mode}
     res = await service.ldb_dwell(filters)
     REQUESTS.labels("performance", "ok").inc()
     return res
@@ -242,10 +255,12 @@ async def cfs_icd(
     facility_type: Optional[str] = Query(default=None, description="CFS | ICD"),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    mode: Optional[str] = Depends(data_mode),
     service: PerformanceService = Depends(get_service),
 ) -> ListResponse:
     filters = {"report_month": report_month,
-               "facility_type": _upper_in(facility_type, ("CFS", "ICD"), "facility_type")}
+               "facility_type": _upper_in(facility_type, ("CFS", "ICD"), "facility_type"),
+               "data_origin": mode}
     res = await service.ldb_facility(filters, limit=limit, offset=offset)
     REQUESTS.labels("performance", "ok").inc()
     return ListResponse(**res)
@@ -255,9 +270,11 @@ async def cfs_icd(
 async def congestion(
     report_month: Optional[date] = Query(default=None, alias="month"),
     cycle: Optional[str] = Query(default=None, description="IMPORT | EXPORT"),
+    mode: Optional[str] = Depends(data_mode),
     service: PerformanceService = Depends(get_service),
 ) -> Dict[str, Any]:
-    filters = {"report_month": report_month, "cycle": _upper_in(cycle, _CYCLES, "cycle")}
+    filters = {"report_month": report_month, "cycle": _upper_in(cycle, _CYCLES, "cycle"),
+               "data_origin": mode}
     res = await service.ldb_congestion(filters)
     REQUESTS.labels("performance", "ok").inc()
     return res
@@ -268,10 +285,12 @@ async def routes(
     report_month: Optional[date] = Query(default=None, alias="month"),
     cycle: Optional[str] = Query(default=None, description="IMPORT | EXPORT"),
     transport_mode: Optional[str] = Query(default=None, description="TRAIN | TRUCK"),
+    mode: Optional[str] = Depends(data_mode),
     service: PerformanceService = Depends(get_service),
 ) -> Dict[str, Any]:
     filters = {"report_month": report_month, "cycle": _upper_in(cycle, _CYCLES, "cycle"),
-               "transport_mode": _upper_in(transport_mode, ("TRAIN", "TRUCK"), "transport_mode")}
+               "transport_mode": _upper_in(transport_mode, ("TRAIN", "TRUCK"), "transport_mode"),
+               "data_origin": mode}
     res = await service.ldb_routes(filters)
     REQUESTS.labels("performance", "ok").inc()
     return res
@@ -282,10 +301,11 @@ async def weather(
     report_month: Optional[date] = Query(default=None, alias="month"),
     terminal: Optional[str] = Query(default=None),
     cycle: Optional[str] = Query(default=None, description="IMPORT | EXPORT"),
+    mode: Optional[str] = Depends(data_mode),
     service: PerformanceService = Depends(get_service),
 ) -> Dict[str, Any]:
     filters = {"report_month": report_month, "terminal_code": _terminal(terminal),
-               "cycle": _upper_in(cycle, _CYCLES, "cycle")}
+               "cycle": _upper_in(cycle, _CYCLES, "cycle"), "data_origin": mode}
     res = await service.ldb_weather(filters)
     REQUESTS.labels("performance", "ok").inc()
     return res

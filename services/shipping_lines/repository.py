@@ -32,6 +32,17 @@ from .parsers.common import ParsedList
 
 log = get_logger("services.shipping_lines.repository")
 
+
+def _data_origin(uploaded_by: Optional[str]) -> str:
+    """LIVE (JNPA-API) vs DEMO (manual) provenance tag for one write.
+
+    The JNPA Simulated Port-Data API sync tags its imports ``uploaded_by =
+    'jnpa-api'`` → ``'API'``; every other importer (dashboard upload, directory
+    dump) → ``'MANUAL'``. Mirrors gateway/data_mode.resolve_data_origin on the
+    read side."""
+    return "API" if (uploaded_by or "").strip().lower() == "jnpa-api" else "MANUAL"
+
+
 # Canonical container columns (parser dict keys that map 1:1 to table columns).
 
 # Legacy-shaped relations over the v3 core model. Every read goes through these
@@ -48,7 +59,7 @@ _ADV_REL = """(
            a.reefer_status, a.reefer_temp, dg.imdg_class AS imdg_code,
            dg.un_number, a.group_code, a.client_code,
            a.departure_mode::text AS departure_mode, a.nominated_cfs, a.iec_code,
-           a.gst_no, a.commodity_code, a.created_at
+           a.gst_no, a.commodity_code, a.data_origin, a.created_at
     FROM core.advance_list_container a
     LEFT JOIN core.ref_terminal t ON t.terminal_id = a.terminal_id
     LEFT JOIN core.advance_list_dg dg ON dg.al_id = a.al_id AND dg.slot = 1
@@ -246,6 +257,9 @@ class ShippingLinesRepository:
                 "EXISTS (SELECT 1 FROM core.delivery_order_line l "
                 "        WHERE l.do_number = d.do_number AND l.container_no = :container_no)")
             params["container_no"] = str(filters["container_no"]).strip().upper()
+        if filters.get("data_origin") is not None:
+            clauses.append("d.data_origin = :data_origin")
+            params["data_origin"] = filters["data_origin"]
         return ((" WHERE " + " AND ".join(clauses)) if clauses else ""), params
 
     async def list_edo(self, *, filters: Mapping[str, Any], limit: int, offset: int) -> list[dict]:
@@ -324,6 +338,9 @@ class ShippingLinesRepository:
         if filters.get("vehicle_no"):
             clauses.append("cm.vehicle_no = :vehicle_no")
             params["vehicle_no"] = str(filters["vehicle_no"]).strip().upper()
+        if filters.get("data_origin") is not None:
+            clauses.append("cm.data_origin = :data_origin")
+            params["data_origin"] = filters["data_origin"]
         return ((" WHERE " + " AND ".join(clauses)) if clauses else ""), params
 
     async def list_gate_movements(self, *, filters: Mapping[str, Any],
@@ -352,11 +369,19 @@ class ShippingLinesRepository:
             "WHERE cm.gate_no IS NOT NULL "
             "GROUP BY rt.code, cm.gate_no ORDER BY rt.code NULLS LAST, cm.gate_no", {})
 
-    async def find_file_by_sha(self, sha256: str) -> Optional[dict]:
-        return await self._one(
-            "SELECT id, list_type, terminal, source_file, import_status, record_count, "
-            "imported_count, error_count, created_at FROM core.sl_import_file "
-            "WHERE source_sha256 = :sha", {"sha": sha256})
+    async def find_file_by_sha(self, sha256: str,
+                               data_origin: Optional[str] = None) -> Optional[dict]:
+        # Dedup is PER-ORIGIN (UNIQUE(source_sha256, data_origin)): the same bytes
+        # delivered by the API and by a manual dump are kept once per origin, so
+        # LIVE and DEMO are each complete. data_origin=None ⇒ identical legacy SQL.
+        sql = ("SELECT id, list_type, terminal, source_file, import_status, record_count, "
+               "imported_count, error_count, created_at FROM core.sl_import_file "
+               "WHERE source_sha256 = :sha")
+        params: dict[str, Any] = {"sha": sha256}
+        if data_origin is not None:
+            sql += " AND data_origin = :data_origin"
+            params["data_origin"] = data_origin
+        return await self._one(sql, params)
 
     # ------------------------------------------------------------------ persist
     async def persist(self, parsed: ParsedList, *, source_file: str, source_sha256: str,
@@ -366,7 +391,8 @@ class ShippingLinesRepository:
 
         ``uploaded_by``/``source`` attribute a UI upload in the ledger; the directory
         importer leaves them at their defaults (NULL / 'DIRECTORY')."""
-        existing = await self.find_file_by_sha(source_sha256)
+        data_origin = _data_origin(uploaded_by)
+        existing = await self.find_file_by_sha(source_sha256, data_origin)
         if existing is not None:
             return {"file_id": existing["id"], "list_type": existing["list_type"],
                     "terminal": existing["terminal"], "import_status": "SKIPPED_DUPLICATE",
@@ -383,15 +409,18 @@ class ShippingLinesRepository:
             "line_code": h.get("line_code"), "direction": h.get("direction"),
             "record_count": parsed.record_count,
             "uploaded_by": uploaded_by, "source": source,
+            "data_origin": data_origin,
         }
         try:
             async with get_engine(self._dsn).begin() as conn:
                 res = await conn.execute(text(_FILE_INSERT), envelope)
                 file_id = res.mappings().first()["id"]
                 if parsed.delivery_orders:
-                    imported = await self._persist_delivery_orders(conn, file_id, parsed.delivery_orders)
+                    imported = await self._persist_delivery_orders(
+                        conn, file_id, parsed.delivery_orders, data_origin)
                 else:
-                    imported = await self._persist_containers(conn, file_id, parsed.containers)
+                    imported = await self._persist_containers(
+                        conn, file_id, parsed.containers, data_origin)
                 await conn.execute(
                     text("UPDATE core.sl_import_file SET import_status = 'SUCCESS', "
                          "imported_count = :imp, error_count = 0, updated_at = now() "
@@ -400,7 +429,7 @@ class ShippingLinesRepository:
                     "import_status": "SUCCESS", "record_count": parsed.record_count,
                     "imported_count": imported, "error_count": 0, "duplicate": False}
         except IntegrityError as exc:
-            dup = await self.find_file_by_sha(source_sha256)
+            dup = await self.find_file_by_sha(source_sha256, data_origin)
             if dup is not None:
                 return {"file_id": dup["id"], "list_type": dup["list_type"],
                         "terminal": dup["terminal"], "import_status": "SKIPPED_DUPLICATE",
@@ -422,7 +451,8 @@ class ShippingLinesRepository:
                 text("INSERT INTO core.ref_shipping_line (line_code) VALUES (:lc) "
                      "ON CONFLICT (line_code) DO UPDATE SET last_seen = now()"), rows)
 
-    async def _persist_containers(self, conn: Any, file_id: int, containers: Sequence[dict]) -> int:
+    async def _persist_containers(self, conn: Any, file_id: int, containers: Sequence[dict],
+                                  data_origin: str = "MANUAL") -> int:
         if not containers:
             return 0
         await self._upsert_lines(conn, {c.get("shipping_line_code") for c in containers if c.get("shipping_line_code")})
@@ -431,6 +461,7 @@ class ShippingLinesRepository:
         for c in containers:
             row = {k: c.get(k) for k in _CONTAINER_COLS}
             row["import_file_id"] = file_id
+            row["data_origin"] = data_origin
             raw = json.dumps(c.get("raw") or {}, sort_keys=True, default=str)
             row["raw"] = raw
             # De-dup on the FULL source row: byte-identical rows collapse (idempotent /
@@ -453,13 +484,15 @@ class ShippingLinesRepository:
             {"id": file_id})
         return after - before
 
-    async def _persist_delivery_orders(self, conn: Any, file_id: int, orders: Sequence[dict]) -> int:
+    async def _persist_delivery_orders(self, conn: Any, file_id: int, orders: Sequence[dict],
+                                       data_origin: str = "MANUAL") -> int:
         if not orders:
             return 0
         rows = []
         for o in orders:
             row = {k: o.get(k) for k in _DO_COLS}
             row["import_file_id"] = file_id
+            row["data_origin"] = data_origin
             rows.append(row)
         # `core.delivery_order_line` has no import_file_id in the canonical schema, so
         # the inserted count is a whole-table before/after delta instead of a per-file
@@ -541,6 +574,10 @@ class ShippingLinesRepository:
             clauses.append("(container_no ILIKE :q OR bill_of_lading ILIKE :q "
                            "OR shipping_line_code ILIKE :q)")
             params["q"] = f"%{filters['q']}%"
+        # LIVE/DEMO provenance filter (data_origin projected from advance_list_container).
+        if filters.get("data_origin") is not None:
+            clauses.append("data_origin = :data_origin")
+            params["data_origin"] = filters["data_origin"]
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         return where, params
 
@@ -692,7 +729,8 @@ class ShippingLinesRepository:
         """Record a structurally-rejected upload (e.g. missing required columns) as a
         FAILED row in the ledger so it appears in upload history, with its column/row
         errors. Writes NO domain rows. De-dupes on sha256 like a real import."""
-        existing = await self.find_file_by_sha(source_sha256)
+        data_origin = _data_origin(uploaded_by)
+        existing = await self.find_file_by_sha(source_sha256, data_origin)
         if existing is not None:
             return existing["id"]
         envelope = {
@@ -701,6 +739,7 @@ class ShippingLinesRepository:
             "file_size_bytes": file_size, "vessel_visit": None, "voyage": None,
             "line_code": None, "direction": None, "record_count": 0,
             "error_detail": detail[:4000], "uploaded_by": uploaded_by, "source": "UPLOAD",
+            "data_origin": data_origin,
         }
         try:
             async with get_engine(self._dsn).begin() as conn:
@@ -725,11 +764,11 @@ _FILE_INSERT = """
 INSERT INTO core.sl_import_file
     (list_type, terminal, physical_format, source_file, source_sha256, file_size_bytes,
      vessel_visit, voyage, line_code, direction, record_count, import_status,
-     uploaded_by, source)
+     uploaded_by, source, data_origin)
 VALUES
     (:list_type, :terminal, :physical_format, :source_file, :source_sha256, :file_size_bytes,
      :vessel_visit, :voyage, :line_code, :direction, :record_count, 'PENDING',
-     :uploaded_by, :source)
+     :uploaded_by, :source, :data_origin)
 RETURNING id
 """
 
@@ -737,11 +776,11 @@ _FILE_INSERT_FAILED = """
 INSERT INTO core.sl_import_file
     (list_type, terminal, physical_format, source_file, source_sha256, file_size_bytes,
      vessel_visit, voyage, line_code, direction, record_count, import_status, error_detail,
-     uploaded_by, source)
+     uploaded_by, source, data_origin)
 VALUES
     (:list_type, :terminal, :physical_format, :source_file, :source_sha256, :file_size_bytes,
      :vessel_visit, :voyage, :line_code, :direction, :record_count, 'FAILED', :error_detail,
-     :uploaded_by, :source)
+     :uploaded_by, :source, :data_origin)
 RETURNING id
 """
 
@@ -754,7 +793,7 @@ INSERT INTO core.advance_list_container
      weight_source_uom, pol, pod, destination, line_code, vessel_visit, voyage,
      bl_no, seal1, reefer_status, reefer_temp, reefer_temp_unit, group_code,
      client_code, departure_mode, nominated_cfs, iec_code, gst_no,
-     commodity_code, extras, row_sha256)
+     commodity_code, data_origin, extras, row_sha256)
 VALUES
     (:import_file_id,
      CASE :list_type WHEN 'EAL' THEN 'E' ELSE 'I' END,
@@ -769,7 +808,7 @@ VALUES
      :shipping_line_code, :vessel_visit, :voyage, :bill_of_lading, :seal_no,
      :reefer_status, :reefer_temp, left(:reefer_uom, 1), :group_code,
      :client_code, left(:departure_mode, 1), :nominated_cfs, :iec_code,
-     :gst_no, :commodity_code, CAST(:raw AS jsonb), :row_sha256)
+     :gst_no, :commodity_code, :data_origin, CAST(:raw AS jsonb), :row_sha256)
 ON CONFLICT (import_file_id, row_sha256) DO NOTHING
 """
 
@@ -787,14 +826,14 @@ INSERT INTO core.delivery_order
     (do_number, do_date, vcn, imo_no, agency_name, custodian_code, delivery_type,
      payload, import_file_id, message_type, sender_id, receiving_party, call_sign,
      stuff_destuff_flag, shipping_agent_code, vessel_country, total_containers,
-     raw_xml)
+     raw_xml, data_origin)
 VALUES
     (coalesce(:document_number, :common_ref_number), CAST(:issued_ts AS date),
      :vcn, :imo_number, :shipping_agent_code, :ca_code, :delivery_mode,
      jsonb_build_object('common_ref_number', :common_ref_number),
      :import_file_id, :message_type, :sender_id, :receiving_party, :call_sign,
      :stuff_destuff_flag, :shipping_agent_code, :vessel_country,
-     :total_containers, :raw_xml)
+     :total_containers, :raw_xml, :data_origin)
 ON CONFLICT (do_number) DO NOTHING
 """
 
@@ -804,7 +843,7 @@ INSERT INTO core.delivery_order_line
      import_file_id, common_ref_number, vcn, imo_number, shipping_agent_code,
      final_pod, container_valid_iso, equipment_status, cargo_type, arrival_ts,
      receipt_date, delivery_mode, gate_pass_no, gate_pass_ts, vehicle_no,
-     gate_number, ca_code, con_seal_status, issued_ts)
+     gate_number, ca_code, con_seal_status, issued_ts, data_origin)
 VALUES
     (coalesce(:document_number, :common_ref_number),
      (SELECT coalesce(max(l2.line_no), 0) + 1 FROM core.delivery_order_line l2
@@ -814,6 +853,6 @@ VALUES
      :shipping_agent_code, :final_pod, :container_valid_iso, :equipment_status,
      :cargo_type, :arrival_ts, :receipt_date, :delivery_mode, :gate_pass_no,
      :gate_pass_ts, :vehicle_no, :gate_number, :ca_code, :con_seal_status,
-     :issued_ts)
+     :issued_ts, :data_origin)
 ON CONFLICT (COALESCE(common_ref_number, ''), container_no, COALESCE(gate_pass_no, '')) DO NOTHING
 """

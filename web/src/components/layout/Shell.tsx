@@ -26,6 +26,7 @@ import { ChevronDown, Play, RotateCcw, Waypoints } from "lucide-react";
 import { SUPPORTED_LANGS, LANG_LABELS, type LangCode } from "@/i18n";
 import i18n from "@/i18n";
 import { HeaderActions } from "@/components/layout/HeaderActions";
+import { DataSourceToggle } from "@/components/layout/DataSourceToggle";
 import { GlobalSearch } from "@/components/layout/GlobalSearch";
 import { canSeeScreen } from "@/lib/auth";
 import { DATA_MODE } from "@/data";
@@ -76,6 +77,10 @@ export function Shell({ children, onResetBaseline, resetDisabled }: ShellProps) 
         <GlobalSearch />
 
         <div className="ml-auto flex items-center gap-2 sm:gap-3">
+          {/* Data-SOURCE toggle (LIVE JNPA-API rows | DEMO pre-loaded rows). Injects
+              the X-Data-Mode header on every gateway request; separate from DATA_MODE. */}
+          <DataSourceToggle />
+
           <button
             type="button"
             onClick={() => navigate("/simulator")}

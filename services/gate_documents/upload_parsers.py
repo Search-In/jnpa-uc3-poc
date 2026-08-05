@@ -196,6 +196,12 @@ ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
         "gross_wt_kg": ("grossweight", "grosswtkg", "weightkg", "grosswt", "weight"),
         "issued_at": ("issuedat", "issuedon", "issuetime", "timestamp", "datetime",
                       "date", "form13date"),
+        # Evidence object reference (fix G-2). OPTIONAL and deliberately absent
+        # from the template: a document-only Form-13 stays valid, but a feed that
+        # carries a scan/photo key now has it persisted to
+        # core.gate_capture.object_path so GET /api/evidence/{path} can resolve it.
+        "object_path": ("objectpath", "imagefile", "image", "scanfile", "evidence",
+                        "evidencepath", "evidenceobject", "objectkey", "filepath"),
     },
 }
 
@@ -527,6 +533,8 @@ def _parse_row(res: ParseResult, rn: dict, i: int, doc_type: str,
         "issued_at": parse_ts(_pick(rn, doc_type, "issued_at")),
         "remarks": _pick(rn, doc_type, "remarks"),
         "source_file": source_file,
+        # Optional evidence object key (fix G-2); None for document-only rows.
+        "object_path": _pick(rn, doc_type, "object_path"),
     }
     rec["row_sha256"] = _sha(rec["form13_no"], rec["visit_id"], vehicle, cn, rec["terminal"])
     return rec

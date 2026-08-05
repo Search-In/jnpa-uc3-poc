@@ -610,6 +610,17 @@ services:
     image: jnpa/trucking-app:0.1.0
     container_name: jnpa-truck-sim
     restart: unless-stopped
+    # The app has always exposed GET /healthz (ingest/trucking_app/app.py) but no
+    # compose healthcheck consumed it, so `docker compose ps` could only say
+    # "running" — a booted-but-not-serving sim looked identical to a healthy one,
+    # and nothing could depends_on: service_healthy it. Uses the image's own
+    # Python (no curl in python:3.11-slim).
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8240/healthz', timeout=3).status==200 else 1)\" || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
     depends_on:
       mosquitto:
         condition: service_started
@@ -712,6 +723,15 @@ services:
     image: jnpa/congestion-ai:0.1.0
     container_name: jnpa-congestion
     restart: unless-stopped
+    # GET /healthz exists (ai/congestion/infer.py) but was never wired to a
+    # compose healthcheck. Model load can take a while on a cold start, hence the
+    # longer start_period.
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8311/healthz', timeout=3).status==200 else 1)\" || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
     depends_on:
       redis:
         condition: service_healthy
@@ -932,6 +952,15 @@ services:
     image: jnpa/gateway:0.1.0
     container_name: jnpa-gateway
     restart: unless-stopped
+    # GET /healthz is served by gateway/main.py. Without a healthcheck the
+    # dependents below could only wait on service_started, i.e. "the process
+    # exists", not "the API answers".
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz', timeout=3).status==200 else 1)\" || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
     depends_on:
       redis:
         condition: service_healthy
@@ -1343,6 +1372,15 @@ services:
     image: jnpa/scenarios:0.1.0
     container_name: jnpa-scenarios
     restart: unless-stopped
+    # GET /healthz is served by scenarios/runner.py. tests/test_scenarios.py skips
+    # with "scenarios-runner not reachable on localhost:8400" — a healthcheck makes
+    # that state visible in `docker compose ps` instead of only at test time.
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8400/healthz', timeout=3).status==200 else 1)\" || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     depends_on:
       kafka:
         condition: service_healthy

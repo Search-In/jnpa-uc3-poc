@@ -77,15 +77,22 @@ def aoi_rollup(trips: Iterable[dict]) -> dict:
 
         {
           "total_kg": float,
-          "by_class": {<class>: kg, ...},      # only classes that appear
+          "by_class": {<class>: kg, ...},           # only classes that appear
+          "vehicles_by_class": {<class>: int, ...}, # same key-set as by_class
           "by_source": {"moving": kg, "idle": kg},
           "vehicle_count": int,
         }
 
+    ``vehicles_by_class`` answers "which vehicles produced this number" — the
+    dashboard shows it beside the totals so an operator can see the fleet
+    composition behind the CO2e figure rather than a bare vehicle count.
+
     Invariant (asserted in tests): ``by_source.moving + by_source.idle`` equals
-    ``total_kg`` within rounding, and ``sum(by_class.values())`` equals it too.
+    ``total_kg`` within rounding, ``sum(by_class.values())`` equals it too, and
+    ``sum(vehicles_by_class.values())`` equals ``vehicle_count`` exactly.
     """
     by_class: dict[str, float] = {}
+    vehicles_by_class: dict[str, int] = {}
     moving_total = 0.0
     idle_total = 0.0
     count = 0
@@ -101,11 +108,13 @@ def aoi_rollup(trips: Iterable[dict]) -> dict:
         moving_total += moving
         idle_total += idle
         by_class[vclass] = round(by_class.get(vclass, 0.0) + moving + idle, _ROUND_KG)
+        vehicles_by_class[vclass] = vehicles_by_class.get(vclass, 0) + 1
 
     total = round(moving_total + idle_total, _ROUND_KG)
     return {
         "total_kg": total,
         "by_class": dict(sorted(by_class.items())),
+        "vehicles_by_class": dict(sorted(vehicles_by_class.items())),
         "by_source": {
             "moving": round(moving_total, _ROUND_KG),
             "idle": round(idle_total, _ROUND_KG),

@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { Spinner, EmptyState } from "@/components/ui/misc";
 import { STATUS, OKABE_ITO } from "@/lib/tokens";
+import type { CarbonRollup } from "@/lib/types";
 
 // Emission factors mirror the backend (carbon/factors.py). The "effective" per-km
 // factor = nominal laden payload (t) × tonne-km factor (g CO₂e/t·km) ÷ 1000, i.e.
@@ -160,6 +161,113 @@ const CLASS_COLOURS = [
   OKABE_ITO.orange,
 ] as const;
 
+// Colour a vehicle class by its position in the rollup's by_class key order, so
+// the breakdown table and the by-class bars below always agree on a category's
+// colour even though they sort their rows differently.
+function classColour(cls: string, order: string[]): string {
+  const i = order.indexOf(cls);
+  return CLASS_COLOURS[(i < 0 ? 0 : i) % CLASS_COLOURS.length];
+}
+
+// Fleet composition behind the CO₂e figure: which vehicle categories were
+// counted, and how many of each. Sourced from `vehicles_by_class` on the rollup
+// (carbon/calculator.py). When the upstream response omits it, the section says
+// so plainly instead of inferring or hard-coding a split — the operator must be
+// able to tell "no breakdown available" from "breakdown is this".
+function VehicleBreakdown({ rollup }: { rollup: CarbonRollup }) {
+  const { t } = useTranslation();
+  const counts = rollup.vehicles_by_class ?? {};
+  // Descending by count so the dominant category reads first.
+  const rows = Object.entries(counts)
+    .filter(([, n]) => Number.isFinite(n))
+    .sort((a, b) => b[1] - a[1]);
+  const breakdownTotal = rows.reduce((sum, [, n]) => sum + n, 0);
+  const classOrder = Object.keys(rollup.by_class);
+
+  return (
+    <div>
+      <div className="mb-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+        {t("panels.carbon.vehicleBreakdown", { defaultValue: "Vehicle breakdown" })}
+      </div>
+
+      {rows.length === 0 ? (
+        // No category data on this response — state it, do not invent a split.
+        <div className="rounded-md border border-dashed border-border bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
+          {t("panels.carbon.breakdownUnavailable", {
+            defaultValue: "Category-wise breakdown not available from this data source.",
+          })}
+        </div>
+      ) : (
+        <div className="overflow-hidden rounded-md border border-border">
+          <table className="w-full text-[12px] tabular-nums">
+            <thead>
+              <tr className="bg-muted/40 text-left text-[10px] uppercase tracking-wide text-muted-foreground">
+                <th className="px-3 py-1.5 font-medium">
+                  {t("panels.carbon.colCategory", { defaultValue: "Category" })}
+                </th>
+                <th className="px-3 py-1.5 text-right font-medium">
+                  {t("panels.carbon.colVehicles", { defaultValue: "Vehicles" })}
+                </th>
+                <th className="px-3 py-1.5 text-right font-medium">
+                  {t("panels.carbon.colShare", { defaultValue: "Share" })}
+                </th>
+                <th className="px-3 py-1.5 text-right font-medium">CO₂e</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(([cls, n]) => {
+                const kg = rollup.by_class[cls];
+                const share = breakdownTotal > 0 ? (n / breakdownTotal) * 100 : 0;
+                return (
+                  <tr key={cls} className="border-t border-border/50">
+                    <td className="px-3 py-1.5">
+                      <span className="flex items-center gap-2">
+                        <span
+                          aria-hidden
+                          className="h-2 w-2 shrink-0 rounded-full"
+                          style={{ backgroundColor: classColour(cls, classOrder) }}
+                        />
+                        <span className="font-medium">{cls}</span>
+                      </span>
+                    </td>
+                    <td className="px-3 py-1.5 text-right">
+                      {n.toLocaleString()}{" "}
+                      <span className="text-[10px] font-normal text-muted-foreground">
+                        {t("panels.carbon.vehiclesUnit", { defaultValue: "vehicles" })}
+                      </span>
+                    </td>
+                    <td className="px-3 py-1.5 text-right text-muted-foreground">
+                      {share.toFixed(1)}%
+                    </td>
+                    <td className="px-3 py-1.5 text-right text-muted-foreground">
+                      {kg != null ? `${Math.round(kg).toLocaleString()} kg` : "—"}
+                    </td>
+                  </tr>
+                );
+              })}
+              <tr className="border-t border-border bg-muted/30 font-semibold">
+                <td className="px-3 py-1.5">
+                  {t("panels.carbon.totalRow", { defaultValue: "Total" })}
+                </td>
+                <td className="px-3 py-1.5 text-right">
+                  {breakdownTotal.toLocaleString()}{" "}
+                  <span className="text-[10px] font-normal text-muted-foreground">
+                    {t("panels.carbon.vehiclesUnit", { defaultValue: "vehicles" })}
+                  </span>
+                </td>
+                <td className="px-3 py-1.5 text-right text-muted-foreground">100%</td>
+                <td className="px-3 py-1.5 text-right">
+                  {Math.round(rollup.total_kg).toLocaleString()} kg
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function fmtTs(iso?: string): string {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -248,9 +356,13 @@ export function CarbonTile() {
         <EmptyState>{t("panels.carbon.empty")}</EmptyState>
       ) : (
         <>
-          <div className="flex items-end justify-between">
-            <div>
-              <div className="text-[11px] text-muted-foreground">{t("panels.carbon.total")}</div>
+          {/* Headline pair: the CO₂e figure and the fleet it was computed over,
+              each with an explicit label so neither number is ambiguous. */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="rounded-md border border-border bg-muted/20 px-3 py-2">
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                {t("panels.carbon.total")}
+              </div>
               <div className="text-2xl font-semibold tabular-nums">
                 {(c.total_kg / 1000).toFixed(2)}
                 <span className="ml-1 text-xs font-normal text-muted-foreground">t CO₂e</span>
@@ -259,9 +371,21 @@ export function CarbonTile() {
                 {c.total_kg.toLocaleString()} kg
               </div>
             </div>
-            <div className="text-right">
-              <div className="text-lg font-semibold tabular-nums">{c.vehicle_count}</div>
-              <div className="text-[10px] text-muted-foreground">{t("panels.carbon.vehicles")}</div>
+            <div className="rounded-md border border-border bg-muted/20 px-3 py-2">
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                {t("panels.carbon.totalVehicles", { defaultValue: "Total vehicles" })}
+              </div>
+              <div className="text-2xl font-semibold tabular-nums">
+                {c.vehicle_count.toLocaleString()}
+                <span className="ml-1 text-xs font-normal text-muted-foreground">
+                  {t("panels.carbon.vehiclesUnit", { defaultValue: "vehicles" })}
+                </span>
+              </div>
+              <div className="text-[10px] text-muted-foreground">
+                {t("panels.carbon.contributesTo", {
+                  defaultValue: "Vehicles included in the CO₂e calculation above",
+                })}
+              </div>
             </div>
           </div>
 
@@ -291,15 +415,18 @@ export function CarbonTile() {
             </div>
           </div>
 
+          {/* which vehicles the figure covers, category by category */}
+          <VehicleBreakdown rollup={c} />
+
           {/* by class */}
           <div>
             <div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">
               {t("panels.carbon.byClass")}
             </div>
             <div className="space-y-1">
-              {Object.entries(c.by_class).map(([cls, kg], i) => {
+              {Object.entries(c.by_class).map(([cls, kg]) => {
                 const max = Math.max(...Object.values(c.by_class), 1);
-                const colour = CLASS_COLOURS[i % CLASS_COLOURS.length];
+                const colour = classColour(cls, Object.keys(c.by_class));
                 return (
                   <div key={cls} className="flex items-center gap-2">
                     <span className="w-14 shrink-0 text-[11px]">{cls}</span>

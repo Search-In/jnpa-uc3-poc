@@ -320,6 +320,21 @@ async def vehicle_intelligence(plate: str, state: GatewayState = Depends(get_sta
     return data
 
 
+@router.get("/vehicle-360/{plate}")
+async def vehicle_360(plate: str, state: GatewayState = Depends(get_state)) -> dict:
+    """Vehicle 360: master row + assigned driver + licence/PDP + transport company
+    + compliance + alerts + lifecycle timeline, in one response.
+
+    An aggregate over tables that already exist — it reuses vehicle_intel() for
+    the enforcement/telemetry half and adds only the master-data spine, so
+    /vehicle-intel keeps its exact contract for existing callers.
+    """
+    norm = normalize_plate(plate)
+    data = await vehicle_intel.vehicle_360(norm, dsn=state.cfg.postgres_dsn)
+    REQUESTS.labels("vahan", "ok").inc()
+    return data
+
+
 @router.get("/driver-intel/{driver_key}")
 async def driver_intelligence(driver_key: str, state: GatewayState = Depends(get_state)) -> dict:
     """Aggregate driver intelligence: profile + DL history + vehicle + violations + activity."""

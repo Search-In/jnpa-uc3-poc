@@ -514,6 +514,11 @@ export const api = {
   // --- Vehicle & Driver Intelligence (Vahan/Sarathi, RDS-backed) ---
   vehicleIntel: (plate: string) =>
     http<import("./types").VehicleIntel>(`/api/vahan/vehicle-intel/${encodeURIComponent(plate)}`),
+  // Vehicle 360: one call for the whole operator view (master + driver + licence
+  // + transporter + compliance + timeline). Wraps vehicle-intel server-side, so
+  // the profile screen needs a single round-trip instead of a lookup chain.
+  vehicle360: (plate: string) =>
+    http<import("./types").Vehicle360>(`/api/vahan/vehicle-360/${encodeURIComponent(plate)}`),
   driverIntel: (key: string) =>
     http<import("./types").DriverIntel>(`/api/vahan/driver-intel/${encodeURIComponent(key)}`),
   dlLookup: (dl: string) =>

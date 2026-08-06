@@ -6,6 +6,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch: {} # manual re-trigger when push events are delayed/dropped
   workflow_call: {} # so deploy.yml can require this workflow as a gate
 
 concurrency:

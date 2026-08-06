@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch: {} # manual re-trigger when push events are delayed/dropped
 
 jobs:
   # Gate: run the full CI workflow first. Deploy only proceeds if every CI job

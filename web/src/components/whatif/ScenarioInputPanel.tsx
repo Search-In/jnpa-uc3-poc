@@ -47,39 +47,102 @@ function fieldsFor(scenario: string): FieldSpec[] {
   switch (scenario) {
     case "berth-cascade":
       return [
-        { name: "as_of", label: "Overrun date/time", kind: "datetime", value: NOTICE.berthOverrun,
-          hint: "Start of the cascade horizon" },
-        { name: "delay_hours", label: "Delay (hours)", kind: "number", value: "6", step: "0.5",
-          min: 0.5, max: 240, hint: "The operation overrun" },
-        { name: "horizon_hours", label: "Horizon (hours)", kind: "number", value: "48", step: "1",
-          min: 1, max: 336, hint: "Cumulative delay is reported over this window" },
-        { name: "terminal", label: "Terminal", kind: "text", value: "",
-          hint: "Blank = all terminals" },
-        { name: "vessel_name", label: "Vessel call", kind: "text", value: "",
-          hint: "Blank = the first call in the window (declared as an assumption)" },
+        {
+          name: "as_of",
+          label: "Overrun date/time",
+          kind: "datetime",
+          value: NOTICE.berthOverrun,
+          hint: "Start of the cascade horizon",
+        },
+        {
+          name: "delay_hours",
+          label: "Delay (hours)",
+          kind: "number",
+          value: "6",
+          step: "0.5",
+          min: 0.5,
+          max: 240,
+          hint: "The operation overrun",
+        },
+        {
+          name: "horizon_hours",
+          label: "Horizon (hours)",
+          kind: "number",
+          value: "48",
+          step: "1",
+          min: 1,
+          max: 336,
+          hint: "Cumulative delay is reported over this window",
+        },
+        {
+          name: "terminal",
+          label: "Terminal",
+          kind: "text",
+          value: "",
+          hint: "Blank = all terminals",
+        },
+        {
+          name: "vessel_name",
+          label: "Vessel call",
+          kind: "text",
+          value: "",
+          hint: "Blank = the first call in the window (declared as an assumption)",
+        },
       ];
     case "crane-productivity":
       return [
         { name: "as_of", label: "Day under study", kind: "datetime", value: NOTICE.craneCall },
-        { name: "reduction_pct", label: "Productivity reduction (%)", kind: "percent",
-          value: "25", step: "1", min: 1, max: 99 },
-        { name: "window_hours", label: "Window (hours)", kind: "number", value: "48", step: "1",
-          min: 1, max: 336 },
+        {
+          name: "reduction_pct",
+          label: "Productivity reduction (%)",
+          kind: "percent",
+          value: "25",
+          step: "1",
+          min: 1,
+          max: 99,
+        },
+        {
+          name: "window_hours",
+          label: "Window (hours)",
+          kind: "number",
+          value: "48",
+          step: "1",
+          min: 1,
+          max: 336,
+        },
         { name: "terminal", label: "Terminal", kind: "text", value: "" },
-        { name: "vessel_name", label: "Vessel", kind: "text", value: "",
-          hint: "Blank = the call with the highest derivable productivity" },
+        {
+          name: "vessel_name",
+          label: "Vessel",
+          kind: "text",
+          value: "",
+          hint: "Blank = the call with the highest derivable productivity",
+        },
       ];
     case "modal-shift":
       return [
         { name: "from_date", label: "From date", kind: "date", value: NOTICE.windowFrom },
         { name: "to_date", label: "To date", kind: "date", value: NOTICE.windowTo },
-        { name: "shift_pct", label: "Rail → road shift (%)", kind: "percent", value: "20",
-          step: "1", min: 1, max: 100 },
+        {
+          name: "shift_pct",
+          label: "Rail → road shift (%)",
+          kind: "percent",
+          value: "20",
+          step: "1",
+          min: 1,
+          max: 100,
+        },
         { name: "terminal", label: "Terminal", kind: "text", value: "" },
         { name: "gate_id", label: "Gate", kind: "text", value: "" },
-        { name: "sustained_rate", label: "Sustained gate rate (trucks/h)", kind: "number",
-          value: "", step: "1", min: 1,
-          hint: "Blank = derived from the data (TAS capacity, else observed p90)" },
+        {
+          name: "sustained_rate",
+          label: "Sustained gate rate (trucks/h)",
+          kind: "number",
+          value: "",
+          step: "1",
+          min: 1,
+          hint: "Blank = derived from the data (TAS capacity, else observed p90)",
+        },
       ];
     case "gate-slotting":
       return [
@@ -87,17 +150,31 @@ function fieldsFor(scenario: string): FieldSpec[] {
         { name: "to_ts", label: "To", kind: "datetime", value: NOTICE.gateTo },
         { name: "terminal", label: "Terminal", kind: "text", value: "" },
         { name: "gate_id", label: "Gate", kind: "text", value: "" },
-        { name: "sustained_rate", label: "Sustained gate rate (trucks/h)", kind: "number",
-          value: "", step: "1", min: 1,
-          hint: "Blank = derived. Override when the slot book is unprovisioned" },
+        {
+          name: "sustained_rate",
+          label: "Sustained gate rate (trucks/h)",
+          kind: "number",
+          value: "",
+          step: "1",
+          min: 1,
+          hint: "Blank = derived. Override when the slot book is unprovisioned",
+        },
       ];
     case "driver-shortage":
       return [
         { name: "from_date", label: "From date", kind: "date", value: NOTICE.windowFrom },
         { name: "to_date", label: "To date", kind: "date", value: NOTICE.windowTo },
         { name: "state_date", label: "Report state on", kind: "date", value: NOTICE.stateOn },
-        { name: "reduction_pct", label: "Trip reduction (%)", kind: "percent", value: "33.33",
-          step: "0.01", min: 1, max: 99, hint: "One third, per the scenario" },
+        {
+          name: "reduction_pct",
+          label: "Trip reduction (%)",
+          kind: "percent",
+          value: "33.33",
+          step: "0.01",
+          min: 1,
+          max: 99,
+          hint: "One third, per the scenario",
+        },
       ];
     default:
       return [];
@@ -191,7 +268,12 @@ export function ScenarioInputPanel({
           {running ? <Spinner className="h-4 w-4" /> : <Play className="h-4 w-4" />}
           {running ? "Running…" : "Run simulation"}
         </Button>
-        <Button variant="outline" onClick={reset} disabled={running} aria-label="Reset to Notice defaults">
+        <Button
+          variant="outline"
+          onClick={reset}
+          disabled={running}
+          aria-label="Reset to Notice defaults"
+        >
           <RotateCcw className="h-4 w-4" />
         </Button>
       </div>

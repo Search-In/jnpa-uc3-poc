@@ -28,7 +28,6 @@ import type { SimulationResult } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { LIMIT, buildSeries } from "./whatifSeries";
 
-
 export function BeforeAfterChart({ result }: { result: SimulationResult }) {
   const series = buildSeries(result);
   if (!series) return null;
@@ -82,11 +81,22 @@ export function BeforeAfterChart({ result }: { result: SimulationResult }) {
                 {...(vertical ? { x: series.reference.value } : { y: series.reference.value })}
                 stroke={LIMIT}
                 strokeDasharray="4 3"
-                label={{ value: series.reference.label, fontSize: 10, fill: LIMIT, position: "insideTopRight" }}
+                label={{
+                  value: series.reference.label,
+                  fontSize: 10,
+                  fill: LIMIT,
+                  position: "insideTopRight",
+                }}
               />
             )}
             {series.bars.map((b) => (
-              <Bar key={b.key} dataKey={b.key} name={b.name} fill={b.colour} radius={[3, 3, 0, 0]} />
+              <Bar
+                key={b.key}
+                dataKey={b.key}
+                name={b.name}
+                fill={b.colour}
+                radius={[3, 3, 0, 0]}
+              />
             ))}
           </BarChart>
         </ResponsiveContainer>

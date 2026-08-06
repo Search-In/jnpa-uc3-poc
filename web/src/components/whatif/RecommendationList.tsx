@@ -15,7 +15,8 @@ import { StatusChip, type Tone } from "@/components/ui/dtccc";
 function toneFor(action: string): Tone {
   const a = action.toUpperCase();
   if (a === "NO_ACTION" || a === "ABSORBED") return "ok";
-  if (a.startsWith("RELIEVE") || a.startsWith("PROTECT") || a.startsWith("REINFORCE")) return "warn";
+  if (a.startsWith("RELIEVE") || a.startsWith("PROTECT") || a.startsWith("REINFORCE"))
+    return "warn";
   return "info";
 }
 
@@ -34,9 +35,7 @@ export function RecommendationList({ recommendations }: { recommendations: SimRe
       </h3>
       <ul className="flex flex-col gap-2">
         {recommendations.map((rec, i) => {
-          const details = Object.entries(rec).filter(
-            ([k]) => k !== "action" && k !== "reason",
-          );
+          const details = Object.entries(rec).filter(([k]) => k !== "action" && k !== "reason");
           return (
             <li key={`${rec.action}-${i}`} className="rounded-md border border-border p-2.5">
               <div className="mb-1 flex flex-wrap items-center gap-2">

@@ -1658,9 +1658,7 @@ export const api = {
     group_by?: "hour" | "day";
   }) => {
     const qs = new URLSearchParams();
-    Object.entries(params).forEach(
-      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
-    );
+    Object.entries(params).forEach(([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)));
     return http<GateHourlyProfile>(`/api/gate/hourly-profile?${qs}`);
   },
 };

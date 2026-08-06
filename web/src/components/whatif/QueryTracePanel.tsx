@@ -134,8 +134,8 @@ export function QueryTracePanel({ queries }: { queries: SimQueryTrace[] }) {
         ))}
       </div>
       <p className="mt-2 border-t border-border pt-2 text-[10.5px] leading-snug text-muted-foreground">
-        Every figure above rests on these queries. They are shown with their bound parameters so
-        the working can be re-run and checked (JNPA Notice §1.d).
+        Every figure above rests on these queries. They are shown with their bound parameters so the
+        working can be re-run and checked (JNPA Notice §1.d).
       </p>
     </Card>
   );

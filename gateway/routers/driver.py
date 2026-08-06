@@ -15,9 +15,11 @@ disabled, local dev) or for a control-room principal (admin support view).
 """
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel
 
 from .. import enrollment, fleet
 from ..auth import Role
@@ -49,6 +51,63 @@ def _resolve_device_id(request: Request, query_device_id: Optional[str]) -> str:
     if not candidate:
         raise HTTPException(status_code=400, detail="device_id required")
     return enrollment.normalize_vehicle_no(candidate)
+
+
+# ---------------------------------------------------------------- login resolve
+# The driver signs in with the REGISTRATION painted on the truck (MH04LZ1507) —
+# the only identifier they actually know. The gateway keys every driver record on
+# the internal Vehicle ID (TRK-######), so this endpoint is the bridge: it
+# resolves number -> id BEFORE any token exists, and the PWA then runs its
+# unchanged pairing flow (device-token mint + truck probe) against the resolved
+# id. Nothing about the token model, the DB, or the id scheme changes.
+#
+# PUBLIC (listed in auth._PUBLIC) by necessity: the DRIVER JWT is device-bound,
+# so it cannot be minted until the device id is known — the same bootstrapping
+# exemption /api/auth itself has. It leaks only the number->id mapping for a
+# plate the caller already holds, and only for ACTIVE fleet vehicles.
+
+_TRK_ID = re.compile(r"^TRK-\d{6}$")
+
+
+class DriverLoginBody(BaseModel):
+    vehicle_number: str
+
+
+@router.post("/login")
+async def driver_login(body: DriverLoginBody,
+                       state: GatewayState = Depends(get_state)) -> dict:
+    """Resolve a driver-entered vehicle number to its internal Vehicle ID.
+
+    Accepts the registration number (the driver-facing path) and, transparently,
+    an internal TRK-id — operations staff quoting the pairing id to a driver on
+    the phone must not be locked out. Unknown -> 404, non-ACTIVE -> 403."""
+    dsn = state.cfg.postgres_dsn
+    raw = (body.vehicle_number or "").strip().upper()
+    if not raw:
+        raise HTTPException(status_code=400, detail="vehicle_number is required")
+
+    vehicle = (await fleet.get_vehicle(dsn, raw) if _TRK_ID.match(raw)
+               else await fleet.find_by_number(dsn, raw))
+    if not vehicle:
+        raise HTTPException(
+            status_code=404,
+            detail="This vehicle number isn't registered. Check the number and try again.")
+    if (vehicle.get("status") or "").upper() != fleet.ACTIVE:
+        raise HTTPException(
+            status_code=403,
+            detail="This vehicle is not active in the fleet. Contact your transporter.")
+
+    vehicle_id = enrollment.normalize_vehicle_no(vehicle.get("vehicle_id"))
+    # Informational only — pairing does not REQUIRE an assigned driver (parity
+    # with the existing TRK-id flow), but the client can message it.
+    holder = await enrollment.get_active_driver_by_vehicle(dsn, vehicle_id)
+    REQUESTS.labels("driver", "ok").inc()
+    return {
+        "vehicle_id": vehicle_id,
+        "vehicle_number": vehicle.get("vehicle_number") or vehicle_id,
+        "driver_assigned": bool(holder),
+        "driver_name": (holder or {}).get("name"),
+    }
 
 
 @router.get("/profile")

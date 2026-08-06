@@ -14,7 +14,7 @@ jobs:
 
   deploy:
     needs: ci
-    runs-on: [self-hosted, linux, x64, jnpa-ec2]
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4

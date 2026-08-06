@@ -25,7 +25,7 @@ from __future__ import annotations
 import asyncio
 import random
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from jnpa_shared.logging import get_logger
 
@@ -336,13 +336,17 @@ class JnpaSyncService:
             date_from=date_from, date_to=date_to)
 
     # -------------------------------------------------------------- replay
-    async def replay_unrouted(self, group: str) -> Dict[str, Any]:
-        """Re-route records that landed UNROUTED, straight from the raw
-        store — no re-download. Run after a new consumer is wired (Phase 4
-        rail services; a future EDI consumer)."""
-        records = await self._repo.list_records(group=group,
-                                                routed_status="UNROUTED",
-                                                limit=10_000)
+    async def replay_unrouted(self, group: str,
+                              statuses: Sequence[str] = ("UNROUTED",)
+                              ) -> Dict[str, Any]:
+        """Re-route records straight from the raw store — no re-download.
+        Run after a new consumer is wired (default: UNROUTED records), or
+        with statuses=("UNROUTED","FAILED","REJECTED") after a consumer /
+        schema fix so the failed backlog is reprocessed too."""
+        records: List[Dict[str, Any]] = []
+        for status_ in statuses:
+            records.extend(await self._repo.list_records(
+                group=group, routed_status=status_, limit=10_000))
         replayed = succeeded = 0
         for row in records:
             sha = (row.get("checksum_sha256") or "").lower()

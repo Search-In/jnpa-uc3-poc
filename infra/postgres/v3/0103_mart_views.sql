@@ -90,7 +90,6 @@ CREATE OR REPLACE VIEW mart.v_tat_inside_port AS
 CREATE OR REPLACE VIEW mart.v_cfs_ecy_dwell AS
  SELECT m.container_number,
     m.facility_type,
-    m.data_origin,
     min(m.event_ts) FILTER (WHERE m.mode = 'IN'::text) AS first_in_ts,
     max(m.event_ts) FILTER (WHERE m.mode = 'OUT'::text) AS last_out_ts,
     count(*) FILTER (WHERE m.mode = 'IN'::text) AS in_events,
@@ -100,7 +99,7 @@ CREATE OR REPLACE VIEW mart.v_cfs_ecy_dwell AS
             ELSE NULL::numeric
         END AS dwell_hours
    FROM core.cfs_ecy_movement m
-  GROUP BY m.container_number, m.facility_type, m.data_origin;
+  GROUP BY m.container_number, m.facility_type;
 CREATE OR REPLACE VIEW mart.v_customs_container_status AS
  WITH cont AS (
          SELECT igm_line_container.container_no,
@@ -153,7 +152,7 @@ CREATE OR REPLACE VIEW mart.v_shipping_line_container AS
             a.bl_no AS bill_of_lading,
             a.vessel_visit, a.voyage, a.iso_code,
             a.seal1 AS seal_no,
-            a.reefer_status, a.reefer_temp, a.data_origin, a.id
+            a.reefer_status, a.reefer_temp, a.id
            FROM core.advance_list_container a
            LEFT JOIN core.ref_terminal t ON t.terminal_id = a.terminal_id
           ORDER BY a.container_no, a.id DESC
@@ -172,7 +171,6 @@ CREATE OR REPLACE VIEW mart.v_shipping_line_container AS
     ac.freight_kind, ac.gross_weight_kg, ac.weight_source_uom,
     ac.pol, ac.pod, ac.destination, ac.bill_of_lading, ac.vessel_visit,
     ac.voyage, ac.iso_code, ac.seal_no, ac.reefer_status, ac.reefer_temp,
-    ac.data_origin,
     edo.gate_pass_no, edo.gate_pass_ts, edo.vehicle_no, edo.delivery_mode,
     edo.shipping_agent_code, edo.equipment_status,
     ac.container_no IS NOT NULL AS in_advance_list,

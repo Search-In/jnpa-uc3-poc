@@ -418,4 +418,11 @@ class CustomsService:
         events = await self._repo.list_events(container_no=container_no, limit=1)
         view["last_event"] = events[0] if events else None
         view["import_export"] = self._derive_import_export(view)
+        # Top-level message_id: the drawer renders it directly. Repositories
+        # (and test fakes) that already provide it win; otherwise it is lifted
+        # from the delivering envelope's message_id_code (row id as fallback).
+        if view.get("message_id") is None:
+            message = view.get("message") or {}
+            view["message_id"] = (message.get("message_id_code")
+                                  or message.get("id"))
         return view

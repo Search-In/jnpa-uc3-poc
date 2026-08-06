@@ -82,6 +82,21 @@ def test_aoi_rollup_conserves_total():
     assert r["total_kg"] > 0
 
 
+# --- (d2) the per-class vehicle census reconciles with the headline count ----
+# The dashboard shows "Total vehicles" beside a category breakdown; the two must
+# agree exactly or the card contradicts itself.
+def test_aoi_rollup_vehicles_by_class_reconciles():
+    r = calculator.aoi_rollup(calculator.seed_aoi_fleet(200))
+
+    counts = r["vehicles_by_class"]
+    assert sum(counts.values()) == r["vehicle_count"] == 200
+    # Every class that emitted is counted, and nothing is counted that did not.
+    assert set(counts) == set(r["by_class"])
+    assert all(isinstance(n, int) and n > 0 for n in counts.values())
+    # The seeded mix is 5 HGV : 2 RIGID : 2 REEFER : 1 LGV per 10 trips.
+    assert counts == {"HGV": 100, "LGV": 20, "REEFER": 40, "RIGID": 40}
+
+
 def test_aoi_rollup_is_deterministic():
     a = calculator.aoi_rollup(calculator.seed_aoi_fleet(200))
     b = calculator.aoi_rollup(calculator.seed_aoi_fleet(200))
@@ -93,6 +108,7 @@ def test_aoi_rollup_empty_fleet():
     assert r["total_kg"] == 0.0
     assert r["vehicle_count"] == 0
     assert r["by_source"] == {"moving": 0.0, "idle": 0.0}
+    assert r["vehicles_by_class"] == {}
 
 
 def test_vehicle_emissions_is_moving_plus_idle():

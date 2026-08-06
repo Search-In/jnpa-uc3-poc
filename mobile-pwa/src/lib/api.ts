@@ -289,6 +289,20 @@ export const api = {
       `/api/driver/profile${deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : ""}`,
     ),
 
+  // Sign-in bootstrap: resolve the driver-entered registration number to the
+  // internal Vehicle ID the device token is minted for. Public endpoint (runs
+  // before any token exists). 404 = unknown number, 403 = vehicle not ACTIVE.
+  driverLogin: (vehicleNumber: string) =>
+    http<{
+      vehicle_id: string;
+      vehicle_number: string;
+      driver_assigned: boolean;
+      driver_name?: string | null;
+    }>(`/api/driver/login`, {
+      method: "POST",
+      body: JSON.stringify({ vehicle_number: vehicleNumber }),
+    }),
+
   // --- profile / vehicle: VahanRecord ---
   vahanRc: (plate: string) => http<VahanEnvelope>(`/api/vahan/rc/${encodeURIComponent(plate)}`),
   fastag: (plate: string) =>

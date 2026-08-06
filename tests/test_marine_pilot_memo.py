@@ -212,10 +212,14 @@ class TestNoArchitecturalDuplication:
         src = (REPO / "services/marine/repository.py").read_text(encoding="utf-8")
         assert "SELECT call_id FROM core.vessel_call WHERE via_no = :via_no" in src
 
-    def test_pltmem_is_parsed_but_not_routed(self):
-        """Routing it too would put two rows in a one-row-per-movement table."""
+    def test_pltmem_is_routed_alongside_ackplm(self):
+        """PLTMEM was originally parsed-but-not-routed because the SAMPLE-PACK
+        corpus delivered ACKPLM for the same movements (richer, 14/15 VCN
+        overlap). The LIVE dt.jnpa.in corpus contains NO ACKPLM at all —
+        PLTMEM is its only pilot-movement message — so it is now routed;
+        movement-key dedup keeps dump re-imports one-row-per-movement."""
         assert "ACKPLM" in REGISTRY
-        assert "PLTMEM" not in REGISTRY
+        assert "PLTMEM" in REGISTRY
         assert callable(parse_pltmem)
 
     def test_existing_message_routing_is_untouched(self):

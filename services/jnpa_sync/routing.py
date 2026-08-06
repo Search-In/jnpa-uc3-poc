@@ -97,6 +97,14 @@ def transport_entity(filename: str) -> Optional[str]:
     return None
 
 
+# nlp-marine messageTypes whose files are tabular DOUBLES of the PCS XML feed
+# (live corpus; the XML is authoritative — see _route's nlp-marine branch).
+_MARINE_REPORT_DOUBLES = frozenset({
+    "eta", "berth-request", "pre-arrival-notifiaction", "vessel-profile",
+    "voyage-registration", "expected-time-of-arrival", "loop",
+})
+
+
 def cfs_facility(filename: str) -> Optional[str]:
     upper = filename.upper()
     if "ECY" in upper:
@@ -156,6 +164,9 @@ class JnpaRouter:
         elif name == "rail_form11_icd":
             from services.rail.form11_icd_service import Form11IcdService
             svc = Form11IcdService(dsn=self._dsn)
+        elif name == "edi_vessel":
+            from services.edi_vessel import EdiVesselService
+            svc = EdiVesselService(dsn=self._dsn)
         else:
             raise KeyError(f"unknown consumer service {name!r}")
         self._services[name] = svc
@@ -180,6 +191,34 @@ class JnpaRouter:
     async def _route(self, group: str, *, filename: str, content: bytes,
                      message_type: Optional[str]) -> RouteOutcome:
         if group in ("nlp-marine", "port-craft-pilot"):
+            if group == "nlp-marine":
+                mt = (message_type or "").strip()
+                up = filename.upper()
+                # LIVE-corpus surprises (absent from the sample pack):
+                # 1. FOIS train intimations delivered as messageType "JNPA"
+                #    ("Port authority notice") — the rail consumer parses the
+                #    CSV verbatim (verified against the live corpus).
+                if "TRAIN_INTIMATION" in up:
+                    svc = self._service("rail_fois")
+                    result = await svc.import_file(content, filename,
+                                                   UPLOADED_BY)
+                    return _normalize("rail_fois", result)
+                # 2. Tabular report DOUBLES of the PCS XML feed (berth-request
+                #    / pre-arrival / vessel-Profile / voyage-registration /
+                #    expected-time-of-arrival xlsx, ETA_ETD csv) plus the
+                #    LOOP import-cohort csv and non-train JNPA notices.
+                #    The XML messages are authoritative for the call spine;
+                #    feeding these to the marine parsers only produced
+                #    REJECTED noise. Land + keep replayable instead.
+                if (mt.lower() in _MARINE_REPORT_DOUBLES
+                        or up.startswith(("ETA_ETD", "LOOP_COHORT"))
+                        or mt.upper() == "JNPA"):
+                    return RouteOutcome(
+                        service="marine", status="UNROUTED",
+                        detail={"reason": "tabular report double / cohort "
+                                          "extract — PCS XML is authoritative;"
+                                          " no consumer wired",
+                                "message_type": mt, "filename": filename})
             # The marine parser registry auto-detects the document type from
             # envelope + filename (PCS XML, pilot-card xlsx, port-craft PDF).
             svc = self._service("marine")
@@ -192,6 +231,14 @@ class JnpaRouter:
             return _normalize("customs", result)
 
         if group == "shipping-lines":
+            mt = (message_type or "").upper()
+            # The LIVE corpus also serves COPARN (empty-container release
+            # orders, <ContainerRelease> XML) under this group — not in the
+            # sample pack. Route to the vessel-side EDI consumer.
+            if mt == "COPARN" or b"<ContainerRelease" in content[:2048]:
+                svc = self._service("edi_vessel")
+                result = await svc.import_file(content, filename, UPLOADED_BY)
+                return _normalize("edi_vessel", result)
             list_type = sl_list_type(filename)
             if list_type is None:
                 return RouteOutcome(
@@ -259,11 +306,37 @@ class JnpaRouter:
             return _normalize("rail_form11_icd", result)
 
         if group == "edi-messages":
-            # CODECO/COARRI/COPRAR have no bytes ingest seam
-            # (export_lifecycle is programmatic-only) — land + replay when
-            # one exists.
+            # Live corpus (verified against dt.jnpa.in): CFS-CODECO /
+            # ECY-CODECO gate-move workbooks (same shape as the cfs-ecy
+            # group) and bare CODECO XML gate move reports (the raw-XML
+            # seam in ShippingLinesUploadService). COARRI/COPRAR remain
+            # UNROUTED — no consumer exists (vessel discharge/load ops).
+            mt = (message_type or "").upper()
+            if "CODECO" in mt and mt != "CODECO":
+                facility = cfs_facility(filename) or (
+                    "CFS" if "CFS" in mt else "ECY" if "ECY" in mt else None)
+                if facility is not None:
+                    svc = self._service("cfs_ecy")
+                    result = await svc.import_file(facility, content,
+                                                   filename, UPLOADED_BY)
+                    return _normalize("cfs_ecy", result)
+            if mt == "CODECO" or b"<CODECODetails" in content:
+                svc = self._service("shipping_lines")
+                result = await svc.import_file("EDO", content, filename,
+                                               UPLOADED_BY)
+                return _normalize("shipping_lines", result)
+            if (mt in ("COARRI", "COPRAR", "COPARN")
+                    or b"<ContLoadingNDischargeOder" in content[:2048]
+                    or b"<AdvContainerList" in content[:2048]
+                    or b"<ContainerRelease" in content[:2048]):
+                # Vessel-side container documents → services.edi_vessel
+                # (core.edi_vessel_container, migration 0125).
+                svc = self._service("edi_vessel")
+                result = await svc.import_file(content, filename, UPLOADED_BY)
+                return _normalize("edi_vessel", result)
             return RouteOutcome(service=group, status="UNROUTED",
-                                detail={"reason": "no consumer wired yet",
+                                detail={"reason": "no consumer for "
+                                                  f"{mt or 'unknown'} yet",
                                         "filename": filename})
 
         return RouteOutcome(service=group, status="UNROUTED",

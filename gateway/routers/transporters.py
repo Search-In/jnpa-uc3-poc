@@ -268,9 +268,14 @@ async def get_transporter(request: Request, transporter_id: int,
     blacklist = await fetch_all(
         "SELECT * FROM core.transporter_blacklist WHERE transporter_id = :id ORDER BY blacklisted_at DESC",
         {"id": transporter_id}, dsn=dsn)
+    transporter = _iso(dict(row))
+    # Same semantics as the list endpoint's EXISTS(..., status='ACTIVE') column;
+    # the UI reads t.blacklisted on the detail view too.
+    transporter["blacklisted"] = any(
+        (b.get("status") or "").upper() == "ACTIVE" for b in blacklist)
     return mask_for_request(
         request,
-        {"transporter": _iso(dict(row)),
+        {"transporter": transporter,
          "vehicles": [_iso(dict(v)) for v in vehicles],
          "blacklist_history": [_iso(dict(b)) for b in blacklist]},
         surface="transporters.detail")

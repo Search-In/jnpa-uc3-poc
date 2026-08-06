@@ -63,6 +63,10 @@ class VahanPath(str, enum.Enum):
 
 class TruckPath(str, enum.Enum):
     PRIMARY = "PRIMARY"
+    # Last GOOD truck-sim payload served from the in-process memo while the sim
+    # is unreachable — the rung between LIVE and the RDS tail. Not in
+    # PRIMARY_PATHS, so serving it is broadcast as a fallback decision.
+    CACHED = "CACHED"
     SECONDARY = "SECONDARY"
     TERTIARY = "TERTIARY"
 

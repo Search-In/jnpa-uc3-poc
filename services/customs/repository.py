@@ -532,8 +532,20 @@ class CustomsRepository:
             "FROM core.rms_scan_container c "
             "JOIN core.rms_scan_report r ON r.report_id = c.report_id "
             f"WHERE c.container_no = :cn{_o('c')} ORDER BY c.sl_no", p)
+        # The message envelope that delivered this box's manifest — the drawer's
+        # "Customs Message ID" (message_id_code). Soft: absent without an IGM link.
+        message = None
+        igm_no = (vessel or {}).get("igm_no")
+        if igm_no is not None:
+            message = await self._one(
+                "SELECT id, message_id_code, message_type, module, sent_ts, source_file "
+                "FROM core.customs_message WHERE primary_ref = :ref"
+                + (" AND data_origin = :data_origin" if do is not None else "")
+                + " ORDER BY id DESC LIMIT 1",
+                {**p, "ref": str(igm_no)})
         return {"container_no": container_no, "status": status, "vessel": vessel,
-                "igm": igm, "ooc": ooc, "smtp": smtp, "rms": rms}
+                "igm": igm, "ooc": ooc, "smtp": smtp, "rms": rms,
+                "message": message}
 
     async def summary(self, *, data_origin: Optional[str] = None) -> dict:
         """Dashboard counts across the customs layer (one round trip per table).

@@ -216,8 +216,60 @@ async def notify_congestion_alert(alert_id: str, payload: Dict[str, Any]) -> Opt
     }
 
 
+def zone_trigger_to_email(alert_id: str, payload: Dict[str, Any]) -> Tuple[str, str]:
+    """Render an operator-triggered zone notification into (subject, body).
+
+    ADMIN-facing only. Read-only over the alert payload the caller already
+    built, and deliberately limited to the five operational fields the control
+    room asked for — no driver identity, licence number, Aadhaar or mobile,
+    since this channel has no masking layer.
+    """
+    vehicle = payload.get("vehicle_id") or "unknown vehicle"
+    zone = payload.get("zone_name") or payload.get("zone_id") or "unknown zone"
+    alert_type = payload.get("alert_type") or "ZONE_PRESENCE"
+    subject = f"[JNPA UC-3] {alert_type} — vehicle {vehicle} in {zone}"
+    lines = [
+        f"Vehicle number : {vehicle}",
+        f"Zone           : {zone}",
+        f"Alert type     : {alert_type}",
+        f"Date & time    : {payload.get('triggered_at') or '-'}",
+        f"Current status : {payload.get('status') or '-'}",
+        "",
+        f"Triggered by   : {payload.get('triggered_by') or '-'}",
+        f"Reference      : {alert_id}",
+    ]
+    return subject, "\n".join(lines)
+
+
+async def notify_zone_trigger(
+    alert_id: str, payload: Dict[str, Any], recipients: List[str]
+) -> Optional[Dict[str, Any]]:
+    """Send one operator-triggered zone notification to the ADMIN recipients.
+
+    Same shape as ``notify_congestion_alert`` and the same provider seam; the
+    caller passes ``admin_recipients()``. Returns None when no admin address is
+    configured (nothing sent), so the feature degrades to alert-only.
+    """
+    to = [r for r in (recipients or []) if r]
+    if not to:
+        return None
+    subject, body = zone_trigger_to_email(alert_id, payload)
+    results = [
+        # Providers are blocking (smtplib): keep them off the event loop.
+        await asyncio.to_thread(send_email, r, subject, body)
+        for r in to
+    ]
+    return {
+        "delivered": any(r.delivered for r in results),
+        "recipients": to,
+        "provider": get_provider().name,
+        "detail": "; ".join(f"{r.to}: {r.detail}" for r in results)[:500],
+    }
+
+
 __all__ = [
     "EmailResult", "EmailProvider", "NoopEmailProvider", "LogEmailProvider",
     "SmtpEmailProvider", "get_provider", "reset_provider", "admin_recipients",
     "send_email", "congestion_alert_to_email", "notify_congestion_alert",
+    "zone_trigger_to_email", "notify_zone_trigger",
 ]

@@ -1,8 +1,16 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { Shell } from "@/components/layout/Shell";
 import { useScenario } from "@/hooks/ScenarioContext";
-import { authEnabled, canSeeScreen, getRole, type Role } from "@/lib/auth";
+import {
+  authEnabled,
+  canSeeScreen,
+  clearSession,
+  getRole,
+  getToken,
+  verifySession,
+  type Role,
+} from "@/lib/auth";
 import { LoginGate } from "@/components/auth/LoginGate";
 import CommandCenter from "@/screens/CommandCenter";
 import AlertsCenter from "@/screens/AlertsCenter";
@@ -14,6 +22,7 @@ import Fastag from "@/screens/Fastag";
 import GateCustoms from "@/screens/GateCustoms";
 import Intelligence from "@/screens/Intelligence";
 import Uc3Lifecycle from "@/screens/Uc3Lifecycle";
+import CargoWhatIf from "@/screens/CargoWhatIf";
 import TruckOperations from "@/screens/TruckOperations";
 import ParkingManagement from "@/screens/ParkingManagement";
 import SystemHealth from "@/screens/SystemHealth";
@@ -44,6 +53,25 @@ export default function App() {
   const { scenario, reset } = useScenario();
   const navigate = useNavigate();
   const [role, setRole] = useState<Role | null>(getRole());
+
+  // Validate the stored session once on load. The role is read from localStorage
+  // above so the first paint is instant, but the token behind it may be expired
+  // (8 h TTL) or belong to an account that has since been disabled — in either
+  // case /api/auth/me says so and we drop back to the login gate instead of
+  // rendering a dashboard whose every panel 401s.
+  useEffect(() => {
+    if (!authEnabled() || !getToken()) return;
+    void verifySession().then((session) => {
+      if (session) {
+        setRole(session.role);
+      } else {
+        clearSession();
+        setRole(null);
+      }
+    });
+    // Mount-only: re-running on login would re-verify a token we just minted.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Auth-enabled build with no session yet -> show the login gate (never mounted
   // in the default demo/mock build, where authEnabled() is false).
@@ -216,6 +244,17 @@ function DashboardShell({
             element={
               <Guard path="/what-if">
                 <WhatIfConsole />
+              </Guard>
+            }
+          />
+          {/* Cargo What-If Dashboard — the JNPA Notice scenarios (read-only
+              analytics over /api/cargo/simulate/*). Distinct from /what-if
+              above, which triggers the TFC live-injection storyline. */}
+          <Route
+            path="/cargo-whatif"
+            element={
+              <Guard path="/cargo-whatif">
+                <CargoWhatIf />
               </Guard>
             }
           />

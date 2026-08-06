@@ -85,6 +85,52 @@ function place(lng: number, lat: number, alongM: number, offsetM: number): [numb
   return [lng + dLon(e), lat + dLat(n)];
 }
 
+// ---- gate placement (UC2 committed placements) -----------------------------
+// UC2's single source of truth for where a gate is drawn is
+// `data/positions.json` → `placements['gate3d:<GATEID>']`. Its builders call
+// withOverride('gate3d:<id>', derived), which returns that committed lng/lat/
+// heading; the `place(lng, lat, alongM, 470)` quay-frame derivation is only the
+// FALLBACK for a gate with no committed record — and every gate has one. Both
+// UC2 views resolve through it (layers.ts 2D + scene3d.ts 3D, asserted equal to
+// within 0.5 m by its scene3d.test.ts).
+//
+// Those positions are deliberate, not incidental. UC2's own $gateNote records
+// that the real gate complexes lie 1322–2848 m inland while its modelled ground
+// ends 754 m inland, so it places each gate at "the in-model equivalent of the
+// terminal entrance: the most landward legal point of the terminal['s] own
+// access road, at least 80 m from any yard block and 180 m from any crane".
+// NSIGT-G1 is the surveyed NSICT/NSIGT Parking Plaza (plus code WXJ7+HQ).
+//
+// UC3 draws gates on the berth centroid its gate feed reports (migration 0012
+// copied those from UC2 config/terminals.json), which is inside the yard. These
+// are UC2's values verbatim — no coordinate is invented here. Render position
+// only: gate id, name, throughput and the source data are untouched.
+export interface GatePlacement {
+  lng: number;
+  lat: number;
+  /** Bearing of the road the gate stands on, so the canopy spans the
+   *  carriageway instead of blocking it sideways (UC2 $gateHeadingNote). */
+  heading: number;
+}
+
+const UC2_GATE_PLACEMENTS: Record<string, GatePlacement> = {
+  "G-NSICT": { lng: 72.96045, lat: 18.95295, heading: 90 }, // gate3d:NSICT-G1
+  "G-NSIGT": { lng: 72.964438, lat: 18.931437, heading: 346 }, // gate3d:NSIGT-G1
+  "G-JNPCT": { lng: 72.953597, lat: 18.931123, heading: 141 }, // gate3d:JNPCT-G1
+  "G-BMCT": { lng: 72.951902, lat: 18.928423, heading: 317 }, // gate3d:BMCT-G1
+};
+
+/** UC2's committed placement for a UC3 gate id, or null if it has none. */
+export function gatePlacement(gateId: string): GatePlacement | null {
+  return UC2_GATE_PLACEMENTS[gateId] ?? null;
+}
+
+/** Where to draw the gate: UC2's committed checkpoint, else the reported point. */
+export function gateAccessPosition(gateId: string, lng: number, lat: number): [number, number] {
+  const p = gatePlacement(gateId);
+  return p ? [p.lng, p.lat] : [lng, lat];
+}
+
 // Model heading that aligns a model's long axis parallel to the quay.
 const MODEL_ROTATION_DEG = 90;
 const QUAY_HEADING = (QUAY_BEARING_DEG + MODEL_ROTATION_DEG) % 360;

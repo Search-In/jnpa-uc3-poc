@@ -158,6 +158,10 @@ export interface CarbonRollup {
   total_kg: number;
   vehicle_count: number;
   by_class: Record<string, number>;
+  // Vehicles counted per class. Optional because an older carbon service (or a
+  // cached upstream response) predates it — the tile then shows the fleet total
+  // and says the category breakdown is unavailable rather than inventing one.
+  vehicles_by_class?: Record<string, number>;
   by_source: { moving: number; idle: number };
 }
 
@@ -840,15 +844,106 @@ export interface AiEvent {
 }
 
 // --- Vehicle & Driver Intelligence (RDS-backed aggregates) ---
+/** /api/vahan/vehicle-intel/{plate}. Every field is optional on purpose: the
+ *  gateway answers 200 with `{}` when it has no DSN, and each of the six lookups
+ *  degrades independently, so a field can be absent or null on a successful
+ *  response. Callers must normalise before dereferencing. */
 export interface VehicleIntel {
-  vehicle_number: string;
-  rc: Record<string, unknown> | null;
-  tracking: { ts: string; lat: number; lon: number; speed_kmh: number }[];
-  violations: Record<string, unknown>[];
-  challans: Record<string, unknown>[];
-  alerts: Record<string, unknown>[];
-  verification_history: Record<string, unknown>[];
+  vehicle_number?: string;
+  rc?: Record<string, unknown> | null;
+  tracking?: { ts: string; lat: number; lon: number; speed_kmh: number }[] | null;
+  violations?: Record<string, unknown>[] | null;
+  challans?: Record<string, unknown>[] | null;
+  alerts?: Record<string, unknown>[] | null;
+  verification_history?: Record<string, unknown>[] | null;
 }
+/** Document expiry verdict from /api/vahan/vehicle-360 (VALID | EXPIRING |
+ *  EXPIRED | NOT_AVAILABLE). */
+export interface DocumentValidity {
+  status?: string | null;
+  valid_to?: string | null;
+  days_left?: number | null;
+}
+
+/** /api/vahan/vehicle-360/{plate} — the operator's single-screen vehicle view.
+ *  Aggregates the vehicle master, its assigned driver, that driver's licence/PDP,
+ *  the transport company, RC compliance, alerts and the lifecycle timeline.
+ *  Nullable throughout: a card whose source row is missing comes back as null
+ *  rather than as fabricated values. */
+export interface Vehicle360 {
+  plate?: string;
+  found?: boolean;
+  vehicle?: {
+    number?: string | null;
+    id?: string | null;
+    status?: string | null;
+    class?: string | null;
+    fuel?: string | null;
+    type?: string | null;
+    chassis_number?: string | null;
+    rfid_fastag_id?: string | null;
+    registered_at?: string | null;
+    assignment_status?: string | null;
+    in_master?: boolean;
+  } | null;
+  driver?: {
+    id?: string | null;
+    name?: string | null;
+    photo?: string | null;
+    mobile?: string | null;
+    dob?: string | null;
+    status?: string | null;
+    enrollment_status?: string | null;
+    enrolled_at?: string | null;
+    license?: {
+      number?: string | null;
+      type?: string | null;
+      valid_until?: string | null;
+      validity?: DocumentValidity | null;
+      pdp_number?: string | null;
+      pdp_status?: string | null;
+      pdp_valid_until?: string | null;
+      verification_status?: string | null;
+      verified_at?: string | null;
+      verification_score?: number | null;
+      in_master?: boolean;
+    } | null;
+  } | null;
+  transporter?: {
+    id?: number | string | null;
+    name?: string | null;
+    code?: string | null;
+    status?: string | null;
+    gstin?: string | null;
+    contact?: string | null;
+    blacklisted?: boolean;
+    blacklist_reason?: string | null;
+    mapped_at?: string | null;
+    source?: string | null;
+  } | null;
+  compliance?: {
+    rc?: Record<string, unknown> | null;
+    insurance?: DocumentValidity | null;
+    puc?: DocumentValidity | null;
+    fitness?: DocumentValidity | null;
+    blacklist?: { status?: string | null; source?: string | null; reason?: string | null } | null;
+    fastag?: { status?: string | null } | null;
+  } | null;
+  alerts?: Record<string, unknown>[] | null;
+  timeline?:
+    | { stage?: string; label?: string; ts?: string | null; detail?: string | null }[]
+    | null;
+  intel?: {
+    rc?: Record<string, unknown> | null;
+    tracking?: { ts: string; lat: number; lon: number; speed_kmh: number }[] | null;
+    violations?: Record<string, unknown>[] | null;
+    challans?: Record<string, unknown>[] | null;
+    verification_history?: Record<string, unknown>[] | null;
+  } | null;
+  jobs?: Record<string, unknown>[] | null;
+  gate_events?: Record<string, unknown>[] | null;
+}
+
 export interface DriverIntel {
   driver_key: string;
   driver: Record<string, unknown> | null;

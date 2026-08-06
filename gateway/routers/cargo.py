@@ -473,12 +473,25 @@ class YardOptimizationOut(BaseModel):
     recommendations: list[dict] = Field(default_factory=list)
     priority_containers: list[str] = Field(default_factory=list)
     busiest_block: Optional[str] = None
+    # ---- capacity provenance (migration 0130). All optional -> the pre-0130
+    # response shape is still valid, so existing consumers are unaffected.
+    occupied: Optional[int] = None
+    capacity: Optional[int] = None
+    #: 'core.yard_block' when the capacity master answered, 'ASSUMED' when the
+    #: nominal per-block constant was used, 'NONE' when the yard is empty.
+    capacity_source: Optional[str] = None
+    block_utilisation: dict[str, float] = Field(default_factory=dict)
+    #: One entry per zone whose capacity had to be assumed — the figure is
+    #: declared rather than silently baked in (JNPA Notice §1.c).
+    assumptions: list[dict] = Field(default_factory=list)
 
     model_config = ConfigDict(json_schema_extra={"example": {
         "yard_congestion": 0.72,
         "recommendations": [{"container_number": "GESU5123996", "action": "MOVE",
                              "reason": "reduce congestion"}],
-        "priority_containers": ["GESU5123996"], "busiest_block": "B"}})
+        "priority_containers": ["GESU5123996"], "busiest_block": "B",
+        "occupied": 18, "capacity": 25, "capacity_source": "core.yard_block",
+        "block_utilisation": {"A": 0.4, "B": 0.9}, "assumptions": []}})
 
 
 # ---- 5. Rake planning ---------------------------------------------------------
@@ -551,6 +564,9 @@ class LifecycleStatus(str, Enum):
     the ``?status=`` list filter used for the UC-III handover (?status=RELEASED)."""
     CREATED = "CREATED"
     VESSEL_DISCHARGED = "VESSEL_DISCHARGED"
+    #: Discharged and awaiting evacuation (migration 0131). Optional step — a
+    #: container may still go VESSEL_DISCHARGED -> YARD_ASSIGNED directly.
+    PENDENCY = "PENDENCY"
     YARD_ASSIGNED = "YARD_ASSIGNED"
     YARD_POSITION_ALLOCATED = "YARD_POSITION_ALLOCATED"
     REEFER_PLANNED = "REEFER_PLANNED"
@@ -558,6 +574,21 @@ class LifecycleStatus(str, Enum):
     SCAN_PENDING = "SCAN_PENDING"
     VERIFIED = "VERIFIED"
     RELEASED = "RELEASED"
+
+
+class PendencyIn(BaseModel):
+    """Body for POST /api/cargo/{cn}/pendency (Phase 5)."""
+    reason: Optional[str] = Field(default=None, max_length=500,
+                                  description="Why the box is pending evacuation")
+
+    model_config = ConfigDict(json_schema_extra={
+        "example": {"reason": "awaiting rail rake"}})
+
+
+class PendencyOut(BaseModel):
+    container_number: str
+    lifecycle_status: str
+    status: str = "PENDING_EVACUATION"
 
 
 class DischargeIn(BaseModel):
@@ -771,6 +802,10 @@ async def create_cargo(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT,
                             detail={"error": "duplicate_container",
                                     "container_number": body.container_number})
+    except CargoTransitionError as exc:
+        # is_released=true at create (audit W1): a new record always lands on
+        # CREATED, so it may not simultaneously claim RELEASED.
+        raise _transition_409(exc)
     return _to_out(row)
 
 
@@ -1078,6 +1113,31 @@ async def discharge_cargo(
     return DischargeOut(container_number=cn,
                         lifecycle_status=row.get("lifecycle_status", "VESSEL_DISCHARGED"),
                         status="DISCHARGED")
+
+
+@router.post("/{container_number}/pendency", response_model=PendencyOut,
+             responses=_ERROR_RESPONSES,
+             summary="Record a discharged container as pending evacuation")
+async def record_pendency(
+    container_number: str,
+    request: Request,
+    body: Optional[PendencyIn] = None,
+    service: CargoService = Depends(get_service),
+) -> PendencyOut:
+    """Pendency (Phase 5): VESSEL_DISCHARGED -> PENDENCY. An OPTIONAL step — a
+    container may still be yard-assigned straight from discharge — so no existing
+    flow changes. 404 if unknown; 409 if the container is not discharged."""
+    cn = _require_container_no(container_number)
+    try:
+        row = await service.record_pendency(cn, reason=body.reason if body else None,
+                                            actor_role=_actor_role(request))
+    except CargoNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail={"error": "not_found", "container_number": cn})
+    except CargoTransitionError as exc:
+        raise _transition_409(exc)
+    return PendencyOut(container_number=cn,
+                       lifecycle_status=row.get("lifecycle_status", "PENDENCY"))
 
 
 @router.post("/{container_number}/yard-position", response_model=YardPositionOut,

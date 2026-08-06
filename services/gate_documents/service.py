@@ -156,6 +156,22 @@ class GateDocumentService:
             category=category, container=container, limit=limit, offset=offset)
         return {"items": rows, "total": total, "limit": limit, "offset": offset,
                 "count": len(rows)}
+      
+    async def hourly_profile(self, doc_type: str, *, filters,
+                             group_by: str = "hour") -> Dict[str, Any]:
+        """Hourly (or daily) document counts for a window — the aggregate view of
+        the same filter set :meth:`list_docs` pages through (audit finding G1)."""
+        rows = await self._repo.hourly_profile(doc_type, filters=filters,
+                                               group_by=group_by)
+        buckets = [{"bucket": r["bucket"], "documents": int(r["documents"] or 0),
+                    "unique_trucks": int(r.get("unique_trucks") or 0)} for r in rows]
+        total = sum(b["documents"] for b in buckets)
+        peak = max(buckets, key=lambda b: b["documents"]) if buckets else None
+        return {"group_by": group_by, "count": len(buckets), "total_documents": total,
+                "peak_bucket": peak["bucket"] if peak else None,
+                "peak_documents": peak["documents"] if peak else 0,
+                "mean_per_bucket": round(total / len(buckets), 2) if buckets else 0.0,
+                "buckets": buckets}
 
     async def docs_for_container(self, container_no: str, *,
                                  source: Optional[str] = None) -> Dict[str, Any]:

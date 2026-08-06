@@ -22,6 +22,7 @@ gateway/auth.py._POLICY — the same audience as gate-data and the customs layer
 from __future__ import annotations
 
 import re
+from datetime import date
 from typing import Any, Dict, List, Optional
 
 from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query, Request,
@@ -42,6 +43,23 @@ router = APIRouter(prefix="/api/gate-docs", tags=["gate-documents"])
 
 _MAX_UPLOAD_BYTES = 10 * 1024 * 1024   # 10 MB — mirrors the other upload modules
 _UPLOADER_ROLES = CONTROL_ROOM | {Role.CUSTOMS.value}
+#: Longest date window a single query may span (audit finding G1). Bounds the
+#: hourly profile at ~2200 buckets so an unbounded range cannot be requested.
+_MAX_WINDOW_DAYS = 92
+
+
+def _check_window(from_date: Optional[date], to_date: Optional[date]) -> None:
+    """Validate an optional date window. 400 on an inverted or oversized range."""
+    if from_date and to_date:
+        if to_date < from_date:
+            raise HTTPException(status_code=400,
+                                detail={"error": "invalid_window",
+                                        "message": "to_date must not precede from_date"})
+        if (to_date - from_date).days > _MAX_WINDOW_DAYS:
+            raise HTTPException(status_code=400,
+                                detail={"error": "invalid_window",
+                                        "message": f"window must not exceed "
+                                                   f"{_MAX_WINDOW_DAYS} days"})
 
 _service: Optional[GateDocumentService] = None
 
@@ -155,15 +173,56 @@ async def list_eir(
     container: Optional[str] = None,
     truck: Optional[str] = None,
     terminal: Optional[str] = None,
+    from_date: Optional[date] = Query(
+        None, description="Only EIRs whose truck_in_time falls on/after this date"),
+    to_date: Optional[date] = Query(
+        None, description="Only EIRs whose truck_in_time falls on/before this date"),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     data_origin: Optional[str] = Depends(data_mode),
     svc: GateDocumentService = Depends(get_service),
 ) -> Page:
+    """List EIRs, optionally over a date window.
+
+    ``from_date`` / ``to_date`` (audit finding G1) make the real gate-arrival
+    history queryable through the API. Without them a JNPA what-if answer about
+    1-3 August could only be produced by raw SQL, which fails the Notice's
+    requirement to cite the API queries the working rests on."""
+    _check_window(from_date, to_date)
     filters = {"container_number": container,
                "truck_no": _norm_plate(truck) if truck else None, "terminal": terminal,
+               "from_date": from_date, "to_date": to_date,
                "data_origin": data_origin}
     return await _list(svc, "EIR", response, filters, limit, offset, request)
+
+
+@router.get("/eir/profile",
+            summary="EIR gate-arrival counts bucketed by hour or day")
+async def eir_profile(
+    from_date: date = Query(..., description="Window start (inclusive)"),
+    to_date: date = Query(..., description="Window end (inclusive)"),
+    terminal: Optional[str] = None,
+    truck: Optional[str] = None,
+    group_by: str = Query("hour", pattern="^(hour|day)$"),
+    data_origin: Optional[str] = Depends(data_mode),
+    svc: GateDocumentService = Depends(get_service),
+) -> Dict[str, Any]:
+    """Gate arrivals per hour (or per day) over an arbitrary historical window,
+    counted from ``core.eir.truck_in_time``.
+
+    The aggregate counterpart of GET /api/gate-docs/eir — same filters, same
+    rows, counted instead of paged. ``GET /api/gate/hourly-profile`` answers the
+    same question for the simulation layer and falls back to ``core.gate_event``;
+    this one stays strictly within the gate-document module."""
+    _check_window(from_date, to_date)
+    filters = {"terminal": terminal,
+               "truck_no": _norm_plate(truck) if truck else None,
+               "from_date": from_date, "to_date": to_date,
+               "data_origin": data_origin}
+    result = await svc.hourly_profile("EIR", filters=filters, group_by=group_by)
+    REQUESTS.labels("gate_docs", "ok").inc()
+    return {"window": {"from": from_date.isoformat(), "to": to_date.isoformat()},
+            "source": "core.eir.truck_in_time", **result}
 
 
 @router.get("/pin", response_model=Page, summary="PIN tickets (one row per move leg)")

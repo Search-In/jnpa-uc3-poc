@@ -19,7 +19,8 @@ Design goals:
     role claim and the policy map below are unchanged.
 
 Roles (bid stakeholders):
-    JNPA_TRAFFIC, TERMINAL_OPS, CUSTOMS, TRAFFIC_POLICE, DRIVER, DTCCC_ADMIN
+    JNPA_TRAFFIC, TERMINAL_OPS, CUSTOMS, TRAFFIC_POLICE, DRIVER, DTCCC_ADMIN,
+    TRANSPORTER
 """
 from __future__ import annotations
 
@@ -47,6 +48,12 @@ class Role(str, Enum):
     TRAFFIC_POLICE = "TRAFFIC_POLICE"
     DRIVER = "DRIVER"
     DTCCC_ADMIN = "DTCCC_ADMIN"
+    # Transport-company staff signing in to the console (fleet owner / dispatcher).
+    # Deliberately NOT DRIVER: a DRIVER token is bound to one device and may not
+    # enumerate the fleet (see driver_scope_violation), which is exactly what a
+    # transporter needs to do. Carries no customs/identity/control-room access —
+    # it lands on the default "any authenticated stakeholder" operational surface.
+    TRANSPORTER = "TRANSPORTER"
 
 
 ALL_ROLES: frozenset[str] = frozenset(r.value for r in Role)
@@ -54,6 +61,34 @@ ALL_ROLES: frozenset[str] = frozenset(r.value for r in Role)
 CONTROL_ROOM: frozenset[str] = frozenset(
     {Role.JNPA_TRAFFIC.value, Role.DTCCC_ADMIN.value, Role.TERMINAL_OPS.value}
 )
+
+# Operator-facing role names accepted when creating/seeding an account, mapped to
+# the canonical role the JWT and the policy map below actually use. The console
+# has always been specified in terms of the six stakeholder roles; the four names
+# the deployment brief asks for are three aliases plus one genuinely new role.
+# Aliasing rather than renaming keeps _POLICY, the ~30 prefix rules it contains,
+# and every already-issued token working unchanged.
+ROLE_ALIASES: dict[str, str] = {
+    "ADMIN": Role.DTCCC_ADMIN.value,
+    "OPERATOR": Role.TERMINAL_OPS.value,
+    "GATE_USER": Role.CUSTOMS.value,
+    "GATE": Role.CUSTOMS.value,
+    "TRANSPORT_USER": Role.TRANSPORTER.value,
+}
+
+
+def normalize_role(name: str | None) -> str | None:
+    """Canonical role for an operator-supplied name, or None if unrecognised.
+
+    Accepts a canonical role (``DTCCC_ADMIN``) or an alias (``ADMIN``), in any
+    case, so ``--role admin`` and ``--role DTCCC_ADMIN`` create the same account.
+    """
+    key = (name or "").strip().upper().replace("-", "_").replace(" ", "_")
+    if not key:
+        return None
+    if key in ALL_ROLES:
+        return key
+    return ROLE_ALIASES.get(key)
 
 
 @dataclass(frozen=True)
@@ -141,6 +176,12 @@ _POLICY: tuple[tuple[str, frozenset[str]], ...] = (
     # the DRIVER-scoped /api/driver rule above for /api/drivers/*.
     ("/api/drivers", {Role.CUSTOMS.value, Role.DTCCC_ADMIN.value}),
     ("/api/identity", {Role.CUSTOMS.value, Role.DTCCC_ADMIN.value}),
+    # Console user administration (core.app_user CRUD). Admin only — this is the
+    # surface that mints other people's access, so it is the tightest rule in the
+    # map. It deliberately sits OUTSIDE the public /api/auth prefix: everything
+    # under /api/auth skips the middleware entirely (see _PUBLIC), so a
+    # user-management route hung there would be unauthenticated.
+    ("/api/users", {Role.DTCCC_ADMIN.value}),
     # Vehicle Master administration — same audience as the enrollment surface it
     # feeds (customs + admin create/manage vehicles + the assign-vehicle dropdown).
     ("/api/vehicles", {Role.CUSTOMS.value, Role.DTCCC_ADMIN.value}),
@@ -172,6 +213,10 @@ _PUBLIC: tuple[str, ...] = (
     # Evidence images are loaded by <img>/<video>, which cannot send a bearer
     # token; the route only streams objects already stored in the evidence bucket.
     "/api/evidence",
+    # Driver sign-in bootstrap: resolves the driver-entered registration number to
+    # the internal Vehicle ID the device token is then minted for. Must be pre-auth
+    # for the same reason /api/auth is — no token can exist before it runs.
+    "/api/driver/login",
 )
 
 

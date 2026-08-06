@@ -190,8 +190,8 @@ class GatewayConfig:
     # (dt.jnpa.in/poc-api-data-access); point it at the local sim
     # (ingest/jnpa_portdata_sim) for offline work. NO hardcoded vendor URL
     # in business code.
-    jnpa_portdata_api_url: str = "https://dt.jnpa.in/poc-api-data-access"
-    jnpa_portdata_client_key: str = "ZmMwNzg4OGYzYWY4NzE0MjhiNGE="
+    jnpa_portdata_api_url: str = ""
+    jnpa_portdata_client_key: str = ""
     jnpa_api_mode: str = "LIVE"              # LIVE | SIM (labels runs/evidence)
     jnpa_sync_enabled: bool = True           # scheduler gate (key still required)
     jnpa_sync_interval_s: int = 300

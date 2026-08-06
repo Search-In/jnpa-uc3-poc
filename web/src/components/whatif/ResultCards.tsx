@@ -33,7 +33,12 @@ const HEADLINE: Record<string, { key: string; label: string; tone?: Tone; unit?:
     { key: "baseline_moves_per_hour", label: "Baseline moves/hour", tone: "ok" },
     { key: "reduced_moves_per_hour", label: "Reduced moves/hour", tone: "warn" },
     { key: "turnaround_increase_hours", label: "Turnaround increase", tone: "critical", unit: "h" },
-    { key: "cumulative_berth_delay_hours", label: "Berth queue delay", tone: "critical", unit: "h" },
+    {
+      key: "cumulative_berth_delay_hours",
+      label: "Berth queue delay",
+      tone: "critical",
+      unit: "h",
+    },
     { key: "calls_displaced", label: "Calls displaced", tone: "warn" },
   ],
   "modal-shift": [
@@ -111,8 +116,8 @@ export function NoDataPanel({ result }: { result: SimulationResult }) {
         </ul>
       )}
       <p className="border-t border-border/60 pt-2 text-[10.5px] text-muted-foreground">
-        The assumptions and query trace below still apply — they show exactly what was asked of
-        the database.
+        The assumptions and query trace below still apply — they show exactly what was asked of the
+        database.
       </p>
     </Card>
   );
@@ -153,12 +158,13 @@ export function ResultCards({ result }: { result: SimulationResult }) {
 
       {rest.length > 0 && (
         <Card className="p-3">
-          <h4 className="mb-2 text-[12px] font-semibold text-foreground">
-            All computed figures
-          </h4>
+          <h4 className="mb-2 text-[12px] font-semibold text-foreground">All computed figures</h4>
           <div className="grid gap-x-4 gap-y-1.5 sm:grid-cols-2 lg:grid-cols-3">
             {rest.map(([k, v]) => (
-              <div key={k} className="flex items-baseline justify-between gap-2 border-b border-border/50 pb-1">
+              <div
+                key={k}
+                className="flex items-baseline justify-between gap-2 border-b border-border/50 pb-1"
+              >
                 <span className="truncate text-[11px] text-muted-foreground" title={humanise(k)}>
                   {humanise(k)}
                 </span>

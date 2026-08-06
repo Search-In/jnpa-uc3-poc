@@ -31,8 +31,9 @@ describe("buildSeries", () => {
   });
 
   it("returns null when the window produced no rows", () => {
-    expect(buildSeries(envelope({ scenario: "berth-cascade", result: { displaced_calls: [] } })))
-      .toBeNull();
+    expect(
+      buildSeries(envelope({ scenario: "berth-cascade", result: { displaced_calls: [] } })),
+    ).toBeNull();
   });
 
   it("maps modal-shift to a baseline vs shifted hourly series with the capacity line", () => {

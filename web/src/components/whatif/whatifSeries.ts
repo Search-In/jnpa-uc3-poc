@@ -15,7 +15,6 @@ export const AFTER = STATUS.warning;
 export const LIMIT = STATUS.critical;
 
 export interface Series {
-
   title: string;
   data: Record<string, string | number>[];
   xKey: string;
@@ -160,4 +159,3 @@ export function buildSeries(result: SimulationResult): Series | null {
       return null;
   }
 }
-

@@ -22,7 +22,13 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { FlaskConical, FileText } from "lucide-react";
 import { api, type SimulationResult } from "@/lib/api";
 import { Card } from "@/components/ui/card";
-import { PageContainer, PageHeader, DataTable, StatusChip, type Column } from "@/components/ui/dtccc";
+import {
+  PageContainer,
+  PageHeader,
+  DataTable,
+  StatusChip,
+  type Column,
+} from "@/components/ui/dtccc";
 import { ErrorState, LoadingState } from "@/components/ui/misc";
 import { ScenarioSelector } from "@/components/whatif/ScenarioSelector";
 import { ScenarioInputPanel } from "@/components/whatif/ScenarioInputPanel";
@@ -69,7 +75,11 @@ function ScenarioDetail({ result }: { result: SimulationResult }) {
         key: "assumed",
         header: "Duration",
         render: (x) =>
-          x.duration_assumed ? <StatusChip label="assumed" tone="warn" /> : <span className="text-muted-foreground">reported</span>,
+          x.duration_assumed ? (
+            <StatusChip label="assumed" tone="warn" />
+          ) : (
+            <span className="text-muted-foreground">reported</span>
+          ),
       },
     ];
     return (
@@ -77,7 +87,12 @@ function ScenarioDetail({ result }: { result: SimulationResult }) {
         <h3 className="mb-2 text-[13px] font-semibold text-foreground">
           Displaced calls <span className="text-muted-foreground">({rows.length})</span>
         </h3>
-        <DataTable columns={columns} rows={rows} rowKey={(x) => `${x.vessel}-${x.voyage}`} pageSize={10} />
+        <DataTable
+          columns={columns}
+          rows={rows}
+          rowKey={(x) => `${x.vessel}-${x.voyage}`}
+          pageSize={10}
+        />
       </Card>
     );
   }
@@ -108,7 +123,10 @@ function ScenarioDetail({ result }: { result: SimulationResult }) {
         header: "Moves source",
         render: (x) =>
           x.moves_data_origin ? (
-            <StatusChip label={x.moves_data_origin} tone={x.moves_data_origin === "DERIVED" ? "info" : "ok"} />
+            <StatusChip
+              label={x.moves_data_origin}
+              tone={x.moves_data_origin === "DERIVED" ? "info" : "ok"}
+            />
           ) : (
             "—"
           ),
@@ -118,7 +136,8 @@ function ScenarioDetail({ result }: { result: SimulationResult }) {
       <div className="flex flex-col gap-3">
         <Card className="p-3">
           <h3 className="mb-2 text-[13px] font-semibold text-foreground">
-            {target.vessel_name ?? "Target call"} — before vs after a {num(result.figures.turnaround_increase_pct, 1)}% longer operation
+            {target.vessel_name ?? "Target call"} — before vs after a{" "}
+            {num(result.figures.turnaround_increase_pct, 1)}% longer operation
           </h3>
           <div className="grid gap-3 sm:grid-cols-2">
             {[
@@ -126,7 +145,9 @@ function ScenarioDetail({ result }: { result: SimulationResult }) {
               { label: "After", data: after, tone: "text-amber-600" },
             ].map((side) => (
               <div key={side.label} className="rounded-md border border-border p-2.5">
-                <div className={`mb-1 text-[11px] font-semibold uppercase ${side.tone}`}>{side.label}</div>
+                <div className={`mb-1 text-[11px] font-semibold uppercase ${side.tone}`}>
+                  {side.label}
+                </div>
                 <dl className="flex flex-col gap-1">
                   <div className="flex justify-between text-[12px]">
                     <dt className="text-muted-foreground">Moves per hour</dt>
@@ -148,7 +169,8 @@ function ScenarioDetail({ result }: { result: SimulationResult }) {
         {calls.length > 0 && (
           <Card className="p-3">
             <h3 className="mb-2 text-[13px] font-semibold text-foreground">
-              Effective productivity by call <span className="text-muted-foreground">({calls.length})</span>
+              Effective productivity by call{" "}
+              <span className="text-muted-foreground">({calls.length})</span>
             </h3>
             <DataTable
               columns={columns}
@@ -170,7 +192,8 @@ function ScenarioDetail({ result }: { result: SimulationResult }) {
         <h3 className="text-[13px] font-semibold text-foreground">Saturation</h3>
         {r.gate_absorbs_load ? (
           <p className="text-[12px] text-emerald-600">
-            The gate absorbs the additional load — no hour exceeds the sustained rate after the shift.
+            The gate absorbs the additional load — no hour exceeds the sustained rate after the
+            shift.
           </p>
         ) : (
           <>
@@ -220,7 +243,10 @@ function ScenarioDetail({ result }: { result: SimulationResult }) {
         <div className="flex flex-wrap gap-4 text-[12px]">
           <div>
             <span className="text-muted-foreground">Shape: </span>
-            <StatusChip label={pattern.shape ?? "—"} tone={pattern.shape === "PEAKED" ? "warn" : "neutral"} />
+            <StatusChip
+              label={pattern.shape ?? "—"}
+              tone={pattern.shape === "PEAKED" ? "warn" : "neutral"}
+            />
           </div>
           <div>
             <span className="text-muted-foreground">Peak hour: </span>
@@ -268,17 +294,43 @@ function ScenarioDetail({ result }: { result: SimulationResult }) {
       { key: "t", header: "Transporter", render: (x) => x.transporter },
       { key: "v", header: "Vehicles", align: "right", render: (x) => num(x.vehicles, 0) },
       { key: "trips", header: "Trips", align: "right", render: (x) => num(x.trips, 0) },
-      { key: "lost", header: "Trips lost", align: "right",
-        render: (x) => <span className="font-semibold tabular-nums text-severity-critical">{num(x.trips_lost, 0)}</span> },
-      { key: "pct", header: "Loss %", align: "right", render: (x) => `${num(x.trips_lost_pct, 1)}%` },
-      { key: "tpv", header: "Trips / vehicle-day", align: "right", render: (x) => num(x.trips_per_vehicle_day) },
+      {
+        key: "lost",
+        header: "Trips lost",
+        align: "right",
+        render: (x) => (
+          <span className="font-semibold tabular-nums text-severity-critical">
+            {num(x.trips_lost, 0)}
+          </span>
+        ),
+      },
+      {
+        key: "pct",
+        header: "Loss %",
+        align: "right",
+        render: (x) => `${num(x.trips_lost_pct, 1)}%`,
+      },
+      {
+        key: "tpv",
+        header: "Trips / vehicle-day",
+        align: "right",
+        render: (x) => num(x.trips_per_vehicle_day),
+      },
     ];
     const fCols: Column<any>[] = [
       { key: "flow", header: "Cargo flow", render: (x) => x.flow ?? "—" },
       { key: "fac", header: "Facility", render: (x) => x.facility ?? "—" },
       { key: "trips", header: "Trips", align: "right", render: (x) => num(x.trips, 0) },
-      { key: "lost", header: "Trips lost", align: "right",
-        render: (x) => <span className="font-semibold tabular-nums text-severity-critical">{num(x.trips_lost, 0)}</span> },
+      {
+        key: "lost",
+        header: "Trips lost",
+        align: "right",
+        render: (x) => (
+          <span className="font-semibold tabular-nums text-severity-critical">
+            {num(x.trips_lost, 0)}
+          </span>
+        ),
+      },
       { key: "veh", header: "Vehicles", align: "right", render: (x) => num(x.vehicles, 0) },
     ];
 
@@ -295,7 +347,9 @@ function ScenarioDetail({ result }: { result: SimulationResult }) {
               ["Projected awaiting evacuation", state.projected_total_awaiting_evacuation],
             ].map(([label, v]) => (
               <div key={String(label)} className="rounded-md border border-border p-2.5">
-                <div className="text-[18px] font-bold tabular-nums text-foreground">{num(v, 0)}</div>
+                <div className="text-[18px] font-bold tabular-nums text-foreground">
+                  {num(v, 0)}
+                </div>
                 <div className="text-[11px] text-muted-foreground">{String(label)}</div>
               </div>
             ))}
@@ -310,7 +364,12 @@ function ScenarioDetail({ result }: { result: SimulationResult }) {
             <p className="mb-2 text-[11px] text-muted-foreground">
               The biggest contributors to the shortfall.
             </p>
-            <DataTable columns={tCols} rows={absolute} rowKey={(x) => `abs-${x.transporter}`} pageSize={5} />
+            <DataTable
+              columns={tCols}
+              rows={absolute}
+              rowKey={(x) => `abs-${x.transporter}`}
+              pageSize={5}
+            />
           </Card>
         )}
 
@@ -322,7 +381,12 @@ function ScenarioDetail({ result }: { result: SimulationResult }) {
             <p className="mb-2 text-[11px] text-muted-foreground">
               Highest trips per vehicle-day: a one-third cut removes a whole cycle here.
             </p>
-            <DataTable columns={tCols} rows={structural} rowKey={(x) => `str-${x.transporter}`} pageSize={5} />
+            <DataTable
+              columns={tCols}
+              rows={structural}
+              rowKey={(x) => `str-${x.transporter}`}
+              pageSize={5}
+            />
           </Card>
         )}
 
@@ -331,7 +395,12 @@ function ScenarioDetail({ result }: { result: SimulationResult }) {
             <h3 className="mb-2 text-[13px] font-semibold text-foreground">
               Most exposed cargo flows
             </h3>
-            <DataTable columns={fCols} rows={flows} rowKey={(x) => `${x.flow}-${x.facility}`} pageSize={5} />
+            <DataTable
+              columns={fCols}
+              rows={flows}
+              rowKey={(x) => `${x.flow}-${x.facility}`}
+              pageSize={5}
+            />
           </Card>
         )}
       </div>
@@ -353,10 +422,7 @@ export default function CargoWhatIf() {
   const scenarios = useMemo(() => catalog.data?.scenarios ?? [], [catalog.data]);
   const [selected, setSelected] = useState<string | null>(null);
   const active = selected ?? scenarios[0]?.scenario ?? null;
-  const entry = useMemo(
-    () => scenarios.find((s) => s.scenario === active),
-    [scenarios, active],
-  );
+  const entry = useMemo(() => scenarios.find((s) => s.scenario === active), [scenarios, active]);
 
   const run = useMutation({
     mutationFn: (vars: { scenario: string; body: Record<string, unknown> }) =>

@@ -42,9 +42,7 @@ export function ScenarioSelector({
             }}
             className={cn(
               "flex cursor-pointer flex-col gap-1.5 p-3 transition-colors",
-              active
-                ? "border-primary bg-primary/5 ring-1 ring-primary/30"
-                : "hover:bg-muted/50",
+              active ? "border-primary bg-primary/5 ring-1 ring-primary/30" : "hover:bg-muted/50",
               disabled && "pointer-events-none opacity-60",
             )}
           >

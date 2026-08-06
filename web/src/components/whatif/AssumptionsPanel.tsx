@@ -69,7 +69,9 @@ export function AssumptionsPanel({ assumptions }: { assumptions: SimAssumption[]
             <tr className="border-b border-border">
               <th className="py-1.5 pr-3 text-[11px] font-semibold text-muted-foreground">Field</th>
               <th className="py-1.5 pr-3 text-[11px] font-semibold text-muted-foreground">Value</th>
-              <th className="py-1.5 pr-3 text-[11px] font-semibold text-muted-foreground">Source</th>
+              <th className="py-1.5 pr-3 text-[11px] font-semibold text-muted-foreground">
+                Source
+              </th>
               <th className="py-1.5 text-[11px] font-semibold text-muted-foreground">Reason</th>
             </tr>
           </thead>
@@ -85,7 +87,9 @@ export function AssumptionsPanel({ assumptions }: { assumptions: SimAssumption[]
                     <StatusChip label={a.source} tone={SOURCE_TONE[a.source] ?? "neutral"} />
                   </span>
                 </td>
-                <td className="py-1.5 text-[11px] leading-snug text-muted-foreground">{a.reason}</td>
+                <td className="py-1.5 text-[11px] leading-snug text-muted-foreground">
+                  {a.reason}
+                </td>
               </tr>
             ))}
           </tbody>

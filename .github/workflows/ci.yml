@@ -90,6 +90,9 @@ jobs:
           # tesseract-dependent cases are marked `integration` and skip here).
           $PY -m pip install -e "ingest/eir_ocr[dev]"
           $PY -m pip install -e "ai/anpr[dev]"
+          # congestion/anomaly [dev] is intentionally torch-free (see their
+          # pyproject). Do not add [torch] here — PyPI torch pulls multi-GB
+          # nvidia_* CUDA wheels that fail on the EC2 runner's network.
           $PY -m pip install -e "ai/congestion[dev]"
           $PY -m pip install -e "ai/anomaly[dev]"
           $PY -m pip install -e "gateway[dev]"

@@ -250,10 +250,7 @@ export async function verifySession(): Promise<SessionInfo | null> {
 }
 
 /** Change the signed-in account's own password (clears must_change_password). */
-export async function changePassword(
-  currentPassword: string,
-  newPassword: string,
-): Promise<void> {
+export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
   const token = getToken();
   const res = await fetch("/api/auth/change-password", {
     method: "POST",

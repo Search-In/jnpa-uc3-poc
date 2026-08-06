@@ -18,7 +18,7 @@ concurrency:
 jobs:
   web:
     name: web — lint · typecheck · test
-    runs-on: [self-hosted, linux, x64, jnpa-ec2]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -44,7 +44,7 @@ jobs:
 
   mobile:
     name: mobile-pwa — lint · typecheck
-    runs-on: [self-hosted, linux, x64, jnpa-ec2]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -66,7 +66,7 @@ jobs:
 
   python:
     name: python — pytest (shared + tests)
-    runs-on: [self-hosted, linux, x64, jnpa-ec2]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       # Prefer the runner's system Python. actions/setup-python only ships builds for
@@ -114,7 +114,7 @@ jobs:
 
   ci-ok:
     name: CI passed
-    runs-on: [self-hosted, linux, x64, jnpa-ec2]
+    runs-on: ubuntu-latest
     needs: [web, mobile, python]
     steps:
       - run: echo "All CI jobs passed."

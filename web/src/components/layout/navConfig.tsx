@@ -104,6 +104,9 @@ export const NAV_SECTIONS: NavSection[] = [
       leaf("/truck-ops", "nav.truckOps", Truck),
       leaf("/cfs-ecy", "nav.cfsEcy", Boxes),
       leaf("/shipping-lines", "nav.shippingLines", Ship),
+      // Cargo What-If sits at the end of the lifecycle section: it asks "what
+      // would change" about the journey the screens above show as it is.
+      leaf("/cargo-whatif", "nav.cargoWhatIf", FlaskConical),
     ],
   },
   {

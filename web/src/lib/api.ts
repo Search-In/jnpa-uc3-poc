@@ -502,6 +502,27 @@ export const api = {
     http<{ count: number; violations: import("./types").GeofenceEvent[] }>(
       `/api/geo/violations?limit=${limit}`,
     ),
+  // Operator-triggered zone notification. entry_time pins the request to ONE
+  // occupancy, so a stale row can never notify against a later re-entry. 409
+  // when the vehicle has left (vehicle_not_in_zone) or re-entered since
+  // (occupancy_changed); `created: false` means it was already triggered.
+  geoNotifyZone: (vehicleId: string, zoneId: string, entryTime: string) =>
+    http<{
+      alert_id: string;
+      created: boolean;
+      vehicle_id: string;
+      zone_id: string;
+      entry_time: string;
+      email: { attempted: boolean; delivered: boolean };
+    }>("/api/geo/zones/notify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        vehicle_id: vehicleId,
+        zone_id: zoneId,
+        entry_time: entryTime,
+      }),
+    }),
   aiEvents: (eventType?: string, limit = 200) => {
     const q = new URLSearchParams();
     if (eventType) q.set("event_type", eventType);
@@ -1617,7 +1638,117 @@ export const api = {
     );
   },
   shippingLinesUploadDetail: (fileId: number) => http<any>(`/api/shipping-lines/uploads/${fileId}`),
+
+  // --- UC-3 Cargo What-If simulation (JNPA Notice 05 Aug 2026) ---
+  // Read-only analytical layer: POST is used because the parameter set is a body,
+  // NOT because anything is mutated. Every response carries the Notice §1
+  // contract (method / result+figures / assumptions / queries), so the UI renders
+  // the evidence beside the answer rather than the answer alone.
+  simulateScenarios: () => http<SimScenarioCatalog>("/api/cargo/simulate/scenarios"),
+  simulate: (scenario: string, body: Record<string, unknown>) =>
+    http<SimulationResult>(`/api/cargo/simulate/${scenario}`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  gateHourlyProfile: (params: {
+    from: string;
+    to: string;
+    terminal?: string;
+    gate_id?: string;
+    group_by?: "hour" | "day";
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)));
+    return http<GateHourlyProfile>(`/api/gate/hourly-profile?${qs}`);
+  },
 };
+
+// --- What-If simulation types ------------------------------------------------
+// Mirror services/cargo/simulation/base.py::SimulationResult exactly. Kept in one
+// place so a backend contract change surfaces as a TypeScript error rather than
+// as an undefined at render time.
+
+/** Where a value came from. The distinction JNPA Notice §1.c asks to be declared:
+ *  ASSUMED means "the data does not carry this, here is what we used and why". */
+export type SimAssumptionSource = "MEASURED" | "DERIVED" | "ASSUMED" | "PARAMETER";
+
+export interface SimAssumption {
+  field: string;
+  value: unknown;
+  reason: string;
+  source: SimAssumptionSource;
+}
+
+/** One query the answer rests on — Notice §1.d ("so the working can be traced").
+ *  `error` is set when the query FAILED rather than returned nothing; the two are
+ *  indistinguishable by row count and must never be conflated in the UI. */
+export interface SimQueryTrace {
+  purpose: string;
+  sql: string;
+  params: Record<string, unknown>;
+  api?: string;
+  row_count?: number;
+  error?: string;
+}
+
+export interface SimRecommendation {
+  action: string;
+  reason: string;
+  [detail: string]: unknown;
+}
+
+export interface SimulationResult {
+  scenario: string;
+  method: string;
+  result: Record<string, any>;
+  figures: Record<string, number | string | null>;
+  assumptions: SimAssumption[];
+  queries: SimQueryTrace[];
+  recommendations: SimRecommendation[];
+  /** False when a required input table was empty or a query failed. The UI must
+   *  render this as a first-class state with `notes`, never as a blank panel. */
+  data_available: boolean;
+  notes: string[];
+}
+
+export interface SimScenarioEntry {
+  scenario: string;
+  jnpa_reference: string;
+  question: string;
+  required: string[];
+  optional: string[];
+  reads: string[];
+}
+
+export interface SimScenarioCatalog {
+  count: number;
+  scenarios: SimScenarioEntry[];
+  contract: Record<string, string>;
+}
+
+export interface GateHourlyBucket {
+  bucket: string;
+  arrivals: number;
+  completed?: number;
+  unique_trucks?: number;
+  avg_tat_min?: number | null;
+}
+
+export interface GateHourlyProfile {
+  window: { from: string; to: string };
+  group_by: string;
+  /** Which table answered: 'core.eir', 'core.gate_event' or 'NONE'. */
+  source: string;
+  count: number;
+  total_arrivals: number;
+  peak_bucket: string | null;
+  peak_arrivals: number;
+  mean_per_bucket: number;
+  buckets: GateHourlyBucket[];
+  notes: string[];
+  assumptions: SimAssumption[];
+  queries: SimQueryTrace[];
+}
 
 export interface WfField {
   key: string;

@@ -407,14 +407,20 @@ export default function LiveOperations() {
           <LogisticsTile />
           <CarbonTile />
           <ParkingBoard />
-          <EmptyContainerBoard />
         </div>
 
-        {/* Operations row — TAS, Auto-LEO gate-out queue, Customs alert feed. */}
+        {/* Operations row — TAS, Auto-LEO gate-out queue, Customs alert feed,
+            then Empty-container repositioning on the row beneath them. As the
+            7th tile of the capability grid above it landed alone in a 3-column
+            row with two empty cells beside it; spanning the full width here
+            fills that space. Same grid, same gap — layout order only. */}
         <div className="grid grid-cols-1 items-stretch gap-2.5 border-t border-border px-4 py-2.5 md:grid-cols-2 lg:grid-cols-3">
           <TasWidget />
           <AutoLeoPanel />
           <CustomsFeedPanel />
+          <div className="md:col-span-2 lg:col-span-3">
+            <EmptyContainerBoard />
+          </div>
         </div>
       </div>
     </PageContainer>

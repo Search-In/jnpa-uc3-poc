@@ -80,6 +80,11 @@ export const SCREEN_ROLES: Record<string, Role[]> = {
   // Berthing Reports (module 7) — mirrors gateway/auth.py /api/berthing policy.
   "/berthing": [...CONTROL_ROOM, "CUSTOMS"],
   "/health": CONTROL_ROOM,
+  // Cargo What-If — mirrors the gateway policy for /api/cargo writes
+  // (gateway/auth.py _METHOD_POLICY: control room + customs). The simulate
+  // endpoints are POSTs and inherit that rule, so the screen must not be
+  // visible to a role whose token the API would refuse.
+  "/cargo-whatif": [...CONTROL_ROOM, "CUSTOMS"],
   "/what-if": CONTROL_ROOM,
   "/whatif": CONTROL_ROOM,
   "/simulator": CONTROL_ROOM,

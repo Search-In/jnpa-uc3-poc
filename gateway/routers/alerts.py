@@ -35,6 +35,9 @@ _KIND_ROLES: Dict[str, set[str]] = {
     "ABANDONED": _CONTROL_ROOM | {"TRAFFIC_POLICE"},
     "ROUTE_DEVIATION": _CONTROL_ROOM | {"TRAFFIC_POLICE"},
     "ELEVATED_SCRUTINY": _CONTROL_ROOM | {"CUSTOMS", "TRAFFIC_POLICE"},
+    # Operator-raised zone notification: a control-room action, so it stays in
+    # the control room (an unmapped kind would default to every role).
+    "ZONE_TRIGGER": _CONTROL_ROOM,
 }
 
 

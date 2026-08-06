@@ -502,6 +502,27 @@ export const api = {
     http<{ count: number; violations: import("./types").GeofenceEvent[] }>(
       `/api/geo/violations?limit=${limit}`,
     ),
+  // Operator-triggered zone notification. entry_time pins the request to ONE
+  // occupancy, so a stale row can never notify against a later re-entry. 409
+  // when the vehicle has left (vehicle_not_in_zone) or re-entered since
+  // (occupancy_changed); `created: false` means it was already triggered.
+  geoNotifyZone: (vehicleId: string, zoneId: string, entryTime: string) =>
+    http<{
+      alert_id: string;
+      created: boolean;
+      vehicle_id: string;
+      zone_id: string;
+      entry_time: string;
+      email: { attempted: boolean; delivered: boolean };
+    }>("/api/geo/zones/notify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        vehicle_id: vehicleId,
+        zone_id: zoneId,
+        entry_time: entryTime,
+      }),
+    }),
   aiEvents: (eventType?: string, limit = 200) => {
     const q = new URLSearchParams();
     if (eventType) q.set("event_type", eventType);

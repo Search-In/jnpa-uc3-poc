@@ -107,6 +107,38 @@ def test_parse_coprar_live_shape():
     assert row["extra"]["DisposalMode"] == "1"
 
 
+COPARN_XML = """<ContainerRelease><DocumentHeader><DocumentReference>
+<DocumentType>COPARN</DocumentType><DocumentName>Empty Container Release Order</DocumentName>
+<DocumentNumber>12072026100000</DocumentNumber><CommonRefNumber>2026071259400968</CommonRefNumber>
+<MessageType>9</MessageType><SenderID>ccansa001</SenderID></DocumentReference></DocumentHeader>
+<DocumentDetails><COPARNHeader><VCN>INNSA1NF0S0977</VCN><VoyageNumber>0P50ZN1MA</VoyageNumber>
+<SACode>CCA</SACode><LineCode>CCA</LineCode><TotNoContainer>1</TotNoContainer></COPARNHeader>
+<ContainerDetails><Container><ContainerNumber>TGHU8682244</ContainerNumber>
+<ContISOCode>4510</ContISOCode><EquipmentStatusCode>MTY</EquipmentStatusCode>
+<ReleaseDateTime>07072026:03:55</ReleaseDateTime><PickupDateTime>07072026:08:33</PickupDateTime>
+<DepotCode>ECD-NSA-01</DepotCode><ReExportBondPCNo></ReExportBondPCNo></Container>
+</ContainerDetails></DocumentDetails></ContainerRelease>"""
+
+
+def test_parse_coparn_live_shape():
+    doc_type, header, rows = parse_document(COPARN_XML)
+    assert doc_type == "COPARN"
+    assert detect_doc_type(COPARN_XML) == "COPARN"
+    assert header["vcn"] == "INNSA1NF0S0977"
+    assert header["voyage"] == "0P50ZN1MA"
+    assert header["line_code"] == "CCA"
+    assert header["agent_code"] == "CCA"
+    assert header["declared_count"] == 1
+    (row,) = rows
+    assert row["container_no"] == "TGHU8682244"
+    assert row["equipment_status"] == "MTY"
+    assert row["depot_code"] == "ECD-NSA-01"
+    rel, pick = row["release_ts"], row["pickup_ts"]
+    assert (rel.day, rel.hour, rel.minute) == (7, 3, 55)
+    assert (pick.day, pick.hour, pick.minute) == (7, 8, 33)
+    assert row["iso_valid"] is True
+
+
 def test_row_without_container_is_skipped_and_bad_xml_rejected():
     xml = COARRI_XML.replace("SAJU3136840", "")
     _, _, rows = parse_document(xml)

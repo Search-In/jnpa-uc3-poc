@@ -35,9 +35,11 @@ jobs:
         run: pnpm install --frozen-lockfile=false
 
       - name: Build Workspace (dashboard compiles to LIVE)
-        run: pnpm -r build
+        # Sequential builds: parallel `pnpm -r build` OOM-kills the self-hosted
+        # EC2 runner (exit 137) when web + mobile-pwa vite both peak at once.
+        run: pnpm -r --workspace-concurrency=1 build
         env:
-          NODE_OPTIONS: "--max-old-space-size=4096"
+          NODE_OPTIONS: "--max-old-space-size=2048"
           # Production builds default to live anyway; set explicitly for clarity
           # and to make the verification step below meaningful.
           VITE_DATA_MODE: live

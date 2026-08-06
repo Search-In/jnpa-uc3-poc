@@ -19,10 +19,11 @@ show / edit).
 """
 from __future__ import annotations
 
-from datetime import datetime
+import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 
 from jnpa_shared import corridor
 
@@ -417,3 +418,189 @@ async def zones_active(state: GatewayState = Depends(get_state)) -> dict:
     snap = state.geofence.zones_snapshot()
     REQUESTS.labels("geofence_events", "ok").inc()
     return {"count": len(snap), "zones": snap, "source": "core.geofence_zone"}
+
+
+# ------------------------------------------------- operator zone notification
+# Deterministic namespace for trigger alert ids, so the same occupancy always
+# maps to the same id (see the dedup note on the endpoint below).
+_ZONE_TRIGGER_NS = uuid.UUID("2f7c9a10-6d5b-4e21-9f38-7c1a5b0d2e64")
+_ZONE_TRIGGER_KIND = "ZONE_TRIGGER"
+
+
+def _alert_type(zone: Dict[str, Any], violated: bool) -> str:
+    """Alert type for this occupancy, derived from data that already exists.
+
+    Uses the SAME vocabulary the geofence engine emits for its automatic
+    violations, so a triggered alert reads identically to a detected one:
+    ``restricted`` zones -> RESTRICTED_ENTRY, a flagged ``no_parking`` dwell ->
+    NO_PARKING_VIOLATION, otherwise a plain zone presence. Nothing is invented
+    and no operator input is required.
+    """
+    kind = str(zone.get("kind") or "")
+    if kind == "restricted":
+        return "RESTRICTED_ENTRY"
+    if violated:
+        return "NO_PARKING_VIOLATION"
+    return "ZONE_PRESENCE"
+
+
+@router.post("/api/geo/zones/notify")
+async def notify_zone_occupancy(
+    request: Request,
+    body: Dict[str, Any] = Body(...),
+    state: GatewayState = Depends(get_state),
+) -> dict:
+    """Raise ONE operator-triggered notification for a vehicle currently in a zone.
+
+    Manual counterpart to the automatic geo-fence pipeline: the engine is only
+    READ here (``vehicles_in_zones()``), never driven — ENTER/EXIT, dwell and
+    violation handling are untouched and this endpoint raises nothing on its own.
+
+    Body: ``{"vehicle_id": str, "zone_id": str, "entry_time": str}``. 409 when
+    the vehicle has left the zone (``vehicle_not_in_zone``) or re-entered since
+    the row was drawn (``occupancy_changed``), so a stale row can never mint a
+    notification against a different occupancy.
+
+    Deduplicated on (vehicle, zone, entry_time) via a uuid5 id + the existing
+    ``persist_alert`` ``ON CONFLICT (id) DO NOTHING``: clicking Trigger ten times
+    yields one alert and one email, while a genuine re-entry (new entry_time) is
+    a new, triggerable event.
+
+    Fan-out reuses what already exists and NOTHING else: core.alert (via
+    ``persist_alert``) + the ``alert`` WS frame the Notification Center/Bell
+    already consume, plus the ADMIN mailer seam (``ADMIN_ALERT_EMAILS``, the
+    same list the congestion alert uses). Drivers are NOT emailed — they keep
+    their existing app/push notifications, untouched by this endpoint.
+    Deliberately writes no core.notification row — the Bell reads alerts, not
+    that table, so a delivery row would be new persistence for no consumer.
+    """
+    from ..provisional import persist_alert
+    from jnpa_shared.schemas import Alert
+
+    vehicle_id = str(body.get("vehicle_id") or "").strip()
+    zone_id = str(body.get("zone_id") or "").strip()
+    entry_time = str(body.get("entry_time") or "").strip()
+    if not vehicle_id or not zone_id or not entry_time:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "vehicle_id_zone_id_and_entry_time_required"})
+
+    # 1) Verify the vehicle is STILL inside that zone, on the SAME occupancy the
+    #    operator was looking at (engine read only — nothing is driven here).
+    #    Matching entry_time too is what stops a stale row from notifying against
+    #    a LATER occupancy: if the vehicle exited and re-entered, the live
+    #    entry_time has moved on and this is a different event entirely.
+    occupancy = next(
+        (r for r in state.geofence.vehicles_in_zones()
+         if r["vehicle_id"] == vehicle_id and r["zone_id"] == zone_id),
+        None,
+    )
+    if occupancy is None:
+        REQUESTS.labels("geofence_events", "error").inc()
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "vehicle_not_in_zone", "vehicle_id": vehicle_id,
+                    "zone_id": zone_id,
+                    "hint": "the vehicle has left this zone; refresh the list"},
+        )
+    if occupancy["entry_time"] != entry_time:
+        REQUESTS.labels("geofence_events", "error").inc()
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "occupancy_changed", "vehicle_id": vehicle_id,
+                    "zone_id": zone_id, "entry_time": occupancy["entry_time"],
+                    "hint": "the vehicle re-entered this zone; refresh the list"},
+        )
+
+    zone = next((z for z in state.geofence.zones_snapshot() if z["id"] == zone_id), {})
+    dsn = state.cfg.postgres_dsn or None
+    principal = getattr(getattr(request, "state", None), "principal", None)
+    actor = f"{principal.role}:{principal.sub}" if principal is not None else "operator"
+
+    alert_id = str(uuid.uuid5(
+        _ZONE_TRIGGER_NS,
+        f"zone-trigger|{vehicle_id}|{zone_id}|{occupancy['entry_time']}",
+    ))
+    payload = {
+        # zone_id is load-bearing: the dashboard's categoryOf() files an alert
+        # under the existing "geofence" category on its presence.
+        "zone_id": zone_id,
+        "zone_name": zone.get("name") or zone_id,
+        "zone_kind": zone.get("kind"),
+        "vehicle_id": vehicle_id,
+        "alert_type": _alert_type(zone, bool(occupancy.get("violated"))),
+        "status": "VIOLATION" if occupancy.get("violated") else "OK",
+        "entry_time": occupancy["entry_time"],
+        "dwell_s": occupancy["dwell_s"],
+        "triggered_by": actor,
+        "triggered_at": datetime.now(timezone.utc).isoformat(),
+        "source": "geo-zone-trigger",
+        # Corridor-wide marker the PWA needs so it never mistakes an unaddressed
+        # frame for a personal advisory (same convention as congestion alerts).
+        "audience": "broadcast",
+    }
+    alert = Alert(id=uuid.UUID(alert_id), kind=_ZONE_TRIGGER_KIND, severity="warning",
+                  plate=vehicle_id, payload=payload)
+
+    # 2) Already triggered for THIS occupancy? ``persist_alert`` dedups the row
+    #    (ON CONFLICT DO NOTHING) but does not report whether it inserted, so a
+    #    repeat click would still re-broadcast and re-email. One id lookup makes
+    #    the whole endpoint idempotent — which matters because the button's
+    #    disabled state is per-browser and is lost on reload or a second operator.
+    if dsn:
+        try:
+            from jnpa_shared.db import fetch_one
+
+            if await fetch_one(
+                "SELECT 1 AS x FROM core.alert WHERE id = CAST(:id AS uuid)",
+                {"id": alert_id}, dsn=dsn,
+            ):
+                REQUESTS.labels("geofence_events", "ok").inc()
+                return {
+                    "alert_id": alert_id, "created": False,
+                    "vehicle_id": vehicle_id, "zone_id": zone_id,
+                    "entry_time": occupancy["entry_time"],
+                    "email": {"attempted": False, "delivered": False},
+                }
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001 — a lookup blip must not block
+            log.debug("zone_trigger_dedup_check_failed", alert_id=alert_id, error=str(exc))
+
+    # 3) Persist (dedup by id) — reuses the shared writer, no new SQL.
+    if dsn:
+        try:
+            await persist_alert(alert, dsn=dsn)
+        except Exception as exc:  # noqa: BLE001 — best-effort, still fan out on WS
+            log.warning("zone_trigger_persist_failed", alert_id=alert_id, error=str(exc))
+
+    # 4) WS broadcast — the frame the Notification Center + Bell already consume.
+    try:
+        await state.ws.broadcast("alert", alert.model_dump(mode="json"))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("zone_trigger_broadcast_failed", alert_id=alert_id, error=str(exc))
+
+    # 5) ADMIN email only, through the same seam + the same ADMIN_ALERT_EMAILS
+    #    list the congestion alert already uses. Drivers are deliberately NOT
+    #    mailed here — they are served by the existing app/push notifications,
+    #    which this endpoint does not touch. No admin address configured =>
+    #    nothing is sent and the alert still reaches the Notification Center.
+    from .. import mailer
+
+    recipients = mailer.admin_recipients()
+    mail = None
+    try:
+        mail = await mailer.notify_zone_trigger(alert_id, payload, recipients)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("zone_trigger_email_failed", alert_id=alert_id, error=str(exc))
+
+    REQUESTS.labels("geofence_events", "ok").inc()
+    return {
+        "alert_id": alert_id,
+        "created": True,
+        "vehicle_id": vehicle_id,
+        "zone_id": zone_id,
+        "entry_time": occupancy["entry_time"],
+        "email": {"attempted": bool(recipients),
+                  "delivered": bool(mail and mail.get("delivered"))},
+    }

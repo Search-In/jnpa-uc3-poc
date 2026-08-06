@@ -81,9 +81,7 @@ describe("callAnomalies — stays quiet on legitimate operational states", () =>
   it("does not demand fields the terminal never publishes", () => {
     // NSFT reports carry no berth column; APMT/BMCT publish no ops-completed time.
     expect(callAnomalies({ ...departed, terminal: "NSFT", berth_number: null })).toEqual([]);
-    expect(
-      callAnomalies({ ...departed, terminal: "BMCT", cargo_operation_end: null }),
-    ).toEqual([]);
+    expect(callAnomalies({ ...departed, terminal: "BMCT", cargo_operation_end: null })).toEqual([]);
   });
 });
 
@@ -156,8 +154,9 @@ describe("classifyField", () => {
       label: "Not reported",
     });
     // NSFT has no berth column at all — not "pending", it will never arrive.
-    expect(classifyField({ ...departed, terminal: "NSFT", berth_number: null }, "berth_number"))
-      .toMatchObject({ state: "not-reported" });
+    expect(
+      classifyField({ ...departed, terminal: "NSFT", berth_number: null }, "berth_number"),
+    ).toMatchObject({ state: "not-reported" });
   });
 
   it("explains a missing ETA on a berthed call rather than calling it pending", () => {

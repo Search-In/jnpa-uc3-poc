@@ -98,10 +98,21 @@ Auth column reflects RBAC **when `AUTH_ENABLED=true`** (currently off → all op
 ### Auth & Session
 | API | Method | Router | Purpose | Dependency | Required Config | Test Payload |
 |---|---|---|---|---|---|---|
-| `/api/auth/login` | POST | auth.py | Password→JWT | — | `AUTH_JWT_SECRET`, `AUTH_USERS` | `{"username":"admin","password":"admin"}` |
+| `/api/auth/login` | POST | auth.py | Password→JWT (validates `core.app_user`) | Postgres | `AUTH_JWT_SECRET` | `{"username":"admin","password":"<seeded>"}` |
+| `/api/auth/me` | GET | auth.py | Current identity; 401 if expired/disabled | Postgres | bearer token | — |
+| `/api/auth/change-password` | POST | auth.py | Self-service rotation | Postgres | bearer token | `{"current_password":"…","new_password":"…"}` |
 | `/api/auth/dev-token` | POST | auth.py | Role token (dev only) | — | `AUTH_DEV_TOKENS`,`APP_ENV` | `{"role":"DTCCC_ADMIN"}` |
 | `/api/auth/device-token` | POST | auth.py | PWA DRIVER pairing | — | `PWA_PAIRING_SECRET` | `{"device_id":"DEV-1","pairing_secret":"s"}` |
-| `/api/auth/roles` | GET | auth.py | List roles | — | — | — |
+| `/api/auth/roles` | GET | auth.py | List roles + aliases | — | — | — |
+| `/api/users` | GET/POST | users.py | List / create accounts (**DTCCC_ADMIN only**) | Postgres | — | `{"username":"gate2","password":"…","role":"GATE_USER"}` |
+| `/api/users/{u}/disable` | POST | users.py | Revoke access (**admin only**) | Postgres | — | — |
+| `/api/users/{u}/enable` | POST | users.py | Restore access (**admin only**) | Postgres | — | — |
+| `/api/users/{u}/reset-password` | POST | users.py | Admin reset (**admin only**) | Postgres | — | `{"new_password":"…"}` |
+
+> Passwords are no longer defined in source or environment. The old `AUTH_USERS`
+> env seam and the seeded `admin/admin` dict were removed with migration 0123;
+> accounts are created by `python scripts/seed_auth_users.py`, which generates
+> the password at run time and prints it once.
 | `/api/auth/otp/request` | POST | otp.py | Issue OTP | Postgres, SMS stub | `SMS_PROVIDER` | `{"mobile":"9876543210","device_id":"DEV-1"}` |
 | `/api/auth/otp/verify` | POST | otp.py | Verify→DRIVER JWT | Postgres | `AUTH_JWT_SECRET` | `{"mobile":"9876543210","otp":"123456","device_id":"DEV-1"}` |
 | `/api/auth/otp/refresh` | POST | otp.py | Re-issue token | Postgres | — | `{"device_id":"DEV-1"}` |

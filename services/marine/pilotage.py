@@ -53,6 +53,11 @@ class PilotageRepository:
             if val:
                 conds.append(f"p.{col} ILIKE :{key}")
                 params[key] = f"%{str(val).strip()}%"
+        # LIVE / DEMO provenance narrowing; None => unfiltered (byte-identical SQL).
+        data_origin = filters.get("data_origin")
+        if data_origin is not None:
+            conds.append("p.data_origin = :data_origin")
+            params["data_origin"] = data_origin
         clause = ("WHERE " + " AND ".join(conds)) if conds else ""
         return clause, params
 
@@ -74,11 +79,16 @@ class PilotageRepository:
             return int((await conn.execute(
                 text(f"SELECT count(*) FROM core.pilotage p {clause}"), params)).scalar() or 0)
 
-    async def get(self, pilotage_id: int) -> Optional[dict]:
+    async def get(self, pilotage_id: int, *,
+                  data_origin: Optional[str] = None) -> Optional[dict]:
+        frag, extra = ("", {})
+        if data_origin is not None:
+            frag = " AND p.data_origin = :data_origin"
+            extra = {"data_origin": data_origin}
         async with get_engine(self._dsn).connect() as conn:
             row = (await conn.execute(text(
-                f"SELECT {_SELECT} FROM core.pilotage p WHERE p.pilotage_id = :id"),
-                {"id": pilotage_id})).mappings().first()
+                f"SELECT {_SELECT} FROM core.pilotage p WHERE p.pilotage_id = :id{frag}"),
+                {"id": pilotage_id, **extra})).mappings().first()
         return dict(row) if row else None
 
     async def stats(self, filters: Mapping[str, Any]) -> dict:
@@ -130,8 +140,15 @@ class PilotageService:
         return {"items": items, "total": total, "limit": limit, "offset": offset,
                 "count": len(items)}
 
-    async def get(self, pilotage_id: int) -> Optional[Dict[str, Any]]:
-        row = await self._repo.get(pilotage_id)
+    async def get(self, pilotage_id: int, *,
+                  data_origin: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """One movement, enriched exactly as the list rows are — see :meth:`_attach_workflow`.
+
+        ``data_origin`` narrows the read to one provenance (LIVE=API / DEMO=MANUAL); the
+        workflow attach runs the same either way, so a single card cannot disagree with the
+        same card in the list.
+        """
+        row = await self._repo.get(pilotage_id, data_origin=data_origin)
         if row is None:
             return None
         return (await self._attach_workflow([row]))[0]

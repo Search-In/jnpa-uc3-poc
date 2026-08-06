@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict
 
+from ..data_mode import data_mode
 from ..metrics import REQUESTS
 from services.marine.port_craft import PortCraftService
 
@@ -77,9 +78,9 @@ class PortCraftStatsOut(BaseModel):
     by_ownership: List[OwnershipStat]
 
 
-def _filters(craft_type, owned_or_hired, name, owner) -> Dict[str, Any]:
+def _filters(craft_type, owned_or_hired, name, owner, data_origin=None) -> Dict[str, Any]:
     return {"craft_type": craft_type, "owned_or_hired": owned_or_hired,
-            "name": name, "owner": owner}
+            "name": name, "owner": owner, "data_origin": data_origin}
 
 
 @router.get("", response_model=PortCraftListResponse,
@@ -93,9 +94,10 @@ async def list_craft(
     direction: str = Query(default="asc"),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    mode: Optional[str] = Depends(data_mode),
     service: PortCraftService = Depends(get_service),
 ) -> PortCraftListResponse:
-    res = await service.list_craft(_filters(craft_type, owned_or_hired, name, owner),
+    res = await service.list_craft(_filters(craft_type, owned_or_hired, name, owner, mode),
                                    sort=sort, direction=direction, limit=limit, offset=offset)
     REQUESTS.labels(_API, "ok").inc()
     return PortCraftListResponse(**res)
@@ -103,16 +105,18 @@ async def list_craft(
 
 @router.get("/stats", response_model=PortCraftStatsOut,
             summary="Port-craft counts by type + ownership")
-async def stats(service: PortCraftService = Depends(get_service)) -> PortCraftStatsOut:
-    res = await service.stats(_filters(None, None, None, None))
+async def stats(mode: Optional[str] = Depends(data_mode),
+                service: PortCraftService = Depends(get_service)) -> PortCraftStatsOut:
+    res = await service.stats(_filters(None, None, None, None, mode))
     REQUESTS.labels(_API, "ok").inc()
     return PortCraftStatsOut(**res)
 
 
 @router.get("/{craft_id}", response_model=PortCraftOut, summary="One port craft")
 async def get_craft(craft_id: int,
+                    mode: Optional[str] = Depends(data_mode),
                     service: PortCraftService = Depends(get_service)) -> PortCraftOut:
-    res = await service.get(craft_id)
+    res = await service.get(craft_id, data_origin=mode)
     if res is None:
         REQUESTS.labels(_API, "not_found").inc()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,

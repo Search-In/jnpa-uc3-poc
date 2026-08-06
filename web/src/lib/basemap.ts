@@ -22,6 +22,39 @@ const BHUVAN_WMS =
 export const JNPA_CENTER: [number, number] = [73.0, 18.86]; // [lon, lat] corridor mid
 export const JNPA_ZOOM = 11.2;
 
+// --------------------------------------------------------------------------
+// Gate access-road bearings (OpenStreetMap ground truth)
+// --------------------------------------------------------------------------
+// Compass bearing (deg) of the terminal access road AT each gate marker,
+// measured off the OSM highway centreline nearest the seeded gate coordinate
+// (jnpa.gates / GATE_DEFS). Expressed in the SEAWARD sense (gate -> port),
+// matching the UC2 reference convention (jnpa_poc_2 scene3d.ts applies
+// QUAY_HEADING = 298 deg to its toll-naka gate symbol layers), so a gate model
+// rotated by this value spans ACROSS its lane rather than standing broadside to
+// it. Rotation only — no gate coordinate is moved.
+export const GATE_ROAD_HEADING: Record<string, number> = {
+  // OSM w1161066187 / w234196511 — the tertiary one-way couplet the marker sits
+  // between (4.9 m and 7.3 m); 12 consecutive vertices all bear 114.4/294.4.
+  "G-NSICT": 294,
+  // OSM w151738469 "JNPT Terminal 3", primary, 3 lanes, one-way; 5.1 m from the
+  // marker and the only highway within 78 m. Centreline bears 137.0/317.0.
+  "G-JNPCT": 317,
+  // OSM w383744551 — the port ring road, 13.1 m from the marker; the two
+  // segments flanking the closest point both bear 304.6/124.6.
+  "G-NSIGT": 305,
+  // OSM w806817133 terminal service road, 2.0 m from the marker; segments
+  // either side of the closest vertex bear 312.3 and 305.6 (mean 309.0).
+  "G-BMCT": 309,
+};
+
+/** UC2 reference default (jnpa_poc_2 QUAY_HEADING) for an unmapped gate id. */
+export const DEFAULT_GATE_HEADING = 298;
+
+/** Access-road bearing (deg) to orient gate-side assets at `gateId`. */
+export function gateRoadHeading(gateId: string): number {
+  return GATE_ROAD_HEADING[gateId] ?? DEFAULT_GATE_HEADING;
+}
+
 export function activeBasemapProvider(): "mapbox" | "esri" | "carto" | "bhuvan" {
   if (MAPBOX_TOKEN) return "mapbox";
   if (BASEMAP === "carto") return "carto";

@@ -68,6 +68,11 @@ class BathymetryRepository:
             if val:
                 conds.append(f"s.{col} ILIKE :{key}")
                 params[key] = f"%{str(val).strip()}%"
+        # LIVE / DEMO provenance narrowing; None => unfiltered (byte-identical SQL).
+        data_origin = filters.get("data_origin")
+        if data_origin is not None:
+            conds.append("s.data_origin = :data_origin")
+            params["data_origin"] = data_origin
         clause = ("WHERE " + " AND ".join(conds)) if conds else ""
         return clause, params
 
@@ -97,17 +102,24 @@ class BathymetryRepository:
                 text(f"SELECT count(*) FROM core.bathymetry_survey s {clause}"),
                 params)).scalar() or 0)
 
-    async def get_survey(self, survey_id: int) -> Optional[dict]:
+    async def get_survey(self, survey_id: int, *,
+                         data_origin: Optional[str] = None) -> Optional[dict]:
         if not _valid_survey_id(survey_id):
             return None
+        frag, extra = ("", {})
+        if data_origin is not None:
+            frag = " AND s.data_origin = :data_origin"
+            extra = {"data_origin": data_origin}
         async with get_engine(self._dsn).connect() as conn:
             row = (await conn.execute(text(
                 f"SELECT {_SURVEY_SELECT} FROM core.bathymetry_survey s "
-                "WHERE s.survey_id = :id"), {"id": survey_id})).mappings().first()
+                f"WHERE s.survey_id = :id{frag}"),
+                {"id": survey_id, **extra})).mappings().first()
         return dict(row) if row else None
 
     # ------------------------------------------------------------------ stats
-    async def survey_stats(self, survey_id: int) -> Optional[dict]:
+    async def survey_stats(self, survey_id: int, *,
+                           data_origin: Optional[str] = None) -> Optional[dict]:
         """Per-survey aggregates. None when the survey itself does not exist.
 
         Aggregated in SQL — a survey holds tens of thousands of soundings and a caller
@@ -115,9 +127,15 @@ class BathymetryRepository:
         georeferenced and page-space rows alike; the coordinate bbox is over the
         georeferenced subset only, and is null when the chart carries no grid.
         """
-        survey = await self.get_survey(survey_id)   # also rejects out-of-range ids
+        survey = await self.get_survey(survey_id, data_origin=data_origin)  # also rejects out-of-range ids
         if survey is None:
             return None
+        # Narrow the sounding aggregate to the same provenance as the survey read; None
+        # leaves the aggregate byte-identical.
+        origin_frag, origin_extra = ("", {})
+        if data_origin is not None:
+            origin_frag = " AND b.data_origin = :data_origin"
+            origin_extra = {"data_origin": data_origin}
         sql = (
             "SELECT count(*) AS sounding_count, "
             "  count(*) FILTER (WHERE b.above_design) AS above_design_count, "
@@ -127,10 +145,10 @@ class BathymetryRepository:
             "  round(avg(b.depth_m)::numeric, 2) AS avg_depth_m, "
             "  min(b.easting_m) AS min_easting_m, max(b.easting_m) AS max_easting_m, "
             "  min(b.northing_m) AS min_northing_m, max(b.northing_m) AS max_northing_m "
-            "FROM core.bathymetry_sounding b WHERE b.survey_id = :id"
+            "FROM core.bathymetry_sounding b WHERE b.survey_id = :id" + origin_frag
         )
         async with get_engine(self._dsn).connect() as conn:
-            r = (await conn.execute(text(sql), {"id": survey_id})).mappings().first()
+            r = (await conn.execute(text(sql), {"id": survey_id, **origin_extra})).mappings().first()
         r = dict(r) if r else {}
         n = int(r.get("sounding_count") or 0)
         return {
@@ -170,6 +188,10 @@ class BathymetryRepository:
             conds.append("b.easting_m IS NOT NULL")
         elif filters.get("georeferenced") is False:
             conds.append("b.easting_m IS NULL")
+        # LIVE / DEMO provenance narrowing; None => unfiltered (byte-identical SQL).
+        if filters.get("data_origin") is not None:
+            conds.append("b.data_origin = :data_origin")
+            params["data_origin"] = filters["data_origin"]
         return "WHERE " + " AND ".join(conds), params
 
     async def list_soundings(self, survey_id: int, filters: Mapping[str, Any], *,
@@ -211,11 +233,13 @@ class BathymetryService:
         return {"items": items, "total": total, "limit": limit, "offset": offset,
                 "count": len(items)}
 
-    async def get_survey(self, survey_id: int) -> Optional[Dict[str, Any]]:
-        return await self._repo.get_survey(survey_id)
+    async def get_survey(self, survey_id: int, *,
+                         data_origin: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        return await self._repo.get_survey(survey_id, data_origin=data_origin)
 
-    async def survey_stats(self, survey_id: int) -> Optional[Dict[str, Any]]:
-        return await self._repo.survey_stats(survey_id)
+    async def survey_stats(self, survey_id: int, *,
+                           data_origin: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        return await self._repo.survey_stats(survey_id, data_origin=data_origin)
 
     async def list_soundings(self, survey_id: int, filters: Mapping[str, Any], *,
                              sort: str, direction: str, limit: int,

@@ -34,7 +34,9 @@ class _Repo:
     def __init__(self, events=()):
         self._events = list(events)
 
-    async def timeline(self, call_id: int):
+    async def timeline(self, call_id: int, *, data_origin=None):
+        # `data_origin` is the LIVE/DEMO narrowing the service forwards verbatim; these
+        # tests pin the lifecycle merge, so the double accepts it and ignores it.
         return {**_CALL, "call_id": call_id, "events": self._events}
 
 
@@ -111,7 +113,7 @@ async def test_manual_boarding_engages_port_craft_on_the_timeline_too():
 @pytest.mark.asyncio
 async def test_timeline_still_returns_none_for_an_unknown_call():
     class _None(_Repo):
-        async def timeline(self, call_id):
+        async def timeline(self, call_id, *, data_origin=None):
             return None
 
     svc = VesselCallService(repository=_None(), manual=_Manual(),

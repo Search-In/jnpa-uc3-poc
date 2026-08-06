@@ -239,13 +239,43 @@ async def test_unconfigured_upstream_skips_the_live_rung_entirely():
 
 
 @pytest.mark.asyncio
-async def test_non_eir_doc_types_never_call_the_eir_service():
-    """An invoice is not a gate slip — do not spend a round trip on it."""
+async def test_image_uploads_call_eir_ocr_regardless_of_doc_type():
+    """PNG/JPG always prefer ingest/eir_ocr — the slip engine owns image OCR."""
     http = _Http(_Resp(200, REAL_SLIP_RESPONSE))
-    for dtype in ("INVOICE", "LR", "EWAYBILL", "PERMIT", "UNKNOWN"):
+    for dtype in ("INVOICE", "LR", "EWAYBILL", "PERMIT", "UNKNOWN", "EIR"):
         http.calls.clear()
-        await doc._extract_async(_State(http), IMG, "image/jpeg", dtype, "f.jpg")
-        assert http.calls == [], f"{dtype} should not hit the EIR OCR service"
+        out = await doc._extract_async(_State(http), IMG, "image/jpeg", dtype, "f.jpg")
+        assert http.calls, f"{dtype} should hit the EIR OCR service for images"
+        assert out["source"] == "OCR_SERVICE"
+
+
+@pytest.mark.asyncio
+async def test_live_keeps_extras_out_of_known_fields():
+    """Garbled OCR labels must not pollute the primary fields map.
+
+    The verify report shows only EIR_FIELDS (ContainerNo, LICNo, …). Extras like
+    ImcoUnNo stay separate so the dashboard matches ingest/eir_ocr/output/.
+    """
+    payload = dict(REAL_SLIP_RESPONSE)
+    payload["extras"] = {
+        "ImcoUnNo": {"value": "1234", "conf": 0.55, "evidence": "IMCO/UN NO: 1234"},
+        "JORY": {"value": "[MPORT", "conf": 0.4},
+        "CATAQYORY": {"value": "vin [IMPORT", "conf": 0.3},
+    }
+    http = _Http(_Resp(200, payload))
+    out = await doc._extract_async(_State(http), IMG, "image/jpeg", "EIR", "s.jpg")
+    assert out["fields"]["EIRNo"] == "4339869"
+    assert out["fields"]["ContainerNo"] == "MSMU1908508"
+    assert "JORY" not in out["fields"]
+    assert "Jory" not in out["fields"]
+    assert "CATAQYORY" not in out["fields"]
+    assert "CatAqyory" not in out["fields"]
+    assert "ImcoUnNo" not in out["fields"]
+    assert list(out["fields"].keys()) == [
+        k for k in doc._KNOWN_EIR_FIELDS if k in out["fields"]
+    ]
+    assert out["extras"]["ImcoUnNo"] == "1234"
+    assert out["extras"]["JORY"] == "[MPORT"
 
 
 # ============================================================ local rung

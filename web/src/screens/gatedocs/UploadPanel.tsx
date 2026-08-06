@@ -26,10 +26,23 @@ const DOC_TYPES = [
 ];
 
 function statusTone(s: string): Tone {
-  if (s === "SUCCESS" || s === "VALIDATED") return "ok";
+  if (s === "SUCCESS" || s === "VALIDATED" || s === "EXTRACTED") return "ok";
   if (s === "FAILED" || s === "REJECTED") return "critical";
   if (s === "PARTIAL") return "warn";
   return "neutral";
+}
+
+function isImageFile(f: File | null): boolean {
+  if (!f) return false;
+  if ((f.type || "").toLowerCase().startsWith("image/")) return true;
+  return /\.(jpe?g|png|webp|tif{1,2}|bmp|gif)$/i.test(f.name);
+}
+
+/** Map gate-doc type → /api/ocr doc_type for the eir_ocr sidecar. */
+function ocrDocType(gateDocType: string): string {
+  if (gateDocType === "FORM13") return "FORM13";
+  if (gateDocType === "PIN") return "GATE_SLIP";
+  return "EIR";
 }
 
 export default function GateDocUploadPanel() {
@@ -37,9 +50,12 @@ export default function GateDocUploadPanel() {
   const [docType, setDocType] = useState("EIR");
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<Record<string, any> | null>(null);
+  const [ocrResult, setOcrResult] = useState<Record<string, any> | null>(null);
   // Per-file drill-down: the ledger listed uploads but no panel could open one,
   // so an operator saw an error COUNT with no way to read the reasons.
   const [openFileId, setOpenFileId] = useState<number | null>(null);
+
+  const imageMode = isImageFile(file);
 
   const detailQ = useQuery({
     queryKey: ["gate-doc-upload-detail", openFileId],
@@ -67,6 +83,16 @@ export default function GateDocUploadPanel() {
     },
   });
 
+  const ocrUpload = useMutation({
+    mutationFn: () => api.ocrUpload(file as File, ocrDocType(docType), file?.name),
+    onSuccess: (data) => {
+      setOcrResult(data);
+      setPreview(null);
+      setFile(null);
+      qc.invalidateQueries({ queryKey: ["ocr-documents"] });
+    },
+  });
+
   return (
     <div className="flex flex-col gap-3 sm:gap-4">
       <Card>
@@ -82,52 +108,78 @@ export default function GateDocUploadPanel() {
               onChange={(v) => {
                 setDocType(v);
                 setPreview(null);
+                setOcrResult(null);
               }}
               options={DOC_TYPES}
               label="Document type"
             />
           </label>
 
-          <Button variant="outline" size="sm" onClick={() => api.gateDocDownloadTemplate(docType)}>
-            <Download className="h-3.5 w-3.5" />
-            Template
-          </Button>
+          {!imageMode && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => api.gateDocDownloadTemplate(docType)}
+            >
+              <Download className="h-3.5 w-3.5" />
+              Template
+            </Button>
+          )}
 
           <label className="flex flex-col gap-1">
             <span className="text-[11px] font-medium text-muted-foreground">
-              File (CSV / XLS / XLSX)
+              File (PNG / JPG · CSV / XLS / XLSX)
             </span>
             <input
               type="file"
-              accept=".csv,.xls,.xlsx"
+              accept=".csv,.xls,.xlsx,image/png,image/jpeg,image/jpg,image/webp,.png,.jpg,.jpeg,.webp"
               onChange={(e) => {
                 setFile(e.target.files?.[0] ?? null);
                 setPreview(null);
+                setOcrResult(null);
               }}
               className="h-9 max-w-[16rem] rounded-md border border-border bg-background px-2 py-1.5 text-[13px] text-foreground file:mr-2 file:rounded file:border-0 file:bg-muted file:px-2 file:py-1 file:text-xs file:font-medium file:text-foreground"
             />
           </label>
 
-          <Button
-            variant="subtle"
-            size="sm"
-            disabled={!file || validate.isPending}
-            onClick={() => validate.mutate()}
-          >
-            {validate.isPending ? "Validating…" : "Validate"}
-          </Button>
+          {imageMode ? (
+            <Button
+              size="sm"
+              disabled={!file || ocrUpload.isPending}
+              onClick={() => ocrUpload.mutate()}
+            >
+              {ocrUpload.isPending ? "Running eir-ocr…" : "Extract with eir-ocr"}
+            </Button>
+          ) : (
+            <>
+              <Button
+                variant="subtle"
+                size="sm"
+                disabled={!file || validate.isPending}
+                onClick={() => validate.mutate()}
+              >
+                {validate.isPending ? "Validating…" : "Validate"}
+              </Button>
 
-          <Button
-            size="sm"
-            disabled={!preview?.valid || upload.isPending}
-            onClick={() => upload.mutate()}
-          >
-            {upload.isPending ? "Importing…" : "Import"}
-          </Button>
+              <Button
+                size="sm"
+                disabled={!preview?.valid || upload.isPending}
+                onClick={() => upload.mutate()}
+              >
+                {upload.isPending ? "Importing…" : "Import"}
+              </Button>
+            </>
+          )}
         </CardContent>
+        {imageMode && (
+          <CardContent className="pt-0 text-[11px] text-muted-foreground">
+            Image selected — PNG/JPG gate slips are OCR’d by the eir_ocr service (
+            <span className="font-mono"> ingest/eir_ocr</span>), not the CSV importer.
+          </CardContent>
+        )}
       </Card>
 
-      {(validate.isError || upload.isError) && (
+      {(validate.isError || upload.isError || ocrUpload.isError) && (
         <div
           role="alert"
           className="flex items-start gap-2 rounded-lg border border-severity-critical/40 bg-severity-critical/10 px-3 py-2 text-xs text-foreground"
@@ -136,8 +188,45 @@ export default function GateDocUploadPanel() {
             className="mt-0.5 h-3.5 w-3.5 shrink-0 text-severity-critical"
             aria-hidden
           />
-          <span>{String(((validate.error || upload.error) as Error).message)}</span>
+          <span>
+            {String(((validate.error || upload.error || ocrUpload.error) as Error).message)}
+          </span>
         </div>
+      )}
+
+      {ocrUpload.isSuccess && ocrResult && (
+        <Card className="overflow-hidden">
+          <CardHeader className="flex-row flex-wrap items-center gap-2 border-b border-border">
+            <CheckCircle2 className="h-4 w-4 text-severity-ok" aria-hidden />
+            <CardTitle>eir-ocr extraction</CardTitle>
+            <StatusChip
+              label={String(ocrResult.source ?? ocrResult.status ?? "EXTRACTED")}
+              tone={statusTone(String(ocrResult.status ?? "EXTRACTED"))}
+            />
+            {ocrResult.engine?.service && (
+              <span className="text-[11px] text-muted-foreground">
+                via {ocrResult.engine.service}
+              </span>
+            )}
+          </CardHeader>
+          <CardContent className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {Object.entries(ocrResult.fields || {}).map(([k, v]) => (
+              <div key={k} className="rounded-md border border-border/60 bg-muted/30 px-2.5 py-1.5">
+                <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  {k}
+                </div>
+                <div className="font-mono text-[13px] font-medium text-foreground">
+                  {v == null || v === "" ? "—" : String(v)}
+                </div>
+              </div>
+            ))}
+            {Object.keys(ocrResult.fields || {}).length === 0 && (
+              <p className="text-xs text-muted-foreground sm:col-span-2">
+                No structured fields — check raw OCR on Document OCR tab.
+              </p>
+            )}
+          </CardContent>
+        </Card>
       )}
 
       {upload.isSuccess && (

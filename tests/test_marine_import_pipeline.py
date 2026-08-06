@@ -281,10 +281,16 @@ class TestOverrideReImport:
 
     def test_failed_row_can_be_retried(self):
         """A FAILED ledger row used to block re-upload forever (its hash was taken).
-        The failure insert now upserts on the hash instead."""
+        The failure insert now upserts on the hash instead.
+
+        Target is (file_hash, data_origin), INFERRED: migration 0120 replaced the named
+        constraint uq_marine_import_file_hash with the per-origin unique INDEX
+        uq_marine_import_file_hash_origin, which has no constraint name to bind to.
+        """
         from services.marine import repository as R
         sql = " ".join(R._FILE_INSERT_FAILED.split())
-        assert "ON CONFLICT ON CONSTRAINT uq_marine_import_file_hash DO UPDATE" in sql
+        assert "ON CONFLICT (file_hash, data_origin) DO UPDATE" in sql
+        assert "ON CONFLICT ON CONSTRAINT" not in sql
 
 
 R_PATH = __import__("pathlib").Path(__file__).resolve().parents[1] / \

@@ -211,14 +211,19 @@ export default function VehicleManagement() {
         isFetching={listQ.isFetching && !listQ.isLoading}
         onRefresh={invalidate}
         actions={
-          <button
-            type="button"
-            onClick={() => setCreateOpen(true)}
-            className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            {t("vehicles.add", "Add Vehicle")}
-          </button>
+          // Transport Master (Transporters tab) has no add action of its own, so
+          // the "+ Add Vehicle" header button reads as a confusing dead end
+          // there. Hidden on that tab only; every other tab keeps it.
+          pageTab === "transporters" ? undefined : (
+            <button
+              type="button"
+              onClick={() => setCreateOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              {t("vehicles.add", "Add Vehicle")}
+            </button>
+          )
         }
       />
 

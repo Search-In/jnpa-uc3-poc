@@ -30,6 +30,7 @@ import { EmptyState, ErrorState, LoadingState } from "@/components/ui/misc";
 
 import { api, apiError } from "../../lib/api";
 import type { ContainerJob, JobAssignInput, JobCheck } from "../../lib/api";
+import { vehicleLabel } from "../../lib/vehicles";
 
 // The move types the backend accepts (services/container_job/service.py MOVE_TYPES).
 const MOVE_TYPES = [
@@ -163,8 +164,10 @@ export default function JobAssignPanel({
     () => [
       { value: NONE, label: vehicles.length ? "Select a truck…" : "No trucks available" },
       ...vehicles.map((v) => ({
+        // Value stays the Vehicle ID the assign API takes; the label is the
+        // registration the yard identifies the truck by.
         value: v.vehicle_id,
-        label: v.plate ? `${v.plate} — ${v.vehicle_id}` : v.vehicle_id,
+        label: vehicleLabel(v),
       })),
     ],
     [vehicles],

@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict
 
+from ..data_mode import data_mode
 from ..metrics import REQUESTS
 from services.marine import VesselCallService
 
@@ -215,18 +216,20 @@ class StatsOut(BaseModel):
 
 # ------------------------------------------------------------------- helpers
 def _filters(vcn, via, imo, vessel, voyage, rotation, terminal_id, berth_id,
-             status_, has_vcn, in_port, eta_from, eta_to) -> Dict[str, Any]:
+             status_, has_vcn, in_port, eta_from, eta_to,
+             data_origin=None) -> Dict[str, Any]:
     """Assemble the repository filter map.
 
     No vocabulary validation: migration 0038 [D8] leaves status free-text and
     terminal_id is a numeric FK column whose parent (core.ref_terminal) does not exist
     yet, so there is nothing to validate against. Every value is bound as a parameter
-    by the repository.
+    by the repository. ``data_origin`` is the LIVE/DEMO provenance narrowing (None =
+    unfiltered).
     """
     return {"vcn": vcn, "via": via, "imo_no": imo, "vessel": vessel, "voyage": voyage,
             "rotation": rotation, "terminal_id": terminal_id, "berth_id": berth_id,
             "status": status_, "has_vcn": has_vcn, "in_port": bool(in_port),
-            "eta_from": eta_from, "eta_to": eta_to}
+            "eta_from": eta_from, "eta_to": eta_to, "data_origin": data_origin}
 
 
 def _not_found(error: str, **detail: Any) -> HTTPException:
@@ -257,10 +260,11 @@ async def list_calls(
     direction: str = Query(default="desc"),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    mode: Optional[str] = Depends(data_mode),
     service: VesselCallService = Depends(get_service),
 ) -> CallListResponse:
     filters = _filters(vcn, via, imo, vessel, voyage, rotation, terminal_id, berth_id,
-                       status_, has_vcn, in_port, date_from, date_to)
+                       status_, has_vcn, in_port, date_from, date_to, data_origin=mode)
     res = await service.list_calls(filters, sort=sort, direction=direction,
                                    limit=limit, offset=offset)
     REQUESTS.labels(_API, "ok").inc()
@@ -276,10 +280,11 @@ async def stats(
     in_port: bool = Query(default=False),
     date_from: Optional[datetime] = Query(default=None, alias="from", description="ETA >="),
     date_to: Optional[datetime] = Query(default=None, alias="to", description="ETA <="),
+    mode: Optional[str] = Depends(data_mode),
     service: VesselCallService = Depends(get_service),
 ) -> StatsOut:
     filters = _filters(None, None, None, None, None, None, terminal_id, None,
-                       status_, has_vcn, in_port, date_from, date_to)
+                       status_, has_vcn, in_port, date_from, date_to, data_origin=mode)
     res = await service.stats(filters)
     REQUESTS.labels(_API, "ok").inc()
     return StatsOut(**res)
@@ -288,8 +293,9 @@ async def stats(
 @router.get("/by-vcn/{vcn}", response_model=CallOut,
             summary="Resolve a full PCS VCN to its vessel call")
 async def get_by_vcn(vcn: str,
+                     mode: Optional[str] = Depends(data_mode),
                      service: VesselCallService = Depends(get_service)) -> CallOut:
-    res = await service.get_by_vcn(vcn)
+    res = await service.get_by_vcn(vcn, data_origin=mode)
     if res is None:
         raise _not_found("vessel_call_not_found", vcn=vcn)
     REQUESTS.labels(_API, "ok").inc()
@@ -299,8 +305,9 @@ async def get_by_vcn(vcn: str,
 @router.get("/by-via/{via_no}", response_model=ViaLookupResponse,
             summary="Resolve a short VIA number — may match several calls")
 async def get_by_via(via_no: str,
+                     mode: Optional[str] = Depends(data_mode),
                      service: VesselCallService = Depends(get_service)) -> ViaLookupResponse:
-    items = await service.get_by_via(via_no)
+    items = await service.get_by_via(via_no, data_origin=mode)
     if not items:
         raise _not_found("vessel_call_not_found", via_no=via_no)
     REQUESTS.labels(_API, "ok").inc()
@@ -312,8 +319,9 @@ async def get_by_via(via_no: str,
 # the static /stats, /by-vcn and /by-via prefixes win)
 @router.get("/{call_id}", response_model=CallOut, summary="One UC-I vessel call")
 async def get_call(call_id: int,
+                   mode: Optional[str] = Depends(data_mode),
                    service: VesselCallService = Depends(get_service)) -> CallOut:
-    res = await service.get(call_id)
+    res = await service.get(call_id, data_origin=mode)
     if res is None:
         raise _not_found("vessel_call_not_found", call_id=call_id)
     REQUESTS.labels(_API, "ok").inc()
@@ -323,8 +331,9 @@ async def get_call(call_id: int,
 @router.get("/{call_id}/timeline", response_model=TimelineOut,
             summary="One vessel call + its ordered actuals")
 async def get_timeline(call_id: int,
+                       mode: Optional[str] = Depends(data_mode),
                        service: VesselCallService = Depends(get_service)) -> TimelineOut:
-    res = await service.timeline(call_id)
+    res = await service.timeline(call_id, data_origin=mode)
     if res is None:
         raise _not_found("vessel_call_not_found", call_id=call_id)
     REQUESTS.labels(_API, "ok").inc()
@@ -337,13 +346,14 @@ async def list_events(
     call_id: int,
     limit: int = Query(default=200, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    mode: Optional[str] = Depends(data_mode),
     service: VesselCallService = Depends(get_service),
 ) -> EventListResponse:
     # 404 on an unknown call rather than returning an empty event list, so the caller
     # can distinguish "no such call" from "call exists but has no actuals yet".
-    if await service.get(call_id) is None:
+    if await service.get(call_id, data_origin=mode) is None:
         raise _not_found("vessel_call_not_found", call_id=call_id)
-    items = await service.list_events(call_id, limit=limit, offset=offset)
+    items = await service.list_events(call_id, limit=limit, offset=offset, data_origin=mode)
     REQUESTS.labels(_API, "ok").inc()
     return EventListResponse(call_id=call_id, items=[EventOut(**i) for i in items],
                              limit=limit, offset=offset, count=len(items))

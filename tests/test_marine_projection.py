@@ -207,7 +207,9 @@ class TestTimelineCarriesLifecycle:
         def __init__(self, row):
             self.row, self.calls = row, 0
 
-        async def timeline(self, call_id):
+        async def timeline(self, call_id, *, data_origin=None):
+            # `data_origin` is the LIVE/DEMO narrowing the service forwards verbatim; it
+            # changes no lifecycle rule, so the double accepts and ignores it.
             self.calls += 1
             return self.row
 

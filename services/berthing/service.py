@@ -56,14 +56,22 @@ class BerthingService:
         return {"items": items, "total": total, "limit": limit, "offset": offset,
                 "count": len(items)}
 
-    async def get(self, report_id: int) -> Optional[Dict[str, Any]]:
-        row = await self._repo.get(report_id)
+    async def get(self, report_id: int, *,
+                  data_origin: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """One report, its status advanced by the marine lifecycle — see :meth:`_advance`.
+
+        ``data_origin`` narrows the read to one provenance (LIVE=API / DEMO=MANUAL) and is
+        the repository's concern only; the lifecycle advance runs the same either way, so a
+        single report reads exactly as its row does in the list.
+        """
+        row = await self._repo.get(report_id, data_origin=data_origin)
         if row is None:
             return None
         return (await self._advance([row]))[0]
 
-    async def timeline(self, report_id: int) -> Optional[Dict[str, Any]]:
-        return await self._repo.timeline(report_id)
+    async def timeline(self, report_id: int, *,
+                       data_origin: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        return await self._repo.timeline(report_id, data_origin=data_origin)
 
     async def stats(self, filters: Mapping[str, Any]) -> Dict[str, Any]:
         return await self._repo.stats(filters)

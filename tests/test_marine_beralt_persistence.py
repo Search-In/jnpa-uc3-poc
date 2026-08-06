@@ -29,8 +29,10 @@ UPSERTS = {"_VESSEL_CALL_UPSERT": R._VESSEL_CALL_UPSERT,
 # ---------------------------------------------------------------- A. event berth
 class TestEventCarriesItsBerth:
     def test_event_insert_writes_berth_id(self):
-        assert "INSERT INTO core.vessel_call_event (call_id, event_type, event_ts, berth_id)" \
-            in R._EVENT_INSERT
+        # data_origin (migration 0121) rides alongside berth_id on the same insert — the
+        # column list is pinned whole so neither can be dropped unnoticed.
+        assert ("INSERT INTO core.vessel_call_event "
+                "(call_id, event_type, event_ts, berth_id, data_origin)") in R._EVENT_INSERT
 
     def test_event_berth_is_resolved_through_code_then_alias(self):
         """Same resolve-or-NULL contract as the call: an unknown code stores NULL rather

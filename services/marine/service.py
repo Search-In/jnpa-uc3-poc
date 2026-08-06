@@ -76,17 +76,21 @@ class VesselCallService:
     async def count(self, filters: Mapping[str, Any]) -> int:
         return await self._repo.count(filters)
 
-    async def get(self, call_id: int) -> Optional[Dict[str, Any]]:
-        return await self._repo.get(call_id)
+    async def get(self, call_id: int, *,
+                  data_origin: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        return await self._repo.get(call_id, data_origin=data_origin)
 
-    async def get_by_vcn(self, vcn: str) -> Optional[Dict[str, Any]]:
-        return await self._repo.get_by_vcn(vcn)
+    async def get_by_vcn(self, vcn: str, *,
+                         data_origin: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        return await self._repo.get_by_vcn(vcn, data_origin=data_origin)
 
-    async def get_by_via(self, via_no: str) -> List[Dict[str, Any]]:
+    async def get_by_via(self, via_no: str, *,
+                         data_origin: Optional[str] = None) -> List[Dict[str, Any]]:
         """A short VIA may resolve to several calls — see VesselCallRepository."""
-        return await self._repo.get_by_via(via_no)
+        return await self._repo.get_by_via(via_no, data_origin=data_origin)
 
-    async def timeline(self, call_id: int) -> Optional[Dict[str, Any]]:
+    async def timeline(self, call_id: int, *,
+                       data_origin: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """One call, its actuals, and the lifecycle derived from BOTH.
 
         The repository has already loaded the call and its events, so those need no second
@@ -105,8 +109,13 @@ class VesselCallService:
 
         ``project()`` remains the SAME pure function every other consumer uses, so there is
         one implementation of the lifecycle, not two.
+
+        ``data_origin`` narrows the LIVE/DEMO provenance of the call and its actuals, and is
+        the repository's concern alone: the manual assignment and the pilot milestones below
+        are keyed on the call this read resolved, so they follow whichever corpus it came
+        from without a second filter.
         """
-        call = await self._repo.timeline(call_id)
+        call = await self._repo.timeline(call_id, data_origin=data_origin)
         if call is None:
             return None
         manual = await self._manual.resolve_effective_pilot(int(call_id))
@@ -124,9 +133,10 @@ class VesselCallService:
         call["lifecycle"] = project(call, events, manual).to_dict()
         return call
 
-    async def list_events(self, call_id: int, *, limit: int,
-                          offset: int) -> List[Dict[str, Any]]:
-        return await self._repo.list_events(call_id, limit=limit, offset=offset)
+    async def list_events(self, call_id: int, *, limit: int, offset: int,
+                          data_origin: Optional[str] = None) -> List[Dict[str, Any]]:
+        return await self._repo.list_events(call_id, limit=limit, offset=offset,
+                                            data_origin=data_origin)
 
     async def stats(self, filters: Mapping[str, Any]) -> Dict[str, Any]:
         return await self._repo.stats(filters)

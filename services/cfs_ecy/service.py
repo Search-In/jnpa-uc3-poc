@@ -87,7 +87,8 @@ class CfsEcyService:
     async def dwell_report(self, filters: Mapping[str, Any], *, limit: int,
                            offset: int) -> Dict[str, Any]:
         rows, total = await self._repo.dwell_report(filters, limit=limit, offset=offset)
-        summary = await self._repo.dwell_summary({"facility_type": "CFS"})
+        summary = await self._repo.dwell_summary(
+            {"facility_type": "CFS", "data_origin": filters.get("data_origin")})
         return {"items": rows, "total": total, "limit": limit, "offset": offset,
                 "count": len(rows), "summary": summary,
                 "note": "Dwell is computed for CFS only; ECY containers have a "

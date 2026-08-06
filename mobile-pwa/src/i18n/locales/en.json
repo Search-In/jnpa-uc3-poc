@@ -119,15 +119,16 @@
   },
   "pairing": {
     "welcome": "Driver sign-in",
-    "tagline": "Enter your assigned Vehicle ID to sign in.",
-    "vehicleId": "Vehicle ID",
-    "vehicleIdSub": "Your assigned in-cab unit ID",
-    "vehicleIdHint": "TRK-000123",
+    "tagline": "Enter your vehicle number to sign in.",
+    "vehicleId": "Vehicle Number",
+    "vehicleIdSub": "The registration number of your assigned vehicle",
+    "vehicleIdHint": "Enter assigned vehicle number",
     "signIn": "Sign in",
     "signingIn": "Signing in…",
-    "invalidId": "Enter a valid Vehicle ID",
-    "notFound": "This Vehicle ID isn't active. Check the ID and try again.",
-    "authFailed": "Could not sign in. Check your connection."
+    "invalidId": "Enter a valid vehicle number, e.g. MH04LZ1507",
+    "notFound": "This vehicle number isn't registered. Check the number and try again.",
+    "authFailed": "Could not sign in. Check your connection.",
+    "inactive": "This vehicle is not active in the fleet. Contact your transporter."
   },
   "alertKind": {
     "WRONG_WAY": "Wrong-way driving",

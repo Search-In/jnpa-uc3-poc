@@ -39,6 +39,13 @@ from .state_engine import (EVENT_ARRIVED, EVENT_DEPARTED, in_port_sql, status_or
 
 log = get_logger("services.marine.repository")
 
+
+def _data_origin(uploaded_by: Optional[str]) -> str:
+    """Provenance tag for an import: 'API' when delivered by the JNPA API sync
+    (uploaded_by == 'jnpa-api'), else 'MANUAL'. Mirrors migration 0120's rule."""
+    return "API" if (uploaded_by or "").strip().lower() == "jnpa-api" else "MANUAL"
+
+
 # ---------------------------------------------------------------- column whitelists
 # core.vessel_call, in migration 0038 declaration order.
 _COLUMNS = (
@@ -121,8 +128,22 @@ class VesselCallRepository:
         if filters.get("eta_to") is not None:
             conds.append("c.eta <= :eta_to")
             params["eta_to"] = filters["eta_to"]
+        # LIVE / DEMO provenance narrowing. None (no header) => unfiltered, so the
+        # SQL is byte-identical to before this feature.
+        data_origin = filters.get("data_origin")
+        if data_origin is not None:
+            conds.append("c.data_origin = :data_origin")
+            params["data_origin"] = data_origin
         clause = ("WHERE " + " AND ".join(conds)) if conds else ""
         return clause, params
+
+    @staticmethod
+    def _origin_and(data_origin: Optional[str], alias: str) -> tuple[str, dict]:
+        """`AND <alias>.data_origin = :data_origin` when a provenance is pinned, else
+        an empty fragment — so the single-row lookups stay byte-identical when None."""
+        if data_origin is None:
+            return "", {}
+        return f" AND {alias}.data_origin = :data_origin", {"data_origin": data_origin}
 
     # ------------------------------------------------------------- list + count
     async def list_calls(self, filters: Mapping[str, Any], *, sort: str,
@@ -146,62 +167,72 @@ class VesselCallRepository:
                 params)).scalar() or 0)
 
     # ------------------------------------------------------------- single-call lookups
-    async def get(self, call_id: int) -> Optional[dict]:
+    async def get(self, call_id: int, *,
+                  data_origin: Optional[str] = None) -> Optional[dict]:
+        frag, extra = self._origin_and(data_origin, "c")
         async with get_engine(self._dsn).connect() as conn:
             row = (await conn.execute(text(
-                f"SELECT {_SELECT_COLS} FROM core.vessel_call c WHERE c.call_id = :call_id"),
-                {"call_id": call_id})).mappings().first()
+                f"SELECT {_SELECT_COLS} FROM core.vessel_call c "
+                f"WHERE c.call_id = :call_id{frag}"),
+                {"call_id": call_id, **extra})).mappings().first()
         return dict(row) if row else None
 
-    async def get_by_vcn(self, vcn: str) -> Optional[dict]:
+    async def get_by_vcn(self, vcn: str, *,
+                         data_origin: Optional[str] = None) -> Optional[dict]:
         """Resolve the full PCS VCN (e.g. INNSA1BM0R3119) to at most one call.
 
         Single-valued by construction: uq_vessel_call_vcn (migration 0038 [D4]).
         """
+        frag, extra = self._origin_and(data_origin, "c")
         async with get_engine(self._dsn).connect() as conn:
             row = (await conn.execute(text(
-                f"SELECT {_SELECT_COLS} FROM core.vessel_call c WHERE c.vcn = :vcn"),
-                {"vcn": vcn})).mappings().first()
+                f"SELECT {_SELECT_COLS} FROM core.vessel_call c WHERE c.vcn = :vcn{frag}"),
+                {"vcn": vcn, **extra})).mappings().first()
         return dict(row) if row else None
 
-    async def get_by_via(self, via_no: str) -> list[dict]:
+    async def get_by_via(self, via_no: str, *,
+                         data_origin: Optional[str] = None) -> list[dict]:
         """Resolve a short VIA number (e.g. S0561) — MAY match several calls.
 
         Unlike the VCN, short VIA numbers recycle across years (migration 0038 [D10]),
         so this deliberately returns a list ordered newest-first rather than one row.
         """
+        frag, extra = self._origin_and(data_origin, "c")
         async with get_engine(self._dsn).connect() as conn:
             rows = (await conn.execute(text(
-                f"SELECT {_SELECT_COLS} FROM core.vessel_call c WHERE c.via_no = :via_no "
+                f"SELECT {_SELECT_COLS} FROM core.vessel_call c WHERE c.via_no = :via_no{frag} "
                 "ORDER BY c.eta DESC NULLS LAST, c.call_id DESC"),
-                {"via_no": via_no})).mappings().all()
+                {"via_no": via_no, **extra})).mappings().all()
         return [dict(r) for r in rows]
 
     # ------------------------------------------------------------- events
     async def list_events(self, call_id: int, *, limit: int = _EVENT_PAGE_MAX,
-                          offset: int = 0) -> list[dict]:
+                          offset: int = 0,
+                          data_origin: Optional[str] = None) -> list[dict]:
         """Actuals for one call, chronological.
 
         Ordered by event_ts (not by a milestone rank array as jnpa.berthing_events is):
         migration 0038 [D6] permits repeated event types at different timestamps, so
         the timestamp is the only sound ordering key.
         """
+        frag, extra = self._origin_and(data_origin, "e")
         async with get_engine(self._dsn).connect() as conn:
             rows = (await conn.execute(text(
                 f"SELECT {_EVENT_SELECT_COLS} FROM core.vessel_call_event e "
-                "WHERE e.call_id = :call_id "
+                f"WHERE e.call_id = :call_id{frag} "
                 "ORDER BY e.event_ts, e.event_id "
                 "LIMIT :limit OFFSET :offset"),
                 {"call_id": call_id, "limit": min(int(limit), _EVENT_PAGE_MAX),
-                 "offset": offset})).mappings().all()
+                 "offset": offset, **extra})).mappings().all()
         return [dict(r) for r in rows]
 
-    async def timeline(self, call_id: int) -> Optional[dict]:
+    async def timeline(self, call_id: int, *,
+                       data_origin: Optional[str] = None) -> Optional[dict]:
         """One call plus its ordered actuals. None when the call does not exist."""
-        call = await self.get(call_id)
+        call = await self.get(call_id, data_origin=data_origin)
         if call is None:
             return None
-        call["events"] = await self.list_events(call_id)
+        call["events"] = await self.list_events(call_id, data_origin=data_origin)
         return call
 
     # ------------------------------------------------------------- stats
@@ -274,13 +305,21 @@ class VesselCallRepository:
     # services.berthing.repository.BerthingRepository: sha256 file dedup on
     # core.marine_import_files + a VCN upsert on core.vessel_call (never overwrites with
     # NULL — COALESCE enrichment). Read methods above are unchanged.
-    async def find_file_by_hash(self, file_hash: str) -> Optional[dict]:
+    async def find_file_by_hash(self, file_hash: str,
+                                data_origin: Optional[str] = None) -> Optional[dict]:
+        # Per-origin dedup: the SAME bytes delivered by both the API and a manual dump
+        # are kept once PER ORIGIN (ledger UNIQUE is (file_hash, data_origin)). A None
+        # data_origin leaves the lookup unfiltered, byte-identical to before.
+        frag, extra = ("", {})
+        if data_origin is not None:
+            frag = " AND data_origin = :data_origin"
+            extra = {"data_origin": data_origin}
         async with get_engine(self._dsn).connect() as conn:
             row = (await conn.execute(text(
                 "SELECT id, filename, status, total_rows, success_rows, failed_rows, "
                 "duplicate_rows, created_at "
-                "FROM core.marine_import_files WHERE file_hash = :h"),
-                {"h": file_hash})).mappings().first()
+                "FROM core.marine_import_files WHERE file_hash = :h" + frag),
+                {"h": file_hash, **extra})).mappings().first()
         return dict(row) if row else None
 
     # ------------------------------------------------------------- param builders
@@ -289,18 +328,20 @@ class VesselCallRepository:
         return {k: rec.get(k) for k in _VESSEL_COLS}
 
     @staticmethod
-    def _call_params(rec: Mapping[str, Any]) -> dict:
-        return {k: rec.get(k) for k in _CALL_COLS}
+    def _call_params(rec: Mapping[str, Any], data_origin: str) -> dict:
+        return {**{k: rec.get(k) for k in _CALL_COLS}, "data_origin": data_origin}
 
     @staticmethod
-    def _sea_channel_params(rec: Mapping[str, Any], fid: int) -> dict:
+    def _sea_channel_params(rec: Mapping[str, Any], fid: int, data_origin: str) -> dict:
         return {"name": rec.get("name"), "section_label": rec.get("section_label"),
                 "area_ha": rec.get("area_ha"), "length_m": rec.get("length_m"),
                 "geom_geojson": json.dumps(rec.get("geom_geojson") or {}, default=str),
-                "row_sha256": rec.get("row_sha256"), "import_file_id": fid}
+                "row_sha256": rec.get("row_sha256"), "import_file_id": fid,
+                "data_origin": data_origin}
 
     @staticmethod
-    def _bathymetry_sounding_params(rec: Mapping[str, Any], survey_id: int, fid: int) -> dict:
+    def _bathymetry_sounding_params(rec: Mapping[str, Any], survey_id: int, fid: int,
+                                    data_origin: str) -> dict:
         """Canonical sounding record -> bind params.
 
         Positional fields are passed through as-is (already coerced to float-or-None by the
@@ -314,20 +355,22 @@ class VesselCallRepository:
         p["row_sha256"] = rec.get("row_sha256")
         p["survey_id"] = survey_id
         p["import_file_id"] = fid
+        p["data_origin"] = data_origin
         return p
 
     @staticmethod
-    def _port_craft_params(rec: Mapping[str, Any], fid: int) -> dict:
+    def _port_craft_params(rec: Mapping[str, Any], fid: int, data_origin: str) -> dict:
         p = {k: rec.get(k) for k in (
             "name", "craft_type", "owned_or_hired", "owner_name", "year_built",
             "loa_m", "breadth_m", "draft_m", "main_engines", "bollard_pull_t",
             "design_speed_kn")}
         p["extras"] = json.dumps(rec.get("extras") or {}, default=str)
         p["import_file_id"] = fid
+        p["data_origin"] = data_origin
         return p
 
     @staticmethod
-    def _pilotage_params(rec: Mapping[str, Any], fid: int) -> dict:
+    def _pilotage_params(rec: Mapping[str, Any], fid: int, data_origin: str) -> dict:
         p = {k: rec.get(k) for k in (
             "movement_type", "via_no", "imo_no", "vessel_name", "pilot_code",
             "vessel_condition", "draft_fwd_m", "draft_aft_m", "pilot_boarded_at",
@@ -336,6 +379,7 @@ class VesselCallRepository:
             "from_berth_code", "to_berth_code")}
         p["extras"] = json.dumps(rec.get("extras") or {}, default=str)
         p["import_file_id"] = fid
+        p["data_origin"] = data_origin
         return p
 
     @staticmethod
@@ -394,7 +438,11 @@ class VesselCallRepository:
 
         Returns the refined counter dict; the existing response keys (status, inserted,
         updated, duplicate_file, success_rows) are preserved and callers read those."""
-        existing = await self.find_file_by_hash(file_hash)
+        # Provenance for this import (LIVE=API vs DEMO=MANUAL). Dedup is PER-ORIGIN, so
+        # the same bytes from the API and from a manual dump each land once — and an
+        # override reopens THIS origin's ledger row, never the other corpus's.
+        origin = _data_origin(uploaded_by)
+        existing = await self.find_file_by_hash(file_hash, origin)
         if existing is not None and not override:
             return {"file_id": existing["id"], "status": "SKIPPED_DUPLICATE",
                     "inserted": 0, "updated": 0, "duplicate": 0, "failed": 0, "invalid": 0,
@@ -403,7 +451,8 @@ class VesselCallRepository:
         parse_errors = list(parse_errors or [])
         envelope = {"filename": filename, "file_hash": file_hash,
                     "physical_format": physical_format, "document_type": document_type,
-                    "uploaded_by": uploaded_by, "total_rows": len(records), "source": source}
+                    "uploaded_by": uploaded_by, "total_rows": len(records), "source": source,
+                    "data_origin": origin}
 
         def _target(r: Mapping[str, Any]) -> str:
             """The record's routing target, or "" when absent.
@@ -457,7 +506,7 @@ class VesselCallRepository:
 
                 # 2. CALINF pre-VCN seed (dedup on (imo_no, voyage_no) WHERE vcn IS NULL)
                 for c in calls_pre:
-                    r = (await conn.execute(text(_VESSEL_CALL_PREVCN_UPSERT), self._call_params(c))).mappings().first()
+                    r = (await conn.execute(text(_VESSEL_CALL_PREVCN_UPSERT), self._call_params(c, origin))).mappings().first()
                     if r is None:
                         continue
                     ins += bool(r["inserted"]); upd += (not bool(r["inserted"]))
@@ -467,7 +516,7 @@ class VesselCallRepository:
                     await conn.execute(text(_VESSEL_CALL_PROMOTE),
                                        {"vcn": c.get("vcn"), "imo_no": c.get("imo_no"),
                                         "voyage_no": c.get("voyage_no")})
-                    r = (await conn.execute(text(_VESSEL_CALL_UPSERT), self._call_params(c))).mappings().first()
+                    r = (await conn.execute(text(_VESSEL_CALL_UPSERT), self._call_params(c, origin))).mappings().first()
                     if r is None:
                         continue
                     ins += bool(r["inserted"]); upd += (not bool(r["inserted"]))
@@ -487,7 +536,8 @@ class VesselCallRepository:
                     r = (await conn.execute(text(_EVENT_INSERT),
                                             {"call_id": cid, "event_type": e.get("event_type"),
                                              "event_ts": e.get("event_ts"),
-                                             "berth_code": e.get("berth_code")})).mappings().first()
+                                             "berth_code": e.get("berth_code"),
+                                             "data_origin": origin})).mappings().first()
                     if r is not None:
                         ins += 1
                     else:
@@ -513,7 +563,7 @@ class VesselCallRepository:
                 # 6. PILOTAGE movements (resolve-or-NULL berth/call; row-hash idempotent)
                 for pg in pilotages:
                     r = (await conn.execute(text(_PILOTAGE_INSERT),
-                                            self._pilotage_params(pg, fid))).mappings().first()
+                                            self._pilotage_params(pg, fid, origin))).mappings().first()
                     if r is not None:
                         ins += 1
                     else:
@@ -522,14 +572,14 @@ class VesselCallRepository:
                 # 7. PORT CRAFT register (upsert on the natural key `name`)
                 for pc in port_crafts:
                     r = (await conn.execute(text(_PORT_CRAFT_UPSERT),
-                                            self._port_craft_params(pc, fid))).mappings().first()
+                                            self._port_craft_params(pc, fid, origin))).mappings().first()
                     if r is not None:
                         ins += bool(r["inserted"]); upd += (not bool(r["inserted"]))
 
                 # 8. SEA CHANNEL geometry (row-hash idempotent; name is not unique)
                 for sc in sea_channels:
                     r = (await conn.execute(text(_SEA_CHANNEL_INSERT),
-                                            self._sea_channel_params(sc, fid))).mappings().first()
+                                            self._sea_channel_params(sc, fid, origin))).mappings().first()
                     if r is not None:
                         ins += 1
                     else:
@@ -556,7 +606,7 @@ class VesselCallRepository:
                                              f"its soundings"),
                             "raw_value": dn})
                         continue
-                    pending.append(self._bathymetry_sounding_params(bs, sid, fid))
+                    pending.append(self._bathymetry_sounding_params(bs, sid, fid, origin))
 
                 # Hashes already written by an EARLIER batch of this same transaction are
                 # invisible to the pre-filter SELECT, so track them here too — otherwise a
@@ -619,7 +669,7 @@ class VesselCallRepository:
                     "duplicate": total_dup, "failed": failed, "invalid": parse_invalid,
                     "success_rows": success, "duplicate_file": False}
         except IntegrityError:
-            dupf = await self.find_file_by_hash(file_hash)
+            dupf = await self.find_file_by_hash(file_hash, origin)
             if dupf is not None:
                 return {"file_id": dupf["id"], "status": "SKIPPED_DUPLICATE", "inserted": 0,
                         "updated": 0, "duplicate": 0, "failed": 0, "invalid": 0,
@@ -651,14 +701,15 @@ class VesselCallRepository:
                                      document_type: Optional[str] = None) -> Optional[int]:
         """Record a structurally-rejected upload (bad template / unreadable / no valid
         rows) as a FAILED ledger row so it appears in history, with its errors. Writes
-        NO vessel_call rows. De-dupes on file_hash."""
-        existing = await self.find_file_by_hash(file_hash)
+        NO vessel_call rows. De-dupes on file_hash (per-origin)."""
+        origin = _data_origin(uploaded_by)
+        existing = await self.find_file_by_hash(file_hash, origin)
         if existing is not None:
             return existing["id"]
         envelope = {"filename": filename, "file_hash": file_hash,
                     "physical_format": physical_format, "document_type": document_type,
                     "uploaded_by": uploaded_by, "total_rows": 0, "source": "UPLOAD",
-                    "error_detail": detail[:4000]}
+                    "error_detail": detail[:4000], "data_origin": origin}
         try:
             async with get_engine(self._dsn).begin() as conn:
                 fid = (await conn.execute(text(_FILE_INSERT_FAILED), envelope)).mappings().first()["id"]
@@ -744,21 +795,32 @@ class VesselCallRepository:
 # --------------------------------------------------------------------------- SQL
 _FILE_INSERT = """
 INSERT INTO core.marine_import_files
-    (filename, file_hash, physical_format, document_type, uploaded_by, total_rows, status, source)
+    (filename, file_hash, physical_format, document_type, uploaded_by, total_rows, status,
+     source, data_origin)
 VALUES
     (:filename, :file_hash, :physical_format, :document_type, :uploaded_by, :total_rows,
-     'PENDING', :source)
+     'PENDING', :source, :data_origin)
 RETURNING id
 """
 
+# A FAILED ledger row used to block re-upload forever, because its hash was taken — so the
+# failure insert UPSERTS on the hash instead.
+#
+# THE TARGET IS (file_hash, data_origin), INFERRED, NOT THE CONSTRAINT NAME. Migration 0120
+# drops `uq_marine_import_file_hash` and replaces it with the per-origin unique INDEX
+# uq_marine_import_file_hash_origin (file_hash, data_origin) — an index has no constraint
+# name to bind to, so `ON CONFLICT ON CONSTRAINT uq_marine_import_file_hash` now raises
+# "constraint does not exist". Inference over the same column pair matches it, and keeps the
+# retry scoped to ONE origin: a manual re-upload cannot overwrite the API corpus's row for
+# the same bytes.
 _FILE_INSERT_FAILED = """
 INSERT INTO core.marine_import_files
     (filename, file_hash, physical_format, document_type, uploaded_by, total_rows, status,
-     error_detail, source)
+     error_detail, source, data_origin)
 VALUES
     (:filename, :file_hash, :physical_format, :document_type, :uploaded_by, :total_rows,
-     'FAILED', :error_detail, :source)
-ON CONFLICT ON CONSTRAINT uq_marine_import_file_hash DO UPDATE SET
+     'FAILED', :error_detail, :source, :data_origin)
+ON CONFLICT (file_hash, data_origin) DO UPDATE SET
     status       = 'FAILED',
     error_detail = EXCLUDED.error_detail,
     total_rows   = EXCLUDED.total_rows,
@@ -767,9 +829,10 @@ RETURNING id
 """
 
 # OVERRIDE re-import: reopen the EXISTING ledger row for this file instead of inserting a
-# second one. `file_hash` is UNIQUE (uq_marine_import_file_hash), so a re-import cannot
-# create a new row without a schema change — and it should not: one source file is one
-# ledger entry, whose counters describe its LATEST processing.
+# second one. (file_hash, data_origin) is UNIQUE (uq_marine_import_file_hash_origin), so a
+# re-import of the same bytes from the same origin cannot create a new row without a schema
+# change — and it should not: one source file is one ledger entry PER ORIGIN, whose counters
+# describe its LATEST processing.
 #
 # The row is NOT deleted and its id is preserved, so every core.marine_import_errors row
 # and every core.port_craft / core.pilotage / core.sea_channel row that references
@@ -888,12 +951,13 @@ ON CONFLICT (imo_no, pi_club) DO UPDATE SET
 _VESSEL_CALL_PREVCN_UPSERT = f"""
 INSERT INTO core.vessel_call
     (vcn, via_no, imo_no, vessel_name, voyage_no, rotation_no, purpose, status,
-     eta, etb, etd, ata, atd, atc, source_note, terminal_id, berth_id)
+     eta, etb, etd, ata, atd, atc, source_note, terminal_id, berth_id, data_origin)
 VALUES
     (:vcn, :via_no,
      (SELECT v.imo_no FROM core.vessel v WHERE v.imo_no = :imo_no),
      :vessel_name, :voyage_no, :rotation_no, :purpose, :status,
-     :eta, :etb, :etd, :ata, :atd, :atc, :source_note, {_TERMINAL_LOOKUP}, {_BERTH_LOOKUP})
+     :eta, :etb, :etd, :ata, :atd, :atc, :source_note, {_TERMINAL_LOOKUP}, {_BERTH_LOOKUP},
+     :data_origin)
 ON CONFLICT (imo_no, voyage_no) WHERE vcn IS NULL DO UPDATE SET
     terminal_id = COALESCE(EXCLUDED.terminal_id, core.vessel_call.terminal_id),
     berth_id    = COALESCE(EXCLUDED.berth_id, core.vessel_call.berth_id),
@@ -958,9 +1022,15 @@ UPDATE core.vessel_call
 # creates. Binding our ledger id there would violate the FK on every event — the same
 # cross-object mistake that made ON CONFLICT ON CONSTRAINT fail in production. Wiring it
 # needs an ingest_file row first, which is a separate provenance slice.
+#
+# data_origin (migration 0121) tags the milestone LIVE (API) or DEMO (MANUAL). It is
+# deliberately NOT part of the conflict target: the uniqueness that exists on the deployed
+# database is over the milestone triple alone, so adding it here would infer on an index
+# that does not exist. The same milestone arriving from both corpora therefore lands once,
+# keeping the tag the first ingest gave it.
 _EVENT_INSERT = f"""
-INSERT INTO core.vessel_call_event (call_id, event_type, event_ts, berth_id)
-VALUES (:call_id, :event_type, :event_ts, {_BERTH_LOOKUP})
+INSERT INTO core.vessel_call_event (call_id, event_type, event_ts, berth_id, data_origin)
+VALUES (:call_id, :event_type, :event_ts, {_BERTH_LOOKUP}, :data_origin)
 ON CONFLICT (call_id, event_type, event_ts) DO NOTHING
 RETURNING event_id
 """
@@ -1022,10 +1092,11 @@ _RESOLVE_BY_VIA = (
 # content hash (uq_sea_channel_row). Geometry is GeoJSON (WGS84, reprojected at parse).
 _SEA_CHANNEL_INSERT = """
 INSERT INTO core.sea_channel
-    (name, section_label, area_ha, length_m, geom_geojson, import_file_id, row_sha256)
+    (name, section_label, area_ha, length_m, geom_geojson, import_file_id, row_sha256,
+     data_origin)
 VALUES
     (:name, :section_label, :area_ha, :length_m, CAST(:geom_geojson AS jsonb),
-     :import_file_id, :row_sha256)
+     :import_file_id, :row_sha256, :data_origin)
 ON CONFLICT (row_sha256) DO NOTHING
 RETURNING channel_id
 """
@@ -1054,10 +1125,10 @@ _RESOLVE_SURVEY_BY_DRAWING = (
 _BATHYMETRY_SOUNDING_INSERT = """
 INSERT INTO core.bathymetry_sounding
     (survey_id, easting_m, northing_m, lat, lon, depth_m, above_design,
-     page_x_pt, page_y_pt, import_file_id, row_sha256)
+     page_x_pt, page_y_pt, import_file_id, row_sha256, data_origin)
 VALUES
     (:survey_id, :easting_m, :northing_m, :lat, :lon, :depth_m, :above_design,
-     :page_x_pt, :page_y_pt, :import_file_id, :row_sha256)
+     :page_x_pt, :page_y_pt, :import_file_id, :row_sha256, :data_origin)
 ON CONFLICT (row_sha256) DO NOTHING
 """
 
@@ -1076,11 +1147,12 @@ _BATHYMETRY_BATCH = 5000
 _PORT_CRAFT_UPSERT = """
 INSERT INTO core.port_craft
     (name, craft_type, owned_or_hired, owner_name, year_built, loa_m, breadth_m,
-     draft_m, main_engines, bollard_pull_t, design_speed_kn, import_file_id, extras)
+     draft_m, main_engines, bollard_pull_t, design_speed_kn, import_file_id, extras,
+     data_origin)
 VALUES
     (:name, :craft_type, :owned_or_hired, :owner_name, :year_built, :loa_m, :breadth_m,
      :draft_m, :main_engines, :bollard_pull_t, :design_speed_kn, :import_file_id,
-     CAST(:extras AS jsonb))
+     CAST(:extras AS jsonb), :data_origin)
 ON CONFLICT (name) DO UPDATE SET
     craft_type      = COALESCE(EXCLUDED.craft_type, core.port_craft.craft_type),
     owned_or_hired  = COALESCE(EXCLUDED.owned_or_hired, core.port_craft.owned_or_hired),
@@ -1116,7 +1188,8 @@ INSERT INTO core.pilotage
     (movement_type, call_id, via_no, imo_no, vessel_name, pilot_code, vessel_condition,
      from_berth_id, to_berth_id, draft_fwd_m, draft_aft_m,
      pilot_boarded_at, first_line_at, all_fast_at, pilot_disembarked_at, berth_vacated_at,
-     anchor_down_at, anchor_up_at, submitted_at, extras, import_file_id, row_sha256)
+     anchor_down_at, anchor_up_at, submitted_at, extras, import_file_id, row_sha256,
+     data_origin)
 VALUES
     (:movement_type,
      (SELECT call_id FROM core.vessel_call WHERE via_no = :via_no
@@ -1129,7 +1202,7 @@ VALUES
      :draft_fwd_m, :draft_aft_m,
      :pilot_boarded_at, :first_line_at, :all_fast_at, :pilot_disembarked_at, :berth_vacated_at,
      :anchor_down_at, :anchor_up_at, :submitted_at, CAST(:extras AS jsonb),
-     :import_file_id, :row_sha256)
+     :import_file_id, :row_sha256, :data_origin)
 ON CONFLICT (row_sha256) DO NOTHING
 RETURNING pilotage_id
 """
@@ -1148,12 +1221,13 @@ RETURNING pilotage_id
 _VESSEL_CALL_UPSERT = f"""
 INSERT INTO core.vessel_call
     (vcn, via_no, imo_no, vessel_name, voyage_no, rotation_no, purpose, status,
-     eta, etb, etd, ata, atd, atc, source_note, terminal_id, berth_id)
+     eta, etb, etd, ata, atd, atc, source_note, terminal_id, berth_id, data_origin)
 VALUES
     (:vcn, :via_no,
      (SELECT v.imo_no FROM core.vessel v WHERE v.imo_no = :imo_no),
      :vessel_name, :voyage_no, :rotation_no, :purpose, :status,
-     :eta, :etb, :etd, :ata, :atd, :atc, :source_note, {_TERMINAL_LOOKUP}, {_BERTH_LOOKUP})
+     :eta, :etb, :etd, :ata, :atd, :atc, :source_note, {_TERMINAL_LOOKUP}, {_BERTH_LOOKUP},
+     :data_origin)
 ON CONFLICT (vcn) DO UPDATE SET
     terminal_id = COALESCE(EXCLUDED.terminal_id, core.vessel_call.terminal_id),
     berth_id    = COALESCE(EXCLUDED.berth_id, core.vessel_call.berth_id),

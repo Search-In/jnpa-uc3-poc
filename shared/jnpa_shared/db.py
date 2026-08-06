@@ -35,6 +35,17 @@ def get_engine(dsn: Optional[str] = None, echo: bool = False) -> AsyncEngine:
         pool_pre_ping=True,
         pool_size=5,
         max_overflow=5,
+        # RDS over a WAN: NAT/firewalls silently drop idle TCP connections, and
+        # asyncpg's defaults wait FOREVER on a dead socket — a single stale
+        # connection then hangs whatever awaited it (observed: gateway boot
+        # frozen mid-DDL for 15+ min). Recycle pooled connections before the
+        # typical idle-drop window and bound both connect and per-statement
+        # time so a dead link fails fast and the best-effort callers move on.
+        pool_recycle=300,
+        connect_args={
+            "timeout": 15,          # connect handshake bound (s)
+            "command_timeout": 60,  # per-statement bound (s)
+        },
     )
     _ENGINES.append(engine)
     return engine

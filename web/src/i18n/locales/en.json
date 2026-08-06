@@ -52,7 +52,7 @@
     "reefer": "Reefer Availability",
     "integrations": "Integrations",
     "doubleTrip": "Double Trip",
-    "uc3Lifecycle": "UC-3 Lifecycle",
+    "uc3Lifecycle": "Container Operations",
     "truckOps": "Truck Operations"
   },
   "followBox": {
@@ -289,7 +289,16 @@
       "moving": "Moving",
       "idle": "Idle",
       "byClass": "By vehicle class",
-      "empty": "No carbon data."
+      "empty": "No carbon data.",
+      "totalVehicles": "Total vehicles",
+      "vehicleBreakdown": "Vehicle breakdown",
+      "colCategory": "Category",
+      "colVehicles": "Vehicles",
+      "colShare": "Share",
+      "totalRow": "Total",
+      "vehiclesUnit": "vehicles",
+      "breakdownUnavailable": "Category-wise breakdown not available from this data source.",
+      "contributesTo": "Vehicles included in the CO₂e calculation above"
     },
     "leo": {
       "title": "Auto-LEO gate-out queue",

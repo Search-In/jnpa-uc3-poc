@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getAdapter } from "@/data";
 import { api } from "@/lib/api";
 import type { TruckDevice } from "@/lib/types";
@@ -14,9 +14,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Spinner, EmptyState, ErrorState } from "@/components/ui/misc";
-import { PageContainer, PageHeader, StatGrid, StatCard, StatusChip } from "@/components/ui/dtccc";
+import {
+  PageContainer,
+  PageHeader,
+  RefreshButton,
+  StatGrid,
+  StatCard,
+  StatusChip,
+} from "@/components/ui/dtccc";
 import { DecisionPathBadge } from "@/components/DecisionPathBadge";
 import { fmtEta } from "@/lib/utils";
+import { gateIdColour } from "@/lib/tokens";
 import { weatherCondition, weatherHumidityPct, weatherRainMm } from "@/lib/weather";
 import {
   congestionTone,
@@ -60,6 +68,12 @@ export default function DriverAdvisory() {
   const queued = useQuery({
     queryKey: ["trucks", "AT_GATE_QUEUE", "advisory"],
     queryFn: () => getAdapter().trucks("AT_GATE_QUEUE", 500),
+    // Serve the last queue instantly on remount / tab return instead of a fresh
+    // spinner-guarded fetch: the gateway memoises this list for a few seconds
+    // anyway, so a sub-10 s refetch cannot say anything new. On refetch the
+    // previous rows stay rendered (no table flash) while the update runs.
+    staleTime: 10_000,
+    placeholderData: keepPreviousData,
   });
 
   const devices = queued.data ?? [];
@@ -67,13 +81,18 @@ export default function DriverAdvisory() {
   // --- Accident Route Advisory (additive) ---------------------------------
   // Reuse the existing accidents API to surface ACTIVE (REPORTED /
   // INVESTIGATING) accidents as route hazards. No new data is fabricated.
+  // Secondary panels: none of these gate the rerouting table — each renders its
+  // own loading state and lands whenever it lands. staleTime keeps a remount
+  // (tab switch, navigation) from re-firing all four calls within the window.
   const accReported = useQuery({
     queryKey: ["accidents", "REPORTED", "advisory"],
     queryFn: () => api.accidents({ status: "REPORTED", limit: 20 }),
+    staleTime: 30_000,
   });
   const accInvestigating = useQuery({
     queryKey: ["accidents", "INVESTIGATING", "advisory"],
     queryFn: () => api.accidents({ status: "INVESTIGATING", limit: 20 }),
+    staleTime: 30_000,
   });
   const activeAccidents = [
     ...(accReported.data?.accidents ?? []),
@@ -89,6 +108,7 @@ export default function DriverAdvisory() {
   const weather = useQuery({
     queryKey: ["weather-current", "advisory"],
     queryFn: () => api.weatherCurrent(),
+    staleTime: 60_000,
   });
 
   // --- Traffic Advisory (additive) ----------------------------------------
@@ -99,6 +119,7 @@ export default function DriverAdvisory() {
   const traffic = useQuery({
     queryKey: ["traffic-current", "advisory"],
     queryFn: () => api.trafficCurrent(),
+    staleTime: 60_000,
   });
 
   // Queue depth per gate -> the recommendation steers toward the shortest queue.
@@ -154,11 +175,23 @@ export default function DriverAdvisory() {
         <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
           <Route className="h-4 w-4 text-muted-foreground" />
           {t("advisory.congestionRerouting", "Congestion Rerouting")}
+          {/* Table-level re-fetch: this query only, no page reload; the rendered
+              rows stay put while it runs (keepPreviousData above). */}
+          <RefreshButton
+            onRefresh={() => void queued.refetch()}
+            isRefreshing={queued.isFetching}
+            className="ml-auto"
+          />
         </div>
-        {queued.isLoading ? (
-          <Card className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
-            <Spinner /> {t("advisory.loadingQueue")}
+        {queued.isError && devices.length === 0 ? (
+          <Card>
+            <ErrorState
+              onRetry={() => void queued.refetch()}
+              detail={(queued.error as Error)?.message}
+            />
           </Card>
+        ) : queued.isLoading ? (
+          <QueueSkeleton />
         ) : devices.length === 0 ? (
           <Card>
             <EmptyState>{t("advisory.emptyQueue")}</EmptyState>
@@ -412,6 +445,28 @@ export default function DriverAdvisory() {
   );
 }
 
+// First-load placeholder for the rerouting table: the real column layout with
+// shimmering cells, so the page keeps its shape while the queue arrives (and
+// nothing else on the page waits for it — each panel loads independently).
+function QueueSkeleton() {
+  return (
+    <Card className="overflow-hidden" aria-busy="true">
+      <CardContent className="p-0">
+        <div className="animate-pulse divide-y divide-border/50">
+          <div className="h-9 bg-muted/60" />
+          {Array.from({ length: 6 }, (_, i) => (
+            <div key={i} className="flex items-center gap-4 px-4 py-3">
+              {[24, 20, 12, 10, 10, 28, 20].map((w, j) => (
+                <div key={j} className="h-3.5 rounded bg-muted" style={{ width: `${w * 4}px` }} />
+              ))}
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 // Best-effort human label for an accident's location. `location` may be a JSON
 // object (parsed by the API) or a plain string; fall back to accident_type.
 function accidentLocation(a: any): string {
@@ -421,6 +476,32 @@ function accidentLocation(a: any): string {
     return loc.name ?? loc.segment ?? loc.detail ?? loc.corridor ?? a?.accident_type ?? "—";
   }
   return a?.accident_type ?? "—";
+}
+
+/**
+ * A gate name tinted with its shared identity colour (`gateIdColour`, defined
+ * once in lib/palette.ts alongside the other Okabe–Ito ramps). Styling matches
+ * the app's existing StatusChip idiom exactly — a 12%-alpha tint of the hue
+ * behind solid, semibold text — so the chips read as part of the current theme
+ * rather than as a new visual language.
+ *
+ * Presentation only: it renders whatever gate string it is handed and carries no
+ * state, no handlers and no routing logic. Because Radix portals a SelectItem's
+ * <ItemText> into the trigger's <SelectValue>, using this inside SelectItem
+ * colours BOTH the dropdown option and the selected value from one definition,
+ * which is what keeps the two permanently in sync.
+ */
+function GateChip({ gate, arrow = false }: { gate: string; arrow?: boolean }) {
+  const colour = gateIdColour(gate);
+  return (
+    <span
+      className="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold"
+      style={{ backgroundColor: `${colour}1f`, color: colour }}
+    >
+      {arrow ? "→ " : ""}
+      {gate.replace("G-", "")}
+    </span>
+  );
 }
 
 function QueueRow({
@@ -463,7 +544,7 @@ function QueueRow({
     <tr className="border-b border-border/50 hover:bg-muted/40">
       <td className="px-4 py-2 font-mono text-xs">{truck.device_id}</td>
       <td className="px-4 py-2 font-mono text-xs">{truck.plate ?? "—"}</td>
-      <td className="px-4 py-2">{truck.gate_id?.replace("G-", "") ?? "—"}</td>
+      <td className="px-4 py-2">{truck.gate_id ? <GateChip gate={truck.gate_id} /> : "—"}</td>
       <td className="px-4 py-2 tabular-nums">{fmtEta(etaSeconds(truck))}</td>
       <td className="px-4 py-2 tabular-nums">{truck.remaining_km.toFixed(1)} km</td>
       <td className="px-4 py-2">
@@ -478,7 +559,7 @@ function QueueRow({
           <SelectContent>
             {GATES.map((g) => (
               <SelectItem key={g} value={g}>
-                → {g.replace("G-", "")}
+                <GateChip gate={g} arrow />
               </SelectItem>
             ))}
           </SelectContent>

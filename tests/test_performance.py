@@ -122,10 +122,10 @@ class FakePerformanceRepo:
     async def ldb_months(self):
         return ["2026-03-01"]
 
-    async def kpi(self, report_date):
+    async def kpi(self, report_date, data_origin=None):
         return None if report_date == dt.date(1900, 1, 1) else _KPI
 
-    async def daily_bundle(self, d):
+    async def daily_bundle(self, d, data_origin=None):
         if d == dt.date(2026, 5, 26):
             return {"snapshot": {"report_date": "2026-05-26", "as_of_ts": None,
                                  "source_file": "x.pdf"},
@@ -145,10 +145,10 @@ class FakePerformanceRepo:
         return [{"month_date": "2025-04-01", "terminal_code": "JN_PORT",
                  "total_teus": 667922}], 1
 
-    async def trends(self, metric, *, grain, terminal, date_from, date_to):
+    async def trends(self, metric, *, grain, terminal, date_from, date_to, data_origin=None):
         return [{"t": "2026-05-26", "terminal_code": "JN_PORT", "value": 33603.0}]
 
-    async def daily_series(self, date_from, date_to):
+    async def daily_series(self, date_from, date_to, data_origin=None):
         return [{"day": "2026-05-26", "total_teus": 33603.0, "gate_in_teus": 9089.0,
                  "gate_out_teus": 9881.0, "yard_occupancy_pct": 61.06}]
 

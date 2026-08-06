@@ -37,7 +37,7 @@
     "demo": "डेमो कंसोल",
     "enrollments": "चालक नामांकन",
     "vehicles": "वाहन प्रबंधन",
-    "uc3Lifecycle": "UC-3 जीवनचक्र",
+    "uc3Lifecycle": "कंटेनर संचालन",
     "truckOps": "ट्रक संचालन"
   },
   "followBox": {
@@ -273,7 +273,16 @@
       "moving": "गतिमान",
       "idle": "निष्क्रिय",
       "byClass": "वाहन श्रेणी अनुसार",
-      "empty": "कोई कार्बन डेटा नहीं।"
+      "empty": "कोई कार्बन डेटा नहीं।",
+      "totalVehicles": "कुल वाहन",
+      "vehicleBreakdown": "वाहन विवरण",
+      "colCategory": "श्रेणी",
+      "colVehicles": "वाहन",
+      "colShare": "हिस्सा",
+      "totalRow": "कुल",
+      "vehiclesUnit": "वाहन",
+      "breakdownUnavailable": "इस डेटा स्रोत से श्रेणी-वार विवरण उपलब्ध नहीं है।",
+      "contributesTo": "उपरोक्त CO₂e गणना में शामिल वाहन"
     },
     "leo": {
       "title": "ऑटो-LEO गेट-आउट कतार",

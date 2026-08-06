@@ -282,7 +282,7 @@ export default function Uc3Lifecycle() {
   const openJobs = jobs.filter((j) => j.status !== "COMPLETED" && j.status !== "CANCELLED").length;
 
   const TABS: { key: Tab; label: string; icon: typeof Workflow; count?: number }[] = [
-    { key: "lifecycle", label: "Lifecycle", icon: Workflow, count: jobs.length },
+    { key: "lifecycle", label: "Container Journey", icon: Workflow, count: jobs.length },
     { key: "documents", label: "Documents", icon: FileText },
     { key: "chains", label: "ECY → CFS Chains", icon: Link2 },
     { key: "upload", label: "Data Upload", icon: UploadCloud },
@@ -292,8 +292,8 @@ export default function Uc3Lifecycle() {
     <PageContainer>
       <PageHeader
         icon={Workflow}
-        title="UC-3 Lifecycle Console"
-        subtitle="Container Journey & Operations"
+        title="Container Operations Console"
+        subtitle="Container Journey & Movement Management"
         isFetching={jobsQ.isFetching}
         onRefresh={() => qc.invalidateQueries({ queryKey: ["uc3-jobs"] })}
       />
@@ -355,11 +355,13 @@ export default function Uc3Lifecycle() {
                   <EmptyState>
                     <div className="flex flex-col items-center gap-2">
                       <Inbox className="h-6 w-6 text-muted-foreground" aria-hidden />
-                      <div className="font-medium text-foreground">No active UC-3 jobs found</div>
+                      <div className="font-medium text-foreground">
+                        No active container jobs found
+                      </div>
                       <p className="max-w-[26ch] text-xs text-muted-foreground">
                         {term
                           ? "No job matches this container. Clear the search to see all jobs."
-                          : "Assign a truck and driver to a container to start a lifecycle."}
+                          : "Assign a truck and driver to a container to start a container journey."}
                       </p>
                       {term && (
                         <Button variant="outline" size="sm" onClick={() => setTerm("")}>

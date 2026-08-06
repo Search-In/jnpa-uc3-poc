@@ -171,7 +171,11 @@ export default function TransporterBlacklist({
   const blacklistedCount = blacklistQ.data?.count ?? 0;
   const activeCount = Math.max(0, regTotal - blacklistedCount);
   const vehiclesAssigned = regRows.reduce((s, r) => s + (Number(r.vehicle_count) || 0), 0);
-  const plus = (n: number) => `${n.toLocaleString()}${capped ? "+" : ""}`;
+  // KPI cards show the exact API-derived number (comma separators only) — no
+  // compact notation and no "+" suffix, even when the list window is capped.
+  const fmt = (n: number) => n.toLocaleString();
+  // List-header badge still flags a capped display window ("1,000+" rows shown).
+  const plus = (n: number) => `${fmt(n)}${capped ? "+" : ""}`;
 
   // Reset paging whenever the result set changes.
   useEffect(() => {
@@ -212,7 +216,7 @@ export default function TransporterBlacklist({
           <StatCard
             icon={Building2}
             label="Total Transporters"
-            value={plus(regTotal)}
+            value={fmt(regTotal)}
             tone="info"
             loading={listQ.isLoading && !registry}
             sub={capped ? "registered (window 1000)" : "registered companies"}
@@ -220,7 +224,7 @@ export default function TransporterBlacklist({
           <StatCard
             icon={ShieldCheck}
             label="Active"
-            value={plus(activeCount)}
+            value={fmt(activeCount)}
             tone="ok"
             loading={listQ.isLoading && !registry}
             sub="cleared for gate entry"
@@ -228,7 +232,7 @@ export default function TransporterBlacklist({
           <StatCard
             icon={ShieldAlert}
             label="Blacklisted"
-            value={blacklistedCount.toLocaleString()}
+            value={fmt(blacklistedCount)}
             tone="critical"
             loading={blacklistQ.isLoading}
             sub="denied at the gate"
@@ -236,7 +240,7 @@ export default function TransporterBlacklist({
           <StatCard
             icon={Truck}
             label="Vehicles Assigned"
-            value={plus(vehiclesAssigned)}
+            value={fmt(vehiclesAssigned)}
             tone="neutral"
             loading={listQ.isLoading && !registry}
             sub="mapped to transporters"

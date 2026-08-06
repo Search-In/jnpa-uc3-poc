@@ -44,7 +44,12 @@ WITH agg AS (
         count(*) FILTER (WHERE facility_type = 'ECY' AND mode = 'OUT')      AS ecy_out_count,
         count(*)                                                            AS event_count,
         min(event_ts)                                                       AS first_event_ts,
-        max(event_ts)                                                       AS last_event_ts
+        max(event_ts)                                                       AS last_event_ts,
+        -- LIVE/DEMO provenance carried onto the chain. A chain is per-container and
+        -- each corpus (API vs manual) is a complete dataset, so a container is
+        -- single-origin in practice; max() keeps GROUP BY container_number intact
+        -- (no split row) rather than risking the ON CONFLICT (container_number) key.
+        max(data_origin)                                                    AS data_origin
     FROM core.cfs_ecy_movement
     GROUP BY container_number
 ),
@@ -80,7 +85,7 @@ INSERT INTO core.ecy_cfs_chain
     (container_number, ecy_out_ts, cfs_in_ts, cfs_out_ts, ecy_in_ts,
      transit_hours, dwell_hours, cycle_hours, chain_status, legs_present,
      event_count, has_anomaly, anomaly_codes, anomaly_detail,
-     first_event_ts, last_event_ts, rebuilt_at)
+     first_event_ts, last_event_ts, data_origin, rebuilt_at)
 SELECT
     container_number, ecy_out_ts, cfs_in_ts, cfs_out_ts, ecy_in_ts,
     transit_hours, dwell_hours, cycle_hours,
@@ -93,7 +98,7 @@ SELECT
     jsonb_build_object('cfs_in_count', cfs_in_count, 'cfs_out_count', cfs_out_count,
                        'ecy_out_count', ecy_out_count,
                        'cfs_first_out_ts', cfs_first_out_ts),
-    first_event_ts, last_event_ts, now()
+    first_event_ts, last_event_ts, data_origin, now()
 FROM flagged
 ON CONFLICT (container_number) DO UPDATE SET
     ecy_out_ts = EXCLUDED.ecy_out_ts, cfs_in_ts = EXCLUDED.cfs_in_ts,
@@ -104,7 +109,7 @@ ON CONFLICT (container_number) DO UPDATE SET
     has_anomaly = EXCLUDED.has_anomaly, anomaly_codes = EXCLUDED.anomaly_codes,
     anomaly_detail = EXCLUDED.anomaly_detail,
     first_event_ts = EXCLUDED.first_event_ts, last_event_ts = EXCLUDED.last_event_ts,
-    rebuilt_at = now()
+    data_origin = EXCLUDED.data_origin, rebuilt_at = now()
 """
 
 
@@ -149,6 +154,10 @@ class EcyCfsChainRepository:
         if f.get("anomaly_code"):
             clauses.append(":code = ANY(anomaly_codes)")
             p["code"] = str(f["anomaly_code"]).upper()
+        # LIVE/DEMO provenance filter (carried into the chain by rebuild()).
+        if f.get("data_origin") is not None:
+            clauses.append("data_origin = :data_origin")
+            p["data_origin"] = f["data_origin"]
         return ((" WHERE " + " AND ".join(clauses)) if clauses else ""), p
 
     async def list_chains(self, *, filters: Mapping[str, Any], limit: int, offset: int) -> list[dict]:

@@ -182,6 +182,21 @@ class GatewayConfig:
     firebase_project_id: str = ""
     firebase_service_account_path: str = ""
 
+    # --- JNPA Simulated Port-Data API (dt.jnpa.in) — never exposed to the
+    # frontend (no VITE_ var, no browser call). The client key is the
+    # credential NOTICE_API_ACCESS.md forbids committing; empty -> the sync
+    # loop never starts and /api/integrations/jnpa/health reports DISABLED.
+    # URL empty -> the client's official default
+    # (dt.jnpa.in/poc-api-data-access); point it at the local sim
+    # (ingest/jnpa_portdata_sim) for offline work. NO hardcoded vendor URL
+    # in business code.
+    jnpa_portdata_api_url: str = ""
+    jnpa_portdata_client_key: str = ""
+    jnpa_api_mode: str = "LIVE"              # LIVE | SIM (labels runs/evidence)
+    jnpa_sync_enabled: bool = True           # scheduler gate (key still required)
+    jnpa_sync_interval_s: int = 300
+    jnpa_store_dir: str = "data/jnpa_api"    # raw downloaded-bytes store
+
     # --- Observability ---
     log_level: str = "INFO"
 
@@ -247,6 +262,12 @@ class GatewayConfig:
             vapid_subject=os.environ.get("VAPID_SUBJECT", "mailto:ops@jnpa-uc3.example"),
             firebase_project_id=os.environ.get("FIREBASE_PROJECT_ID", ""),
             firebase_service_account_path=os.environ.get("FIREBASE_SERVICE_ACCOUNT_PATH", ""),
+            jnpa_portdata_api_url=os.environ.get("JNPA_PORTDATA_API_URL", "").strip(),
+            jnpa_portdata_client_key=os.environ.get("JNPA_PORTDATA_CLIENT_KEY", "").strip(),
+            jnpa_api_mode=os.environ.get("JNPA_API_MODE", "LIVE").strip().upper() or "LIVE",
+            jnpa_sync_enabled=_as_bool(os.environ.get("JNPA_SYNC_ENABLED"), True),
+            jnpa_sync_interval_s=_as_int(os.environ.get("JNPA_SYNC_INTERVAL_S"), 300),
+            jnpa_store_dir=os.environ.get("JNPA_STORE_DIR", "data/jnpa_api"),
             log_level=os.environ.get("LOG_LEVEL", "INFO"),
         )
 
@@ -269,6 +290,12 @@ class GatewayConfig:
         return bool(self.ulip_api_key.strip()
                     or (self.ulip_client_id.strip()
                         and self.ulip_client_secret.strip()))
+
+    @property
+    def jnpa_portdata_enabled(self) -> bool:
+        """True if a JNPA Port-Data client key is configured (enables the
+        API sync loop and the LIVE face of /api/integrations/jnpa/*)."""
+        return bool(self.jnpa_portdata_client_key.strip())
 
     @property
     def surepass_enabled(self) -> bool:

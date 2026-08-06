@@ -46,6 +46,15 @@ _SORTS = {"eta": "b.eta", "ata": "b.ata", "vessel_name": "b.vessel_name",
           "updated_at": "b.updated_at", "id": "b.id"}
 
 
+def _data_origin(uploaded_by: Optional[str]) -> str:
+    """LIVE (JNPA-API sync) vs DEMO (manual) provenance tag for one import.
+
+    The JNPA API sync stamps its uploads with uploaded_by='jnpa-api'; every other
+    importer (dashboard upload / directory watch) is manual. Mirrors the tag the
+    0120/0121 migrations backfill from uploaded_by ('API' | 'MANUAL')."""
+    return "API" if (uploaded_by or "").strip().lower() == "jnpa-api" else "MANUAL"
+
+
 class BerthingRepository:
     def __init__(self, dsn: Optional[str] = None) -> None:
         self._dsn = dsn
@@ -74,6 +83,11 @@ class BerthingRepository:
         if filters.get("eta_to") is not None:
             conds.append("b.eta <= :eta_to")
             params["eta_to"] = filters["eta_to"]
+        # LIVE / DEMO data-source filter (X-Data-Mode → 'API' | 'MANUAL'). None ⇒
+        # no clause ⇒ SQL byte-identical to the pre-provenance query.
+        if filters.get("data_origin"):
+            conds.append("b.data_origin = :data_origin")
+            params["data_origin"] = filters["data_origin"]
         clause = ("WHERE " + " AND ".join(conds)) if conds else ""
         return clause, params
 
@@ -97,15 +111,19 @@ class BerthingRepository:
             return int((await conn.execute(
                 text(f"SELECT count(*) FROM core.berthing_record b {clause}"), params)).scalar() or 0)
 
-    async def get(self, report_id: int) -> Optional[dict]:
+    async def get(self, report_id: int, *, data_origin: Optional[str] = None) -> Optional[dict]:
+        clause = " AND b.data_origin = :data_origin" if data_origin else ""
+        params: dict[str, Any] = {"id": report_id}
+        if data_origin:
+            params["data_origin"] = data_origin
         async with get_engine(self._dsn).connect() as conn:
             row = (await conn.execute(text(
-                f"SELECT {_SELECT_COLS} FROM core.berthing_record b WHERE b.id = :id"),
-                {"id": report_id})).mappings().first()
+                f"SELECT {_SELECT_COLS} FROM core.berthing_record b WHERE b.id = :id" + clause),
+                params)).mappings().first()
         return dict(row) if row else None
 
-    async def timeline(self, report_id: int) -> Optional[dict]:
-        report = await self.get(report_id)
+    async def timeline(self, report_id: int, *, data_origin: Optional[str] = None) -> Optional[dict]:
+        report = await self.get(report_id, data_origin=data_origin)
         if report is None:
             return None
         async with get_engine(self._dsn).connect() as conn:
@@ -156,13 +174,21 @@ class BerthingRepository:
         }
 
     # ================================================================ Data Upload / import
-    async def find_file_by_hash(self, file_hash: str) -> Optional[dict]:
+    async def find_file_by_hash(self, file_hash: str, *,
+                                data_origin: Optional[str] = None) -> Optional[dict]:
+        # Dedup is PER-ORIGIN (uq_berthing_import_file_hash_origin): the same bytes
+        # delivered by both the API and a manual dump are kept once per origin, so
+        # LIVE and DEMO each stay a complete dataset. None ⇒ legacy hash-only lookup.
+        clause = " AND data_origin = :data_origin" if data_origin else ""
+        params: dict[str, Any] = {"h": file_hash}
+        if data_origin:
+            params["data_origin"] = data_origin
         async with get_engine(self._dsn).connect() as conn:
             row = (await conn.execute(text(
                 "SELECT id, terminal, filename, status, total_rows, success_rows, "
                 "failed_rows, duplicate_rows, created_at "
-                "FROM core.berthing_import_file WHERE file_hash = :h"),
-                {"h": file_hash})).mappings().first()
+                "FROM core.berthing_import_file WHERE file_hash = :h" + clause),
+                params)).mappings().first()
         return dict(row) if row else None
 
     @staticmethod
@@ -192,7 +218,8 @@ class BerthingRepository:
                       source: str = "UPLOAD") -> dict:
         """Upsert one file's vessel-calls atomically + idempotently. Re-uploading
         identical bytes is a no-op (SKIPPED_DUPLICATE)."""
-        existing = await self.find_file_by_hash(file_hash)
+        data_origin = _data_origin(uploaded_by)
+        existing = await self.find_file_by_hash(file_hash, data_origin=data_origin)
         if existing is not None:
             return {"file_id": existing["id"], "status": "SKIPPED_DUPLICATE",
                     "inserted": 0, "updated": 0, "success_rows": existing["success_rows"],
@@ -200,7 +227,7 @@ class BerthingRepository:
 
         envelope = {"filename": filename, "file_hash": file_hash, "terminal": terminal,
                     "physical_format": physical_format, "uploaded_by": uploaded_by,
-                    "total_rows": len(records), "source": source}
+                    "total_rows": len(records), "source": source, "data_origin": data_origin}
         actor = uploaded_by or ("importer" if source == "DIRECTORY" else "uploader")
         try:
             async with get_engine(self._dsn).begin() as conn:
@@ -213,6 +240,7 @@ class BerthingRepository:
                         "departure_time", "cargo_operation_start", "cargo_operation_end",
                         "status", "source_file")}
                     params["import_file_id"] = fid
+                    params["data_origin"] = data_origin
                     res = (await conn.execute(text(_REPORT_UPSERT), params)).mappings().first()
                     rid, was_insert = res["id"], bool(res["inserted"])
                     inserted += was_insert
@@ -228,7 +256,7 @@ class BerthingRepository:
             return {"file_id": fid, "status": "SUCCESS", "inserted": inserted,
                     "updated": updated, "success_rows": success, "duplicate_file": False}
         except IntegrityError:
-            dup = await self.find_file_by_hash(file_hash)
+            dup = await self.find_file_by_hash(file_hash, data_origin=data_origin)
             if dup is not None:
                 return {"file_id": dup["id"], "status": "SKIPPED_DUPLICATE", "inserted": 0,
                         "updated": 0, "success_rows": dup["success_rows"], "duplicate_file": True}
@@ -256,12 +284,14 @@ class BerthingRepository:
     async def record_rejected_upload(self, *, terminal: Optional[str], physical_format: str,
                                      filename: str, file_hash: str, uploaded_by: Optional[str],
                                      detail: str, errors: Sequence[Mapping[str, Any]]) -> Optional[int]:
-        existing = await self.find_file_by_hash(file_hash)
+        data_origin = _data_origin(uploaded_by)
+        existing = await self.find_file_by_hash(file_hash, data_origin=data_origin)
         if existing is not None:
             return existing["id"]
         envelope = {"filename": filename, "file_hash": file_hash, "terminal": terminal,
                     "physical_format": physical_format, "uploaded_by": uploaded_by,
-                    "total_rows": 0, "source": "UPLOAD", "error_detail": detail[:4000]}
+                    "total_rows": 0, "source": "UPLOAD", "error_detail": detail[:4000],
+                    "data_origin": data_origin}
         try:
             async with get_engine(self._dsn).begin() as conn:
                 fid = (await conn.execute(text(_FILE_INSERT_FAILED), envelope)).mappings().first()["id"]
@@ -346,20 +376,21 @@ class BerthingRepository:
 # --------------------------------------------------------------------------- SQL
 _FILE_INSERT = """
 INSERT INTO core.berthing_import_file
-    (filename, file_hash, terminal, physical_format, uploaded_by, total_rows, status, source)
+    (filename, file_hash, terminal, physical_format, uploaded_by, total_rows, status,
+     source, data_origin)
 VALUES
     (:filename, :file_hash, :terminal, :physical_format, :uploaded_by, :total_rows,
-     'PENDING', :source)
+     'PENDING', :source, :data_origin)
 RETURNING id
 """
 
 _FILE_INSERT_FAILED = """
 INSERT INTO core.berthing_import_file
     (filename, file_hash, terminal, physical_format, uploaded_by, total_rows, status,
-     error_detail, source)
+     error_detail, source, data_origin)
 VALUES
     (:filename, :file_hash, :terminal, :physical_format, :uploaded_by, :total_rows,
-     'FAILED', :error_detail, :source)
+     'FAILED', :error_detail, :source, :data_origin)
 RETURNING id
 """
 
@@ -367,11 +398,11 @@ _REPORT_UPSERT = f"""
 INSERT INTO core.berthing_record
     (terminal, vessel_name, imo_number, voyage_number, shipping_line, berth_number,
      eta, ata, berthing_time, departure_time, cargo_operation_start, cargo_operation_end,
-     status, source_file, import_file_id)
+     status, source_file, import_file_id, data_origin)
 VALUES
     (:terminal, :vessel_name, :imo_number, :voyage_number, :shipping_line, :berth_number,
      :eta, :ata, :berthing_time, :departure_time, :cargo_operation_start,
-     :cargo_operation_end, :status, :source_file, :import_file_id)
+     :cargo_operation_end, :status, :source_file, :import_file_id, :data_origin)
 ON CONFLICT ON CONSTRAINT uq_berthing_call DO UPDATE SET
     status = CASE WHEN array_position({_RANK}, EXCLUDED.status)
                    >= array_position({_RANK}, core.berthing_record.status)
@@ -387,6 +418,7 @@ ON CONFLICT ON CONSTRAINT uq_berthing_call DO UPDATE SET
     cargo_operation_end   = COALESCE(EXCLUDED.cargo_operation_end, core.berthing_record.cargo_operation_end),
     source_file           = EXCLUDED.source_file,
     import_file_id        = EXCLUDED.import_file_id,
+    data_origin           = EXCLUDED.data_origin,
     updated_at            = now()
 RETURNING id, (xmax = 0) AS inserted
 """

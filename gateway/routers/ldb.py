@@ -217,24 +217,10 @@ def _normalize_truck_payload(raw: Dict[str, Any], vehicle_number: str) -> Dict[s
             f"ALERT! Trailer {plate} carrying Container No. {latest['containerNumber']}"
         )
 
-    digits = re.sub(r"\D", "", plate) or "0000000"
-    compliance = body.get("compliance") or {
-        "status": "COMPLIANT",
-        "owner": "JNPA DEMO FLEET" if plate != "MH43CQ0554" else "DEMO TRANSPORT LLP",
-        "vehicleClass": "Goods Carriage (HMV)",
-        "fitnessValidUpto": "31-03-2027" if plate == "MH43CQ0554" else "31-12-2026",
-        "insuranceValidUpto": "15-11-2026" if plate == "MH43CQ0554" else "30-06-2027",
-        "pucValidUpto": "01-02-2027" if plate == "MH43CQ0554" else "31-03-2027",
-        "chassisNumber": (
-            "MB1AA12CD3456789" if plate == "MH43CQ0554"
-            else f"CH{digits[-8:].zfill(8)}"
-        ),
-        "engineNumber": (
-            "ENG55CQ054" if plate == "MH43CQ0554"
-            else f"EN{digits[-6:].zfill(6)}"
-        ),
-        "notes": "In-app compliance snapshot (Vahan-style). No external redirect.",
-    }
+    # Never invent compliance here — real Vahan fields come from
+    # GET /vahan/get/vahanDetails/{plate} (see ldb_truck). Pass through only if
+    # an upstream body already included a compliance object.
+    compliance = body.get("compliance") if isinstance(body.get("compliance"), dict) else None
 
     return {
         "truckNumber": plate,
@@ -248,6 +234,96 @@ def _normalize_truck_payload(raw: Dict[str, Any], vehicle_number: str) -> Dict[s
         "latest": latest,
         "compliance": compliance,
     }
+
+
+def _normalize_vahan_compliance(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Map NLDS ``GET /vahan/get/vahanDetails/{plate}`` → UI compliance fields.
+
+    Live shape (ldb.co.in)::
+        {"object":{"rcVhClassDesc":"Goods Carrier(HGV)","rcFuelDesc":"DIESEL",
+         "rcFitUpto":"19-Aug-2027","rcTaxUpto":"31-Jul-2027",
+         "rcInsuranceUpto":"31-Jul-2027","rcPuccUpto":"20-Aug-2026",
+         "rcPermitValidUpto":"30-Dec-2030","rcVchCatg":null},
+         "responseCode":"200","statusCode":"SUCCESS"}
+    """
+    if not isinstance(raw, dict):
+        return None
+    obj = raw.get("object") if isinstance(raw.get("object"), dict) else raw
+    if not isinstance(obj, dict):
+        return None
+    # Reject empty / error payloads
+    if raw.get("statusCode") not in (None, "SUCCESS", "OK", "SUC013") and not obj.get("rcVhClassDesc"):
+        return None
+    if not any(obj.get(k) for k in (
+        "rcVhClassDesc", "rcFuelDesc", "rcFitUpto", "rcTaxUpto",
+        "rcInsuranceUpto", "rcPuccUpto", "rcPermitValidUpto",
+    )):
+        return None
+
+    def _valid(s: Any) -> Optional[str]:
+        if s is None:
+            return None
+        t = str(s).strip()
+        return t or None
+
+    fitness = _valid(obj.get("rcFitUpto"))
+    insurance = _valid(obj.get("rcInsuranceUpto"))
+    pucc = _valid(obj.get("rcPuccUpto"))
+    tax = _valid(obj.get("rcTaxUpto"))
+    permit = _valid(obj.get("rcPermitValidUpto"))
+
+    # Derive a coarse status from date strings when parseable (DD-Mon-YYYY).
+    status = "UNKNOWN"
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        now = _dt.now(_tz.utc).date()
+        parsed = []
+        for label in (fitness, insurance, pucc, tax, permit):
+            if not label:
+                continue
+            for fmt in ("%d-%b-%Y", "%d-%B-%Y", "%d-%m-%Y", "%Y-%m-%d"):
+                try:
+                    parsed.append(_dt.strptime(label, fmt).date())
+                    break
+                except ValueError:
+                    continue
+        if parsed:
+            status = "COMPLIANT" if all(d >= now for d in parsed) else "NON_COMPLIANT"
+    except Exception:  # noqa: BLE001
+        status = "UNKNOWN"
+
+    return {
+        "status": status,
+        "vehicleClass": _valid(obj.get("rcVhClassDesc")),
+        "fuelType": _valid(obj.get("rcFuelDesc")),
+        "fitnessValidUpto": fitness,
+        "taxValidUpto": tax,
+        "insuranceValidUpto": insurance,
+        "pucValidUpto": pucc,
+        "permitValidUpto": permit,
+        "vehicleCategory": _valid(obj.get("rcVchCatg")),
+        "source": "LDB_VAHAN",
+    }
+
+
+async def _fetch_vahan_compliance(plate: str, state: GatewayState) -> Optional[Dict[str, Any]]:
+    """LIVE-only Vahan compliance from LDB. Returns None when unconfigured / failed."""
+    if not integrations.system_config("LDB").configured:
+        return None
+    result = await integrations.call(
+        system="LDB",
+        op="vahan_details",
+        ref=plate,
+        request={},
+        live_path=f"/vahan/get/vahanDetails/{plate}",
+        mock_fn=lambda: {},  # never fabricate compliance
+        dsn=state.cfg.postgres_dsn,
+        method="GET",
+        http_client=state.http,
+    )
+    if result.get("source") != "LIVE":
+        return None
+    return _normalize_vahan_compliance(result.get("data") or {})
 
 
 # --------------------------------------------------------------------- routes
@@ -404,11 +480,19 @@ async def ldb_truck(vehicle_number: str,
             log.info("ldb_truck_live_empty", plate=plate, code=raw.get("code"),
                      status=raw.get("status"))
             tracking = _normalize_truck_payload({}, plate)
-            REQUESTS.labels("ldb", "ok").inc()
-            return {"source": "LIVE", "tracking": tracking, "raw": raw}
-        tracking = _normalize_truck_payload(raw, plate)
+        else:
+            tracking = _normalize_truck_payload(raw, plate)
     else:
         tracking = _normalize_truck_payload(raw if isinstance(raw, dict) else {}, plate)
+
+    # Real vehicle compliance from LDB Vahan (never invent DEMO fields).
+    if result["source"] == "LIVE":
+        try:
+            compliance = await _fetch_vahan_compliance(plate, state)
+            if compliance:
+                tracking["compliance"] = compliance
+        except Exception as exc:  # noqa: BLE001 - compliance is best-effort
+            log.warning("ldb_vahan_compliance_failed", plate=plate, error=str(exc))
 
     REQUESTS.labels("ldb", "ok").inc()
     return {"source": result["source"], "tracking": tracking}

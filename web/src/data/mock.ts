@@ -195,6 +195,21 @@ function pointAlong(f: number): [number, number] {
   return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
 }
 
+/** Compass bearing (deg) of the corridor leg containing fraction `f` — i.e. the
+ *  direction a DOWN-corridor vehicle (JNPA -> Karal Phata) actually travels.
+ *  The legs run 133°..169° (OSM: JNPT Road / NH-348 south-east out of the port),
+ *  so this is the road bearing a truck at `f` is standing on. */
+function bearingAlong(f: number): number {
+  const clamped = Math.max(0, Math.min(1, f));
+  const span = (WAYPOINTS.length - 1) * clamped;
+  const i = Math.min(Math.floor(span), WAYPOINTS.length - 2);
+  const a = WAYPOINTS[i];
+  const b = WAYPOINTS[i + 1];
+  const north = (b[0] - a[0]) * 110_574;
+  const east = (b[1] - a[1]) * 111_320 * Math.cos((a[0] * Math.PI) / 180);
+  return ((Math.atan2(east, north) * 180) / Math.PI + 360) % 360;
+}
+
 // --------------------------------------------------------------------------
 // Static fixture tables.
 // --------------------------------------------------------------------------
@@ -416,17 +431,8 @@ function buildMockLdbTruck(vehicleNumber: string): LdbTruckTracking {
       terminals: [{ locName: events[0].locName, events }],
       latest: events[0],
       alert: `ALERT! Trailer ${plate} carrying Container No. HMMU4963884`,
-      compliance: {
-        status: "COMPLIANT",
-        owner: "DEMO TRANSPORT LLP",
-        vehicleClass: "Goods Carriage (HMV)",
-        fitnessValidUpto: "31-03-2027",
-        insuranceValidUpto: "15-11-2026",
-        pucValidUpto: "01-02-2027",
-        chassisNumber: "MB1AA12CD3456789",
-        engineNumber: "ENG55CQ054",
-        notes: "In-app compliance snapshot (Vahan-style). No external redirect.",
-      },
+      // No fabricated compliance — LIVE path fetches LDB Vahan details.
+      compliance: null,
     };
   }
 
@@ -466,17 +472,7 @@ function buildMockLdbTruck(vehicleNumber: string): LdbTruckTracking {
     terminals: [{ locName: terminal, events }],
     latest: events[0],
     alert: `ALERT! Trailer ${plate} carrying Container No. ${container}`,
-    compliance: {
-      status: "COMPLIANT",
-      owner: "JNPA DEMO FLEET",
-      vehicleClass: "Goods Carriage (HMV)",
-      fitnessValidUpto: "31-12-2026",
-      insuranceValidUpto: "30-06-2027",
-      pucValidUpto: "31-03-2027",
-      chassisNumber: `CH${digits.slice(-8).padStart(8, "0")}`,
-      engineNumber: `EN${digits.slice(-6).padStart(6, "0")}`,
-      notes: "In-app compliance snapshot. No external redirect.",
-    },
+    compliance: null,
   };
 }
 
@@ -1029,6 +1025,15 @@ export class MockAdapter implements DataAdapter {
         SEGMENTS_LATLON[
           Math.min(Math.floor(f * SEGMENTS_LATLON.length), SEGMENTS_LATLON.length - 1)
         ].id;
+      // Face the truck along the corridor leg it is standing on. Outbound legs
+      // (gate-out / running to the ECD) travel DOWN-corridor; every other state
+      // is inbound or holding at the port, so it faces UP-corridor (+180°). A
+      // ±5° lane/GPS spread keeps the fleet from looking like a rigid train.
+      // Replaces a flat random 100..170° that pointed inbound trucks backwards
+      // and could sit up to ~44° off the road under them.
+      const outbound = st === "GATE_OUT" || st === "EN_ROUTE_TO_ECD";
+      const heading =
+        (bearingAlong(f) + (outbound ? 0 : 180) + randRange(seed + "-hdg", -5, 5) + 360) % 360;
       out.push({
         device_id: deviceId,
         plate: `MH${randInt(seed + "-rto", 1, 48)
@@ -1041,7 +1046,7 @@ export class MockAdapter implements DataAdapter {
         state: st,
         position: { lat: round(lat, 6), lon: round(lon, 6) },
         speed_kmh: round(speed, 1),
-        heading: randInt(seed + "-hdg", 100, 170),
+        heading: round(heading, 1),
         remaining_km,
         eta_s,
         segment_id: nearest,
@@ -1464,14 +1469,24 @@ export class MockAdapter implements DataAdapter {
       MGV: 980,
       LGV: 340,
     };
+    // Vehicles per class — same key-set as by_class, summing to vehicle_count so
+    // the tile's breakdown total always reconciles with the headline figure.
+    const vehicles_by_class: Record<string, number> = {
+      HGV: 128,
+      REEFER: 39,
+      MGV: 32,
+      LGV: 19,
+    };
     const total_kg = Object.values(by_class).reduce((a, b) => a + b, 0);
+    const vehicle_count = Object.values(vehicles_by_class).reduce((a, b) => a + b, 0);
     // Split total into moving vs idle so the two always sum back to total_kg.
     const moving = Math.round(total_kg * 0.62);
     const idle = total_kg - moving;
     return Promise.resolve({
       total_kg,
-      vehicle_count: 218,
+      vehicle_count,
       by_class,
+      vehicles_by_class,
       by_source: { moving, idle },
     });
   }

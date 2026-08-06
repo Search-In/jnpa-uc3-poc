@@ -37,16 +37,18 @@ class PerformanceService:
         }
 
     # ---------------------------------------------------------------- KPI
-    async def kpi(self, report_date: Optional[date]) -> Optional[Dict[str, Any]]:
+    async def kpi(self, report_date: Optional[date],
+                  data_origin: Optional[str] = None) -> Optional[Dict[str, Any]]:
         t0 = perf_counter()
-        res = await self._repo.kpi(report_date)
+        res = await self._repo.kpi(report_date, data_origin)
         log.info("performance.kpi", extra={"ms": round((perf_counter() - t0) * 1000, 1),
                  "date": str(report_date) if report_date else "latest"})
         return res
 
     # ---------------------------------------------------------------- daily
-    async def daily_bundle(self, d: date) -> Optional[Dict[str, Any]]:
-        return await self._repo.daily_bundle(d)
+    async def daily_bundle(self, d: date,
+                           data_origin: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        return await self._repo.daily_bundle(d, data_origin)
 
     async def list_traffic(self, filters: Mapping[str, Any], *, sort: str, direction: str,
                            limit: int, offset: int) -> Dict[str, Any]:
@@ -69,16 +71,18 @@ class PerformanceService:
 
     # ---------------------------------------------------------------- trends / stats
     async def trends(self, metric: str, *, grain: str, terminal: Optional[str],
-                     date_from, date_to) -> Dict[str, Any]:
+                     date_from, date_to, data_origin: Optional[str] = None) -> Dict[str, Any]:
         series = await self._repo.trends(metric, grain=grain, terminal=terminal,
-                                         date_from=date_from, date_to=date_to)
+                                         date_from=date_from, date_to=date_to,
+                                         data_origin=data_origin)
         return {"metric": metric, "grain": grain, "terminal": terminal, "series": series,
                 "count": len(series)}
 
-    async def stats(self, date_from, date_to) -> Dict[str, Any]:
+    async def stats(self, date_from, date_to,
+                    data_origin: Optional[str] = None) -> Dict[str, Any]:
         t0 = perf_counter()
-        daily = await self._repo.daily_series(date_from, date_to)
-        kpi = await self._repo.kpi(None)
+        daily = await self._repo.daily_series(date_from, date_to, data_origin)
+        kpi = await self._repo.kpi(None, data_origin)
         log.info("performance.stats", extra={"ms": round((perf_counter() - t0) * 1000, 1),
                  "days": len(daily)})
         return {"daily": daily, "latest_kpi": kpi, "days": len(daily)}

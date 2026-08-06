@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional
 from jnpa_shared.logging import get_logger
 
 from . import upload_parsers as P
-from .upload_repository import UploadRepository
+from .upload_repository import UploadRepository, _data_origin
 
 log = get_logger("services.performance.upload_service")
 
@@ -139,9 +139,11 @@ class UploadService:
             return {"upload_id": upload_id, "status": "REJECTED", "inserted": 0, "skipped": 0,
                     "summary": summary, "errors": res.errors[:200]}
         try:
-            # source_file + upload_id are stamped on every imported row for traceability
+            # source_file + upload_id + data_origin are stamped on every imported row
+            # for traceability and LIVE/DEMO provenance.
             inserted, updated, per_table = await self._repo.import_records(
-                res.records, upload_id=upload_id, source_file=filename)
+                res.records, upload_id=upload_id, source_file=filename,
+                data_origin=_data_origin(uploaded_by))
         except Exception as exc:  # noqa: BLE001 — any DB error rolls back the whole tx
             await self._repo.finalize_upload(upload_id, status="FAILED", inserted=0, skipped=0,
                                              notes=f"import failed and rolled back: {exc}")

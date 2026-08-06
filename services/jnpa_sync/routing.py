@@ -97,6 +97,14 @@ def transport_entity(filename: str) -> Optional[str]:
     return None
 
 
+# nlp-marine messageTypes whose files are tabular DOUBLES of the PCS XML feed
+# (live corpus; the XML is authoritative — see _route's nlp-marine branch).
+_MARINE_REPORT_DOUBLES = frozenset({
+    "eta", "berth-request", "pre-arrival-notifiaction", "vessel-profile",
+    "voyage-registration", "expected-time-of-arrival", "loop",
+})
+
+
 def cfs_facility(filename: str) -> Optional[str]:
     upper = filename.upper()
     if "ECY" in upper:
@@ -183,6 +191,34 @@ class JnpaRouter:
     async def _route(self, group: str, *, filename: str, content: bytes,
                      message_type: Optional[str]) -> RouteOutcome:
         if group in ("nlp-marine", "port-craft-pilot"):
+            if group == "nlp-marine":
+                mt = (message_type or "").strip()
+                up = filename.upper()
+                # LIVE-corpus surprises (absent from the sample pack):
+                # 1. FOIS train intimations delivered as messageType "JNPA"
+                #    ("Port authority notice") — the rail consumer parses the
+                #    CSV verbatim (verified against the live corpus).
+                if "TRAIN_INTIMATION" in up:
+                    svc = self._service("rail_fois")
+                    result = await svc.import_file(content, filename,
+                                                   UPLOADED_BY)
+                    return _normalize("rail_fois", result)
+                # 2. Tabular report DOUBLES of the PCS XML feed (berth-request
+                #    / pre-arrival / vessel-Profile / voyage-registration /
+                #    expected-time-of-arrival xlsx, ETA_ETD csv) plus the
+                #    LOOP import-cohort csv and non-train JNPA notices.
+                #    The XML messages are authoritative for the call spine;
+                #    feeding these to the marine parsers only produced
+                #    REJECTED noise. Land + keep replayable instead.
+                if (mt.lower() in _MARINE_REPORT_DOUBLES
+                        or up.startswith(("ETA_ETD", "LOOP_COHORT"))
+                        or mt.upper() == "JNPA"):
+                    return RouteOutcome(
+                        service="marine", status="UNROUTED",
+                        detail={"reason": "tabular report double / cohort "
+                                          "extract — PCS XML is authoritative;"
+                                          " no consumer wired",
+                                "message_type": mt, "filename": filename})
             # The marine parser registry auto-detects the document type from
             # envelope + filename (PCS XML, pilot-card xlsx, port-craft PDF).
             svc = self._service("marine")

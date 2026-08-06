@@ -42,7 +42,10 @@ from jnpa_shared.iso6346 import is_valid_container_no
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
 
 ROOT_TO_DOC = {"ContLoadingNDischargeOder": "COARRI",
-               "AdvContainerList": "COPRAR"}
+               "AdvContainerList": "COPRAR",
+               # COPARN — "Empty Container Release Order". Served by the LIVE
+               # API in the shipping-lines group (not in the sample pack).
+               "ContainerRelease": "COPARN"}
 
 
 class EdiVesselParseError(ValueError):
@@ -150,7 +153,7 @@ def parse_document(xml_text: str) -> Tuple[str, Dict[str, Any], List[Dict[str, A
         })
         items = root.findall("DocumentDetails/COARRIDetails/COARRIItem")
         rows = [r for r in (_coarri_row(i) for i in items) if r is not None]
-    else:
+    elif doc_type == "COPRAR":
         h = root.find("DocumentDetails/COPRARHeader")
         header.update({
             "vcn": _text(h, "VCN"),
@@ -162,6 +165,17 @@ def parse_document(xml_text: str) -> Tuple[str, Dict[str, Any], List[Dict[str, A
         })
         items = root.findall("DocumentDetails/COPRARDetailsSummary/COPRARItem")
         rows = [r for r in (_coprar_row(i) for i in items) if r is not None]
+    else:  # COPARN
+        h = root.find("DocumentDetails/COPARNHeader")
+        header.update({
+            "vcn": _text(h, "VCN"),
+            "voyage": _text(h, "VoyageNumber"),
+            "agent_code": _text(h, "SACode"),
+            "line_code": _text(h, "LineCode"),
+            "declared_count": _int(_text(h, "TotNoContainer")),
+        })
+        items = root.findall("DocumentDetails/ContainerDetails/Container")
+        rows = [r for r in (_coparn_row(i) for i in items) if r is not None]
     return doc_type, header, rows
 
 
@@ -211,6 +225,29 @@ def _coarri_row(item: ET.Element) -> Optional[Dict[str, Any]]:
         "damage_indicator": _yn(_text(item, "ContainerDamageIndicator")),
         "damage_desc": _text(item, "ContainerDamageDesc"),
         "extra": _extra(item, _COARRI_KNOWN),
+    }
+
+
+_COPARN_KNOWN = {
+    "ContainerNumber", "ContISOCode", "EquipmentStatusCode",
+    "ReleaseDateTime", "PickupDateTime", "DepotCode",
+}
+
+
+def _coparn_row(item: ET.Element) -> Optional[Dict[str, Any]]:
+    container = _text(item, "ContainerNumber")
+    if not container:
+        return None
+    container = container.upper()
+    return {
+        "container_no": container,
+        "iso_valid": is_valid_container_no(container),
+        "iso_code": _text(item, "ContISOCode"),
+        "equipment_status": _text(item, "EquipmentStatusCode"),
+        "release_ts": parse_ist_datetime(_text(item, "ReleaseDateTime")),
+        "pickup_ts": parse_ist_datetime(_text(item, "PickupDateTime")),
+        "depot_code": _text(item, "DepotCode"),
+        "extra": _extra(item, _COPARN_KNOWN),
     }
 
 

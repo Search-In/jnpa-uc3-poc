@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS core.edi_import_file (
     created_at      timestamptz NOT NULL DEFAULT now(),
     updated_at      timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT edi_import_file_feed_check
-        CHECK (feed = ANY (ARRAY['COARRI'::text, 'COPRAR'::text])),
+        CHECK (feed = ANY (ARRAY['COARRI'::text, 'COPRAR'::text,
+                                 'COPARN'::text])),
     CONSTRAINT edi_import_file_status_check
         CHECK (import_status = ANY (ARRAY['PENDING'::text, 'SUCCESS'::text,
                'PARTIAL'::text, 'FAILED'::text, 'SKIPPED_DUPLICATE'::text,
@@ -101,12 +102,17 @@ CREATE TABLE IF NOT EXISTS core.edi_vessel_container (
     berthing_ts     timestamptz,
     rotation_no     text,
     rotation_date   date,
+    voyage          text,
+    release_ts      timestamptz,
+    pickup_ts       timestamptz,
+    depot_code      text,
     source_file     text,
     extra           jsonb NOT NULL DEFAULT '{}'::jsonb,
     data_origin     text NOT NULL DEFAULT 'MANUAL',
     created_at      timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT edi_vessel_container_doc_check
-        CHECK (doc_type = ANY (ARRAY['COARRI'::text, 'COPRAR'::text])),
+        CHECK (doc_type = ANY (ARRAY['COARRI'::text, 'COPRAR'::text,
+                                     'COPARN'::text])),
     CONSTRAINT ck_edi_vessel_container_data_origin
         CHECK (data_origin IN ('API', 'MANUAL')));
 
@@ -118,7 +124,27 @@ CREATE INDEX IF NOT EXISTS idx_edi_vessel_container_no
 CREATE INDEX IF NOT EXISTS idx_edi_vessel_container_vcn
     ON core.edi_vessel_container (vcn);
 CREATE INDEX IF NOT EXISTS idx_edi_vessel_container_origin
-    ON core.edi_vessel_container (data_origin)
+    ON core.edi_vessel_container (data_origin);
+
+-- 0124 repair for tables created by an earlier boot (pre-COPARN): add the
+-- COPARN columns and widen the doc/feed CHECKs. All idempotent.
+ALTER TABLE core.edi_vessel_container
+    ADD COLUMN IF NOT EXISTS voyage text,
+    ADD COLUMN IF NOT EXISTS release_ts timestamptz,
+    ADD COLUMN IF NOT EXISTS pickup_ts timestamptz,
+    ADD COLUMN IF NOT EXISTS depot_code text;
+ALTER TABLE core.edi_vessel_container
+    DROP CONSTRAINT IF EXISTS edi_vessel_container_doc_check;
+ALTER TABLE core.edi_vessel_container
+    ADD CONSTRAINT edi_vessel_container_doc_check
+        CHECK (doc_type = ANY (ARRAY['COARRI'::text, 'COPRAR'::text,
+                                     'COPARN'::text]));
+ALTER TABLE core.edi_import_file
+    DROP CONSTRAINT IF EXISTS edi_import_file_feed_check;
+ALTER TABLE core.edi_import_file
+    ADD CONSTRAINT edi_import_file_feed_check
+        CHECK (feed = ANY (ARRAY['COARRI'::text, 'COPRAR'::text,
+                                 'COPARN'::text]))
 """
 
 
@@ -152,7 +178,8 @@ _ROW_COLS = (
     "pol", "pod", "final_pod", "igm_line", "igm_subline", "cargo_type",
     "imo_class", "icd_indicator", "damage_indicator", "damage_desc",
     "shipping_ts", "landing_ts", "berthing_ts", "rotation_no",
-    "rotation_date", "source_file",
+    "rotation_date", "voyage", "release_ts", "pickup_ts", "depot_code",
+    "source_file",
 )
 
 _ROW_INSERT = (
@@ -198,7 +225,7 @@ class EdiVesselRepository:
                       uploaded_by: Optional[str] = None,
                       source: str = "API") -> dict:
         """One document, atomically + idempotently. Mirrors RailRepository."""
-        if feed not in ("COARRI", "COPRAR"):
+        if feed not in ("COARRI", "COPRAR", "COPARN"):
             raise KeyError(f"unknown EDI feed {feed!r}")
         data_origin = _data_origin(uploaded_by)
         existing = await self.find_file_by_sha(source_sha256, data_origin)
@@ -284,7 +311,7 @@ class EdiVesselRepository:
         existing = await self.find_file_by_sha(source_sha256, data_origin)
         if existing is not None:
             return existing["id"]
-        envelope = {"feed": feed if feed in ("COARRI", "COPRAR") else "COARRI",
+        envelope = {"feed": feed if feed in ("COARRI", "COPRAR", "COPARN") else "COARRI",
                     "physical_format": "XML", "source_file": source_file,
                     "source_sha256": source_sha256, "file_size_bytes": file_size,
                     "record_count": 0, "import_status": "REJECTED",

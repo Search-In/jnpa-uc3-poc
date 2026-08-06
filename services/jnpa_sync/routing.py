@@ -195,6 +195,14 @@ class JnpaRouter:
             return _normalize("customs", result)
 
         if group == "shipping-lines":
+            mt = (message_type or "").upper()
+            # The LIVE corpus also serves COPARN (empty-container release
+            # orders, <ContainerRelease> XML) under this group — not in the
+            # sample pack. Route to the vessel-side EDI consumer.
+            if mt == "COPARN" or b"<ContainerRelease" in content[:2048]:
+                svc = self._service("edi_vessel")
+                result = await svc.import_file(content, filename, UPLOADED_BY)
+                return _normalize("edi_vessel", result)
             list_type = sl_list_type(filename)
             if list_type is None:
                 return RouteOutcome(
@@ -281,9 +289,10 @@ class JnpaRouter:
                 result = await svc.import_file("EDO", content, filename,
                                                UPLOADED_BY)
                 return _normalize("shipping_lines", result)
-            if (mt in ("COARRI", "COPRAR")
+            if (mt in ("COARRI", "COPRAR", "COPARN")
                     or b"<ContLoadingNDischargeOder" in content[:2048]
-                    or b"<AdvContainerList" in content[:2048]):
+                    or b"<AdvContainerList" in content[:2048]
+                    or b"<ContainerRelease" in content[:2048]):
                 # Vessel-side container documents → services.edi_vessel
                 # (core.edi_vessel_container, migration 0123).
                 svc = self._service("edi_vessel")

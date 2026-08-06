@@ -10,8 +10,10 @@ on:
   workflow_call: {} # so deploy.yml can require this workflow as a gate
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Include run_id so a stuck/queued parent Deploy does not block later CI
+  # (workflow_call + cancel-in-progress was leaving new runs with 0 jobs).
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   web:

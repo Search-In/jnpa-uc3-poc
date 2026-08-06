@@ -38,7 +38,8 @@
     "enrollments": "चालक नोंदणी",
     "vehicles": "वाहन व्यवस्थापन",
     "uc3Lifecycle": "कंटेनर परिचालन",
-    "truckOps": "ट्रक ऑपरेशन्स"
+    "truckOps": "ट्रक ऑपरेशन्स",
+    "cargoWhatIf": "कार्गो व्हॉट-इफ"
   },
   "followBox": {
     "title": "फॉलो द बॉक्स",

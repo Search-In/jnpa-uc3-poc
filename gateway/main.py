@@ -48,6 +48,7 @@ from .routers import (
     auth as auth_router,
     carbon,
     cargo,
+    cargo_simulation,
     checkin,
     control,
     debug,
@@ -713,6 +714,12 @@ app.include_router(fastag.router)
 # for both the Traffic Twin (POC-3) and the Cargo Twin (POC-2); POC-2 consumes
 # /api/cargo directly and keeps no backend/DB. Thin router → services.cargo
 # (CargoService → raw-SQL CargoRepository). See gateway/routers/cargo.py.
+# UC-3 what-if simulation — /api/cargo/simulate/* + /api/gate/hourly-profile.
+# Registered BEFORE cargo.router so the ordering against GET /api/cargo/{cn} is
+# explicit rather than incidental (the simulate paths carry two segments after the
+# prefix, so they could not be captured by it either way). READ-ONLY: the layer
+# answers "what would this cost" and never writes — see services/cargo/simulation.
+app.include_router(cargo_simulation.router)
 app.include_router(cargo.router)
 app.include_router(scenario_ext.router)
 # Appendix-C capability services (Empty-Container, Carbon, Gate-Data/Auto-LEO,

@@ -12,6 +12,7 @@ whitelist keyed by doc_type; every value is a bound parameter.
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from typing import Any, Mapping, Optional, Sequence
 
 from sqlalchemy import text
@@ -49,6 +50,12 @@ _FORM13_PAYLOAD = ("form13_no", "visit_id", "terminal", "iso_valid", "transporte
 
 # Truck/vehicle column per doc type (the required key).
 TRUCK_COL = {"EIR": "truck_no", "PIN": "truck_no", "FORM13": "vehicle_plate"}
+
+# The timestamp each document type is filtered/bucketed on. EIR carries the gate
+# arrival (truck_in_time), which is what a date-ranged query and an hourly profile
+# both mean by "when"; PIN uses its issue time and FORM13 its capture time. Fixed
+# identifiers — never interpolated from client input.
+TIME_COL = {"EIR": "truck_in_time", "PIN": "issued_at", "FORM13": "captured_at"}
 
 # Reading Form-13 back out of gate_capture with the same field names the EIR/PIN
 # rows expose, so the API shape is uniform across all three document types.
@@ -388,7 +395,47 @@ class GateDocumentRepository:
         if not form13 and f.get("data_origin"):
             clauses.append("data_origin = :data_origin")
             p["data_origin"] = f["data_origin"]
+        # Date window (audit finding G1). Before this the EIR surface had no way to
+        # select a historical period at all, so the JNPA scenarios that need
+        # 1-3 August gate arrivals could not be served from the API — only by raw
+        # SQL, which fails the Notice's "cite the queries used" requirement.
+        # from_date is inclusive, to_date is inclusive of the whole day.
+        time_col = TIME_COL[doc_type]
+        if f.get("from_date"):
+            clauses.append(f"{time_col} >= :from_date")
+            p["from_date"] = f["from_date"]
+        if f.get("to_date"):
+            clauses.append(f"{time_col} < :to_date_excl")
+            p["to_date_excl"] = f["to_date"] + timedelta(days=1)
         return ((" WHERE " + " AND ".join(clauses)) if clauses else ""), p
+
+    async def hourly_profile(self, doc_type: str, *, filters: Mapping[str, Any],
+                             group_by: str = "hour") -> list[dict]:
+        """Bucket documents by hour (or day) of their timestamp column.
+
+        The aggregate counterpart of :meth:`list_docs`, sharing the SAME
+        ``_doc_where`` clause so a profile and the rows behind it can never
+        disagree. ``group_by`` is validated against a fixed set by the caller and
+        re-checked here — it lands in the SQL as an identifier, never a bound
+        value, so it may not come from raw client input."""
+        bucket = "hour" if str(group_by).lower() != "day" else "day"
+        where, p = self._doc_where(doc_type, filters)
+        time_col = TIME_COL[doc_type]
+        table = TABLES[doc_type]
+        scope = where or ""
+        if doc_type == "FORM13":
+            # gate_capture holds every capture type; keep the Form-13 scope.
+            scope = where or f" WHERE {_FORM13_SCOPE}"
+        sql = (
+            f"SELECT date_trunc('{bucket}', {time_col}) AS bucket, "
+            f"       count(*) AS documents, "
+            f"       count(DISTINCT {TRUCK_COL[doc_type]}) AS unique_trucks "
+            f"FROM {table}{scope} "
+            f"{'AND' if scope else 'WHERE'} {time_col} IS NOT NULL "
+            f"GROUP BY date_trunc('{bucket}', {time_col}) "
+            f"ORDER BY bucket ASC"
+        )
+        return await self._rows(sql, p)
 
     # The `terminal` printed on a gate document is free text and spelled a dozen
     # ways ("Nhava Sheva IGT", "DP World Nhava Sheva ICT", "PSA Mumbai BMCT"...).

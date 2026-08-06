@@ -1,14 +1,14 @@
--- 0124  COPARN (Empty Container Release Order) support for the EDI vessel tables
+-- 0126  COPARN (Empty Container Release Order) support for the EDI vessel tables
 --
 -- The LIVE dt.jnpa.in corpus serves COPARN documents (<ContainerRelease>
 -- XML, ~1,250 containers each, release/pickup timestamps + depot codes)
 -- under the SHIPPING-LINES group — a message type absent from the sample
 -- pack, discovered as 103 UNROUTED records on the first live backfill.
--- They now route to services.edi_vessel (0123 tables); this migration
+-- They now route to services.edi_vessel (0125 tables); this migration
 -- widens those tables: feed/doc CHECKs gain 'COPARN' and the item columns
 -- gain the release-order fields (+ voyage, which COPRAR headers also carry).
 --
--- Idempotent; safe on a database whose 0123 tables were created either by
+-- Idempotent; safe on a database whose 0125 tables were created either by
 -- the migration or by the gateway's boot DDL.
 
 BEGIN;

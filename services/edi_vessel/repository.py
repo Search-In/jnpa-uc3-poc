@@ -1,13 +1,13 @@
 """COARRI/COPRAR persistence — raw-SQL repository over the shared async engine.
 
-The ONLY layer that speaks SQL to the 0123 tables (``core.edi_import_file`` +
+The ONLY layer that speaks SQL to the 0125 tables (``core.edi_import_file`` +
 ``core.edi_vessel_container``). Same conventions as services/rail/repository.py:
 ledger + domain rows + final status in ONE transaction, identical bytes are a
 per-origin no-op (SKIPPED_DUPLICATE), domain rows ON CONFLICT DO NOTHING on
 the (doc_type, document_number, container_no) natural key.
 
 ``ensure_edi_vessel_schema()`` embeds the same DDL as
-infra/postgres/v3/0123_edi_vessel_container.sql (IF NOT EXISTS throughout) so
+infra/postgres/v3/0125_edi_vessel_container.sql (IF NOT EXISTS throughout) so
 the gateway can boot the tables idempotently.
 """
 from __future__ import annotations
@@ -30,7 +30,7 @@ def _data_origin(uploaded_by: Optional[str]) -> str:
 
 
 # --------------------------------------------------------------------------- DDL
-# Byte-for-byte the object definitions of 0123_edi_vessel_container.sql (minus
+# Byte-for-byte the object definitions of 0125_edi_vessel_container.sql (minus
 # the BEGIN/COMMIT wrapper — split on ';' like every ensure_*_schema).
 _DDL = """
 CREATE TABLE IF NOT EXISTS core.edi_import_file (
@@ -126,7 +126,7 @@ CREATE INDEX IF NOT EXISTS idx_edi_vessel_container_vcn
 CREATE INDEX IF NOT EXISTS idx_edi_vessel_container_origin
     ON core.edi_vessel_container (data_origin);
 
--- 0124 repair for tables created by an earlier boot (pre-COPARN): add the
+-- 0126 repair for tables created by an earlier boot (pre-COPARN): add the
 -- COPARN columns and widen the doc/feed CHECKs. All idempotent.
 ALTER TABLE core.edi_vessel_container
     ADD COLUMN IF NOT EXISTS voyage text,
@@ -149,7 +149,7 @@ ALTER TABLE core.edi_import_file
 
 
 async def ensure_edi_vessel_schema(dsn: Optional[str] = None) -> None:
-    """Idempotent boot DDL for the 0123 tables (gateway lifespan)."""
+    """Idempotent boot DDL for the 0125 tables (gateway lifespan)."""
     engine = get_engine(dsn)
     async with engine.begin() as conn:
         for statement in _DDL.split(";"):

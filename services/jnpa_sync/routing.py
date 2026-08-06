@@ -330,7 +330,7 @@ class JnpaRouter:
                     or b"<AdvContainerList" in content[:2048]
                     or b"<ContainerRelease" in content[:2048]):
                 # Vessel-side container documents → services.edi_vessel
-                # (core.edi_vessel_container, migration 0123).
+                # (core.edi_vessel_container, migration 0125).
                 svc = self._service("edi_vessel")
                 result = await svc.import_file(content, filename, UPLOADED_BY)
                 return _normalize("edi_vessel", result)

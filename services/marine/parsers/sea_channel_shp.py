@@ -12,10 +12,11 @@ whole thing is content-hashed for idempotent import.
 """
 from __future__ import annotations
 
+import math
+
 import hashlib
 import io
 import json
-import math
 import struct
 import zipfile
 from typing import Any, Optional
@@ -123,9 +124,12 @@ def _num(v: Any) -> Optional[float]:
     if v is None or (isinstance(v, str) and not v.strip()):
         return None
     try:
-        return float(v)
+        f = float(v)
     except (ValueError, TypeError):
         return None
+    # NaN/inf are not measurements. `float()` accepts them without raising, and a numeric
+    # column will store them, so they must be rejected here or they break JSON later.
+    return f if math.isfinite(f) else None
 
 
 def _extract_bundle(content: bytes, filename: Optional[str]) -> tuple[Optional[bytes], Optional[bytes]]:

@@ -14,6 +14,8 @@ decoupled (same conventions, no cross-import).
 """
 from __future__ import annotations
 
+import math
+
 import datetime as _dt
 from typing import Any, Optional
 
@@ -35,13 +37,26 @@ def clean(value: Any) -> Optional[str]:
 
 
 def to_num(value: Any) -> Optional[float]:
+    """PCS numeric field -> float, or None when it carries no usable number.
+
+    NON-FINITE VALUES ARE NOT NUMBERS. `float()` ACCEPTS 'NaN', 'inf', 'Infinity' and an
+    overflowing literal like '1e400' — it does not raise — so a source document carrying
+    any of those used to pass straight through, land in a PostgreSQL `numeric` column
+    (which permits NaN), and then break JSON serialisation for the whole page at response
+    time. One bad cell took out `GET /api/marine/vessels` entirely.
+
+    Returning None keeps the existing contract exactly: an unparseable measurement was
+    already None, and a non-finite one is no more of a measurement than 'abc' is. The
+    same guard is stated in parsers/bathymetry_model._num.
+    """
     s = clean(value)
     if s is None:
         return None
     try:
-        return float(s.replace(",", ""))
+        f = float(s.replace(",", ""))
     except ValueError:
         return None
+    return f if math.isfinite(f) else None
 
 
 def to_int(value: Any) -> Optional[int]:

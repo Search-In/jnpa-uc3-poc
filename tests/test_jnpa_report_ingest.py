@@ -371,3 +371,31 @@ def test_mappers_never_raise_on_junk():
     # renderers tolerate empty row sets
     assert render_berthing_csv([]) is None
     assert render_daily_csv([]) is None
+
+
+# --------------------------------------------------------------- report_date bind
+# Regression: the ingest layer threads report_date as an ISO STRING (it doubles
+# as the snapshot bucket key), but core.api_report_snapshot.report_date is a
+# `date` bound under CAST(:d AS date). asyncpg resolves the bind's type from that
+# cast and rejects a str outright ("'str' object has no attribute 'toordinal'"),
+# so the statement never reaches Postgres and the WHOLE report group fails —
+# berthing-reports and daily-reports landed ZERO snapshots on the live RDS.
+# The tests above fake insert_report_snapshot, so only this exercises the bind.
+def test_report_date_param_coerces_iso_string_to_date():
+    from datetime import date as _date
+
+    from services.jnpa_sync.repository import SyncRepository
+
+    coerce = SyncRepository._report_date_param
+    assert coerce("2026-07-11") == _date(2026, 7, 11)
+    # a full ISO timestamp is truncated to its date part
+    assert coerce("2026-07-11T13:45:00+05:30") == _date(2026, 7, 11)
+    # already-a-date and None pass straight through
+    assert coerce(_date(2026, 7, 11)) == _date(2026, 7, 11)
+    assert coerce(None) is None
+    # unparseable/empty degrade to NULL rather than exploding the group
+    assert coerce("") is None
+    assert coerce("not-a-date") is None
+    # every returned value is what asyncpg's date codec needs
+    for value in ("2026-07-11", _date(2026, 7, 11)):
+        assert hasattr(coerce(value), "toordinal")

@@ -510,11 +510,26 @@ _DDL: list[str] = [
     END $$""",
 
     # ==================================================================
-    # Migration 0051 — bathymetry depth soundings (core.bathymetry_sounding) + the
-    # 'JSON' physical_format widening. Additive; mirrors 0051 byte-for-byte.
-    # core.bathymetry_survey already exists (schema.sql §10); this is its detail table
-    # and the FIRST inbound FK it has ever had.
+    # Migration 0051 — bathymetry survey header + depth soundings.
+    # core.bathymetry_survey was historically assumed to live in an external
+    # schema.sql that this PoC DB never received; without it, CREATE sounding
+    # (FK) fails and the WHOLE ensure_marine_schema transaction rolls back —
+    # which is why vessel_call / sea_channel / marine_import_files were also
+    # missing on a fresh compose volume. Create the survey table first.
     # ==================================================================
+    """CREATE TABLE IF NOT EXISTS core.bathymetry_survey (
+        survey_id      smallint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        drawing_no     text NOT NULL UNIQUE,
+        section_label  text,
+        design_depth_m numeric(5,2),
+        survey_start   text,
+        survey_end     text,
+        survey_vessel  text,
+        file_path      text,
+        created_at     timestamptz NOT NULL DEFAULT now())""",
+    "CREATE INDEX IF NOT EXISTS idx_bathy_survey_drawing ON core.bathymetry_survey (drawing_no)",
+    "CREATE INDEX IF NOT EXISTS idx_bathy_survey_section ON core.bathymetry_survey (section_label)",
+
     """CREATE TABLE IF NOT EXISTS core.bathymetry_sounding (
         sounding_id    bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
         survey_id      smallint NOT NULL

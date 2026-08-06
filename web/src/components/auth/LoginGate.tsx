@@ -34,8 +34,8 @@ export function LoginGate({ onAuthed }: { onAuthed: (role: Role) => void }) {
         <div className="space-y-1">
           <h1 className="text-lg font-semibold">JNPA UC-III — Sign in</h1>
           <p className="text-xs text-muted-foreground">
-            Role-scoped access (JNPA Traffic · Terminal Ops · Customs · Traffic Police · Driver ·
-            DTCCC Admin).
+            Role-scoped access (Admin · Operator · Gate · Transport Partner · JNPA Traffic ·
+            Traffic Police). Accounts are issued by your DTCCC administrator.
           </p>
         </div>
         <label className="block space-y-1">

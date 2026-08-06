@@ -15,6 +15,7 @@ falls back to a stdlib HS256 verifier).
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 from pathlib import Path
@@ -27,10 +28,13 @@ for p in (str(REPO_ROOT / "shared"), str(REPO_ROOT)):
         sys.path.insert(0, p)
 
 os.environ.setdefault("POSTGRES_DSN", "postgresql+asyncpg://x:x@127.0.0.1:1/none")
+# Cheap PBKDF2 in-process; each digest carries its own iteration count.
+os.environ.setdefault("AUTH_PBKDF2_ITERATIONS", "1000")
 
 from starlette.testclient import TestClient  # noqa: E402
 
-from gateway.auth import Role, encode_token, roles_for_path  # noqa: E402
+from gateway import users  # noqa: E402
+from gateway.auth import ALL_ROLES, Role, encode_token, roles_for_path  # noqa: E402
 
 # Track clients + env so each test cleans up — AUTH_ENABLED must NEVER leak into
 # the other gateway test modules (they assume auth off). See the autouse fixture.
@@ -53,9 +57,13 @@ _TEST_SECRET = "test-secret-not-the-default-0123456789abcdef"
 @pytest.fixture(autouse=True)
 def _restore_env_and_clients():
     saved = {k: os.environ.get(k) for k in _AUTH_ENV_KEYS}
+    # Accounts are per-test: the dev in-memory user store must not leak a login
+    # from one test into the next.
+    users.reset_memory_store()
     try:
         yield
     finally:
+        users.reset_memory_store()
         # Tear down any lifespan clients opened by the test.
         while _OPEN_CLIENTS:
             try:
@@ -116,8 +124,11 @@ def test_policy_map_scoping():
     assert roles_for_path("/api/identity/verify") == frozenset(
         {Role.CUSTOMS.value, Role.DTCCC_ADMIN.value}
     )
-    # An unscoped operational path defaults to any authenticated role (6).
-    assert len(roles_for_path("/api/traffic/snapshots")) == 6
+    # An unscoped operational path defaults to any authenticated role. Seven
+    # since TRANSPORTER joined the six original stakeholder roles (migration
+    # 0123 / multi-user auth): transport partners land on exactly this default
+    # operational surface and carry no scoped-prefix access of their own.
+    assert len(roles_for_path("/api/traffic/snapshots")) == len(ALL_ROLES) == 7
 
 
 def test_method_overlay_locks_writes_without_breaking_reads():
@@ -199,8 +210,17 @@ def test_control_room_only_for_fault_control():
 
 
 def test_login_mints_role_token():
+    """Login now resolves against core.app_user (migration 0123) instead of the
+    old plaintext _seed_users() dict, so the account has to be created first —
+    there are no built-in credentials left to log in with. See
+    tests/test_auth_users.py for the full multi-user matrix."""
     c = _client(enabled=True)
-    r = c.post("/api/auth/login", json={"username": "police", "password": "police"})
+    dsn = c.app.state.gw.cfg.postgres_dsn
+    asyncio.run(users.create_user(
+        dsn, username="police", password="police-account-secret",
+        role=Role.TRAFFIC_POLICE.value, must_change_password=False))
+
+    r = c.post("/api/auth/login", json={"username": "police", "password": "police-account-secret"})
     assert r.status_code == 200
     body = r.json()
     assert body["role"] == Role.TRAFFIC_POLICE.value
@@ -211,6 +231,10 @@ def test_login_mints_role_token():
 
 def test_login_rejects_bad_credentials():
     c = _client(enabled=True)
+    dsn = c.app.state.gw.cfg.postgres_dsn
+    asyncio.run(users.create_user(
+        dsn, username="police", password="police-account-secret",
+        role=Role.TRAFFIC_POLICE.value, must_change_password=False))
     r = c.post("/api/auth/login", json={"username": "police", "password": "wrong"})
     assert r.status_code == 401
 

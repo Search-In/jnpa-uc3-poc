@@ -1145,7 +1145,12 @@ services:
       PII_MASKING_ENABLED: ${PII_MASKING_ENABLED:-true}
       PII_UNMASK_ROLES: ${PII_UNMASK_ROLES:-DTCCC_ADMIN,CUSTOMS}
       AUTH_RATE_LIMIT_PER_MIN: ${AUTH_RATE_LIMIT_PER_MIN:-600}
-      AUTH_USERS: ${AUTH_USERS:-}
+      # NOTE: AUTH_USERS is gone. Console accounts live in core.app_user
+      # (migration 0123) with PBKDF2-hashed passwords; create them with
+      # `python scripts/seed_auth_users.py`. There is deliberately no env var
+      # that can define a login, because that seam only ever held plaintext.
+      # PBKDF2 rounds for NEW password hashes (existing digests carry their own).
+      AUTH_PBKDF2_ITERATIONS: ${AUTH_PBKDF2_ITERATIONS:-200000}
       # Shared secret accepted from trusted internal services (the scenarios-runner)
       # in place of a user JWT. Same value injected into the scenarios service below.
       INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-}

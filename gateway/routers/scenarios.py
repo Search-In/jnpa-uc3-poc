@@ -27,7 +27,14 @@ async def _proxy(state: GatewayState, method: str, path: str, body: Any = None):
     """Forward to the scenario service; return (ok, json) — ok False if down."""
     url = state.cfg.scenarios_url.rstrip("/") + path
     try:
-        resp = await state.http.request(method, url, json=body)
+        # The shared client's 2 s upstream timeout is tuned for ANPR liveness,
+        # not for scenario control: a reset synchronously deletes injected
+        # trucks, reopens gates and cleans RDS rows (10-30 s over a WAN), so at
+        # 2 s every reset "failed" with scenarios_runner_unreachable even
+        # though the runner completed it. A down runner still fails fast on
+        # connect; only a slow RESPONSE is given the longer budget.
+        resp = await state.http.request(method, url, json=body,
+                                        timeout=httpx.Timeout(45.0, connect=5.0))
     except httpx.HTTPError as exc:
         log.debug("scenarios_upstream_unreachable", url=url, error=str(exc))
         return False, None

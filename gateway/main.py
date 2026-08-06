@@ -415,7 +415,7 @@ async def _lifespan(app: FastAPI):
 
     # JNPA Port-Data API sync: the core.api_sync_state / api_ingest_run /
     # api_record / api_report_snapshot / api_defect_log tables. Idempotent,
-    # additive — mirrors v3 migration 0117 so a dev DB that never ran it still
+    # additive — mirrors v3 migration 0124 so a dev DB that never ran it still
     # gets the objects. Runs regardless of whether the sync loop is enabled
     # (the /api/integrations/jnpa/* reads need the tables).
     try:
@@ -774,7 +774,7 @@ app.include_router(bhuvan.router)            # Bhuvan WMS geospatial layer (ISRO
 app.include_router(logistics.router)         # ULIP logistics intelligence (LIVE→CACHED→DATABASE→FALLBACK)
 app.include_router(jnpa_api.router)          # JNPA Port-Data API sync (dt.jnpa.in → upload services)
 app.include_router(rail.router)              # Rail feeds (FOIS / Form 11 / CTO — read path for the 0119 tables)
-app.include_router(edi_vessel.router)        # COARRI/COPRAR vessel-side container moves (read path for 0123)
+app.include_router(edi_vessel.router)        # COARRI/COPRAR vessel-side container moves (read path for 0125)
 app.include_router(double_trip.router)       # TT double-trip workflow
 app.include_router(ws.router)
 app.include_router(checkin.router)

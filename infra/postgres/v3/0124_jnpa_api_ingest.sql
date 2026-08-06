@@ -1,5 +1,8 @@
 -- ============================================================
--- 0117  JNPA Simulated Port-Data API — ingest machinery
+-- 0124  JNPA Simulated Port-Data API — ingest machinery
+-- (renumbered from a duplicate 0117 — 0117_gate_capture_evidence.sql keeps
+--  the slot; the version ledger is keyed on the number, so duplicates abort
+--  every migrate run with a checksum-drift error. Content unchanged.)
 -- Additive only. Naming: singular, per architecture conventions.
 --
 -- Five tables for the live-API sync layer (services/jnpa_sync +

@@ -249,6 +249,17 @@ export default function LiveOperations() {
     enabled: !!selected?.plate,
   });
 
+  // `selected` holds the truck object as it was AT CLICK TIME. React Query hands
+  // back new object identities on every refetch, so that snapshot is detached the
+  // moment fresh telemetry lands — the rail and the map move on while the detail
+  // panel keeps rendering the old position. Re-resolve it against the live list
+  // by device_id so the panel shows current lat/lon/speed/heading/remaining.
+  // Falls back to the snapshot when the truck drops out of the (filtered, capped)
+  // list, so the panel keeps its last known values instead of blanking.
+  const liveSelected = selected
+    ? (allTrucks.find((t) => t.device_id === selected.device_id) ?? selected)
+    : null;
+
   const selectedFocus = selected
     ? { lat: selected.position.lat, lon: selected.position.lon }
     : null;
@@ -390,8 +401,10 @@ export default function LiveOperations() {
         {/* Selected-vehicle detail (Trip / ETA / Driver / History / Violations). */}
         {selected && (
           <div className="px-4 pb-3">
+            {/* `?? selected` is only for narrowing: inside this guard
+                liveSelected is non-null by construction. */}
             <VehicleDetail
-              truck={selected}
+              truck={liveSelected ?? selected}
               intel={intelQ.data}
               status={intelQ}
               onClose={() => setSelected(null)}

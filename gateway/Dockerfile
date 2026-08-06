@@ -49,6 +49,13 @@ COPY services/ /app/services/
 # (services/weather) imports it, so it MUST be present in the image.
 COPY integrations/ /app/integrations/
 
+# Congestion model-performance artifact ONLY (not the ai/ package). /api/traffic/metrics
+# proxies ai/congestion's GET /metrics, which itself just serves this committed
+# training summary; the gateway reads the same file as its LOCAL_ARTIFACT rung so
+# the model-performance card survives the congestion container being down. Data,
+# not code — no ai/ dependency is added to the gateway image.
+COPY ai/congestion/artifacts/metrics.json /app/ai/congestion/artifacts/metrics.json
+
 # Guarantee starlette is intact: the original build landed a half-written
 # starlette (Version: None -> `import starlette.exceptions` fails) which only
 # surfaced at runtime, not at the build import-guard. Force a clean reinstall of

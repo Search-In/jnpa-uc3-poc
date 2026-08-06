@@ -36,6 +36,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
+from ..data_mode import data_mode
 from ..logging import get_logger
 from ..metrics import REQUESTS
 from ..notifications import dispatch_alert
@@ -122,6 +123,7 @@ async def list_transporters(request: Request,
                             q: Optional[str] = Query(default=None),
                             status: Optional[str] = Query(default=None),
                             limit: int = Query(default=100, ge=1, le=1000),
+                            mode: Optional[str] = Depends(data_mode),
                             state: GatewayState = Depends(get_state)) -> dict:
     dsn = state.cfg.postgres_dsn
     if not dsn:
@@ -141,6 +143,10 @@ async def list_transporters(request: Request,
     if status:
         where.append("status = :status")
         params["status"] = status.upper()
+    # LIVE/DEMO provenance filter — None ⇒ no predicate (identical SQL).
+    if mode:
+        where.append("t.data_origin = :data_origin")
+        params["data_origin"] = mode
     clause = ("WHERE " + " AND ".join(where)) if where else ""
     rows = await fetch_all(
         f"""SELECT {_T_COLS_T},
@@ -158,18 +164,25 @@ async def list_transporters(request: Request,
 
 @router.get("/blacklist")
 async def active_blacklist(limit: int = Query(default=200, ge=1, le=1000),
+                           mode: Optional[str] = Depends(data_mode),
                            state: GatewayState = Depends(get_state)) -> dict:
     dsn = state.cfg.postgres_dsn
     if not dsn:
         return {"count": 0, "blacklist": []}
     from jnpa_shared.db import fetch_all
+    params: Dict[str, Any] = {"limit": limit}
+    origin_clause = ""
+    # LIVE/DEMO provenance filter — None ⇒ no predicate (identical SQL).
+    if mode:
+        origin_clause = " AND t.data_origin = :data_origin"
+        params["data_origin"] = mode
     rows = await fetch_all(
-        """SELECT b.*, t.company_name AS transporter_name, t.code AS transporter_code
+        f"""SELECT b.*, t.company_name AS transporter_name, t.code AS transporter_code
            FROM core.transporter_blacklist b
            JOIN core.transporter t ON t.id = b.transporter_id
-           WHERE b.status = 'ACTIVE'
+           WHERE b.status = 'ACTIVE'{origin_clause}
            ORDER BY b.blacklisted_at DESC LIMIT :limit""",
-        {"limit": limit}, dsn=dsn)
+        params, dsn=dsn)
     return {"count": len(rows), "blacklist": [_iso(dict(r)) for r in rows]}
 
 
@@ -232,13 +245,21 @@ async def validate_driver(driver_id: str, state: GatewayState = Depends(get_stat
 
 @router.get("/{transporter_id}")
 async def get_transporter(request: Request, transporter_id: int,
+                          mode: Optional[str] = Depends(data_mode),
                           state: GatewayState = Depends(get_state)) -> dict:
     dsn = state.cfg.postgres_dsn
     if not dsn:
         raise HTTPException(503, "database_unavailable")
     from jnpa_shared.db import fetch_all, fetch_one
-    row = await fetch_one(f"SELECT {_T_COLS} FROM core.transporter WHERE id = :id",
-                          {"id": transporter_id}, dsn=dsn)
+    tparams: Dict[str, Any] = {"id": transporter_id}
+    origin_clause = ""
+    # LIVE/DEMO provenance filter — None ⇒ no predicate (identical SQL).
+    if mode:
+        origin_clause = " AND data_origin = :data_origin"
+        tparams["data_origin"] = mode
+    row = await fetch_one(
+        f"SELECT {_T_COLS} FROM core.transporter WHERE id = :id{origin_clause}",
+        tparams, dsn=dsn)
     if not row:
         raise HTTPException(404, "transporter_not_found")
     vehicles = await fetch_all(
@@ -247,9 +268,14 @@ async def get_transporter(request: Request, transporter_id: int,
     blacklist = await fetch_all(
         "SELECT * FROM core.transporter_blacklist WHERE transporter_id = :id ORDER BY blacklisted_at DESC",
         {"id": transporter_id}, dsn=dsn)
+    transporter = _iso(dict(row))
+    # Same semantics as the list endpoint's EXISTS(..., status='ACTIVE') column;
+    # the UI reads t.blacklisted on the detail view too.
+    transporter["blacklisted"] = any(
+        (b.get("status") or "").upper() == "ACTIVE" for b in blacklist)
     return mask_for_request(
         request,
-        {"transporter": _iso(dict(row)),
+        {"transporter": transporter,
          "vehicles": [_iso(dict(v)) for v in vehicles],
          "blacklist_history": [_iso(dict(b)) for b in blacklist]},
         surface="transporters.detail")

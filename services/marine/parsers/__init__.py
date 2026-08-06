@@ -20,11 +20,15 @@ from typing import Any, Callable, Optional
 import xml.etree.ElementTree as ET
 
 from ..upload_parsers import ParseResult, parse as _csv_parse, read_rows_from_bytes
+from .beralt import parse_beralt
 from .berman import parse_berman
 from .calinf import parse_calinf
+from .calinv import parse_calinv
 from .documents import document_type, safe_fromstring
 from .envelope import detect_format, extract_xml_documents
+from .paisps import parse_paisps
 from .pcs_common import MarineParseError
+from .pilot_memo import parse_ackplm, parse_pltmem
 from .registry import (DocumentTypeError, DocumentTypeMismatch, PARSER_REGISTRY,
                        ParserSpec, UnknownDocumentType, known_document_types,
                        normalise_document_type, resolve_by_document_type,
@@ -41,9 +45,26 @@ _document_type_of = document_type
 REGISTRY: dict[str, Callable[..., list[dict[str, Any]]]] = {
     "VESPRO": parse_vespro,
     "CALINF": parse_calinf,
+    "CALINV": parse_calinv,
     "BERMAN": parse_berman,
+    "BERALT": parse_beralt,
     "VESARR": parse_vesarr,
     "VESDEP": parse_vesdep,
+    # Pilot ALLOTMENT -> core.pilotage. Writes a DIFFERENT target than the call spine, so
+    # no existing record shape changes.
+    #
+    # PLTMEM was originally NOT routed: in the SAMPLE-PACK corpus it duplicated
+    # ACKPLM (14 of 15 VCNs overlapped) and ACKPLM was strictly richer. The
+    # LIVE dt.jnpa.in corpus contains NO ACKPLM at all — PLTMEM is the only
+    # pilot-movement message it delivers (142 documents on the first backfill,
+    # all REJECTED while unrouted) — so the duplication argument no longer
+    # holds and the application is now routed. Re-imports of the dump corpus
+    # stay safe: pilotage rows dedup ON CONFLICT at the movement key.
+    "PLTMEM": parse_pltmem,
+    "ACKPLM": parse_ackplm,
+    # PAISPS (Pre-Arrival Notification ISPS) — LIVE-corpus message absent from
+    # the sample pack; lands as an ISPS_DECLARED call event keyed by VCN.
+    "PAISPS": parse_paisps,
 }
 
 __all__ = [

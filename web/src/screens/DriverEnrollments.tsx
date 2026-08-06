@@ -42,6 +42,7 @@ import {
 } from "@/components/ui/dtccc";
 import { STATUS } from "@/lib/tokens";
 import { fmtDateTimeIST } from "@/lib/utils";
+import { useVehicleNumbers, vehicleLabel } from "@/lib/vehicles";
 
 const FILTERS = ["PENDING", "ACTIVE", "REJECTED", "ALL"] as const;
 type Filter = (typeof FILTERS)[number];
@@ -112,6 +113,10 @@ export default function DriverEnrollments() {
 
   const invalidate = () => void qc.invalidateQueries({ queryKey: ["enrollments"] });
 
+  // Vehicle IDs -> registration numbers for every vehicle-bearing row (one cached
+  // Vehicle Master read for the whole screen).
+  const vehicles = useVehicleNumbers();
+
   const columns: Column<DriverEnrollment>[] = [
     {
       key: "photo",
@@ -140,6 +145,14 @@ export default function DriverEnrollments() {
       header: t("enrollments.license", "Licence"),
       className: "font-mono",
       render: (e) => e.license_no || "—",
+    },
+    {
+      // Registration, not the TRK-id the record stores — the queue is scanned
+      // against the vehicles physically at the gate.
+      key: "vehicle",
+      header: t("enrollments.vehicle", "Vehicle"),
+      className: "font-mono",
+      render: (e) => (e.vehicle_no ? vehicles.label(e.vehicle_no) : "—"),
     },
     {
       key: "submitted",
@@ -239,7 +252,11 @@ export default function DriverEnrollments() {
             onRetry={() => listQ.refetch()}
             emptyLabel={t("enrollments.empty", "No enrollment requests in this view.")}
             search={(e, q) =>
-              `${e.name} ${e.driver_id} ${e.license_no ?? ""} ${e.vehicle_no ?? ""}`
+              // Searchable by registration as well as the stored Vehicle ID, so the
+              // number shown in the column is the number you can type.
+              `${e.name} ${e.driver_id} ${e.license_no ?? ""} ${e.vehicle_no ?? ""} ${
+                vehicles.numberOf(e.vehicle_no) ?? ""
+              }`
                 .toLowerCase()
                 .includes(q)
             }
@@ -308,7 +325,11 @@ function CreateDriverForm({
   const [license, setLicense] = useState(initialLicense || "");
   const [mobile, setMobile] = useState("");
   const [emergency, setEmergency] = useState("");
+  // `vehicle` is the internal Vehicle ID (TRK-…) the API is addressed by;
+  // `vehicleNumber` is the registration the admin actually reads. Both are kept:
+  // the ID is submitted, the number is displayed.
   const [vehicle, setVehicle] = useState<string>("");
+  const [vehicleNumber, setVehicleNumber] = useState<string>("");
   const [vehicleQuery, setVehicleQuery] = useState("");
   const [dropdownOpen, setDropdownOpen] = useState(false);
 
@@ -383,20 +404,24 @@ function CreateDriverForm({
               )}
               <input
                 className="flex-1 bg-transparent text-sm outline-none"
-                value={dropdownOpen ? vehicleQuery : vehicle || vehicleQuery}
+                value={dropdownOpen ? vehicleQuery : vehicleNumber || vehicleQuery}
                 onFocus={() => setDropdownOpen(true)}
                 onChange={(e) => {
                   setVehicleQuery(e.target.value);
                   setDropdownOpen(true);
-                  if (vehicle) setVehicle("");
+                  if (vehicle) {
+                    setVehicle("");
+                    setVehicleNumber("");
+                  }
                 }}
-                placeholder={t("enrollments.searchVehicle", "Search available Vehicle ID…")}
+                placeholder={t("enrollments.searchVehicle", "Search available vehicle number…")}
               />
               {vehicle && (
                 <button
                   type="button"
                   onClick={() => {
                     setVehicle("");
+                    setVehicleNumber("");
                     setVehicleQuery("");
                   }}
                   className="text-muted-foreground hover:text-foreground"
@@ -421,15 +446,20 @@ function CreateDriverForm({
                       key={v.vehicle_id}
                       type="button"
                       onClick={() => {
+                        // The ID is what POST /api/identity/drivers validates and
+                        // stores — it stays the value; only the label changes.
                         setVehicle(v.vehicle_id);
+                        setVehicleNumber(vehicleLabel(v));
                         setVehicleQuery("");
                         setDropdownOpen(false);
                       }}
                       className="flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-sm hover:bg-muted"
                     >
-                      <span className="font-mono">{v.vehicle_id}</span>
-                      {v.plate && (
-                        <span className="text-[10px] text-muted-foreground">{v.plate}</span>
+                      {/* Registration first: it is the only identifier the admin can
+                          match against the vehicle in front of them. */}
+                      <span className="font-mono">{vehicleLabel(v)}</span>
+                      {v.vehicle_type && (
+                        <span className="text-[10px] text-muted-foreground">{v.vehicle_type}</span>
                       )}
                     </button>
                   ))
@@ -446,7 +476,17 @@ function CreateDriverForm({
       >
         {t(
           "enrollments.createNote",
-          "Creates a PENDING profile. After you approve it, the assigned Vehicle ID becomes eligible for Driver PWA login.",
+          "Creates a PENDING profile. After you approve it, the assigned vehicle becomes eligible for Driver PWA login.",
+        )}
+        {vehicle && (
+          // Pairing is still keyed on the Vehicle ID, so the admin is shown the one
+          // the driver must enter — alongside, not instead of, the number.
+          <div className="mt-1 font-mono text-[10px] text-muted-foreground">
+            {t("enrollments.pairingId", "Pairing ID for {{number}}: {{id}}", {
+              number: vehicleNumber || vehicle,
+              id: vehicle,
+            })}
+          </div>
         )}
       </div>
 
@@ -572,6 +612,7 @@ function EnrollmentDetail({
     queryKey: ["enrollment-detail", driverId],
     queryFn: () => getAdapter().enrollmentDetail(driverId),
   });
+  const vehicles = useVehicleNumbers();
   const rec = detailQ.data;
   const actions = useEnrollmentActions(driverId, () => {
     onChanged();
@@ -633,7 +674,27 @@ function EnrollmentDetail({
       <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
         <Field k={t("enrollments.license", "Licence")} v={rec.license_no} mono />
         <Field k={t("enrollments.mobile", "Mobile")} v={rec.mobile} />
-        <Field k={t("enrollments.vehicle", "Vehicle")} v={rec.vehicle_no} mono />
+        {/* The enrollment stores only the Vehicle ID, so the registration is
+            resolved from the Vehicle Master for display. The ID is kept as a
+            sub-line because it is what the driver types at PWA pairing — the
+            admin has to be able to read it out. */}
+        <Field
+          k={t("enrollments.vehicle", "Vehicle")}
+          v={
+            rec.vehicle_no ? (
+              <>
+                <span className="font-mono">{vehicles.label(rec.vehicle_no)}</span>
+                {vehicles.numberOf(rec.vehicle_no) && (
+                  <span className="block font-mono text-[10px] text-muted-foreground">
+                    {t("enrollments.vehicleIdLogin", "ID {{id}} · PWA login", {
+                      id: rec.vehicle_no,
+                    })}
+                  </span>
+                )}
+              </>
+            ) : null
+          }
+        />
         <Field k={t("enrollments.aadhaar", "Aadhaar / ID")} v={rec.aadhaar_masked} mono />
         <Field k={t("enrollments.emergency", "Emergency contact")} v={rec.emergency_contact} />
         <Field

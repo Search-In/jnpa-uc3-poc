@@ -137,12 +137,24 @@ async def upload_validate(request: Request,
 async def upload_import(request: Request,
                         file: UploadFile = File(...),
                         document_type: Optional[str] = Form(default=None),
+                        override: bool = Form(
+                            default=False,
+                            description="Re-process a file already in the ledger instead "
+                                        "of returning SKIPPED_DUPLICATE. Upserts only — "
+                                        "deletes nothing."),
                         svc: MarineUploadService = Depends(get_upload_service)) -> Dict[str, Any]:
+    """Import an upload. Idempotent by file hash.
+
+    ``override`` is ADDITIVE and optional: omitted, this endpoint behaves exactly as
+    before, duplicates included. Supplied as true, the file is re-processed through the
+    same upsert path so the business rows and the lifecycle projection refresh in place.
+    The response shape is identical either way.
+    """
     uploader = require_uploader(request)
     content = await _read_upload(file)
     try:
         res = await svc.import_file(content, file.filename or "upload.csv", uploader,
-                                    document_type=document_type)
+                                    document_type=document_type, override=override)
     except (UnknownDocumentType, DocumentTypeMismatch) as exc:
         REQUESTS.labels(_API, "error").inc()
         raise _document_type_error(exc) from exc

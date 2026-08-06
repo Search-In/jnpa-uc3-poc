@@ -29,19 +29,34 @@ from jnpa_shared.logging import get_logger
 log = get_logger("services.transporters_drivers.repository")
 
 
+def _data_origin(uploaded_by: Optional[str]) -> str:
+    """LIVE (JNPA-API sync) vs DEMO (manual import) provenance tag for a write."""
+    return "API" if (uploaded_by or "").strip().lower() == "jnpa-api" else "MANUAL"
+
+
 class TransportersDriversRepository:
     def __init__(self, dsn: Optional[str] = None) -> None:
         self._dsn = dsn
 
     # ---------------------------------------------------------------- dedup
-    async def find_file_by_sha(self, sha256: str) -> Optional[dict]:
-        """The prior ledger row for identical bytes (content-level dedup), or None."""
+    async def find_file_by_sha(self, sha256: str,
+                               data_origin: Optional[str] = None) -> Optional[dict]:
+        """The prior ledger row for identical bytes (content-level dedup), or None.
+
+        Dedup is PER-ORIGIN when ``data_origin`` is given: LIVE (API) and DEMO
+        (manual) each keep their own copy of identical bytes — see migration 0120's
+        UNIQUE(source_sha256, data_origin). Omitted ⇒ match any origin (unchanged)."""
+        where = "source_sha256 = :sha"
+        params: dict[str, Any] = {"sha": sha256}
+        if data_origin is not None:
+            where += " AND data_origin = :data_origin"
+            params["data_origin"] = data_origin
         async with get_engine(self._dsn).connect() as conn:
             row = (await conn.execute(text(
                 "SELECT id, entity_type, source_file, import_status, record_count, "
                 "imported_count, error_count, duplicate_count, created_at "
-                "FROM core.td_import_file WHERE source_sha256 = :sha"),
-                {"sha": sha256})).mappings().first()
+                f"FROM core.td_import_file WHERE {where}"),
+                params)).mappings().first()
         return dict(row) if row else None
 
     # ---------------------------------------------------------------- persist
@@ -52,7 +67,8 @@ class TransportersDriversRepository:
         """Persist one uploaded file atomically + idempotently. Returns the outcome
         envelope incl. ``created`` / ``updated`` / ``row_errors`` (DB-level per-row
         failures the caller records + folds into the PARTIAL decision)."""
-        existing = await self.find_file_by_sha(source_sha256)
+        data_origin = _data_origin(uploaded_by)
+        existing = await self.find_file_by_sha(source_sha256, data_origin)
         if existing is not None:
             return {"file_id": existing["id"], "import_status": "SKIPPED_DUPLICATE",
                     "record_count": existing["record_count"],
@@ -66,6 +82,7 @@ class TransportersDriversRepository:
             "source_file": source_file, "source_sha256": source_sha256,
             "file_size_bytes": file_size, "record_count": len(records),
             "uploaded_by": uploaded_by, "source": source,
+            "data_origin": data_origin,
         }
         upsert_sql = _TRANSPORTER_UPSERT if entity_type == "TRANSPORTER" else _DRIVER_UPSERT
         row_errors: list[dict[str, Any]] = []
@@ -82,8 +99,8 @@ class TransportersDriversRepository:
 
                 created = updated = 0
                 for rec in records:
-                    params = (self._transporter_params(rec, fid) if entity_type == "TRANSPORTER"
-                              else self._driver_params(rec, fid, tmap))
+                    params = (self._transporter_params(rec, fid, data_origin) if entity_type == "TRANSPORTER"
+                              else self._driver_params(rec, fid, tmap, data_origin))
                     try:
                         async with conn.begin_nested():
                             res = (await conn.execute(text(upsert_sql), params)).first()
@@ -114,7 +131,7 @@ class TransportersDriversRepository:
                     "duplicate_count": 0, "duplicate": False,
                     "created": created, "updated": updated, "row_errors": row_errors}
         except IntegrityError as exc:
-            dup_row = await self.find_file_by_sha(source_sha256)
+            dup_row = await self.find_file_by_sha(source_sha256, data_origin)
             if dup_row is not None:
                 return {"file_id": dup_row["id"], "import_status": "SKIPPED_DUPLICATE",
                         "record_count": dup_row["record_count"],
@@ -128,7 +145,7 @@ class TransportersDriversRepository:
             return await self._record_failure(envelope, str(exc))
 
     @staticmethod
-    def _transporter_params(rec: Mapping[str, Any], fid: int) -> dict[str, Any]:
+    def _transporter_params(rec: Mapping[str, Any], fid: int, data_origin: str) -> dict[str, Any]:
         return {
             "source_company_id": rec["source_company_id"],
             "source_user_id": rec.get("source_user_id"),
@@ -137,11 +154,13 @@ class TransportersDriversRepository:
             "contact_person": rec.get("contact_person"), "designation": rec.get("designation"),
             "email": rec.get("email"), "mobile": rec.get("mobile"),
             "address": rec.get("address"), "import_file_id": fid,
+            "data_origin": data_origin,
             "_key": f"company_id={rec['source_company_id']}",
         }
 
     @staticmethod
-    def _driver_params(rec: Mapping[str, Any], fid: int, tmap: Mapping[str, int]) -> dict[str, Any]:
+    def _driver_params(rec: Mapping[str, Any], fid: int, tmap: Mapping[str, int],
+                       data_origin: str) -> dict[str, Any]:
         company = (rec.get("company_name") or "").strip().lower()
         return {
             "licence_no": rec["licence_no"], "licence_no_norm": rec["licence_no_norm"],
@@ -151,6 +170,7 @@ class TransportersDriversRepository:
             "licence_valid_to": rec.get("licence_valid_to"), "dob": rec.get("dob"),
             "latest_pdp_number": rec.get("latest_pdp_number"),
             "status": rec.get("status") or "ACTIVE", "import_file_id": fid,
+            "data_origin": data_origin,
             "_key": f"licence={rec['licence_no_norm']}",
         }
 
@@ -179,8 +199,9 @@ class TransportersDriversRepository:
                                      detail: str, errors: Sequence[Mapping[str, Any]]) -> Optional[int]:
         """Record a structurally-rejected upload (missing required columns / no valid
         rows) as a FAILED ledger row so it appears in history, with its errors. Writes
-        NO master rows. De-dupes on sha256."""
-        existing = await self.find_file_by_sha(source_sha256)
+        NO master rows. De-dupes on sha256 (per-origin)."""
+        data_origin = _data_origin(uploaded_by)
+        existing = await self.find_file_by_sha(source_sha256, data_origin)
         if existing is not None:
             return existing["id"]
         envelope = {
@@ -188,6 +209,7 @@ class TransportersDriversRepository:
             "source_file": source_file, "source_sha256": source_sha256,
             "file_size_bytes": file_size, "record_count": 0,
             "error_detail": detail[:4000], "uploaded_by": uploaded_by, "source": "UPLOAD",
+            "data_origin": data_origin,
         }
         try:
             async with get_engine(self._dsn).begin() as conn:
@@ -272,20 +294,20 @@ class TransportersDriversRepository:
 _FILE_INSERT = """
 INSERT INTO core.td_import_file
     (entity_type, physical_format, source_file, source_sha256, file_size_bytes,
-     record_count, import_status, uploaded_by, source)
+     record_count, import_status, uploaded_by, source, data_origin)
 VALUES
     (:entity_type, :physical_format, :source_file, :source_sha256, :file_size_bytes,
-     :record_count, 'PENDING', :uploaded_by, :source)
+     :record_count, 'PENDING', :uploaded_by, :source, :data_origin)
 RETURNING id
 """
 
 _FILE_INSERT_FAILED = """
 INSERT INTO core.td_import_file
     (entity_type, physical_format, source_file, source_sha256, file_size_bytes,
-     record_count, import_status, error_detail, uploaded_by, source)
+     record_count, import_status, error_detail, uploaded_by, source, data_origin)
 VALUES
     (:entity_type, :physical_format, :source_file, :source_sha256, :file_size_bytes,
-     :record_count, 'FAILED', :error_detail, :uploaded_by, :source)
+     :record_count, 'FAILED', :error_detail, :uploaded_by, :source, :data_origin)
 RETURNING id
 """
 
@@ -295,10 +317,12 @@ RETURNING id
 _TRANSPORTER_UPSERT = """
 INSERT INTO core.transporter
     (company_id, user_id, company_name, code, gstin, contact, status,
-     contact_person, designation, email, mobile_number, address, import_file_id)
+     contact_person, designation, email, mobile_number, address, import_file_id,
+     data_origin)
 VALUES
     (:source_company_id, :source_user_id, :name, :code, :gstin, '{}'::jsonb, :status,
-     :contact_person, :designation, :email, :mobile, :address, :import_file_id)
+     :contact_person, :designation, :email, :mobile, :address, :import_file_id,
+     :data_origin)
 ON CONFLICT (company_id) DO UPDATE SET
     company_name   = EXCLUDED.company_name,
     code           = COALESCE(EXCLUDED.code, core.transporter.code),
@@ -311,6 +335,7 @@ ON CONFLICT (company_id) DO UPDATE SET
     mobile_number  = COALESCE(EXCLUDED.mobile_number, core.transporter.mobile_number),
     address        = COALESCE(EXCLUDED.address, core.transporter.address),
     import_file_id = EXCLUDED.import_file_id,
+    data_origin    = EXCLUDED.data_origin,
     updated_at     = now()
 RETURNING (xmax = 0) AS inserted
 """
@@ -321,10 +346,12 @@ RETURNING (xmax = 0) AS inserted
 _DRIVER_UPSERT = """
 INSERT INTO core.driver
     (licence_number, driver_name, company_name, transporter_id, licence_type,
-     licence_valid_to, latest_pdp_number, date_of_birth, status, import_file_id)
+     licence_valid_to, latest_pdp_number, date_of_birth, status, import_file_id,
+     data_origin)
 VALUES
     (:licence_no, :name, :company_name, :transporter_id, :licence_type,
-     :licence_valid_to, :latest_pdp_number, :dob, :status, :import_file_id)
+     :licence_valid_to, :latest_pdp_number, :dob, :status, :import_file_id,
+     :data_origin)
 ON CONFLICT (licence_no_norm) WHERE id < 100000000 DO UPDATE SET
     licence_number    = EXCLUDED.licence_number,
     driver_name       = EXCLUDED.driver_name,
@@ -336,6 +363,7 @@ ON CONFLICT (licence_no_norm) WHERE id < 100000000 DO UPDATE SET
     date_of_birth     = COALESCE(EXCLUDED.date_of_birth, core.driver.date_of_birth),
     status            = EXCLUDED.status,
     import_file_id    = EXCLUDED.import_file_id,
+    data_origin       = EXCLUDED.data_origin,
     updated_at        = now()
 RETURNING (xmax = 0) AS inserted
 """

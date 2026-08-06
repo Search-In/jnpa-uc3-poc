@@ -3,7 +3,8 @@
 // gateway. Every helper returns parsed JSON and throws on non-2xx so TanStack
 // Query surfaces the error state.
 
-import { getToken } from "./auth";
+import { authEnabled, clearSession, getToken } from "./auth";
+import { getDataSourceMode } from "./dataSourceMode";
 import type { AvailableVehicle } from "./types";
 
 // Request budget. Without one, `fetch` waits indefinitely: the 2026-08-04 audit
@@ -43,10 +44,17 @@ async function http<T>(
   // auth is disabled there is no token and the header is simply omitted.
   const token = getToken();
   const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+  // Data-source provenance filter (LIVE = JNPA-API rows, DEMO = pre-loaded).
+  const dataModeHeader: Record<string, string> = { "x-data-mode": getDataSourceMode() };
   let res: Response;
   try {
     res = await fetch(path, {
-      headers: { "content-type": "application/json", ...authHeader, ...(init?.headers || {}) },
+      headers: {
+        "content-type": "application/json",
+        ...authHeader,
+        ...dataModeHeader,
+        ...(init?.headers || {}),
+      },
       ...init,
       signal: timeoutSignal(timeoutMs, init?.signal),
     });
@@ -67,6 +75,7 @@ async function http<T>(
     throw err;
   }
   if (!res.ok) {
+    if (res.status === 401) onUnauthorized();
     let detail: any = undefined;
     try {
       detail = await res.json();
@@ -79,6 +88,23 @@ async function http<T>(
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+/** Drop an expired/revoked session and return to the login gate.
+ *
+ *  A JWT lasts at most 8 h and cannot be revoked server-side, so the console has
+ *  to notice a dead session itself. Without this a 401 surfaced as a generic
+ *  panel error and the operator was stuck on a dashboard where nothing loaded
+ *  and nothing offered a way to sign in again. Guarded on a token actually being
+ *  present so an anonymous 401 can never loop the page. */
+function onUnauthorized(): void {
+  if (!authEnabled() || !getToken()) return;
+  clearSession();
+  try {
+    window.location.assign("/");
+  } catch {
+    /* navigation is unimplemented in jsdom (unit tests) */
+  }
 }
 
 // The gateway reports refusals as `{detail: {error, detail, ...extra}}` with a
@@ -141,7 +167,8 @@ async function downloadFile(path: string, filename: string): Promise<void> {
   const token = getToken();
   const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
   const res = await fetch(path, {
-    headers: { ...authHeader },
+    // Data-source provenance filter (LIVE = JNPA-API rows, DEMO = pre-loaded).
+    headers: { ...authHeader, "x-data-mode": getDataSourceMode() },
     signal: timeoutSignal(UPLOAD_TIMEOUT_MS),
   });
   if (!res.ok) {
@@ -173,7 +200,8 @@ async function postForm<T>(path: string, form: FormData): Promise<T> {
   const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
   const res = await fetch(path, {
     method: "POST",
-    headers: { ...authHeader },
+    // Data-source provenance filter (LIVE = JNPA-API rows, DEMO = pre-loaded).
+    headers: { ...authHeader, "x-data-mode": getDataSourceMode() },
     body: form,
     signal: timeoutSignal(UPLOAD_TIMEOUT_MS),
   });
@@ -764,10 +792,21 @@ export const api = {
       `/api/gate-docs/${docType}${qs.toString() ? `?${qs}` : ""}`,
     );
   },
-  gateDocsForContainer: (containerNo: string) =>
-    http<GateDocBundle>(`/api/gate-docs/container/${encodeURIComponent(containerNo)}`),
-  gateDocsForTruck: (truckNo: string) =>
-    http<GateDocBundle>(`/api/gate-docs/truck/${encodeURIComponent(truckNo)}`),
+  // Form-13 provenance: in LIVE data mode the timeline pins source=live so
+  // simulator-generated Form 13s never mix into the ingested document trail
+  // (the server default is "all"). Explicit `source` overrides the pin.
+  gateDocsForContainer: (containerNo: string, source?: "live" | "sim" | "all") => {
+    const pin = source ?? (getDataSourceMode() === "LIVE" ? "live" : undefined);
+    return http<GateDocBundle>(
+      `/api/gate-docs/container/${encodeURIComponent(containerNo)}${pin ? `?source=${pin}` : ""}`,
+    );
+  },
+  gateDocsForTruck: (truckNo: string, source?: "live" | "sim" | "all") => {
+    const pin = source ?? (getDataSourceMode() === "LIVE" ? "live" : undefined);
+    return http<GateDocBundle>(
+      `/api/gate-docs/truck/${encodeURIComponent(truckNo)}${pin ? `?source=${pin}` : ""}`,
+    );
+  },
   gateDocTat: (terminal?: string) =>
     http<GateDocTat>(
       `/api/gate-docs/tat${terminal ? `?terminal=${encodeURIComponent(terminal)}` : ""}`,

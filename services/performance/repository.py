@@ -80,21 +80,26 @@ class PerformanceRepository:
         return [str(r["report_date"]) for r in rows]
 
     # ---------------------------------------------------------------- KPI headline
-    async def _day_headline(self, conn, d: date) -> dict:
+    async def _day_headline(self, conn, d: date, data_origin: Optional[str] = None) -> dict:
+        # LIVE/DEMO provenance filter — None ⇒ no predicate (identical SQL).
+        oc = " AND data_origin = :data_origin" if data_origin else ""
+        p: dict[str, Any] = {"d": d}
+        if data_origin:
+            p["data_origin"] = data_origin
         teus = (await conn.execute(text(
             "SELECT total_teus FROM core.perf_daily_traffic "
-            "WHERE report_date=:d AND terminal_code='JN_PORT' AND period='DAY'"),
-            {"d": d})).scalar()
+            f"WHERE report_date=:d AND terminal_code='JN_PORT' AND period='DAY'{oc}"),
+            p)).scalar()
         tonnage = (await conn.execute(text(
             "SELECT total_tonnes, vessels FROM core.perf_daily_tonnage "
-            "WHERE report_date=:d AND category='JNPA_TOTAL' AND period='DAY'"),
-            {"d": d})).mappings().first()
+            f"WHERE report_date=:d AND category='JNPA_TOTAL' AND period='DAY'{oc}"),
+            p)).mappings().first()
         st = (await conn.execute(text(
             "SELECT yard_occupancy_pct, gate_in_teus, gate_out_teus, gate_total_teus, "
             "  icd_pendency_teus, cfs_pendency_teus, reefer_total_slots, "
             "  reefer_occupied_slots, reefer_available_slots "
             "FROM core.perf_daily_terminal_status "
-            "WHERE report_date=:d AND terminal_code='TOTAL'"), {"d": d})).mappings().first()
+            f"WHERE report_date=:d AND terminal_code='TOTAL'{oc}"), p)).mappings().first()
         st = dict(st) if st else {}
         pend = None
         if st.get("icd_pendency_teus") is not None or st.get("cfs_pendency_teus") is not None:
@@ -112,19 +117,25 @@ class PerformanceRepository:
             "reefer_total_slots": st.get("reefer_total_slots"),
         }
 
-    async def kpi(self, report_date: Optional[date]) -> Optional[dict]:
+    async def kpi(self, report_date: Optional[date],
+                  data_origin: Optional[str] = None) -> Optional[dict]:
+        # LIVE/DEMO provenance filter — None ⇒ no predicate (identical SQL).
         async with get_engine(self._dsn).connect() as conn:
             d = report_date
             if d is None:
                 d = (await conn.execute(text(
-                    "SELECT max(report_date) AS d FROM core.perf_daily_snapshot"))).scalar()
+                    "SELECT max(report_date) AS d FROM core.perf_daily_snapshot"
+                    + (" WHERE data_origin = :data_origin" if data_origin else "")),
+                    ({"data_origin": data_origin} if data_origin else {}))).scalar()
             if d is None:
                 return None
-            cur = await self._day_headline(conn, d)
+            cur = await self._day_headline(conn, d, data_origin)
+            oc = " AND data_origin = :data_origin" if data_origin else ""
             pd = (await conn.execute(text(
                 "SELECT max(report_date) AS d FROM core.perf_daily_snapshot "
-                "WHERE report_date < :d"), {"d": d})).scalar()
-            prev = await self._day_headline(conn, pd) if pd else {}
+                f"WHERE report_date < :d{oc}"),
+                ({"d": d, "data_origin": data_origin} if data_origin else {"d": d}))).scalar()
+            prev = await self._day_headline(conn, pd, data_origin) if pd else {}
         deltas = {}
         for k, v in cur.items():
             pv = prev.get(k)
@@ -134,29 +145,34 @@ class PerformanceRepository:
                 "metrics": cur, "deltas": deltas}
 
     # ---------------------------------------------------------------- daily bundle
-    async def daily_bundle(self, d: date) -> Optional[dict]:
+    async def daily_bundle(self, d: date, data_origin: Optional[str] = None) -> Optional[dict]:
+        # LIVE/DEMO provenance filter — None ⇒ no predicate (identical SQL).
+        oc = " AND data_origin = :data_origin" if data_origin else ""
+        p: dict[str, Any] = {"d": d}
+        if data_origin:
+            p["data_origin"] = data_origin
         async with get_engine(self._dsn).connect() as conn:
             snap = (await conn.execute(text(
                 "SELECT report_date, as_of_ts, source_file FROM core.perf_daily_snapshot "
-                "WHERE report_date=:d"), {"d": d})).mappings().first()
+                f"WHERE report_date=:d{oc}"), p)).mappings().first()
             if not snap:
                 return None
             traffic = (await conn.execute(text(
                 "SELECT terminal_code, period, vessels, imp_teus, exp_teus, total_teus, "
                 "  rakes, rail_dis_teus, rail_ldg_teus, rail_total_teus "
-                "FROM core.perf_daily_traffic WHERE report_date=:d "
-                "ORDER BY period, terminal_code"), {"d": d})).mappings().all()
+                f"FROM core.perf_daily_traffic WHERE report_date=:d{oc} "
+                "ORDER BY period, terminal_code"), p)).mappings().all()
             tonnage = (await conn.execute(text(
                 "SELECT category, period, vessels, liquid_tonnes, dry_bulk_tonnes, "
                 "  break_bulk_tonnes, total_tonnes FROM core.perf_daily_tonnage "
-                "WHERE report_date=:d ORDER BY period, category"), {"d": d})).mappings().all()
+                f"WHERE report_date=:d{oc} ORDER BY period, category"), p)).mappings().all()
             status = (await conn.execute(text(
-                "SELECT * FROM core.perf_daily_terminal_status WHERE report_date=:d "
-                "ORDER BY terminal_code"), {"d": d})).mappings().all()
+                f"SELECT * FROM core.perf_daily_terminal_status WHERE report_date=:d{oc} "
+                "ORDER BY terminal_code"), p)).mappings().all()
             vessels = (await conn.execute(text(
                 "SELECT terminal_code, berth_no, via_no, vessel_name, cargo_commodity, "
                 "  berthed_on, expected_completion FROM core.perf_daily_vessel "
-                "WHERE report_date=:d ORDER BY terminal_code, berth_no"), {"d": d})).mappings().all()
+                f"WHERE report_date=:d{oc} ORDER BY terminal_code, berth_no"), p)).mappings().all()
         return {
             "snapshot": dict(snap),
             "traffic": [dict(r) for r in traffic],
@@ -177,6 +193,8 @@ class PerformanceRepository:
             conds.append("terminal_code = :terminal"); params["terminal"] = filters["terminal"]
         if filters.get("period"):
             conds.append("period = :period"); params["period"] = filters["period"]
+        if filters.get("data_origin"):
+            conds.append("data_origin = :data_origin"); params["data_origin"] = filters["data_origin"]
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
         order_col = _TRAFFIC_SORTS.get(sort, "report_date")
         order_dir = "ASC" if str(direction).lower() == "asc" else "DESC"
@@ -199,6 +217,8 @@ class PerformanceRepository:
             conds.append("report_date = :d"); params["d"] = filters["date"]
         if filters.get("terminal"):
             conds.append("terminal_code = :terminal"); params["terminal"] = filters["terminal"]
+        if filters.get("data_origin"):
+            conds.append("data_origin = :data_origin"); params["data_origin"] = filters["data_origin"]
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
         async with get_engine(self._dsn).connect() as conn:
             total = (await conn.execute(text(
@@ -217,6 +237,8 @@ class PerformanceRepository:
             conds.append("report_date = :d"); params["d"] = filters["date"]
         if filters.get("terminal"):
             conds.append("terminal_code = :terminal"); params["terminal"] = filters["terminal"]
+        if filters.get("data_origin"):
+            conds.append("data_origin = :data_origin"); params["data_origin"] = filters["data_origin"]
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
         async with get_engine(self._dsn).connect() as conn:
             total = (await conn.execute(text(
@@ -241,6 +263,8 @@ class PerformanceRepository:
             conds.append("month_date >= :date_from"); params["date_from"] = filters["date_from"]
         if filters.get("date_to"):
             conds.append("month_date <= :date_to"); params["date_to"] = filters["date_to"]
+        if filters.get("data_origin"):
+            conds.append("data_origin = :data_origin"); params["data_origin"] = filters["data_origin"]
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
         order_col = _MONTHLY_SORTS.get(sort, "month_date")
         order_dir = "ASC" if str(direction).lower() == "asc" else "DESC"
@@ -258,7 +282,8 @@ class PerformanceRepository:
 
     # ---------------------------------------------------------------- trends
     async def trends(self, metric: str, *, grain: str, terminal: Optional[str],
-                     date_from, date_to) -> list[dict]:
+                     date_from, date_to, data_origin: Optional[str] = None) -> list[dict]:
+        # LIVE/DEMO provenance filter — None ⇒ no predicate (identical SQL).
         if grain == "monthly":
             conds = []
             params: dict[str, Any] = {}
@@ -266,6 +291,8 @@ class PerformanceRepository:
                 conds.append("terminal_code = :terminal"); params["terminal"] = terminal
             else:
                 conds.append("terminal_code = 'JN_PORT'")
+            if data_origin:
+                conds.append("data_origin = :data_origin"); params["data_origin"] = data_origin
             where = "WHERE " + " AND ".join(conds)
             sql = ("SELECT month_date::text AS t, terminal_code, total_teus AS value "
                    f"FROM core.perf_monthly_teu {where} ORDER BY month_date ASC")
@@ -283,6 +310,8 @@ class PerformanceRepository:
             drange += " AND report_date >= :date_from"; params["date_from"] = date_from
         if date_to:
             drange += " AND report_date <= :date_to"; params["date_to"] = date_to
+        if data_origin:
+            drange += " AND data_origin = :data_origin"; params["data_origin"] = data_origin
         if src == "traffic_jnport":
             sql = (f"SELECT report_date::text AS t, {col} AS value FROM core.perf_daily_traffic "
                    f"WHERE terminal_code='JN_PORT' AND period='DAY'{drange} ORDER BY report_date ASC")
@@ -297,23 +326,32 @@ class PerformanceRepository:
             rows = (await conn.execute(text(sql), params)).mappings().all()
         return [{"t": r["t"], "terminal_code": "JN_PORT", "value": _f(r["value"])} for r in rows]
 
-    async def daily_series(self, date_from, date_to) -> list[dict]:
+    async def daily_series(self, date_from, date_to,
+                           data_origin: Optional[str] = None) -> list[dict]:
         """Per-day headline series for the overview chart (JN Port TEUs + gate)."""
+        # LIVE/DEMO provenance filter — None ⇒ no predicate (identical SQL). The
+        # snapshot drives the series; the joins are pinned to the same origin so a
+        # LIVE row never picks up a DEMO traffic/status value for the same date.
         params: dict[str, Any] = {}
         drange = ""
         if date_from:
             drange += " AND s.report_date >= :date_from"; params["date_from"] = date_from
         if date_to:
             drange += " AND s.report_date <= :date_to"; params["date_to"] = date_to
+        tr_oc = st_oc = ""
+        if data_origin:
+            drange += " AND s.data_origin = :data_origin"; params["data_origin"] = data_origin
+            tr_oc = " AND tr.data_origin = :data_origin"
+            st_oc = " AND st.data_origin = :data_origin"
         sql = (
             "SELECT s.report_date::text AS day, "
             "  tr.total_teus AS total_teus, st.gate_in_teus, st.gate_out_teus, "
             "  st.yard_occupancy_pct "
             "FROM core.perf_daily_snapshot s "
             "LEFT JOIN core.perf_daily_traffic tr ON tr.report_date=s.report_date "
-            "  AND tr.terminal_code='JN_PORT' AND tr.period='DAY' "
+            f"  AND tr.terminal_code='JN_PORT' AND tr.period='DAY'{tr_oc} "
             "LEFT JOIN core.perf_daily_terminal_status st ON st.report_date=s.report_date "
-            "  AND st.terminal_code='TOTAL' "
+            f"  AND st.terminal_code='TOTAL'{st_oc} "
             f"WHERE 1=1{drange} ORDER BY s.report_date ASC")
         async with get_engine(self._dsn).connect() as conn:
             rows = (await conn.execute(text(sql), params)).mappings().all()
@@ -327,6 +365,8 @@ class PerformanceRepository:
         for col in ("report_month", "terminal_code", "cycle", "segment"):
             if filters.get(col):
                 conds.append(f"{col} = :{col}"); params[col] = filters[col]
+        if filters.get("data_origin"):
+            conds.append("data_origin = :data_origin"); params["data_origin"] = filters["data_origin"]
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
         sql = ("SELECT report_month::text AS report_month, terminal_code, cycle, segment, "
                "  dwell_hours, dwell_hours_prev FROM core.perf_ldb_port_dwell "
@@ -341,6 +381,8 @@ class PerformanceRepository:
         for col in ("report_month", "facility_type"):
             if filters.get(col):
                 conds.append(f"{col} = :{col}"); params[col] = filters[col]
+        if filters.get("data_origin"):
+            conds.append("data_origin = :data_origin"); params["data_origin"] = filters["data_origin"]
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
         async with get_engine(self._dsn).connect() as conn:
             total = (await conn.execute(text(
@@ -358,6 +400,8 @@ class PerformanceRepository:
         for col in ("report_month", "cycle"):
             if filters.get(col):
                 conds.append(f"{col} = :{col}"); params[col] = filters[col]
+        if filters.get("data_origin"):
+            conds.append("data_origin = :data_origin"); params["data_origin"] = filters["data_origin"]
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
         sql = ("SELECT report_month::text AS report_month, cycle, cluster_no, cluster_name, "
                "  cfs_count, pct_containers, congestion_level FROM core.perf_ldb_congestion "
@@ -371,6 +415,8 @@ class PerformanceRepository:
         for col in ("report_month", "cycle", "transport_mode"):
             if filters.get(col):
                 conds.append(f"{col} = :{col}"); params[col] = filters[col]
+        if filters.get("data_origin"):
+            conds.append("data_origin = :data_origin"); params["data_origin"] = filters["data_origin"]
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
         sql = ("SELECT report_month::text AS report_month, cycle, transport_mode, route_name, "
                f"pct_share FROM core.perf_ldb_route_movement {where} "
@@ -384,6 +430,8 @@ class PerformanceRepository:
         for col in ("report_month", "terminal_code", "cycle"):
             if filters.get(col):
                 conds.append(f"{col} = :{col}"); params[col] = filters[col]
+        if filters.get("data_origin"):
+            conds.append("data_origin = :data_origin"); params["data_origin"] = filters["data_origin"]
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
         sql = ("SELECT report_month::text AS report_month, terminal_code, cycle, weather, "
                f"dwell_hours FROM core.perf_ldb_weather {where} "

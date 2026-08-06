@@ -37,13 +37,30 @@ def _physical_format(filename: str, content: bytes) -> str:
     """Ledger physical_format = the ACTUAL uploaded file container.
 
     The parser's detect_format() returns a ROUTING format ('CSV'|'XML'|'LOG'|'XLSX'
-    |'PDF'|'SHP'); the shapefile ('SHP') is delivered as a ZIP bundle (or, rarely, a
-    bare .shp). The ledger stores what was uploaded — 'ZIP' for the zip, 'SHP' for a
-    bare .shp — while parser detection/routing stays 'SHP' internally, unchanged. All
-    other formats pass through as-is, so XML/XLSX/PDF/CSV uploads are unaffected."""
+    |'PDF'|'SHP'|'JSON'|'JOURNAL'); two of those are not containers and are translated
+    here, so the ledger keeps describing what the user actually uploaded:
+
+      * 'SHP'     — a shapefile arrives as a ZIP bundle (or, rarely, a bare .shp), so the
+                    ledger records 'ZIP' / 'SHP' by magic bytes.
+      * 'JOURNAL' — a PCS message journal IS a .csv; 'JOURNAL' says how to PARSE it, not
+                    what it is. The ledger records 'CSV'. Nothing is lost: the ledger's
+                    document_type column already carries the message family the journal
+                    held ('BERALT', or 'MIXED' when it holds several), so
+                    physical_format='CSV' + document_type='BERALT' describes it fully.
+
+    Parser detection/routing is untouched in both cases. All other formats pass through
+    as-is, so XML/XLSX/PDF/CSV/JSON uploads are unaffected.
+
+    This function is also the ONLY producer of the value, so it is the single place the
+    core.marine_import_files_physical_format_check CHECK constraint
+    ('CSV','XLS','XLSX','PDF','XML','LOG','ZIP','SHP','JSON') is satisfied — a routing
+    format that is not in that set must be translated here rather than widening the
+    constraint, or the ledger column stops meaning "container"."""
     fmt = detect_format(filename, content)
     if fmt == "SHP":
         return "ZIP" if content[:4] == b"PK\x03\x04" else "SHP"
+    if fmt == "JOURNAL":
+        return "CSV"
     return fmt
 
 
@@ -134,7 +151,15 @@ class MarineUploadService:
     # ---------------------------------------------------------------- import (confirm)
     async def import_file(self, content: bytes, filename: str,
                           uploaded_by: str,
-                          document_type: Optional[str] = None) -> Dict[str, Any]:
+                          document_type: Optional[str] = None,
+                          override: bool = False) -> Dict[str, Any]:
+        """Import one uploaded file.
+
+        ``override`` re-processes a file already in the ledger instead of returning
+        SKIPPED_DUPLICATE. Every write is an upsert, so this refreshes the business rows
+        and the lifecycle projection in place — it deletes nothing. Default False keeps
+        the normal import path unchanged.
+        """
         t0 = perf_counter()
         sha = _sha256(content)
         physical_format = _physical_format(filename, content)
@@ -170,7 +195,7 @@ class MarineUploadService:
             res.records, filename=filename, file_hash=sha, physical_format=physical_format,
             document_type=doc_type, parse_errors=res.errors, parse_invalid=res.invalid_count,
             parse_duplicate=res.duplicate_count, file_size=len(content),
-            uploaded_by=uploaded_by, source="UPLOAD")
+            uploaded_by=uploaded_by, source="UPLOAD", override=override)
 
         status = result["status"]  # SUCCESS | PARTIAL | FAILED | SKIPPED_DUPLICATE
         log.info("marine_upload.import", extra={"status": status, "document_type": doc_type,

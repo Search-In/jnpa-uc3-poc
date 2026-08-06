@@ -1,0 +1,627 @@
+<!doctype html><html lang=en><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>JNPA Digital Twin API — Worked Examples</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#1a1d21;background:#fff}
+#wrap{display:flex;min-height:100vh}
+nav{width:288px;flex:0 0 288px;background:#0f1720;color:#8b98a5;padding:22px 0 60px;position:sticky;top:0;height:100vh;overflow-y:auto}
+nav h1{color:#fff;font-size:15px;margin:0 20px 4px}
+nav .sub{margin:0 20px 18px;font-size:11.5px;color:#5f6d7a;line-height:1.5}
+nav a{display:block;padding:5px 20px 5px 26px;color:#9fb0bf;text-decoration:none;font-size:13px;border-left:2px solid transparent}
+nav a:hover{color:#fff;background:#18222c}
+nav a.on{color:#fff;border-left-color:#3d9df0;background:#18222c}
+.navsec{margin:16px 20px 4px;font-size:10.5px;letter-spacing:.9px;text-transform:uppercase;color:#4c5966;font-weight:600}
+main{flex:1;min-width:0;padding:34px 46px 120px;max-width:1080px}
+h2{font-size:13px;letter-spacing:1.1px;text-transform:uppercase;color:#5b6875;margin:52px 0 18px;padding-bottom:9px;border-bottom:1px solid #e3e8ee}
+h2:first-of-type{margin-top:8px}
+h3{font-size:18px;margin:0 0 12px;font-weight:600}
+.ep{margin-bottom:40px;scroll-margin-top:20px}
+.reqline{display:flex;align-items:center;gap:10px;background:#f5f7fa;border:1px solid #e3e8ee;border-radius:7px;padding:9px 12px;margin-bottom:12px;font-family:ui-monospace,Menlo,monospace;font-size:13px}
+.m{background:#1c7ed6;color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700}
+.u{flex:1;min-width:0;overflow-x:auto;white-space:nowrap;color:#0b3d62}
+.cp{border:1px solid #cfd8e3;background:#fff;border-radius:5px;font-size:11px;padding:3px 9px;cursor:pointer;color:#5b6875;flex:0 0 auto}
+.cp:hover{background:#eef3f8;color:#1c7ed6}
+.why{margin:0 0 12px;color:#3c4753}
+.note{margin:12px 0 0;padding:10px 14px;background:#fffbea;border-left:3px solid #f0b429;border-radius:0 5px 5px 0;font-size:13.5px;color:#5c4813}
+.meta{font-size:12px;color:#6b7784;margin-bottom:8px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.meta code{background:#f0f3f7;padding:1px 6px;border-radius:4px;font-size:11.5px;color:#48525e}
+.lbl{font-size:10.5px;letter-spacing:.8px;text-transform:uppercase;color:#8b98a5;margin:10px 0 5px}
+pre{margin:0;background:#0f1720;color:#d8e0e8;padding:15px 17px;border-radius:8px;overflow-x:auto;font:12.5px/1.65 ui-monospace,Menlo,monospace}
+pre.req{background:#16212c;margin-bottom:12px}
+pre.res{max-height:520px;overflow-y:auto}
+.k{color:#7cc4f8} .s{color:#b5e8a0} .n{color:#f7c873} .b{color:#e39ff6}
+.badge{padding:1px 8px;border-radius:11px;font-size:11px;font-weight:600}
+.ok{background:#d8f5dd;color:#1a7f37} .info{background:#dbe9fb;color:#1c5f9e}
+.warn{background:#ffe9c9;color:#9a5b00} .err{background:#ffd9d9;color:#a01b1b}
+.tr{background:#e7ecf2;color:#5b6875;font-weight:500}
+table{border-collapse:collapse;width:100%;margin:0 0 26px;font-size:14px}
+td,th{border:1px solid #e3e8ee;padding:9px 13px;text-align:left;vertical-align:top}
+th{background:#f5f7fa;font-weight:600} td:first-child{width:170px;white-space:nowrap}
+.intro{background:#f5f9fd;border:1px solid #d6e6f5;border-radius:9px;padding:16px 20px;margin-bottom:26px}
+.intro p{margin:0 0 9px} .intro p:last-child{margin:0}
+.intro code,.flow code{background:#e4eef8;padding:1px 6px;border-radius:4px;font-size:12.5px}
+.flow{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 26px}
+.step{flex:1;min-width:210px;background:#fff;border:1px solid #d6e6f5;border-radius:9px;padding:13px 16px}
+.step b{display:block;font-size:11px;letter-spacing:.8px;text-transform:uppercase;color:#1c5f9e;margin-bottom:5px}
+.arrow{color:#9fb8cf;font-size:21px}
+@media(max-width:900px){nav{display:none}main{padding:22px 18px 80px}.flow{flex-direction:column}}
+</style>
+<div id=wrap>
+<nav><h1>JNPA Digital Twin API</h1>
+<p class=sub>Worked examples · captured output<br>2026-07-31 · v2.0 PoC</p>
+<div class=navsec>1. Getting started</div><a href="#root">Service description</a><a href="#health">Health probe</a><a href="#token">Exchange the client key for a token</a><a href="#token-bad">An unrecognised key</a><a href="#noauth">Data is closed by default</a><div class=navsec>2. Data groups</div><a href="#groups">The data groups</a><div class=navsec>3. Step one — indexed data</div><a href="#records">Indexed JSON, metadata only</a><a href="#records-latest">Newest first by default</a><a href="#records-range">Bounded by a date range</a><a href="#records-since">Reading incrementally</a><a href="#records-page">Paging</a><a href="#records-404">An unknown group</a><a href="#records-future">Asking for the future</a><div class=navsec>4. Step two — the file</div><a href="#file">Fetch by reference</a><a href="#file-304">Revalidate with If-None-Match</a><a href="#file-bad">A tampered reference</a><div class=navsec>5. Report groups</div><a href="#dbr">Daily Berthing Report</a><a href="#dsr">Daily Status Report</a><a href="#dbr-range">A range of report days</a></nav>
+<main>
+<h1 style="font-size:27px;margin:0 0 6px">Worked Examples</h1>
+<p style="color:#6b7784;margin:0 0 22px;font-size:14px">JNPA Digital Twin · 13 data groups ·
+Asia/Kolkata (+05:30) · <code>https://dt.jnpa.in/poc-api-data-access</code></p>
+<div class=intro>
+<p><strong>Every request and response on this page is captured output</strong> — status codes, byte
+counts, timings, ETags and headers come from the run that produced this file.</p>
+<p>Base URL: <code>https://dt.jnpa.in/poc-api-data-access</code>. Paths below are relative to it.</p>
+</div>
+<div class=flow>
+<div class=step><b>Step 1</b><code>GET /v2/groups/{group}/records</code><br>
+<span style="font-size:13px;color:#3c4753">Indexed JSON. Metadata only — each record carries a <code>fileRef</code>.</span></div>
+<div class=arrow>&rarr;</div>
+<div class=step><b>Step 2</b><code>GET /v2/files/{fileRef}</code><br>
+<span style="font-size:13px;color:#3c4753">Resolves the reference and returns the file itself.</span></div>
+</div>
+<h2>What to know before reading</h2>
+<table>
+<tr><td>Authentication</td><td>A client key derived from your registered email buys a one-hour bearer
+token at <code>POST /v2/auth/token</code>. The key is never accepted on a data route, so the standing
+secret crosses the wire once an hour rather than on every call.</td></tr>
+<tr><td>Requested as if live</td><td>The data is simulated, but the endpoint behaves like a production
+one: results come back newest first and you bound a request with dates the way you would against a
+real system.</td></tr>
+<tr><td>No future data</td><td><strong>Every query is capped at the instant the request arrives.</strong>
+A record dated after that is not hidden or refused — from the caller's side it does not exist, and it
+becomes available as time passes. Upper bounds past the present are clamped; a future range returns an
+empty result, not an error. Every response carries <code>asOf</code>.</td></tr>
+<tr><td>Two steps, always</td><td>Group records are <strong>metadata only</strong> and never contain a
+payload. The <code>fileRef</code> is an opaque HMAC-signed token — it carries no path, no row id and
+no filename, and altering one byte makes it invalid.</td></tr>
+<tr><td>Report groups</td><td>The daily terminal reports are returned directly as JSON. No file
+reference is issued for them.</td></tr>
+<tr><td>Time bounds</td><td><code>from</code>/<code>to</code> are inclusive — a bare date as the upper
+bound means end of day. <code>since</code> is exclusive, so incremental readers never re-read the last
+record. <code>order=asc</code> walks forward through history.</td></tr>
+<tr><td>No internal detail</td><td>No database identifier, table, path or internal filename appears in
+any response. The acceptance test greps for them and asserts zero.</td></tr>
+</table>
+<h2>1. Getting started</h2><section class=ep id="root">
+<h3>Service description</h3>
+<div class=reqline><span class=m>GET</span><span class=u>/</span>
+<button class=cp data-c="GET /">copy</button></div><p class=why>No token needed. Tells you the endpoints and the order to call them in.</p>
+<div class=meta><span class="badge ok">200</span> · <code>application/json</code> · 703 B · 1.84 ms · auth: none</div><div class=lbl>response headers</div><pre class=req><span class=k>Content-Type</span>: application/json
+<span class=k>X-Content-Type-Options</span>: nosniff
+<span class=k>X-Frame-Options</span>: DENY
+<span class=k>Referrer-Policy</span>: no-referrer
+<span class=k>Strict-Transport-Security</span>: max-age=31536000; includeSubDomains</pre>
+<pre class=res><code>{
+  <span class=k>&quot;service&quot;</span>: <span class=s>&quot;JNPA Digital Twin \u2014 Simulated Port Data API&quot;</span>,
+  <span class=k>&quot;version&quot;</span>: <span class=s>&quot;2.0&quot;</span>,
+  <span class=k>&quot;timeZone&quot;</span>: <span class=s>&quot;Asia/Kolkata&quot;</span>,
+  <span class=k>&quot;howToUse&quot;</span>: [
+    &quot;POST /v2/auth/token with your clientKey to obtain a bearer token&quot;,
+    &quot;GET /v2/groups to list the data groups&quot;,
+    &quot;GET /v2/groups/{group}/records for indexed JSON with file references&quot;,
+    &quot;GET /v2/files/{fileRef} to download the referenced file&quot;
+  ],
+  <span class=k>&quot;notes&quot;</span>: <span class=s>&quot;Records are returned newest first. Use since/until, from/to or date to bound a request, and order=asc to walk forward through history.&quot;</span>,
+  <span class=k>&quot;endpoints&quot;</span>: {
+    <span class=k>&quot;token&quot;</span>: <span class=s>&quot;/v2/auth/token&quot;</span>,
+    <span class=k>&quot;groups&quot;</span>: <span class=s>&quot;/v2/groups&quot;</span>,
+    <span class=k>&quot;records&quot;</span>: <span class=s>&quot;/v2/groups/{group}/records&quot;</span>,
+    <span class=k>&quot;files&quot;</span>: <span class=s>&quot;/v2/files/{fileRef}&quot;</span>,
+    <span class=k>&quot;health&quot;</span>: <span class=s>&quot;/v2/health&quot;</span>
+  }
+}</code></pre></section><section class=ep id="health">
+<h3>Health probe</h3>
+<div class=reqline><span class=m>GET</span><span class=u>/v2/health</span>
+<button class=cp data-c="GET /v2/health">copy</button></div><p class=why>For load balancers and the deployment check. Unauthenticated by design.</p>
+<div class=meta><span class="badge ok">200</span> · <code>application/json</code> · 40 B · 1.51 ms · auth: none</div><div class=lbl>response headers</div><pre class=req><span class=k>Content-Type</span>: application/json
+<span class=k>X-Content-Type-Options</span>: nosniff
+<span class=k>X-Frame-Options</span>: DENY
+<span class=k>Referrer-Policy</span>: no-referrer
+<span class=k>Strict-Transport-Security</span>: max-age=31536000; includeSubDomains</pre>
+<pre class=res><code>{
+  <span class=k>&quot;status&quot;</span>: <span class=s>&quot;ok&quot;</span>,
+  <span class=k>&quot;uptimeSeconds&quot;</span>: <span class=n>6</span>
+}</code></pre></section><section class=ep id="token">
+<h3>Exchange the client key for a token</h3>
+<div class=reqline><span class=m>POST</span><span class=u>/v2/auth/token</span>
+<button class=cp data-c="POST /v2/auth/token">copy</button></div><div class=lbl>request body</div><pre class=req>{
+  <span class=k>&quot;clientKey&quot;</span>: <span class=s>&quot;MzQ0MTMzODJiNTE1N2U2ZTY1MTY=&quot;</span>
+}</pre><p class=why>The client key is derived from your registered email. It buys a one-hour token; the key itself is never accepted on a data route.</p>
+<div class=meta><span class="badge ok">200</span> · <code>application/json</code> · 483 B · 1.74 ms · auth: none</div><div class=lbl>response headers</div><pre class=req><span class=k>Content-Type</span>: application/json
+<span class=k>X-Content-Type-Options</span>: nosniff
+<span class=k>X-Frame-Options</span>: DENY
+<span class=k>Referrer-Policy</span>: no-referrer
+<span class=k>Strict-Transport-Security</span>: max-age=31536000; includeSubDomains</pre>
+<pre class=res><code>{
+  <span class=k>&quot;accessToken&quot;</span>: <span class=s>&quot;eyJzdWIiOiJjbGlfMz... [redacted]&quot;</span>,
+  <span class=k>&quot;tokenType&quot;</span>: <span class=s>&quot;Bearer&quot;</span>,
+  <span class=k>&quot;expiresIn&quot;</span>: <span class=n>3600</span>,
+  <span class=k>&quot;expiresAt&quot;</span>: <span class=s>&quot;2026-08-01T00:56:21+05:30&quot;</span>,
+  <span class=k>&quot;scopes&quot;</span>: [
+    &quot;groups:read&quot;,
+    &quot;files:read&quot;,
+    &quot;admin:read&quot;
+  ],
+  <span class=k>&quot;client&quot;</span>: {
+    <span class=k>&quot;id&quot;</span>: <span class=s>&quot;cli_34413382b515&quot;</span>,
+    <span class=k>&quot;organisation&quot;</span>: <span class=s>&quot;JNPA&quot;</span>
+  }
+}</code></pre><p class=note>Send the accessToken as `Authorization: Bearer …` on everything below.</p></section><section class=ep id="token-bad">
+<h3>An unrecognised key</h3>
+<div class=reqline><span class=m>POST</span><span class=u>/v2/auth/token</span>
+<button class=cp data-c="POST /v2/auth/token">copy</button></div><div class=lbl>request body</div><pre class=req>{
+  <span class=k>&quot;clientKey&quot;</span>: <span class=s>&quot;not-a-real-key&quot;</span>
+}</pre><p class=why>Fails closed, says nothing about why, and is deliberately slowed to blunt guessing.</p>
+<div class=meta><span class="badge warn">401</span> · <code>application/json</code> · 69 B · 252.38 ms · auth: none</div><div class=lbl>response headers</div><pre class=req><span class=k>Content-Type</span>: application/json
+<span class=k>X-Content-Type-Options</span>: nosniff
+<span class=k>X-Frame-Options</span>: DENY
+<span class=k>Referrer-Policy</span>: no-referrer
+<span class=k>Strict-Transport-Security</span>: max-age=31536000; includeSubDomains</pre>
+<pre class=res><code>{
+  <span class=k>&quot;error&quot;</span>: <span class=s>&quot;unauthorized&quot;</span>,
+  <span class=k>&quot;message&quot;</span>: <span class=s>&quot;Client key not recognised&quot;</span>
+}</code></pre></section><section class=ep id="noauth">
+<h3>Data is closed by default</h3>
+<div class=reqline><span class=m>GET</span><span class=u>/v2/groups</span>
+<button class=cp data-c="GET /v2/groups">copy</button></div><p class=why>Every data route requires a token. Nothing is readable anonymously.</p>
+<div class=meta><span class="badge warn">401</span> · <code>application/json</code> · 65 B · 2.19 ms · auth: omitted deliberately</div><div class=lbl>response headers</div><pre class=req><span class=k>Content-Type</span>: application/json
+<span class=k>X-Content-Type-Options</span>: nosniff
+<span class=k>X-Frame-Options</span>: DENY
+<span class=k>Referrer-Policy</span>: no-referrer
+<span class=k>Strict-Transport-Security</span>: max-age=31536000; includeSubDomains</pre>
+<pre class=res><code>{
+  <span class=k>&quot;error&quot;</span>: <span class=s>&quot;unauthorized&quot;</span>,
+  <span class=k>&quot;message&quot;</span>: <span class=s>&quot;Bearer token required&quot;</span>
+}</code></pre></section><h2>2. Data groups</h2><section class=ep id="groups">
+<h3>The data groups</h3>
+<div class=reqline><span class=m>GET</span><span class=u>/v2/groups</span>
+<button class=cp data-c="GET /v2/groups">copy</button></div><p class=why>Thirteen groups mirroring the folders in the sample pack, each with its record count and coverage.</p>
+<div class=meta><span class="badge ok">200</span> · <code>application/json</code> · 6,517 B · 24.3 ms · auth: Bearer token · <span class="badge tr">truncated for display</span></div><div class=lbl>response headers</div><pre class=req><span class=k>Content-Type</span>: application/json
+<span class=k>X-Content-Type-Options</span>: nosniff
+<span class=k>X-Frame-Options</span>: DENY
+<span class=k>Referrer-Policy</span>: no-referrer
+<span class=k>Strict-Transport-Security</span>: max-age=31536000; includeSubDomains
+<span class=k>RateLimit-Remaining</span>: 599</pre>
+<pre class=res><code>{
+  <span class=k>&quot;groups&quot;</span>: [
+    {
+      <span class=k>&quot;group&quot;</span>: <span class=s>&quot;nlp-marine&quot;</span>,
+      <span class=k>&quot;name&quot;</span>: <span class=s>&quot;NLP Marine&quot;</span>,
+      <span class=k>&quot;description&quot;</span>: <span class=s>&quot;Vessel spine: profile, call information, berth request and allotment, arrival and departure.&quot;</span>,
+      <span class=k>&quot;delivery&quot;</span>: <span class=s>&quot;indexed&quot;</span>,
+      <span class=k>&quot;links&quot;</span>: {
+        <span class=k>&quot;records&quot;</span>: <span class=s>&quot;/v2/groups/nlp-marine/records&quot;</span>
+      },
+      <span class=k>&quot;records&quot;</span>: <span class=n>793</span>,
+      <span class=k>&quot;coverage&quot;</span>: {
+        <span class=k>&quot;from&quot;</span>: <span class=s>&quot;2026-07-09T00:00:00+05:30&quot;</span>,
+        <span class=k>&quot;to&quot;</span>: <span class=s>&quot;2026-07-31T23:36:00+05:30&quot;</span>
+      },
+      <span class=k>&quot;messageTypes&quot;</span>: [
+        &quot;Berth allotment&quot;,
+        &quot;Berth management request&quot;,
+        &quot;Berth request&quot;,
+        &quot;Call information&quot;,
+        &quot;Call information response&quot;,
+        &quot;Expected time of arrival&quot;,
+        &quot;Expected time of arrival (report)&quot;,
+        &quot;Pilot memo&quot;,
+        &quot;Port and ISPS declaration&quot;,
+        &quot;Port authority notice&quot;,
+        &quot;Pre-arrival notification&quot;,
+        &quot;Service loop registration&quot;,
+        &quot;Vessel departure&quot;,
+        &quot;Vessel profile&quot;,
+        &quot;Vessel profile (report)&quot;,
+        &quot;Voyage registration&quot;
+      ]
+    },
+    {
+      <span class=k>&quot;group&quot;</span>: <span class=s>&quot;bathymetry&quot;</span>,
+      <span class=k>&quot;name&quot;</span>: <span class=s>&quot;Sea Channels and Bathymetry&quot;</span>,
+      <span class=k>&quot;description&quot;</span>: <span class=s>&quot;Channel geometry and depth survey. Static reference; nothing time-varying was simulated.&quot;</span>,
+      <span class=k>&quot;delivery&quot;</span>: <span class=s>&quot;static&quot;</span>,
+      <span class=k>&quot;links&quot;</span>: {
+        <span class=k>&quot;records&quot;</span>: <span class=s>&quot;/v2/groups/bathymetry/records&quot;</span>
+      },
+      <span class=k>&quot;records&quot;</span>: <span class=n>0</span>,
+      <span class=k>&quot;note&quot;</span>: <span class=s>&quot;Static reference carried over from the sample set.&quot;</span>
+    }
+  ],
+  <span class=k>&quot;_truncatedForDisplay&quot;</span>: <span class=b>true</span>
+}</code></pre><p class=note>`indexed` groups carry file references. `report` groups return JSON directly. `static` is reference material shipped with the pack.</p></section><h2>3. Step one — indexed data</h2><section class=ep id="records">
+<h3>Indexed JSON, metadata only</h3>
+<div class=reqline><span class=m>GET</span><span class=u>/v2/groups/customs/records?type=IGM&amp;limit=2</span>
+<button class=cp data-c="GET /v2/groups/customs/records?type=IGM&amp;limit=2">copy</button></div><p class=why>The first half of the contract. Each record says what the message is, when it was published, how many containers it names and which call it belongs to — plus how to fetch the bytes. It never contains the payload.</p>
+<div class=meta><span class="badge ok">200</span> · <code>application/json</code> · 1,416 B · 4.4 ms · auth: Bearer token</div><div class=lbl>response headers</div><pre class=req><span class=k>Content-Type</span>: application/json
+<span class=k>X-Content-Type-Options</span>: nosniff
+<span class=k>X-Frame-Options</span>: DENY
+<span class=k>Referrer-Policy</span>: no-referrer
+<span class=k>Strict-Transport-Security</span>: max-age=31536000; includeSubDomains
+<span class=k>RateLimit-Remaining</span>: 598</pre>
+<pre class=res><code>{
+  <span class=k>&quot;group&quot;</span>: <span class=s>&quot;customs&quot;</span>,
+  <span class=k>&quot;delivery&quot;</span>: <span class=s>&quot;indexed&quot;</span>,
+  <span class=k>&quot;order&quot;</span>: <span class=s>&quot;desc&quot;</span>,
+  <span class=k>&quot;asOf&quot;</span>: <span class=s>&quot;2026-07-31T23:56:21+05:30&quot;</span>,
+  <span class=k>&quot;count&quot;</span>: <span class=n>2</span>,
+  <span class=k>&quot;matched&quot;</span>: <span class=n>29</span>,
+  <span class=k>&quot;hasMore&quot;</span>: <span class=b>true</span>,
+  <span class=k>&quot;nextCursor&quot;</span>: <span class=s>&quot;ref_MTI3NwwpbIBt9fQ_GI&quot;</span>,
+  <span class=k>&quot;items&quot;</span>: [
+    {
+      <span class=k>&quot;recordId&quot;</span>: <span class=s>&quot;rec_NjI2NQz9fct1VIFTGO&quot;</span>,
+      <span class=k>&quot;group&quot;</span>: <span class=s>&quot;customs&quot;</span>,
+      <span class=k>&quot;messageType&quot;</span>: <span class=s>&quot;CHPOI03&quot;</span>,
+      <span class=k>&quot;messageName&quot;</span>: <span class=s>&quot;Import General Manifest&quot;</span>,
+      <span class=k>&quot;publishedAt&quot;</span>: <span class=s>&quot;2026-07-31T19:59:00+05:30&quot;</span>,
+      <span class=k>&quot;containerCount&quot;</span>: <span class=n>477</span>,
+      <span class=k>&quot;vesselCall&quot;</span>: <span class=s>&quot;INNSA1NF0S1042&quot;</span>,
+      <span class=k>&quot;summary&quot;</span>: <span class=s>&quot;Import General Manifest \u2014 140 lines covering all 477 discharged containers&quot;</span>,
+      <span class=k>&quot;file&quot;</span>: {
+        <span class=k>&quot;fileRef&quot;</span>: <span class=s>&quot;ref_NjI2NQz9fct1VIFTGO&quot;</span>,
+        <span class=k>&quot;mediaType&quot;</span>: <span class=s>&quot;application/xml&quot;</span>,
+        <span class=k>&quot;sizeBytes&quot;</span>: <span class=n>424875</span>,
+        <span class=k>&quot;checksumSha256&quot;</span>: <span class=s>&quot;d7406a0ecd4fb5ff8025d1cad81fc15fabd29089e07dec892c6f72406a38e756&quot;</span>,
+        <span class=k>&quot;url&quot;</span>: <span class=s>&quot;/v2/files/ref_NjI2NQz9fct1VIFTGO&quot;</span>
+      }
+    },
+    {
+      <span class=k>&quot;recordId&quot;</span>: <span class=s>&quot;rec_MTI3NwwpbIBt9fQ_GI&quot;</span>,
+      <span class=k>&quot;group&quot;</span>: <span class=s>&quot;customs&quot;</span>,
+      <span class=k>&quot;messageType&quot;</span>: <span class=s>&quot;CHPOI03&quot;</span>,
+      <span class=k>&quot;messageName&quot;</span>: <span class=s>&quot;Import General Manifest&quot;</span>,
+      <span class=k>&quot;publishedAt&quot;</span>: <span class=s>&quot;2026-07-31T19:30:00+05:30&quot;</span>,
+      <span class=k>&quot;containerCount&quot;</span>: <span class=n>432</span>,
+      <span class=k>&quot;vesselCall&quot;</span>: <span class=s>&quot;INNSA1BM0S1087&quot;</span>,
+      <span class=k>&quot;summary&quot;</span>: <span class=s>&quot;Import General Manifest \u2014 102 lines covering all 432 discharged containers&quot;</span>,
+      <span class=k>&quot;file&quot;</span>: {
+        <span class=k>&quot;fileRef&quot;</span>: <span class=s>&quot;ref_MTI3NwwpbIBt9fQ_GI&quot;</span>,
+        <span class=k>&quot;mediaType&quot;</span>: <span class=s>&quot;application/xml&quot;</span>,
+        <span class=k>&quot;sizeBytes&quot;</span>: <span class=n>358750</span>,
+        <span class=k>&quot;checksumSha256&quot;</span>: <span class=s>&quot;f30d7061ff1ed86ec9c62db5452b9f1d19b6110b4cec0a59cc3ee319bde2a449&quot;</span>,
+        <span class=k>&quot;url&quot;</span>: <span class=s>&quot;/v2/files/ref_MTI3NwwpbIBt9fQ_GI&quot;</span>
+      }
+    }
+  ]
+}</code></pre><p class=note>`IGM` resolves to the internal code; you never need to know it.</p></section><section class=ep id="records-latest">
+<h3>Newest first by default</h3>
+<div class=reqline><span class=m>GET</span><span class=u>/v2/groups/nlp-marine/records?limit=4</span>
+<button class=cp data-c="GET /v2/groups/nlp-marine/records?limit=4">copy</button></div><p class=why>No date bounds, so you get the most recent records — what a live endpoint would answer.</p>
+<div class=meta><span class="badge ok">200</span> · <code>application/json</code> · 2,799 B · 5.48 ms · auth: Bearer token</div><div class=lbl>response headers</div><pre class=req><span class=k>Content-Type</span>: application/json
+<span class=k>X-Content-Type-Options</span>: nosniff
+<span class=k>X-Frame-Options</span>: DENY
+<span class=k>Referrer-Policy</span>: no-referrer
+<span class=k>Strict-Transport-Security</span>: max-age=31536000; includeSubDomains
+<span class=k>RateLimit-Remaining</span>: 597</pre>
+<pre class=res><code>{
+  <span class=k>&quot;group&quot;</span>: <span class=s>&quot;nlp-marine&quot;</span>,
+  <span class=k>&quot;delivery&quot;</span>: <span class=s>&quot;indexed&quot;</span>,
+  <span class=k>&quot;order&quot;</span>: <span class=s>&quot;desc&quot;</span>,
+  <span class=k>&quot;asOf&quot;</span>: <span class=s>&quot;2026-07-31T23:56:21+05:30&quot;</span>,
+  <span class=k>&quot;count&quot;</span>: <span class=n>4</span>,
+  <span class=k>&quot;matched&quot;</span>: <span class=n>793</span>,
+  <span class=k>&quot;hasMore&quot;</span>: <span class=b>true</span>,
+  <span class=k>&quot;nextCursor&quot;</span>: <span class=s>&quot;ref_NjI0Mwp3SrsyLUpVBp&quot;</span>,
+  <span class=k>&quot;items&quot;</span>: [
+    {
+      <span class=k>&quot;recordId&quot;</span>: <span class=s>&quot;rec_NjI0Nw-HtFsBEiK-Lh&quot;</span>,
+      <span class=k>&quot;group&quot;</span>: <span class=s>&quot;nlp-marine&quot;</span>,
+      <span class=k>&quot;messageType&quot;</span>: <span class=s>&quot;LOOP&quot;</span>,
+      <span class=k>&quot;messageName&quot;</span>: <span class=s>&quot;Service loop registration&quot;</span>,
+      <span class=k>&quot;publishedAt&quot;</span>: <span class=s>&quot;2026-07-31T23:36:00+05:30&quot;</span>,
+      <span class=k>&quot;containerCount&quot;</span>: <span class=n>0</span>,
+      <span class=k>&quot;vesselCall&quot;</span>: <span class=s>&quot;INNSA1NS0S0800&quot;</span>,
+      <span class=k>&quot;summary&quot;</span>: <span class=s>&quot;Loop cohort \u2014 boxes that close the import-&gt;empty-&gt;export loop on CMA CGM ZANZIBAR S1083&quot;</span>,
+      <span class=k>&quot;file&quot;</span>: {
+        <span class=k>&quot;fileRef&quot;</span>: <span class=s>&quot;ref_NjI0Nw-HtFsBEiK-Lh&quot;</span>,
+        <span class=k>&quot;mediaType&quot;</span>: <span class=s>&quot;text/csv&quot;</span>,
+        <span class=k>&quot;sizeBytes&quot;</span>: <span class=n>3452</span>,
+        <span class=k>&quot;checksumSha256&quot;</span>: <span class=s>&quot;41a3ff4160d8915c869fd531f0400e3ec2d08d3e33ba1efb44d8982c0836c0d7&quot;</span>,
+        <span class=k>&quot;url&quot;</span>: <span class=s>&quot;/v2/files/ref_NjI0Nw-HtFsBEiK-Lh&quot;</span>
+      }
+    },
+    {
+      <span class=k>&quot;recordId&quot;</span>: <span class=s>&quot;rec_NjI0NQdrSAKGZs3aI0&quot;</span>,
+      <span class=k>&quot;group&quot;</span>: <span class=s>&quot;nlp-marine&quot;</span>,
+      <span class=k>&quot;messageType&quot;</span>: <span class=s>&quot;expected-time-of-arrival&quot;</span>,
+      <span class=k>&quot;messageName&quot;</span>: <span class=s>&quot;Expected time of arrival (report)&quot;</span>,
+      <span class=k>&quot;publishedAt&quot;</span>: <span class=s>&quot;2026-07-31T23:36:00+05:30&quot;</span>,
+      <span class=k>&quot;containerCount&quot;</span>: <span class=n>0</span>,
+      <span class=k>&quot;vesselCall&quot;</span>: <span class=s>&quot;INNSA1NS0S0800&quot;</span>,
+      <span class=k>&quot;summary&quot;</span>: <span class=s>&quot;NLP-Marine vessel-notification screen export \u2014 expected-time-of-arrival&quot;</span>,
+      <span class=k>&quot;file&quot;</span>: {
+        <span class=k>&quot;fileRef&quot;</span>: <span class=s>&quot;ref_NjI0NQdrSAKGZs3aI0&quot;</span>,
+        <span class=k>&quot;mediaType&quot;</span>: <span class=s>&quot;application/vnd.openxmlformats-officedocument.spreadsheetml.sheet&quot;</span>,
+        <span class=k>&quot;sizeBytes&quot;</span>: <span class=n>5616</span>,
+        <span class=k>&quot;checksumSha256&quot;</span>: <span class=s>&quot;7545b726116a626e67289f9b4b13360913c5a3fbb381c327acf101e7ea503753&quot;</span>,
+        <span class=k>&quot;url&quot;</span>: <span class=s>&quot;/v2/files/ref_NjI0NQdrSAKGZs3aI0&quot;</span>
+      }
+    },
+    {
+      <span class=k>&quot;recordId&quot;</span>: <span class=s>&quot;rec_NjI0NAT3vuMLQrhJmg&quot;</span>,
+      <span class=k>&quot;group&quot;</span>: <span class=s>&quot;nlp-marine&quot;</span>,
+      <span class=k>&quot;messageType&quot;</span>: <span class=s>&quot;voyage-registration&quot;</span>,
+      <span class=k>&quot;messageName&quot;</span>: <span class=s>&quot;Voyage registration&quot;</span>,
+      <span class=k>&quot;publishedAt&quot;</span>: <span class=s>&quot;2026-07-31T23:36:00+05:30&quot;</span>,
+      <span class=k>&quot;containerCount&quot;</span>: <span class=n>0</span>,
+      <span class=k>&quot;vesselCall&quot;</span>: <span class=s>&quot;INNSA1NS0S0800&quot;</span>,
+      <span class=k>&quot;summary&quot;</span>: <span class=s>&quot;NLP-Marine vessel-notification screen export \u2014 voyage-registration&quot;</span>,
+      <span class=k>&quot;file&quot;</span>: {
+        <span class=k>&quot;fileRef&quot;</span>: <span class=s>&quot;ref_NjI0NAT3vuMLQrhJmg&quot;</span>,
+        <span class=k>&quot;mediaType&quot;</span>: <span class=s>&quot;application/vnd.openxmlformats-officedocument.spreadsheetml.sheet&quot;</span>,
+        <span class=k>&quot;sizeBytes&quot;</span>: <span class=n>5674</span>,
+        <span class=k>&quot;checksumSha256&quot;</span>: <span class=s>&quot;1c76c8585797b509e1461fa3bbb9d613354e41d3d041b404a5d31a523b37a092&quot;</span>,
+        <span class=k>&quot;url&quot;</span>: <span class=s>&quot;/v2/files/ref_NjI0NAT3vuMLQrhJmg&quot;</span>
+      }
+    },
+    {
+      <span class=k>&quot;recordId&quot;</span>: <span class=s>&quot;rec_NjI0Mwp3SrsyLUpVBp&quot;</span>,
+      <span class=k>&quot;group&quot;</span>: <span class=s>&quot;nlp-marine&quot;</span>,
+      <span class=k>&quot;messageType&quot;</span>: <span class=s>&quot;vessel-Profile&quot;</span>,
+      <span class=k>&quot;messageName&quot;</span>: <span class=s>&quot;Vessel profile (report)&quot;</span>,
+      <span class=k>&quot;publishedAt&quot;</span>: <span class=s>&quot;2026-07-31T23:36:00+05:30&quot;</span>,
+      <span class=k>&quot;containerCount&quot;</span>: <span class=n>0</span>,
+      <span class=k>&quot;vesselCall&quot;</span>: <span class=s>&quot;INNSA1NS0S0800&quot;</span>,
+      <span class=k>&quot;summary&quot;</span>: <span class=s>&quot;NLP-Marine vessel-notification screen export \u2014 vessel-Profile&quot;</span>,
+      <span class=k>&quot;file&quot;</span>: {
+        <span class=k>&quot;fileRef&quot;</span>: <span class=s>&quot;ref_NjI0Mwp3SrsyLUpVBp&quot;</span>,
+        <span class=k>&quot;mediaType&quot;</span>: <span class=s>&quot;application/vnd.openxmlformats-officedocument.spreadsheetml.sheet&quot;</span>,
+        <span class=k>&quot;sizeBytes&quot;</span>: <span class=n>5585</span>,
+        <span class=k>&quot;checksumSha256&quot;</span>: <span class=s>&quot;309f3abba90c112e648f34a4997a7c5d3d266540a7fd0f906ad18d13a7923fe0&quot;</span>,
+        <span class=k>&quot;url&quot;</span>: <span class=s>&quot;/v2/files/ref_NjI0Mwp3SrsyLUpVBp&quot;</span>
+      }
+    }
+  ]
+}</code></pre></section><section class=ep id="records-range">
+<h3>Bounded by a date range</h3>
+<div class=reqline><span class=m>GET</span><span class=u>/v2/groups/customs/records?from=2026-08-01&amp;to=2026-08-03&amp;limit=3</span>
+<button class=cp data-c="GET /v2/groups/customs/records?from=2026-08-01&amp;to=2026-08-03&amp;limit=3">copy</button></div><p class=why>`from` and `to` are inclusive. A bare date as the upper bound means the end of that day.</p>
+<div class=meta><span class="badge ok">200</span> · <code>application/json</code> · 185 B · 2.73 ms · auth: Bearer token</div><div class=lbl>response headers</div><pre class=req><span class=k>Content-Type</span>: application/json
+<span class=k>X-Content-Type-Options</span>: nosniff
+<span class=k>X-Frame-Options</span>: DENY
+<span class=k>Referrer-Policy</span>: no-referrer
+<span class=k>Strict-Transport-Security</span>: max-age=31536000; includeSubDomains
+<span class=k>RateLimit-Remaining</span>: 596</pre>
+<pre class=res><code>{
+  <span class=k>&quot;group&quot;</span>: <span class=s>&quot;customs&quot;</span>,
+  <span class=k>&quot;delivery&quot;</span>: <span class=s>&quot;indexed&quot;</span>,
+  <span class=k>&quot;order&quot;</span>: <span class=s>&quot;desc&quot;</span>,
+  <span class=k>&quot;asOf&quot;</span>: <span class=s>&quot;2026-07-31T23:56:21+05:30&quot;</span>,
+  <span class=k>&quot;count&quot;</span>: <span class=n>0</span>,
+  <span class=k>&quot;matched&quot;</span>: <span class=n>0</span>,
+  <span class=k>&quot;hasMore&quot;</span>: <span class=b>false</span>,
+  <span class=k>&quot;nextCursor&quot;</span>: <span class=b>null</span>,
+  <span class=k>&quot;items&quot;</span>: []
+}</code></pre></section><section class=ep id="records-since">
+<h3>Reading incrementally</h3>
+<div class=reqline><span class=m>GET</span><span class=u>/v2/groups/nlp-marine/records?since=2026-08-10T00:00:00+05:30&amp;order=asc&amp;limit=3</span>
+<button class=cp data-c="GET /v2/groups/nlp-marine/records?since=2026-08-10T00:00:00+05:30&amp;order=asc&amp;limit=3">copy</button></div><p class=why>`since` is exclusive, so keeping the last `publishedAt` you processed means never re-reading or skipping a record.</p>
+<div class=meta><span class="badge ok">200</span> · <code>application/json</code> · 187 B · 3.04 ms · auth: Bearer token</div><div class=lbl>response headers</div><pre class=req><span class=k>Content-Type</span>: application/json
+<span class=k>X-Content-Type-Options</span>: nosniff
+<span class=k>X-Frame-Options</span>: DENY
+<span class=k>Referrer-Policy</span>: no-referrer
+<span class=k>Strict-Transport-Security</span>: max-age=31536000; includeSubDomains
+<span class=k>RateLimit-Remaining</span>: 595</pre>
+<pre class=res><code>{
+  <span class=k>&quot;group&quot;</span>: <span class=s>&quot;nlp-marine&quot;</span>,
+  <span class=k>&quot;delivery&quot;</span>: <span class=s>&quot;indexed&quot;</span>,
+  <span class=k>&quot;order&quot;</span>: <span class=s>&quot;asc&quot;</span>,
+  <span class=k>&quot;asOf&quot;</span>: <span class=s>&quot;2026-07-31T23:56:21+05:30&quot;</span>,
+  <span class=k>&quot;count&quot;</span>: <span class=n>0</span>,
+  <span class=k>&quot;matched&quot;</span>: <span class=n>0</span>,
+  <span class=k>&quot;hasMore&quot;</span>: <span class=b>false</span>,
+  <span class=k>&quot;nextCursor&quot;</span>: <span class=b>null</span>,
+  <span class=k>&quot;items&quot;</span>: []
+}</code></pre><p class=note>Pair it with `order=asc` to walk forward through history.</p></section><section class=ep id="records-page">
+<h3>Paging</h3>
+<div class=reqline><span class=m>GET</span><span class=u>/v2/groups/gate-documents/records?limit=2</span>
+<button class=cp data-c="GET /v2/groups/gate-documents/records?limit=2">copy</button></div><p class=why>When `hasMore` is true, pass `nextCursor` back verbatim. Cursors are signed, so a fabricated one is rejected.</p>
+<div class=meta><span class="badge ok">200</span> · <code>application/json</code> · 1,733 B · 4.0 ms · auth: Bearer token</div><div class=lbl>response headers</div><pre class=req><span class=k>Content-Type</span>: application/json
+<span class=k>X-Content-Type-Options</span>: nosniff
+<span class=k>X-Frame-Options</span>: DENY
+<span class=k>Referrer-Policy</span>: no-referrer
+<span class=k>Strict-Transport-Security</span>: max-age=31536000; includeSubDomains
+<span class=k>RateLimit-Remaining</span>: 594</pre>
+<pre class=res><code>{
+  <span class=k>&quot;group&quot;</span>: <span class=s>&quot;gate-documents&quot;</span>,
+  <span class=k>&quot;delivery&quot;</span>: <span class=s>&quot;indexed&quot;</span>,
+  <span class=k>&quot;order&quot;</span>: <span class=s>&quot;desc&quot;</span>,
+  <span class=k>&quot;asOf&quot;</span>: <span class=s>&quot;2026-07-31T23:56:21+05:30&quot;</span>,
+  <span class=k>&quot;count&quot;</span>: <span class=n>2</span>,
+  <span class=k>&quot;matched&quot;</span>: <span class=n>583</span>,
+  <span class=k>&quot;hasMore&quot;</span>: <span class=b>true</span>,
+  <span class=k>&quot;nextCursor&quot;</span>: <span class=s>&quot;ref_NjIyNg8s6pBzbhx6ko&quot;</span>,
+  <span class=k>&quot;items&quot;</span>: [
+    {
+      <span class=k>&quot;recordId&quot;</span>: <span class=s>&quot;rec_NjIyNwpVXQMKnDSPRg&quot;</span>,
+      <span class=k>&quot;group&quot;</span>: <span class=s>&quot;gate-documents&quot;</span>,
+      <span class=k>&quot;messageType&quot;</span>: <span class=s>&quot;gate-open-report&quot;</span>,
+      <span class=k>&quot;messageName&quot;</span>: <span class=s>&quot;Gate open report&quot;</span>,
+      <span class=k>&quot;publishedAt&quot;</span>: <span class=s>&quot;2026-07-31T23:36:00+05:30&quot;</span>,
+      <span class=k>&quot;containerCount&quot;</span>: <span class=n>0</span>,
+      <span class=k>&quot;vesselCall&quot;</span>: <span class=s>&quot;INNSA1NS0S0800&quot;</span>,
+      <span class=k>&quot;summary&quot;</span>: <span class=s>&quot;Gate open / cut-off declaration \u2014 the four datetimes exactly as the BMCT Vessels Expected block publishes them. This is the ONLY artefact in the whole dataset that carries the cut-off: no PCS, customs or EDI schema has a field for it.&quot;</span>,
+      <span class=k>&quot;file&quot;</span>: {
+        <span class=k>&quot;fileRef&quot;</span>: <span class=s>&quot;ref_NjIyNwpVXQMKnDSPRg&quot;</span>,
+        <span class=k>&quot;mediaType&quot;</span>: <span class=s>&quot;application/vnd.openxmlformats-officedocument.spreadsheetml.sheet&quot;</span>,
+        <span class=k>&quot;sizeBytes&quot;</span>: <span class=n>5636</span>,
+        <span class=k>&quot;checksumSha256&quot;</span>: <span class=s>&quot;53fbc8e4eb6e56bd601ecdfcc7ee79a0c39830269a4eebe1cd3fa47923e9fbe9&quot;</span>,
+        <span class=k>&quot;url&quot;</span>: <span class=s>&quot;/v2/files/ref_NjIyNwpVXQMKnDSPRg&quot;</span>
+      }
+    },
+    {
+      <span class=k>&quot;recordId&quot;</span>: <span class=s>&quot;rec_NjIyNg8s6pBzbhx6ko&quot;</span>,
+      <span class=k>&quot;group&quot;</span>: <span class=s>&quot;gate-documents&quot;</span>,
+      <span class=k>&quot;messageType&quot;</span>: <span class=s>&quot;equipment-interchange-report&quot;</span>,
+      <span class=k>&quot;messageName&quot;</span>: <span class=s>&quot;Equipment interchange report&quot;</span>,
+      <span class=k>&quot;publishedAt&quot;</span>: <span class=s>&quot;2026-07-31T23:36:00+05:30&quot;</span>,
+      <span class=k>&quot;containerCount&quot;</span>: <span class=n>1251</span>,
+      <span class=k>&quot;vesselCall&quot;</span>: <span class=s>&quot;INNSA1NS0S0800&quot;</span>,
+      <span class=k>&quot;summary&quot;</span>: <span class=s>&quot;Road EIR register \u2014 1251 road interchanges (rail boxes excluded, they use the siding)&quot;</span>,
+      <span class=k>&quot;file&quot;</span>: {
+        <span class=k>&quot;fileRef&quot;</span>: <span class=s>&quot;ref_NjIyNg8s6pBzbhx6ko&quot;</span>,
+        <span class=k>&quot;mediaType&quot;</span>: <span class=s>&quot;application/vnd.openxmlformats-officedocument.spreadsheetml.sheet&quot;</span>,
+        <span class=k>&quot;sizeBytes&quot;</span>: <span class=n>69291</span>,
+        <span class=k>&quot;checksumSha256&quot;</span>: <span class=s>&quot;7554297f3276426f30c04e3f8ad20164af26e8bc4cafba7f8018479ae1832a9d&quot;</span>,
+        <span class=k>&quot;url&quot;</span>: <span class=s>&quot;/v2/files/ref_NjIyNg8s6pBzbhx6ko&quot;</span>
+      }
+    }
+  ]
+}</code></pre></section><section class=ep id="records-404">
+<h3>An unknown group</h3>
+<div class=reqline><span class=m>GET</span><span class=u>/v2/groups/not-a-group/records</span>
+<button class=cp data-c="GET /v2/groups/not-a-group/records">copy</button></div><p class=why>The error names the valid groups rather than making you read the document.</p>
+<div class=meta><span class="badge warn">404</span> · <code>application/json</code> · 322 B · 2.03 ms · auth: Bearer token</div><div class=lbl>response headers</div><pre class=req><span class=k>Content-Type</span>: application/json
+<span class=k>X-Content-Type-Options</span>: nosniff
+<span class=k>X-Frame-Options</span>: DENY
+<span class=k>Referrer-Policy</span>: no-referrer
+<span class=k>Strict-Transport-Security</span>: max-age=31536000; includeSubDomains</pre>
+<pre class=res><code>{
+  <span class=k>&quot;error&quot;</span>: <span class=s>&quot;unknown_group&quot;</span>,
+  <span class=k>&quot;message&quot;</span>: <span class=s>&quot;No group &#x27;not-a-group&#x27;&quot;</span>,
+  <span class=k>&quot;availableGroups&quot;</span>: [
+    &quot;nlp-marine&quot;,
+    &quot;bathymetry&quot;,
+    &quot;port-craft-pilot&quot;,
+    &quot;shipping-lines&quot;,
+    &quot;customs&quot;,
+    &quot;edi-messages&quot;,
+    &quot;berthing-reports&quot;,
+    &quot;gate-documents&quot;,
+    &quot;rail-fois&quot;,
+    &quot;rail-form11-icd&quot;,
+    &quot;transport&quot;,
+    &quot;daily-reports&quot;,
+    &quot;cfs-ecy&quot;
+  ]
+}</code></pre></section><section class=ep id="records-future">
+<h3>Asking for the future</h3>
+<div class=reqline><span class=m>GET</span><span class=u>/v2/groups/customs/records?from=2030-01-01&amp;limit=5</span>
+<button class=cp data-c="GET /v2/groups/customs/records?from=2030-01-01&amp;limit=5">copy</button></div><p class=why>A date range beyond the present returns an empty result rather than an error — the records are not there yet, exactly as they would not be on a live endpoint.</p>
+<div class=meta><span class="badge ok">200</span> · <code>application/json</code> · 185 B · 2.67 ms · auth: Bearer token</div><div class=lbl>response headers</div><pre class=req><span class=k>Content-Type</span>: application/json
+<span class=k>X-Content-Type-Options</span>: nosniff
+<span class=k>X-Frame-Options</span>: DENY
+<span class=k>Referrer-Policy</span>: no-referrer
+<span class=k>Strict-Transport-Security</span>: max-age=31536000; includeSubDomains
+<span class=k>RateLimit-Remaining</span>: 592</pre>
+<pre class=res><code>{
+  <span class=k>&quot;group&quot;</span>: <span class=s>&quot;customs&quot;</span>,
+  <span class=k>&quot;delivery&quot;</span>: <span class=s>&quot;indexed&quot;</span>,
+  <span class=k>&quot;order&quot;</span>: <span class=s>&quot;desc&quot;</span>,
+  <span class=k>&quot;asOf&quot;</span>: <span class=s>&quot;2026-07-31T23:56:21+05:30&quot;</span>,
+  <span class=k>&quot;count&quot;</span>: <span class=n>0</span>,
+  <span class=k>&quot;matched&quot;</span>: <span class=n>0</span>,
+  <span class=k>&quot;hasMore&quot;</span>: <span class=b>false</span>,
+  <span class=k>&quot;nextCursor&quot;</span>: <span class=b>null</span>,
+  <span class=k>&quot;items&quot;</span>: []
+}</code></pre><p class=note>An upper bound past the present is silently clamped rather than rejected.</p></section><h2>4. Step two — the file</h2><section class=ep id="file">
+<h3>Fetch by reference</h3>
+<div class=reqline><span class=m>GET</span><span class=u>/v2/files/ref_NjI2NQz9fct1VIFTGO</span>
+<button class=cp data-c="GET /v2/files/ref_NjI2NQz9fct1VIFTGO">copy</button></div><p class=why>The second half of the contract. Original media type, real filename, and an ETag equal to the SHA-256 you were given in step one.</p>
+<div class=meta><span class="badge ok">200</span> · <code>application/xml</code> · 424,875 B · 34.02 ms · auth: Bearer token · <span class="badge tr">truncated for display</span></div><div class=lbl>response headers</div><pre class=req><span class=k>Content-Type</span>: application/xml
+<span class=k>ETag</span>: &quot;d7406a0ecd4fb5ff8025d1cad81fc15fabd29089e07dec892c6f72406a38e756&quot;
+<span class=k>Content-Disposition</span>: attachment; filename=&quot;CHPOI03_IGM_1197294_31-07-2026-195900.xml&quot;
+<span class=k>X-Content-Type-Options</span>: nosniff
+<span class=k>X-Frame-Options</span>: DENY
+<span class=k>Referrer-Policy</span>: no-referrer
+<span class=k>Strict-Transport-Security</span>: max-age=31536000; includeSubDomains
+<span class=k>RateLimit-Remaining</span>: 590</pre>
+<pre class=res><code>&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?&gt;&lt;<span class=k>CHPOI03Payload</span>&gt;&lt;<span class=k>DocumentHeader</span>&gt;&lt;<span class=k>SenderIdQualifier</span>&gt;ZZ&lt;/<span class=k>SenderIdQualifier</span>&gt;&lt;<span class=k>SenderId</span>&gt;INNSA1&lt;/<span class=k>SenderId</span>&gt;&lt;<span class=k>ReceiverIdQualifier</span>&gt;ZZ&lt;/<span class=k>ReceiverIdQualifier</span>&gt;&lt;<span class=k>ReceiverId</span>&gt;INNSA1BMC1&lt;/<span class=k>ReceiverId</span>&gt;&lt;<span class=k>VersionNumber</span>&gt;ICES1_5&lt;/<span class=k>VersionNumber</span>&gt;&lt;<span class=k>TestProductionFlag</span>&gt;P&lt;/<span class=k>TestProductionFlag</span>&gt;&lt;<span class=k>MessageId</span>&gt;CHPOI03&lt;/<span class=k>MessageId</span>&gt;&lt;<span class=k>ControlNumber</span>&gt;1197432&lt;/<span class=k>ControlNumber</span>&gt;&lt;<span class=k>SentDate</span>&gt;31072026&lt;/<span class=k>SentDate</span>&gt;&lt;<span class=k>SentTime</span>&gt;195900&lt;/<span class=k>SentTime</span>&gt;&lt;<span class=k>PCSCommonRefNumber</span>&gt;2026073101197432&lt;/<span class=k>PCSCommonRefNumber</span>&gt;&lt;/<span class=k>DocumentHeader</span>&gt;&lt;<span class=k>DocumentDetails</span>&gt;&lt;<span class=k>vesinfo</span>&gt;&lt;<span class=k>MessageType</span>&gt;CHPOI03&lt;/<span class=k>MessageType</span>&gt;&lt;<span class=k>CustomsHouseCode</span>&gt;INNSA1&lt;/<span class=k>CustomsHouseCode</span>&gt;&lt;<span class=k>IGM_NO</span>&gt;1197294&lt;/<span class=k>IGM_NO</span>&gt;&lt;<span class=k>IGM_DT</span>&gt;31072026&lt;/<span class=k>IGM_DT</span>&gt;&lt;<span class=k>IMOCodeofVessel</span>&gt;&lt;/<span class=k>IMOCodeofVessel</span>&gt;&lt;<span class=k>VesselCode</span>&gt;&lt;/<span class=k>VesselCode</span>&gt;&lt;<span class=k>VoyageNo</span>&gt;&lt;/<span class=k>VoyageNo</span>&gt;&lt;<span class=k>ShippingLineCode</span>&gt;HLI&lt;/<span class=k>ShippingLineCode</span>&gt;&lt;<span class=k>ShipingAgentCode</span>&gt;HLI&lt;/<span class=k>ShipingAgentCode</span>&gt;&lt;<span class=k>MasterName</span>&gt;CAPT. C. PETROV&lt;/<span class=k>MasterName</span>&gt;&lt;<span class=k>PortofArrival</span>&gt;INNSA1&lt;/<span class=k>PortofArrival</span>&gt;&lt;<span class=k>Vesseltype</span>&gt;C&lt;
+… truncated for display …</code></pre><p class=note>Compare the checksum against what you downloaded — that is what it is for.</p></section><section class=ep id="file-304">
+<h3>Revalidate with If-None-Match</h3>
+<div class=reqline><span class=m>GET</span><span class=u>/v2/files/ref_NjI2NQz9fct1VIFTGO</span>
+<button class=cp data-c="GET /v2/files/ref_NjI2NQz9fct1VIFTGO">copy</button></div><p class=why>Send the ETag back and you get 304 with an empty body if your copy is current.</p>
+<div class=meta><span class="badge info">304</span> · 21.5 ms · auth: Bearer token</div><div class=lbl>response headers</div><pre class=req><span class=k>ETag</span>: &quot;d7406a0ecd4fb5ff8025d1cad81fc15fabd29089e07dec892c6f72406a38e756&quot;
+<span class=k>X-Content-Type-Options</span>: nosniff
+<span class=k>X-Frame-Options</span>: DENY
+<span class=k>Referrer-Policy</span>: no-referrer
+<span class=k>Strict-Transport-Security</span>: max-age=31536000; includeSubDomains</pre>
+<pre class=res><code>(empty body)</code></pre></section><section class=ep id="file-bad">
+<h3>A tampered reference</h3>
+<div class=reqline><span class=m>GET</span><span class=u>/v2/files/ref_AAAAAAAAAAAAAAAAAA</span>
+<button class=cp data-c="GET /v2/files/ref_AAAAAAAAAAAAAAAAAA">copy</button></div><p class=why>References are HMAC-signed. Altering one byte makes it invalid — it fails closed rather than probing the store.</p>
+<div class=meta><span class="badge warn">404</span> · <code>application/json</code> · 101 B · 1.85 ms · auth: Bearer token</div><div class=lbl>response headers</div><pre class=req><span class=k>Content-Type</span>: application/json
+<span class=k>X-Content-Type-Options</span>: nosniff
+<span class=k>X-Frame-Options</span>: DENY
+<span class=k>Referrer-Policy</span>: no-referrer
+<span class=k>Strict-Transport-Security</span>: max-age=31536000; includeSubDomains</pre>
+<pre class=res><code>{
+  <span class=k>&quot;error&quot;</span>: <span class=s>&quot;invalid_reference&quot;</span>,
+  <span class=k>&quot;message&quot;</span>: <span class=s>&quot;That file reference is not valid or has been altered&quot;</span>
+}</code></pre></section><h2>5. Report groups</h2><section class=ep id="dbr">
+<h3>Daily Berthing Report</h3>
+<div class=reqline><span class=m>GET</span><span class=u>/v2/groups/berthing-reports/records?date=2026-08-06&amp;terminal=APMT</span>
+<button class=cp data-c="GET /v2/groups/berthing-reports/records?date=2026-08-06&amp;terminal=APMT">copy</button></div><p class=why>The daily terminal reports come back directly as JSON. No file reference is issued for them.</p>
+<div class=meta><span class="badge ok">200</span> · <code>application/json</code> · 120 B · 2.54 ms · auth: Bearer token</div><div class=lbl>response headers</div><pre class=req><span class=k>Content-Type</span>: application/json
+<span class=k>X-Content-Type-Options</span>: nosniff
+<span class=k>X-Frame-Options</span>: DENY
+<span class=k>Referrer-Policy</span>: no-referrer
+<span class=k>Strict-Transport-Security</span>: max-age=31536000; includeSubDomains
+<span class=k>RateLimit-Remaining</span>: 586</pre>
+<pre class=res><code>{
+  <span class=k>&quot;group&quot;</span>: <span class=s>&quot;berthing-reports&quot;</span>,
+  <span class=k>&quot;delivery&quot;</span>: <span class=s>&quot;report&quot;</span>,
+  <span class=k>&quot;asOf&quot;</span>: <span class=s>&quot;2026-07-31T23:56:21+05:30&quot;</span>,
+  <span class=k>&quot;count&quot;</span>: <span class=n>0</span>,
+  <span class=k>&quot;items&quot;</span>: []
+}</code></pre></section><section class=ep id="dsr">
+<h3>Daily Status Report</h3>
+<div class=reqline><span class=m>GET</span><span class=u>/v2/groups/daily-reports/records?date=2026-08-06</span>
+<button class=cp data-c="GET /v2/groups/daily-reports/records?date=2026-08-06">copy</button></div><p class=why>Port-wide totals with the per-terminal breakdown behind them.</p>
+<div class=meta><span class="badge ok">200</span> · <code>application/json</code> · 117 B · 2.73 ms · auth: Bearer token</div><div class=lbl>response headers</div><pre class=req><span class=k>Content-Type</span>: application/json
+<span class=k>X-Content-Type-Options</span>: nosniff
+<span class=k>X-Frame-Options</span>: DENY
+<span class=k>Referrer-Policy</span>: no-referrer
+<span class=k>Strict-Transport-Security</span>: max-age=31536000; includeSubDomains
+<span class=k>RateLimit-Remaining</span>: 585</pre>
+<pre class=res><code>{
+  <span class=k>&quot;group&quot;</span>: <span class=s>&quot;daily-reports&quot;</span>,
+  <span class=k>&quot;delivery&quot;</span>: <span class=s>&quot;report&quot;</span>,
+  <span class=k>&quot;asOf&quot;</span>: <span class=s>&quot;2026-07-31T23:56:21+05:30&quot;</span>,
+  <span class=k>&quot;count&quot;</span>: <span class=n>0</span>,
+  <span class=k>&quot;items&quot;</span>: []
+}</code></pre></section><section class=ep id="dbr-range">
+<h3>A range of report days</h3>
+<div class=reqline><span class=m>GET</span><span class=u>/v2/groups/berthing-reports/records?from=2026-08-05&amp;to=2026-08-06</span>
+<button class=cp data-c="GET /v2/groups/berthing-reports/records?from=2026-08-05&amp;to=2026-08-06">copy</button></div>
+<div class=meta><span class="badge ok">200</span> · <code>application/json</code> · 120 B · 2.52 ms · auth: Bearer token</div><div class=lbl>response headers</div><pre class=req><span class=k>Content-Type</span>: application/json
+<span class=k>X-Content-Type-Options</span>: nosniff
+<span class=k>X-Frame-Options</span>: DENY
+<span class=k>Referrer-Policy</span>: no-referrer
+<span class=k>Strict-Transport-Security</span>: max-age=31536000; includeSubDomains
+<span class=k>RateLimit-Remaining</span>: 584</pre>
+<pre class=res><code>{
+  <span class=k>&quot;group&quot;</span>: <span class=s>&quot;berthing-reports&quot;</span>,
+  <span class=k>&quot;delivery&quot;</span>: <span class=s>&quot;report&quot;</span>,
+  <span class=k>&quot;asOf&quot;</span>: <span class=s>&quot;2026-07-31T23:56:21+05:30&quot;</span>,
+  <span class=k>&quot;count&quot;</span>: <span class=n>0</span>,
+  <span class=k>&quot;items&quot;</span>: []
+}</code></pre></section>
+<h2>Not in this PoC</h2>
+<table>
+<tr><td>No write path</td><td>Read-only by design.</td></tr>
+<tr><td>No server push</td><td>No webhooks or SSE. Poll with <code>since</code>, which is resumable and easy to debug.</td></tr>
+<tr><td>No payload search</td><td>Records filter by group, type and time — not by content inside files.</td></tr>
+<tr><td>Videos excluded</td><td>Left out by agreement; the simulation covers what an integration needs.</td></tr>
+<tr><td>Bathymetry not served</td><td>Static reference, distributed with the sample pack rather than through the API.</td></tr>
+</table>
+</main></div>
+<script>
+document.querySelectorAll('.cp').forEach(b=>b.onclick=()=>{
+ navigator.clipboard.writeText(b.dataset.c);const t=b.textContent;b.textContent='copied';
+ setTimeout(()=>b.textContent=t,1100);});
+const links=[...document.querySelectorAll('nav a')];
+const obs=new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting){
+ links.forEach(l=>l.classList.toggle('on',l.getAttribute('href')==='#'+e.target.id));}});},
+ {rootMargin:'-10% 0px -75% 0px'});
+document.querySelectorAll('section.ep').forEach(s=>obs.observe(s));
+</script></html>

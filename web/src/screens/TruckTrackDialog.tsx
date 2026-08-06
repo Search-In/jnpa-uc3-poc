@@ -61,15 +61,15 @@ function downloadTrackingReport(tracking: LdbTruckTracking, plate: string) {
     const c = tracking.compliance;
     lines.push(
       "",
-      "Compliance",
+      "Compliance (LDB Vahan)",
       `status,${c.status}`,
-      `owner,${c.owner ?? ""}`,
-      `class,${c.vehicleClass ?? ""}`,
+      `vehicleClass,${c.vehicleClass ?? ""}`,
+      `fuelType,${c.fuelType ?? ""}`,
       `fitness,${c.fitnessValidUpto ?? ""}`,
+      `tax,${c.taxValidUpto ?? ""}`,
       `insurance,${c.insuranceValidUpto ?? ""}`,
-      `puc,${c.pucValidUpto ?? ""}`,
-      `chassis,${c.chassisNumber ?? ""}`,
-      `engine,${c.engineNumber ?? ""}`,
+      `pucc,${c.pucValidUpto ?? ""}`,
+      `permit,${c.permitValidUpto ?? ""}`,
     );
   }
   const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
@@ -212,7 +212,7 @@ export default function TruckTrackDialog({ open, vehicleNumber, onClose }: Props
                 <p className="text-sm text-muted-foreground">
                   {t(
                     "vehicles.complianceUnavailable",
-                    "Compliance details are not available for this vehicle yet.",
+                    "No LDB Vahan compliance data for this vehicle.",
                   )}
                 </p>
               ) : (
@@ -232,39 +232,33 @@ export default function TruckTrackDialog({ open, vehicleNumber, onClose }: Props
                     </dd>
                   </div>
                   <div>
-                    <dt className="text-muted-foreground">Owner</dt>
-                    <dd className="font-medium">{compliance.owner || "—"}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-muted-foreground">Class</dt>
+                    <dt className="text-muted-foreground">Vehicle Description</dt>
                     <dd className="font-medium">{compliance.vehicleClass || "—"}</dd>
                   </div>
                   <div>
-                    <dt className="text-muted-foreground">Fitness valid upto</dt>
-                    <dd className="font-medium">{compliance.fitnessValidUpto || "—"}</dd>
+                    <dt className="text-muted-foreground">Fuel Description</dt>
+                    <dd className="font-medium">{compliance.fuelType || "—"}</dd>
                   </div>
                   <div>
-                    <dt className="text-muted-foreground">Insurance valid upto</dt>
-                    <dd className="font-medium">{compliance.insuranceValidUpto || "—"}</dd>
+                    <dt className="text-muted-foreground">Tax Valid Upto</dt>
+                    <dd className="font-medium">{compliance.taxValidUpto || "—"}</dd>
                   </div>
                   <div>
-                    <dt className="text-muted-foreground">PUC valid upto</dt>
+                    <dt className="text-muted-foreground">PUCC Valid Upto</dt>
                     <dd className="font-medium">{compliance.pucValidUpto || "—"}</dd>
                   </div>
                   <div>
-                    <dt className="text-muted-foreground">Chassis</dt>
-                    <dd className="font-mono font-medium">{compliance.chassisNumber || "—"}</dd>
+                    <dt className="text-muted-foreground">Fitness Valid Upto</dt>
+                    <dd className="font-medium">{compliance.fitnessValidUpto || "—"}</dd>
                   </div>
                   <div>
-                    <dt className="text-muted-foreground">Engine</dt>
-                    <dd className="font-mono font-medium">{compliance.engineNumber || "—"}</dd>
+                    <dt className="text-muted-foreground">Permit Valid Upto</dt>
+                    <dd className="font-medium">{compliance.permitValidUpto || "—"}</dd>
                   </div>
-                  {compliance.notes ? (
-                    <div className="sm:col-span-2">
-                      <dt className="text-muted-foreground">Notes</dt>
-                      <dd className="text-muted-foreground">{compliance.notes}</dd>
-                    </div>
-                  ) : null}
+                  <div>
+                    <dt className="text-muted-foreground">Insurance Valid Upto</dt>
+                    <dd className="font-medium">{compliance.insuranceValidUpto || "—"}</dd>
+                  </div>
                 </dl>
               )}
             </Card>

@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { FileText, ImageOff } from "lucide-react";
 import type { Alert } from "@/lib/types";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { alertLocation } from "@/lib/alerts";
 import { severityColour } from "@/lib/palette";
 import { fmtTimeIST } from "@/lib/utils";
 
@@ -66,6 +67,14 @@ export function AlertEvidenceDialog({
                 <Field k={t("notifications.zone", { defaultValue: "Zone" })}>
                   <span className="font-medium">{(alert.payload?.zone_id as string) ?? "—"}</span>
                 </Field>
+                {/* Camera-sourced alerts carry neither gate nor zone — show the
+                    resolved locator (camera / coordinates) so the row is never
+                    a dead end for the operator. */}
+                {!alert.gate_id && !alert.payload?.zone_id && (
+                  <Field k={t("notifications.location", { defaultValue: "Location" })}>
+                    <span className="font-medium">{alertLocation(alert)}</span>
+                  </Field>
+                )}
               </div>
 
               {/* TFC-2: play the last-10s evidence clip when present. */}

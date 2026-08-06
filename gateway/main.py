@@ -72,6 +72,7 @@ from .routers import (
     traffic,
     trucks,
     ulip,
+    users as users_router,
     vahan,
     vehicle_identity,
     vehicles,
@@ -93,21 +94,28 @@ from .routers import (
     document_ocr,
     double_trip,
     driver_jobs,
+    edi_vessel,
     export_lifecycle,
     gate_documents,
+    jnpa_api,
     ldb,
     logistics,
     marine_calls,
     marine_live_vessels,
     marine_imports,
+    marine_manual_craft,
+    marine_manual_pilot,
     marine_pilotage,
     marine_bathymetry,
     marine_port_craft,
     marine_sea_channel,
+    marine_state,
+    marine_vessel,
     nvr,
     pdp,
     performance,
     performance_upload,
+    rail,
     reefer,
     rms_tas,
     shipping_lines,
@@ -405,6 +413,37 @@ async def _lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         log.warning("logistics_schema_boot_failed", error=str(exc))
 
+    # JNPA Port-Data API sync: the core.api_sync_state / api_ingest_run /
+    # api_record / api_report_snapshot / api_defect_log tables. Idempotent,
+    # additive — mirrors v3 migration 0124 so a dev DB that never ran it still
+    # gets the objects. Runs regardless of whether the sync loop is enabled
+    # (the /api/integrations/jnpa/* reads need the tables).
+    try:
+        from services.jnpa_sync import ensure_api_ingest_schema
+        await ensure_api_ingest_schema(cfg.postgres_dsn or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("jnpa_api_schema_boot_failed", error=str(exc))
+
+    # Rail consumers (rail-fois + rail-form11-icd): the core.rail_import_file /
+    # rail_import_error ledger + fois_train_intimation / form11_entry /
+    # cto_manifest_entry domain tables. Idempotent, additive — mirrors v3
+    # migration 0119 so a dev DB that never ran it still gets the objects.
+    try:
+        from services.rail.repository import ensure_rail_schema
+        await ensure_rail_schema(cfg.postgres_dsn or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("rail_schema_boot_failed", error=str(exc))
+
+    # COARRI/COPRAR consumer (edi-messages group): the core.edi_import_file
+    # ledger + edi_vessel_container domain table. Idempotent, additive —
+    # mirrors v3 migration 0123 so a dev DB that never ran it still gets
+    # the objects.
+    try:
+        from services.edi_vessel.repository import ensure_edi_vessel_schema
+        await ensure_edi_vessel_schema(cfg.postgres_dsn or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("edi_vessel_schema_boot_failed", error=str(exc))
+
     # Vehicle Master (fleet registry): ensure the table, then migrate the truck-sim
     # fleet into it (idempotent, never clobbering an operator edit) so no existing
     # vehicle disappears when the master is introduced. Best-effort — a sim/DB blip
@@ -525,6 +564,19 @@ async def _lifespan(app: FastAPI):
     # MQTT truck-position pump (async task) — best-effort.
     mqtt_task = asyncio.create_task(mqtt_truck_pump(state, stop), name="mqtt-truck-pump")
 
+    # JNPA Port-Data API sync loop (async task) — starts ONLY when a client
+    # key is configured AND the scheduler is enabled, so TestClient runs and
+    # keyless deployments stay task-free (the Kafka-pump posture above).
+    jnpa_task = None
+    if cfg.jnpa_portdata_enabled and cfg.jnpa_sync_enabled:
+        from services.jnpa_sync import jnpa_sync_loop
+        jnpa_task = asyncio.create_task(jnpa_sync_loop(state, stop),
+                                        name="jnpa-sync")
+        log.info("jnpa_sync_scheduled", interval_s=cfg.jnpa_sync_interval_s)
+    else:
+        log.info("jnpa_sync_skipped",
+                 reason="JNPA_PORTDATA_CLIENT_KEY unset or JNPA_SYNC_ENABLED=false")
+
     try:
         yield
     finally:
@@ -538,6 +590,12 @@ async def _lifespan(app: FastAPI):
             await mqtt_task
         except (asyncio.CancelledError, Exception):  # noqa: BLE001
             pass
+        if jnpa_task is not None:
+            jnpa_task.cancel()
+            try:
+                await jnpa_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
         await state.aclose()
         log.info("gateway_stopped")
 
@@ -622,6 +680,9 @@ log.info("gateway_runtime_mode", mode=mode_name())
 # Routers (order matters only where static paths must beat /{param} — kpi router
 # declares /sources + /cameras before /{view}, so it is safe).
 app.include_router(auth_router.router)
+# Console user administration — admin-only (/api/users is scoped to DTCCC_ADMIN
+# in auth._POLICY, unlike the public /api/auth bootstrap prefix).
+app.include_router(users_router.router)
 app.include_router(anpr.router)
 app.include_router(vahan.router)
 app.include_router(traffic.router)
@@ -693,9 +754,13 @@ app.include_router(marine_calls.router)         # UC-I Marine vessel-call spine 
 app.include_router(marine_live_vessels.router)  # Live AIS vessel positions (MarineTraffic proxy, no DB write)
 app.include_router(marine_imports.router)    # UC-I Marine Data-Upload sub-module (CSV: validate/upload/history)
 app.include_router(marine_pilotage.router)   # UC-I Marine pilotage movements (read-only; XLSX via marine_imports)
+app.include_router(marine_manual_pilot.router)  # UC-I Marine manual pilot assignment (operator fallback; additive paths only)
+app.include_router(marine_manual_craft.router)  # UC-I Marine manual craft assignment (operator fallback; additive paths only)
 app.include_router(marine_port_craft.router) # UC-I Marine port-craft register (read-only; PDF via marine_imports)
 app.include_router(marine_sea_channel.router) # UC-I Marine sea-channel geometry (read-only; SHP zip via marine_imports)
 app.include_router(marine_bathymetry.router) # UC-I Marine bathymetry soundings (read-only; PDF/JSON via marine_imports)
+app.include_router(marine_vessel.router)     # UC-I Marine vessel master (read-only; VESPRO XML via marine_imports)
+app.include_router(marine_state.router)      # UC-I Marine business state (read-only; derived by state_engine)
 app.include_router(performance.router)       # Performance & Daily Reports (module 12, read-only, additive)
 app.include_router(performance_upload.router)  # Performance Data Upload (module 12 sub-module, admin-only, additive)
 app.include_router(bottlenecks.router)       # three-road bottleneck analytics
@@ -707,6 +772,9 @@ app.include_router(weather.router)           # Open-Meteo weather + marine (LIVE
 app.include_router(air_quality.router)       # OpenAQ air quality (LIVE→CACHED→DATABASE→SYNTHETIC)
 app.include_router(bhuvan.router)            # Bhuvan WMS geospatial layer (ISRO/NRSC, control-plane only)
 app.include_router(logistics.router)         # ULIP logistics intelligence (LIVE→CACHED→DATABASE→FALLBACK)
+app.include_router(jnpa_api.router)          # JNPA Port-Data API sync (dt.jnpa.in → upload services)
+app.include_router(rail.router)              # Rail feeds (FOIS / Form 11 / CTO — read path for the 0119 tables)
+app.include_router(edi_vessel.router)        # COARRI/COPRAR vessel-side container moves (read path for 0125)
 app.include_router(double_trip.router)       # TT double-trip workflow
 app.include_router(ws.router)
 app.include_router(checkin.router)

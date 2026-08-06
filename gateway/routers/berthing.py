@@ -31,6 +31,7 @@ from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query, Reque
 from pydantic import BaseModel, ConfigDict
 
 from ..auth import CONTROL_ROOM, Role, auth_enabled
+from ..data_mode import data_mode
 from ..metrics import REQUESTS
 from services.berthing import BerthingService, BerthingUploadService
 from services.berthing import upload_parsers as P
@@ -191,10 +192,12 @@ def _terminal_filter(value: Optional[str]) -> Optional[str]:
     return canon
 
 
-def _filters(terminal, status_, vessel, voyage, berthed_only, eta_from, eta_to) -> Dict[str, Any]:
+def _filters(terminal, status_, vessel, voyage, berthed_only, eta_from, eta_to,
+             data_origin=None) -> Dict[str, Any]:
     return {"terminal": _terminal_filter(terminal), "status": _status(status_),
             "vessel": vessel, "voyage": voyage,
-            "berthed_only": bool(berthed_only), "eta_from": eta_from, "eta_to": eta_to}
+            "berthed_only": bool(berthed_only), "eta_from": eta_from, "eta_to": eta_to,
+            "data_origin": data_origin}
 
 
 # ------------------------------------------------------------------- read endpoints
@@ -211,9 +214,11 @@ async def list_reports(
     direction: str = Query(default="desc"),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    data_origin: Optional[str] = Depends(data_mode),
     service: BerthingService = Depends(get_service),
 ) -> ReportListResponse:
-    filters = _filters(terminal, status_, vessel, voyage, berthed_only, date_from, date_to)
+    filters = _filters(terminal, status_, vessel, voyage, berthed_only, date_from, date_to,
+                       data_origin)
     res = await service.list_reports(filters, sort=sort, direction=direction,
                                      limit=limit, offset=offset)
     REQUESTS.labels("berthing", "ok").inc()
@@ -225,9 +230,10 @@ async def stats(
     terminal: Optional[str] = Query(default=None),
     date_from: Optional[datetime] = Query(default=None, alias="from"),
     date_to: Optional[datetime] = Query(default=None, alias="to"),
+    data_origin: Optional[str] = Depends(data_mode),
     service: BerthingService = Depends(get_service),
 ) -> StatsOut:
-    filters = _filters(terminal, None, None, None, False, date_from, date_to)
+    filters = _filters(terminal, None, None, None, False, date_from, date_to, data_origin)
     res = await service.stats(filters)
     REQUESTS.labels("berthing", "ok").inc()
     return StatsOut(**res)
@@ -337,19 +343,21 @@ async def full_extract_import(request: Request, file: UploadFile = File(...),
 async def list_documents(response: Response, request: Request,
                          terminal: Optional[str] = None,
                          limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0),
+                         data_origin: Optional[str] = Depends(data_mode),
                          repo: BerthingDocumentRepository = Depends(get_doc_repo)) -> Page:
     require_uploader(request)
     res = await repo.list_documents(terminal=(_terminal_filter(terminal) if terminal else None),
-                                    limit=limit, offset=offset)
+                                    limit=limit, offset=offset, data_origin=data_origin)
     return _page(res["items"], res["total"], limit, offset, response)
 
 
 @router.get("/documents/{document_id}/tables",
             summary="Every extracted table for one full-extract document (verbatim)")
 async def document_tables(document_id: int, request: Request,
+                          data_origin: Optional[str] = Depends(data_mode),
                           repo: BerthingDocumentRepository = Depends(get_doc_repo)) -> Dict[str, Any]:
     require_uploader(request)
-    doc = await repo.get_document(document_id)
+    doc = await repo.get_document(document_id, data_origin=data_origin)
     if doc is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "document_not_found", "id": document_id})
@@ -360,13 +368,14 @@ async def document_tables(document_id: int, request: Request,
 @router.get("/documents/{document_id}/full-view",
             summary="Complete extracted report — every table, verbatim, with dynamic columns")
 async def document_full_view(document_id: int, request: Request,
+                             data_origin: Optional[str] = Depends(data_mode),
                              repo: BerthingDocumentRepository = Depends(get_doc_repo)) -> Dict[str, Any]:
     """The Report-Details view surface: returns the document header + EVERY row of EVERY
     table stored in core.berthing_report_table, exactly as extracted. No filtering, no
     column dropping, no value transformation — the frontend renders columns dynamically
     from ``columns`` so every terminal (APMT/BMCT/NSFT/NSICT/NSIGT) works unchanged."""
     require_uploader(request)
-    doc = await repo.get_document(document_id)
+    doc = await repo.get_document(document_id, data_origin=data_origin)
     if doc is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "document_not_found", "id": document_id})
@@ -392,8 +401,9 @@ async def document_full_view(document_id: int, request: Request,
 # ------------------------------------------------------------------- one call (declared last so
 # the static /stats, /templates, /validate, /upload, /uploads prefixes win)
 @router.get("/{report_id}", response_model=ReportOut, summary="One berthing vessel call")
-async def get_report(report_id: int, service: BerthingService = Depends(get_service)) -> ReportOut:
-    res = await service.get(report_id)
+async def get_report(report_id: int, data_origin: Optional[str] = Depends(data_mode),
+                     service: BerthingService = Depends(get_service)) -> ReportOut:
+    res = await service.get(report_id, data_origin=data_origin)
     if res is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "report_not_found", "id": report_id})
@@ -402,9 +412,9 @@ async def get_report(report_id: int, service: BerthingService = Depends(get_serv
 
 
 @router.get("/{report_id}/timeline", summary="One vessel call + its lifecycle timeline")
-async def get_timeline(report_id: int,
+async def get_timeline(report_id: int, data_origin: Optional[str] = Depends(data_mode),
                        service: BerthingService = Depends(get_service)) -> Dict[str, Any]:
-    res = await service.timeline(report_id)
+    res = await service.timeline(report_id, data_origin=data_origin)
     if res is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "report_not_found", "id": report_id})

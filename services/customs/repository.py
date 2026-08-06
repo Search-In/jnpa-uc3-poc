@@ -84,10 +84,11 @@ class CustomsRepository:
 
     async def list_events(self, *, module: Optional[str] = None,
                           container_no: Optional[str] = None, event: Optional[str] = None,
-                          since_id: Optional[int] = None, limit: int = 100,
-                          offset: int = 0) -> list[dict]:
+                          since_id: Optional[int] = None, data_origin: Optional[str] = None,
+                          limit: int = 100, offset: int = 0) -> list[dict]:
         """Recent customs events (newest first), optionally filtered. since_id (an
-        exclusive lower bound) supports a monotonic poll cursor like cargo events."""
+        exclusive lower bound) supports a monotonic poll cursor like cargo events.
+        ``data_origin`` narrows to a LIVE/DEMO provenance; None ⇒ no filter."""
         where = []
         params: dict[str, Any] = {"limit": limit, "offset": offset}
         for col, val in (("module", module), ("container_no", container_no), ("event", event)):
@@ -97,6 +98,9 @@ class CustomsRepository:
         if since_id is not None:
             where.append("id > :since_id")
             params["since_id"] = since_id
+        if data_origin is not None:
+            where.append("data_origin = :data_origin")
+            params["data_origin"] = data_origin
         clause = (" WHERE " + " AND ".join(where)) if where else ""
         sql = ("SELECT id, event, module, reference, container_no, payload, created_at "
                f"FROM core.customs_event{clause} ORDER BY id DESC LIMIT :limit OFFSET :offset")
@@ -104,14 +108,24 @@ class CustomsRepository:
             res = await conn.execute(text(sql), params)
             return [dict(r) for r in res.mappings().all()]
 
-    async def find_message_by_sha(self, sha256: str) -> Optional[dict]:
-        """Return the existing ledger row for this content hash, or None."""
+    async def find_message_by_sha(self, sha256: str, *,
+                                  data_origin: Optional[str] = None) -> Optional[dict]:
+        """Return the existing ledger row for this content hash, or None.
+
+        Dedup is PER-ORIGIN since 0120 (UNIQUE(source_sha256, data_origin)): the same
+        bytes delivered by both the JNPA API ('API') and a manual dump ('MANUAL') are
+        distinct rows, so a lookup narrows to the origin it is deduping against.
+        ``data_origin`` None ⇒ hash-only lookup (byte-identical to the pre-0120 query)."""
+        clause = " AND data_origin = :data_origin" if data_origin is not None else ""
+        params: dict[str, Any] = {"sha": sha256}
+        if data_origin is not None:
+            params["data_origin"] = data_origin
         async with get_engine(self._dsn).connect() as conn:
             res = await conn.execute(
                 text("SELECT id, module, message_type, source_file, import_status, "
                      "record_count, imported_count, error_count, created_at "
-                     "FROM core.customs_message WHERE source_sha256 = :sha"),
-                {"sha": sha256})
+                     f"FROM core.customs_message WHERE source_sha256 = :sha{clause}"),
+                params)
             row = res.mappings().first()
         return dict(row) if row else None
 
@@ -154,6 +168,15 @@ class CustomsRepository:
                 qualified = f"{alias}.{expr}" if alias else expr
                 clauses.append(f"{qualified} = :{col}")
                 params[col] = val
+        # LIVE/DEMO provenance: narrow to one data_origin ('API' | 'MANUAL') when the
+        # request pinned a mode. It is a cross-cutting tag every corpus table carries
+        # (0121), not a domain key, so it lives outside ``allowed`` and is qualified
+        # with the same alias. Absent/None ⇒ no clause ⇒ byte-identical SQL.
+        data_origin = filters.get("data_origin")
+        if data_origin is not None:
+            prefix = f"{alias}." if alias else ""
+            clauses.append(f"{prefix}data_origin = :data_origin")
+            params["data_origin"] = data_origin
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         return where, params
 
@@ -357,6 +380,9 @@ class CustomsRepository:
         if filters.get("container_no"):
             clauses.append("rc.container_no = :container_no")
             params["container_no"] = str(filters["container_no"]).strip().upper()
+        if filters.get("data_origin") is not None:
+            clauses.append("rc.data_origin = :data_origin")
+            params["data_origin"] = filters["data_origin"]
         return " WHERE " + " AND ".join(clauses), params
 
     _RMS_CONT_FROM = ("FROM core.rms_scan_container rc "
@@ -377,6 +403,9 @@ class CustomsRepository:
         if filters.get("container_no"):
             clauses.append("rc.container_no = :container_no")
             params["container_no"] = filters["container_no"]
+        if filters.get("data_origin") is not None:
+            clauses.append("rc.data_origin = :data_origin")
+            params["data_origin"] = filters["data_origin"]
         return " WHERE " + " AND ".join(clauses), params
 
     async def list_rms_containers(self, *, filters: Mapping[str, Any],
@@ -430,13 +459,35 @@ class CustomsRepository:
         where, params = self._where(filters, ("sb_no", "site_id"))
         return await self._count(f"SELECT count(*) FROM core.shipping_bill{where}", params)
 
-    async def container_customs(self, container_no: str) -> dict:
+    async def container_customs(self, container_no: str, *,
+                                data_origin: Optional[str] = None) -> dict:
         """The full customs view of one container: the derived status flags + every
         customs document that references it (IGM line, OOC, SMTP line, RMS selection).
-        The single soft-join binding the customs layer to a box (by value)."""
-        status = await self._one(
+        The single soft-join binding the customs layer to a box (by value).
+
+        LIVE/DEMO: when ``data_origin`` is set, every customs fact for the box is
+        narrowed to that provenance. ``mart.v_customs_container_status`` is grouped +
+        UNIONed across four tables, so rather than re-shape that shared view its read
+        is gated on the base manifest table's data_origin (core.igm_line_container)
+        and each document sub-query is filtered on its own base table. ``data_origin``
+        None ⇒ the origin clauses collapse to '' ⇒ byte-identical SQL."""
+        do = data_origin
+
+        def _o(alias: str) -> str:
+            return f" AND {alias}.data_origin = :data_origin" if do is not None else ""
+
+        p: dict[str, Any] = {"cn": container_no}
+        if do is not None:
+            p["data_origin"] = do
+        status_sql = (
             "SELECT container_no, igm_no, declared_igm, rms_selected, ooc_cleared, smtp_bonded "
-            "FROM mart.v_customs_container_status WHERE container_no = :cn", {"cn": container_no})
+            "FROM mart.v_customs_container_status WHERE container_no = :cn")
+        if do is not None:
+            # Fallback (view is grouped/unioned, not directly origin-tagged): keep the
+            # box only if it is manifested under the requested origin.
+            status_sql += (" AND EXISTS (SELECT 1 FROM core.igm_line_container ic "
+                           "WHERE ic.container_no = :cn AND ic.data_origin = :data_origin)")
+        status = await self._one(status_sql, p)
         # Vessel/voyage + IGM timestamps for this box, via the same container ->
         # cargo_line -> vessel join the ICEGATE adapter uses. One box maps to one
         # cargo line -> one vessel; ORDER BY igm_no DESC LIMIT 1 picks the latest.
@@ -447,50 +498,85 @@ class CustomsRepository:
             "v.entry_inward_ts AS entry_inward "
             "FROM core.igm_line_container c "
             "JOIN core.igm v ON v.igm_no = c.igm_no "
-            "WHERE c.container_no = :cn ORDER BY v.igm_no DESC LIMIT 1", {"cn": container_no})
+            f"WHERE c.container_no = :cn{_o('c')} ORDER BY v.igm_no DESC LIMIT 1", p)
         igm = await self._rows(
             "SELECT igm_no, line_no, container_no, seal_no, agent_code AS container_agent_code, "
             "status AS container_status, iso_code AS iso_size_type "
-            "FROM core.igm_line_container WHERE container_no = :cn "
-            "ORDER BY igm_no, line_no, subline_no", {"cn": container_no})
+            "FROM core.igm_line_container WHERE container_no = :cn"
+            + (" AND data_origin = :data_origin" if do is not None else "")
+            + " ORDER BY igm_no, line_no, subline_no", p)
         ooc = await self._rows(
             "SELECT DISTINCT o.be_no AS bill_of_entry_no, o.ooc_no AS out_of_charge_no, "
             "o.ooc_date AS out_of_charge_date, o.importer_name "
             "FROM core.ooc_item oc JOIN core.bill_of_entry_ooc o ON o.be_no = oc.be_no "
-            "WHERE oc.container_no = :cn ORDER BY 1", {"cn": container_no})
+            f"WHERE oc.container_no = :cn{_o('oc')} ORDER BY 1", p)
         smtp = await self._rows(
             "SELECT s.smtp_no, s.bond_no, s.destination_icd AS destination_code, "
             "sl.consignee AS consignee_name "
             "FROM core.smtp_container sl JOIN core.smtp_permit s ON s.smtp_no = sl.smtp_no "
-            "WHERE sl.container_no = :cn ORDER BY s.smtp_no", {"cn": container_no})
+            f"WHERE sl.container_no = :cn{_o('sl')} ORDER BY s.smtp_no", p)
         # The scan-selection line carries only report_id; the IGM number lives on the
         # parent scan report, so it is joined in rather than read off the line.
         rms = await self._rows(
             "SELECT r.igm_no, c.machine_type AS scan_machine, c.scan_location, c.cfs_name "
             "FROM core.rms_scan_container c "
             "JOIN core.rms_scan_report r ON r.report_id = c.report_id "
-            "WHERE c.container_no = :cn ORDER BY c.sl_no", {"cn": container_no})
+            f"WHERE c.container_no = :cn{_o('c')} ORDER BY c.sl_no", p)
+        # The message envelope that delivered this box's manifest — the drawer's
+        # "Customs Message ID" (message_id_code). Soft: absent without an IGM link.
+        message = None
+        igm_no = (vessel or {}).get("igm_no")
+        if igm_no is not None:
+            message = await self._one(
+                "SELECT id, message_id_code, message_type, module, sent_ts, source_file "
+                "FROM core.customs_message WHERE primary_ref = :ref"
+                + (" AND data_origin = :data_origin" if do is not None else "")
+                + " ORDER BY id DESC LIMIT 1",
+                {**p, "ref": str(igm_no)})
         return {"container_no": container_no, "status": status, "vessel": vessel,
-                "igm": igm, "ooc": ooc, "smtp": smtp, "rms": rms}
+                "igm": igm, "ooc": ooc, "smtp": smtp, "rms": rms,
+                "message": message}
 
-    async def summary(self) -> dict:
-        """Dashboard counts across the customs layer (one round trip per table)."""
+    async def summary(self, *, data_origin: Optional[str] = None) -> dict:
+        """Dashboard counts across the customs layer (one round trip per table).
+
+        ``data_origin`` narrows every count to a LIVE ('API') or DEMO ('MANUAL')
+        corpus; None ⇒ counts span both (byte-identical to the pre-provenance query)."""
+        do = data_origin
+        p: dict[str, Any] = {"data_origin": do} if do is not None else {}
+        and_do = " AND data_origin = :data_origin" if do is not None else ""
+        where_do = " WHERE data_origin = :data_origin" if do is not None else ""
         async with get_engine(self._dsn).connect() as conn:
             async def n(sql: str) -> int:
-                return int((await conn.execute(text(sql))).scalar() or 0)
+                return int((await conn.execute(text(sql), p)).scalar() or 0)
+            # distinct_containers reads the grouped mart view when unfiltered; under a
+            # LIVE/DEMO filter it becomes the distinct box count across the four
+            # origin-tagged base tables the view unions (the view is not origin-tagged).
+            if do is None:
+                distinct_containers = await n("SELECT count(*) FROM mart.v_customs_container_status")
+            else:
+                distinct_containers = await n(
+                    "SELECT count(*) FROM ("
+                    "  SELECT container_no FROM core.igm_line_container WHERE data_origin = :data_origin"
+                    "  UNION SELECT container_no FROM core.ooc_item WHERE data_origin = :data_origin"
+                    "  UNION SELECT container_no FROM core.smtp_container WHERE data_origin = :data_origin"
+                    "  UNION SELECT container_no FROM core.rms_scan_container WHERE data_origin = :data_origin"
+                    ") x")
             return {
-                "messages": await n("SELECT count(*) FROM core.customs_message"),
-                "igm_vessels": await n("SELECT count(*) FROM core.igm"),
-                "igm_containers": await n("SELECT count(*) FROM core.igm_line_container"),
-                "ooc": await n("SELECT count(*) FROM core.bill_of_entry_ooc"),
-                "smtp": await n("SELECT count(*) FROM core.smtp_permit"),
-                "smtp_lines": await n("SELECT count(*) FROM core.smtp_container"),
-                "rms_scanlists": await n("SELECT count(*) FROM core.rms_scan_report"),
-                "rms_containers": await n("SELECT count(*) FROM core.rms_scan_container"),
-                "leo": await n("SELECT count(*) FROM core.leo"),
-                "shipping_bills": await n("SELECT count(*) FROM core.shipping_bill"),
-                "distinct_containers": await n("SELECT count(*) FROM mart.v_customs_container_status"),
-                "failed_imports": await n("SELECT count(*) FROM core.customs_message WHERE import_status = 'FAILED'"),
+                "messages": await n(f"SELECT count(*) FROM core.customs_message{where_do}"),
+                "igm_vessels": await n(f"SELECT count(*) FROM core.igm{where_do}"),
+                "igm_containers": await n(f"SELECT count(*) FROM core.igm_line_container{where_do}"),
+                "ooc": await n(f"SELECT count(*) FROM core.bill_of_entry_ooc{where_do}"),
+                "smtp": await n(f"SELECT count(*) FROM core.smtp_permit{where_do}"),
+                "smtp_lines": await n(f"SELECT count(*) FROM core.smtp_container{where_do}"),
+                "rms_scanlists": await n(f"SELECT count(*) FROM core.rms_scan_report{where_do}"),
+                "rms_containers": await n(f"SELECT count(*) FROM core.rms_scan_container{where_do}"),
+                "leo": await n(f"SELECT count(*) FROM core.leo{where_do}"),
+                "shipping_bills": await n(f"SELECT count(*) FROM core.shipping_bill{where_do}"),
+                "distinct_containers": distinct_containers,
+                "failed_imports": await n(
+                    "SELECT count(*) FROM core.customs_message "
+                    f"WHERE import_status = 'FAILED'{and_do}"),
             }
 
     # ------------------------------------------------------- cargo binding (workflow)
@@ -607,15 +693,21 @@ class CustomsRepository:
 
     # ------------------------------------------------------------------ persist
     async def persist(self, parsed: ParsedMessage, *, source_file: str,
-                      source_sha256: str, file_size: Optional[int] = None) -> dict:
+                      source_sha256: str, file_size: Optional[int] = None,
+                      data_origin: str = "MANUAL") -> dict:
         """Persist one parsed customs message atomically + idempotently.
 
         Returns an import-result dict: ``{message_id, module, import_status,
         record_count, imported_count, error_count, duplicate}``. A file whose bytes
-        were already imported returns ``duplicate=True`` / ``SKIPPED_DUPLICATE`` and
-        writes nothing. A structural failure returns ``FAILED`` with a recorded
-        ledger row (and no domain rows)."""
-        existing = await self.find_message_by_sha(source_sha256)
+        were already imported (FOR THE SAME data_origin) returns ``duplicate=True`` /
+        ``SKIPPED_DUPLICATE`` and writes nothing. A structural failure returns
+        ``FAILED`` with a recorded ledger row (and no domain rows).
+
+        ``data_origin`` ('API' | 'MANUAL') tags the ledger + every domain row this
+        file contributes, so the dashboards can show the LIVE (JNPA-API) or DEMO
+        (manual) corpus. Dedup is per-origin (0120), so the same bytes delivered by
+        both paths are kept once each."""
+        existing = await self.find_message_by_sha(source_sha256, data_origin=data_origin)
         if existing is not None:
             return {"message_id": existing["id"], "module": existing["module"],
                     "import_status": "SKIPPED_DUPLICATE",
@@ -632,13 +724,14 @@ class CustomsRepository:
             "message_id_code": msg.get("message_id_code"), "sent_ts": msg.get("sent_ts"),
             "primary_ref": msg.get("primary_ref"), "source_file": source_file,
             "source_sha256": source_sha256, "file_size_bytes": file_size,
-            "record_count": parsed.record_count,
+            "record_count": parsed.record_count, "data_origin": data_origin,
         }
         try:
             async with get_engine(self._dsn).begin() as conn:
                 res = await conn.execute(text(_MSG_INSERT), envelope)
                 message_id = res.mappings().first()["id"]
-                imported = await _PERSISTERS[module](self, conn, message_id, parsed.payload)
+                imported = await _PERSISTERS[module](self, conn, message_id, parsed.payload,
+                                                     data_origin)
                 status = "SUCCESS"
                 await conn.execute(
                     text("UPDATE core.customs_message SET import_status = :s, "
@@ -649,8 +742,8 @@ class CustomsRepository:
                     "record_count": parsed.record_count, "imported_count": imported,
                     "error_count": 0, "duplicate": False}
         except IntegrityError as exc:
-            # A concurrent import committed the same sha first — treat as duplicate.
-            dup = await self.find_message_by_sha(source_sha256)
+            # A concurrent import committed the same sha (same origin) first — dup.
+            dup = await self.find_message_by_sha(source_sha256, data_origin=data_origin)
             if dup is not None:
                 return {"message_id": dup["id"], "module": module,
                         "import_status": "SKIPPED_DUPLICATE",
@@ -687,20 +780,23 @@ class CustomsRepository:
                 "imported_count": 0, "error_count": 1, "duplicate": False}
 
     # ----------------------------------------------------- per-module persisters
-    async def _persist_igm(self, conn: Any, message_id: int, payload: Mapping[str, Any]) -> int:
+    async def _persist_igm(self, conn: Any, message_id: int, payload: Mapping[str, Any],
+                           data_origin: str = "MANUAL") -> int:
         # v3: children attach by the natural key (igm_no, line_no, subline_no) —
         # no surrogate parent-id resolution needed.
         imported = 0
         for v in payload.get("vessels", []):
             vparams = {k: v.get(k) for k in _IGM_VESSEL_COLS}
             vparams["message_id"] = message_id
+            vparams["data_origin"] = data_origin
             await conn.execute(text(_IGM_VESSEL_UPSERT), vparams)
             igm_no, igm_date = v.get("igm_no"), v.get("igm_date")
             line_rows = []
             for ln in v.get("lines", []):
                 lr = {k: ln.get(k) for k in _IGM_LINE_COLS}
                 lr.update({"igm_no": igm_no, "igm_date": igm_date,
-                           "subline_no": ln.get("subline_no") or 0})
+                           "subline_no": ln.get("subline_no") or 0,
+                           "data_origin": data_origin})
                 line_rows.append(lr)
             await self._exec_many(conn, _IGM_LINE_INSERT, line_rows)
             cont_rows = []
@@ -709,7 +805,8 @@ class CustomsRepository:
                     cr = {k: c.get(k) for k in _IGM_CONT_COLS}
                     cr.update({"igm_no": igm_no,
                                "line_no": ln.get("line_no"),
-                               "subline_no": ln.get("subline_no") or 0})
+                               "subline_no": ln.get("subline_no") or 0,
+                               "data_origin": data_origin})
                     cont_rows.append(cr)
             imported += await self._bulk_counted(
                 conn, _IGM_CONT_INSERT, cont_rows,
@@ -718,17 +815,20 @@ class CustomsRepository:
                 count_params={"igm": igm_no})
         return imported
 
-    async def _persist_ooc(self, conn: Any, message_id: int, payload: Mapping[str, Any]) -> int:
+    async def _persist_ooc(self, conn: Any, message_id: int, payload: Mapping[str, Any],
+                           data_origin: str = "MANUAL") -> int:
         # v3: core.ooc_item carries (be_no, container_no, invoice_no, item_sr_no)
         # directly — the legacy customs_ooc_container level is flattened away.
         imported = 0
         for o in payload.get("oocs", []):
             oparams = {k: o.get(k) for k in _OOC_COLS}
             oparams["message_id"] = message_id
+            oparams["data_origin"] = data_origin
             await conn.execute(text(_OOC_UPSERT), oparams)
             be_no = o.get("bill_of_entry_no")
             cont_rows = [{"bill_of_entry_no": be_no,
-                          "container_no": c.get("container_no"), "iso_valid": c.get("iso_valid")}
+                          "container_no": c.get("container_no"), "iso_valid": c.get("iso_valid"),
+                          "data_origin": data_origin}
                          for c in o.get("containers", [])]
             imported += await self._bulk_counted(
                 conn, _OOC_CONT_INSERT, cont_rows,
@@ -741,21 +841,24 @@ class CustomsRepository:
                     ir = {k: it.get(k) for k in _OOC_ITEM_COLS}
                     ir.update({"bill_of_entry_no": be_no,
                                "container_no": c.get("container_no"),
-                               "iso_valid": c.get("iso_valid")})
+                               "iso_valid": c.get("iso_valid"),
+                               "data_origin": data_origin})
                     item_rows.append(ir)
             await self._exec_many(conn, _OOC_ITEM_INSERT, item_rows)
         return imported
 
-    async def _persist_smtp(self, conn: Any, message_id: int, payload: Mapping[str, Any]) -> int:
+    async def _persist_smtp(self, conn: Any, message_id: int, payload: Mapping[str, Any],
+                            data_origin: str = "MANUAL") -> int:
         imported = 0
         for p in payload.get("permits", []):
             pparams = {k: p.get(k) for k in _SMTP_COLS}
             pparams["message_id"] = message_id
+            pparams["data_origin"] = data_origin
             await conn.execute(text(_SMTP_UPSERT), pparams)
             line_rows = []
             for ln in p.get("lines", []):
                 lr = {k: ln.get(k) for k in _SMTP_LINE_COLS}
-                lr.update({"smtp_no": p.get("smtp_no")})
+                lr.update({"smtp_no": p.get("smtp_no"), "data_origin": data_origin})
                 line_rows.append(lr)
             imported += await self._bulk_counted(
                 conn, _SMTP_LINE_INSERT, line_rows,
@@ -764,34 +867,41 @@ class CustomsRepository:
                 count_params={"sno": p.get("smtp_no")})
         return imported
 
-    async def _persist_rms(self, conn: Any, message_id: int, payload: Mapping[str, Any]) -> int:
+    async def _persist_rms(self, conn: Any, message_id: int, payload: Mapping[str, Any],
+                           data_origin: str = "MANUAL") -> int:
         s = payload.get("scanlist") or {}
         sparams = {k: s.get(k) for k in _RMS_SCAN_COLS}
         sparams["message_id"] = message_id
+        sparams["data_origin"] = data_origin
         res = await conn.execute(text(_RMS_SCAN_UPSERT), sparams)
         scanlist_id = res.mappings().first()["report_id"]
         cont_rows = []
         for c in payload.get("containers", []):
             cr = {k: c.get(k) for k in _RMS_CONT_COLS}
             cr["scanlist_id"] = scanlist_id
+            cr["data_origin"] = data_origin
             cont_rows.append(cr)
         return await self._bulk_counted(
             conn, _RMS_CONT_INSERT, cont_rows,
             count_sql="SELECT count(*) FROM core.rms_scan_container WHERE report_id = :sid",
             count_params={"sid": scanlist_id})
 
-    async def _persist_leo(self, conn: Any, message_id: int, payload: Mapping[str, Any]) -> int:
+    async def _persist_leo(self, conn: Any, message_id: int, payload: Mapping[str, Any],
+                           data_origin: str = "MANUAL") -> int:
         # Leaf carries message_id and is brand-new for this message, so a message-scoped
         # count is the exact number of rows this file contributed (duplicates collapse).
-        rows = [{"message_id": message_id, **{k: r.get(k) for k in _LEO_COLS}}
+        rows = [{"message_id": message_id, "data_origin": data_origin,
+                 **{k: r.get(k) for k in _LEO_COLS}}
                 for r in payload.get("rows", [])]
         return await self._bulk_counted(
             conn, _LEO_INSERT, rows,
             count_sql="SELECT count(*) FROM core.leo WHERE message_id = :mid",
             count_params={"mid": message_id})
 
-    async def _persist_sb(self, conn: Any, message_id: int, payload: Mapping[str, Any]) -> int:
-        rows = [{"message_id": message_id, **{k: r.get(k) for k in _SB_COLS}}
+    async def _persist_sb(self, conn: Any, message_id: int, payload: Mapping[str, Any],
+                          data_origin: str = "MANUAL") -> int:
+        rows = [{"message_id": message_id, "data_origin": data_origin,
+                 **{k: r.get(k) for k in _SB_COLS}}
                 for r in payload.get("rows", [])]
         return await self._bulk_counted(
             conn, _SB_INSERT, rows,
@@ -810,22 +920,22 @@ _MSG_INSERT = """
 INSERT INTO core.customs_message
     (message_type, module, control_number, sender_id, receiver_id, message_id_code,
      sent_ts, primary_ref, source_file, source_sha256, file_size_bytes, record_count,
-     import_status)
+     data_origin, import_status)
 VALUES
     (:message_type, :module, :control_number, :sender_id, :receiver_id, :message_id_code,
      :sent_ts, :primary_ref, :source_file, :source_sha256, :file_size_bytes, :record_count,
-     'PENDING')
+     :data_origin, 'PENDING')
 RETURNING id
 """
 _MSG_INSERT_FAILED = """
 INSERT INTO core.customs_message
     (message_type, module, control_number, sender_id, receiver_id, message_id_code,
      sent_ts, primary_ref, source_file, source_sha256, file_size_bytes, record_count,
-     import_status, error_detail)
+     data_origin, import_status, error_detail)
 VALUES
     (:message_type, :module, :control_number, :sender_id, :receiver_id, :message_id_code,
      :sent_ts, :primary_ref, :source_file, :source_sha256, :file_size_bytes, :record_count,
-     'FAILED', :error_detail)
+     :data_origin, 'FAILED', :error_detail)
 RETURNING id
 """
 
@@ -846,9 +956,9 @@ _IGM_VESSEL_COLMAP = {
 }
 _IGM_VESSEL_UPSERT = f"""
 INSERT INTO core.igm
-    (message_id, {", ".join(_IGM_VESSEL_COLMAP[c] for c in _IGM_VESSEL_COLS)})
+    (message_id, data_origin, {", ".join(_IGM_VESSEL_COLMAP[c] for c in _IGM_VESSEL_COLS)})
 VALUES
-    (:message_id, {", ".join(('CAST(:igm_no AS bigint)' if c == 'igm_no' else f':{c}')
+    (:message_id, :data_origin, {", ".join(('CAST(:igm_no AS bigint)' if c == 'igm_no' else f':{c}')
                              for c in _IGM_VESSEL_COLS)})
 ON CONFLICT (igm_no) DO UPDATE SET
     eta = EXCLUDED.eta, entry_inward_ts = EXCLUDED.entry_inward_ts,
@@ -875,9 +985,9 @@ _IGM_LINE_COLMAP = {
 }
 _IGM_LINE_INSERT = f"""
 INSERT INTO core.igm_line
-    (igm_no, {", ".join(_IGM_LINE_COLMAP[c] for c in _IGM_LINE_COLS)})
+    (igm_no, data_origin, {", ".join(_IGM_LINE_COLMAP[c] for c in _IGM_LINE_COLS)})
 VALUES
-    (CAST(:igm_no AS bigint), {", ".join(f':{c}' for c in _IGM_LINE_COLS)})
+    (CAST(:igm_no AS bigint), :data_origin, {", ".join(f':{c}' for c in _IGM_LINE_COLS)})
 ON CONFLICT (igm_no, line_no, subline_no) DO NOTHING
 """
 _IGM_CONT_COLS = _cols(
@@ -891,9 +1001,9 @@ _IGM_CONT_COLMAP = {
 }
 _IGM_CONT_INSERT = f"""
 INSERT INTO core.igm_line_container
-    (igm_no, line_no, subline_no, {", ".join(_IGM_CONT_COLMAP[c] for c in _IGM_CONT_COLS)})
+    (igm_no, line_no, subline_no, data_origin, {", ".join(_IGM_CONT_COLMAP[c] for c in _IGM_CONT_COLS)})
 VALUES
-    (CAST(:igm_no AS bigint), :line_no, :subline_no, {", ".join(f':{c}' for c in _IGM_CONT_COLS)})
+    (CAST(:igm_no AS bigint), :line_no, :subline_no, :data_origin, {", ".join(f':{c}' for c in _IGM_CONT_COLS)})
 ON CONFLICT (igm_no, line_no, subline_no, container_no) DO NOTHING
 """
 
@@ -921,9 +1031,9 @@ _OOC_COLMAP = {
 _OOC_INS_COLS = [c for c in _OOC_COLS if _OOC_COLMAP[c]]
 _OOC_UPSERT = f"""
 INSERT INTO core.bill_of_entry_ooc
-    (message_id, {", ".join(_OOC_COLMAP[c] for c in _OOC_INS_COLS)})
+    (message_id, data_origin, {", ".join(_OOC_COLMAP[c] for c in _OOC_INS_COLS)})
 VALUES
-    (:message_id, {", ".join(('CAST(:bill_of_entry_no AS bigint)' if c == 'bill_of_entry_no'
+    (:message_id, :data_origin, {", ".join(('CAST(:bill_of_entry_no AS bigint)' if c == 'bill_of_entry_no'
                               else 'CAST(:igm_no AS bigint)' if c == 'igm_no'
                               else f':{c}') for c in _OOC_INS_COLS)})
 ON CONFLICT (be_no) DO UPDATE SET
@@ -933,8 +1043,8 @@ RETURNING id
 """
 # container placeholder row: invoice_no='' / item_sr_no=0 (the flattened level)
 _OOC_CONT_INSERT = """
-INSERT INTO core.ooc_item (be_no, container_no, invoice_no, item_sr_no, iso_valid)
-VALUES (CAST(:bill_of_entry_no AS bigint), :container_no, '', 0, :iso_valid)
+INSERT INTO core.ooc_item (be_no, container_no, invoice_no, item_sr_no, iso_valid, data_origin)
+VALUES (CAST(:bill_of_entry_no AS bigint), :container_no, '', 0, :iso_valid, :data_origin)
 ON CONFLICT (be_no, container_no, invoice_no, item_sr_no) DO NOTHING
 """
 _OOC_ITEM_COLS = _cols(
@@ -946,9 +1056,9 @@ _OOC_ITEM_COLMAP = {
 }
 _OOC_ITEM_INSERT = f"""
 INSERT INTO core.ooc_item
-    (be_no, container_no, iso_valid, {", ".join(_OOC_ITEM_COLMAP[c] for c in _OOC_ITEM_COLS)})
+    (be_no, container_no, iso_valid, data_origin, {", ".join(_OOC_ITEM_COLMAP[c] for c in _OOC_ITEM_COLS)})
 VALUES
-    (CAST(:bill_of_entry_no AS bigint), :container_no, :iso_valid,
+    (CAST(:bill_of_entry_no AS bigint), :container_no, :iso_valid, :data_origin,
      {", ".join(("coalesce(:invoice_number, '')" if c == 'invoice_number'
                  else 'coalesce(:item_sr_no, 0)' if c == 'item_sr_no'
                  else f':{c}') for c in _OOC_ITEM_COLS)})
@@ -967,9 +1077,9 @@ _SMTP_COLMAP = {
 }
 _SMTP_UPSERT = f"""
 INSERT INTO core.smtp_permit
-    (message_id, {", ".join(_SMTP_COLMAP[c] for c in _SMTP_COLS)})
+    (message_id, data_origin, {", ".join(_SMTP_COLMAP[c] for c in _SMTP_COLS)})
 VALUES
-    (:message_id, {", ".join(('CAST(:smtp_no AS bigint)' if c == 'smtp_no'
+    (:message_id, :data_origin, {", ".join(('CAST(:smtp_no AS bigint)' if c == 'smtp_no'
                               else 'CAST(:igm_no AS bigint)' if c == 'igm_no'
                               else f':{c}') for c in _SMTP_COLS)})
 ON CONFLICT (smtp_no) DO UPDATE SET message_id = EXCLUDED.message_id
@@ -988,10 +1098,10 @@ _SMTP_LINE_COLMAP = {
 }
 _SMTP_LINE_INSERT = f"""
 INSERT INTO core.smtp_container
-    (smtp_no, igm_line_no, igm_subline_no,
+    (smtp_no, igm_line_no, igm_subline_no, data_origin,
      {", ".join(_SMTP_LINE_COLMAP[c] for c in _SMTP_LINE_COLS)})
 VALUES
-    (CAST(:smtp_no AS bigint), :line_no, :subline_no,
+    (CAST(:smtp_no AS bigint), :line_no, :subline_no, :data_origin,
      {", ".join(f':{c}' for c in _SMTP_LINE_COLS)})
 ON CONFLICT (smtp_no, container_no) DO NOTHING
 """
@@ -1009,9 +1119,9 @@ _RMS_SCAN_COLMAP = {
 }
 _RMS_SCAN_UPSERT = f"""
 INSERT INTO core.rms_scan_report
-    (message_id, {", ".join(_RMS_SCAN_COLMAP[c] for c in _RMS_SCAN_COLS)})
+    (message_id, data_origin, {", ".join(_RMS_SCAN_COLMAP[c] for c in _RMS_SCAN_COLS)})
 VALUES
-    (:message_id, {", ".join(('CAST(:igm_no AS bigint)' if c == 'igm_no' else f':{c}')
+    (:message_id, :data_origin, {", ".join(('CAST(:igm_no AS bigint)' if c == 'igm_no' else f':{c}')
                              for c in _RMS_SCAN_COLS)})
 ON CONFLICT (igm_no) WHERE igm_no IS NOT NULL
     DO UPDATE SET selected_count = EXCLUDED.selected_count
@@ -1027,9 +1137,9 @@ _RMS_CONT_COLMAP = {
 }
 _RMS_CONT_INSERT = f"""
 INSERT INTO core.rms_scan_container
-    (report_id, {", ".join(_RMS_CONT_COLMAP[c] for c in _RMS_CONT_COLS)})
+    (report_id, data_origin, {", ".join(_RMS_CONT_COLMAP[c] for c in _RMS_CONT_COLS)})
 VALUES
-    (:scanlist_id, {", ".join(('CAST(:igm_no AS bigint)' if c == 'igm_no' else f':{c}')
+    (:scanlist_id, :data_origin, {", ".join(('CAST(:igm_no AS bigint)' if c == 'igm_no' else f':{c}')
                               for c in _RMS_CONT_COLS)})
 ON CONFLICT (report_id, sl_no) DO UPDATE SET
     container_no  = EXCLUDED.container_no,
@@ -1045,15 +1155,15 @@ ON CONFLICT (report_id, sl_no) DO UPDATE SET
 # LEO / Shipping Bill --------------------------------------------------------
 _LEO_COLS = _cols("sb_no, sb_date, site_id, rotation_no, leo_date, action")
 _LEO_INSERT = f"""
-INSERT INTO core.leo (message_id, {", ".join(_LEO_COLS)})
-VALUES (:message_id, {", ".join(('CAST(:sb_no AS bigint)' if c == 'sb_no' else f':{c}')
+INSERT INTO core.leo (message_id, data_origin, {", ".join(_LEO_COLS)})
+VALUES (:message_id, :data_origin, {", ".join(('CAST(:sb_no AS bigint)' if c == 'sb_no' else f':{c}')
                                 for c in _LEO_COLS)})
 ON CONFLICT (sb_no) DO NOTHING
 """
 _SB_COLS = _cols("sb_no, sb_date, site_id, action")
 _SB_INSERT = f"""
-INSERT INTO core.shipping_bill (message_id, {", ".join(_SB_COLS)})
-VALUES (:message_id, {", ".join(('CAST(:sb_no AS bigint)' if c == 'sb_no' else f':{c}')
+INSERT INTO core.shipping_bill (message_id, data_origin, {", ".join(_SB_COLS)})
+VALUES (:message_id, :data_origin, {", ".join(('CAST(:sb_no AS bigint)' if c == 'sb_no' else f':{c}')
                                 for c in _SB_COLS)})
 ON CONFLICT (sb_no) DO NOTHING
 """

@@ -110,7 +110,7 @@ class FakeDocRepo:
         return {"document_id": d["id"], "status": "IMPORTED", "terminal": d["terminal"],
                 "table_count": d["table_count"], "row_count": d["row_count"], "duplicate": False}
 
-    async def list_documents(self, *, terminal, limit, offset):
+    async def list_documents(self, *, terminal, limit, offset, data_origin=None):
         return {"items": list(self.docs.values()), "total": len(self.docs), "limit": limit, "offset": offset}
 
     def seed(self, doc_id, terminal, tables):
@@ -119,7 +119,7 @@ class FakeDocRepo:
                              "table_count": len(tables), "row_count": sum(len(t["rows"]) for t in tables)}
         self.tables = getattr(self, "tables", {}); self.tables[doc_id] = tables
 
-    async def get_document(self, document_id):
+    async def get_document(self, document_id, *, data_origin=None):
         return self.docs.get(document_id)
 
     async def get_tables(self, document_id):

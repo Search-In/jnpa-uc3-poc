@@ -33,6 +33,7 @@ from pydantic import BaseModel
 from services.shipping_lines import ShippingLinesService, ShippingLinesUploadService
 
 from ..auth import CONTROL_ROOM, Role, auth_enabled
+from ..data_mode import data_mode
 
 router = APIRouter(prefix="/api/shipping-lines", tags=["shipping-lines"])
 
@@ -180,12 +181,14 @@ async def list_edo(
     container_no: Optional[str] = None,
     limit: int = Query(200, ge=1, le=2000),
     offset: int = Query(0, ge=0),
+    data_origin: Optional[str] = Depends(data_mode),
     svc: ShippingLinesService = Depends(get_service),
 ) -> Page:
     """One row per delivery order. ``manifest_linked`` says whether any container on
     the DO also appears on a filed IGM — the one cross-document join that resolves
     in the current corpus."""
-    filters = {"do_number": do_number, "igm_no": igm_no, "container_no": container_no}
+    filters = {"do_number": do_number, "igm_no": igm_no, "container_no": container_no,
+               "data_origin": data_origin}
     items = await svc.list_edo(filters=filters, limit=limit, offset=offset)
     total = await svc.count_edo(filters=filters)
     return _page(items, total, limit, offset, response)
@@ -217,6 +220,7 @@ async def list_gate_movements(
     vehicle_no: Optional[str] = None,
     limit: int = Query(200, ge=1, le=2000),
     offset: int = Query(0, ge=0),
+    data_origin: Optional[str] = Depends(data_mode),
     svc: ShippingLinesService = Depends(get_service),
 ) -> Page:
     """The container actually leaving the terminal on a truck. ``dwell_hours`` is
@@ -224,7 +228,8 @@ async def list_gate_movements(
     ``terminal_code`` is resolved through the vessel call the message cites, so a
     dashboard gate id (``NSICT-G1``) can be split into terminal + gate number."""
     filters = {"gate_no": gate_no, "terminal_code": terminal_code,
-               "container_no": container_no, "vehicle_no": vehicle_no}
+               "container_no": container_no, "vehicle_no": vehicle_no,
+               "data_origin": data_origin}
     items = await svc.list_gate_movements(filters=filters, limit=limit, offset=offset)
     total = await svc.count_gate_movements(filters=filters)
     return _page(items, total, limit, offset, response)
@@ -319,6 +324,7 @@ async def list_containers(
     q: Optional[str] = None,
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
+    data_origin: Optional[str] = Depends(data_mode),
     svc: ShippingLinesService = Depends(get_service),
 ) -> Page:
     filters = {
@@ -330,6 +336,7 @@ async def list_containers(
         "container": container.strip().upper() if container else None,
         "bl": bl.strip().upper() if bl else None,
         "q": q.strip() if q else None,
+        "data_origin": data_origin,
     }
     items = await svc.list_containers(filters=filters, limit=limit, offset=offset)
     total = await svc.count_containers(filters=filters)
@@ -428,6 +435,7 @@ async def by_shipping_line(
     list_type: Optional[str] = None,
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
+    data_origin: Optional[str] = Depends(data_mode),
     svc: ShippingLinesService = Depends(get_service),
 ) -> Page:
     code = shipping_line.strip().upper()
@@ -435,7 +443,8 @@ async def by_shipping_line(
     if line is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "shipping_line_not_found", "shipping_line": code})
-    filters = {"shipping_line": code, "list_type": _norm_list_type(list_type)}
+    filters = {"shipping_line": code, "list_type": _norm_list_type(list_type),
+               "data_origin": data_origin}
     items = await svc.list_containers(filters=filters, limit=limit, offset=offset)
     total = await svc.count_containers(filters=filters)
     response.headers["X-Total-Count"] = str(total)

@@ -4,6 +4,7 @@
 //   StatCard / StatGrid          — summary KPI cards
 //   SegmentedTabs                — the pill tab control
 //   SearchInput / FilterSelect   — toolbar controls
+//   RefreshButton                — re-fetch ONE section without reloading the page
 //   DataTable                    — Top-N table with search + pagination +
 //                                  View-all + loading/empty/error/retry states
 //
@@ -130,6 +131,51 @@ export function PageHeader({
         </button>
       </div>
     </div>
+  );
+}
+
+// --- Section refresh ---------------------------------------------------------
+// A refresh scoped to ONE table / card, for the case the page header cannot
+// serve: a screen rendered inside <Embedded> has no header of its own (see
+// PageHeader), so before this the only way to see new rows was to reload the
+// browser. Hand it the query's `refetch` — it re-runs that fetch and nothing
+// else, leaving the table's search / filter / page state untouched because no
+// component unmounts.
+//
+// Deliberately NOT a page reload: `window.location.reload()` would discard every
+// other query's cache, the current tab, and any half-filled form on the screen.
+export function RefreshButton({
+  onRefresh,
+  isRefreshing,
+  label,
+  className,
+}: {
+  onRefresh: () => void;
+  /** Spins the icon and blocks re-entry while the fetch is in flight. */
+  isRefreshing?: boolean;
+  label?: string;
+  className?: string;
+}) {
+  const { t } = useTranslation();
+  const text = label ?? t("dtable.refresh", "Refresh");
+  return (
+    <button
+      type="button"
+      onClick={() => onRefresh()}
+      disabled={isRefreshing}
+      title={text}
+      aria-label={text}
+      aria-busy={isRefreshing || undefined}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5",
+        "text-xs font-medium text-foreground transition-colors hover:bg-muted",
+        "disabled:cursor-not-allowed disabled:opacity-60",
+        className,
+      )}
+    >
+      <RefreshCw className={cn("h-3.5 w-3.5", isRefreshing && "animate-spin")} />
+      {text}
+    </button>
   );
 }
 
@@ -324,12 +370,18 @@ export function DataTable<T>({
   isRowActive,
   maxHeight,
   initialSearch,
+  onRefresh,
 }: {
   columns: Column<T>[];
   rows: T[];
   rowKey: (row: T) => string;
   status?: AsyncStatus;
   onRetry?: () => void;
+  /** Re-fetches THIS table's data from the toolbar (see RefreshButton). Defaults
+   *  to `onRetry`, which every caller already passes as the query's `refetch`, so
+   *  a table with a retry also gets a refresh. The spinner and the disabled state
+   *  come from `status.isFetching`. */
+  onRefresh?: () => void;
   emptyLabel?: ReactNode;
   /** Enables the search box; return true to keep the row for query `q`. */
   search?: (row: T, q: string) => boolean;
@@ -368,7 +420,11 @@ export function DataTable<T>({
   const safePage = Math.min(page, pageCount - 1);
   const pageRows = filtered.slice(safePage * pageSize, safePage * pageSize + pageSize);
 
-  const showToolbar = !!search || !!toolbar;
+  // Refreshing re-runs the caller's fetch only — `q` and `page` live in this
+  // component's state and no remount happens, so the operator's search and page
+  // survive the round trip.
+  const handleRefresh = onRefresh ?? onRetry;
+  const showToolbar = !!search || !!toolbar || !!handleRefresh;
 
   return (
     <div className="flex flex-col">
@@ -386,12 +442,36 @@ export function DataTable<T>({
             />
           )}
           {toolbar}
+          {handleRefresh && (
+            <RefreshButton
+              onRefresh={handleRefresh}
+              isRefreshing={status?.isFetching}
+              className="ml-auto"
+            />
+          )}
+        </div>
+      )}
+
+      {/* A refresh that fails must not destroy what the operator is reading. With
+          rows already on screen the failure is reported as a strip above them and
+          the previous page stays put; only a table that has nothing to show falls
+          back to the full error state. */}
+      {status?.isError && rows.length > 0 && (
+        <div
+          role="status"
+          className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2 text-[11px]"
+          style={{ color: STATUS.critical, backgroundColor: `${STATUS.critical}14` }}
+        >
+          <span>{t("dtable.refreshFailed", "Refresh failed — showing the last loaded data.")}</span>
+          {(status.error as Error)?.message && (
+            <span className="text-muted-foreground">{(status.error as Error).message}</span>
+          )}
         </div>
       )}
 
       {status?.isLoading ? (
         <LoadingState />
-      ) : status?.isError ? (
+      ) : status?.isError && rows.length === 0 ? (
         <ErrorState onRetry={onRetry} detail={(status.error as Error)?.message} />
       ) : filtered.length === 0 ? (
         <EmptyState>{emptyLabel}</EmptyState>

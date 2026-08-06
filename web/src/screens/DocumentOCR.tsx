@@ -1,10 +1,9 @@
-// Document OCR (Feature 6) — upload transport documents (LR / Invoice / e-Way
-// Bill / Permit / RC / DL / Form-13) and extract structured fields via the OCR
-// engine (Tesseract when configured, deterministic mock otherwise). Backed by
-// /api/ocr/* (health, documents list, single document, multipart upload).
+// Document OCR (Feature 6) — upload EIR / gate-slip photos (PNG/JPG) and other
+// transport documents. LIVE extraction goes through the dedicated eir_ocr
+// sidecar (ingest/eir_ocr → GATEWAY_EIR_OCR_URL /infer); falls back to local
+// Tesseract then MOCK. Backed by /api/ocr/*.
 //
-//   Upload → extract fields (key/value) + confidence → browse the document log
-//   → drill into raw OCR text.
+//   Upload → eir_ocr structured fields (+ extras) → browse the document log.
 
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -16,7 +15,19 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { EmptyState, LoadingState } from "@/components/ui/misc";
 import { fmtDateTimeIST } from "@/lib/utils";
 
-const DOC_TYPES = ["LR", "INVOICE", "EWAYBILL", "PERMIT", "RC", "DL", "FORM13", "UNKNOWN"];
+/** EIR first — PNG/JPG gate slips are the primary eir_ocr workload. */
+const DOC_TYPES = [
+  "EIR",
+  "GATE_SLIP",
+  "FORM13",
+  "LR",
+  "INVOICE",
+  "EWAYBILL",
+  "PERMIT",
+  "RC",
+  "DL",
+  "UNKNOWN",
+];
 
 function pct(v: any): string {
   const n = Number(v);
@@ -24,26 +35,41 @@ function pct(v: any): string {
   return `${Math.round(n <= 1 ? n * 100 : n)}%`;
 }
 
-function isMock(source: any): boolean {
-  return String(source ?? "").toLowerCase() === "mock";
+function sourceKind(source: any): "service" | "ocr" | "mock" | "unknown" {
+  const s = String(source ?? "").toLowerCase();
+  if (s === "ocr_service" || s === "eir-ocr" || s === "eir_ocr") return "service";
+  if (s === "mock") return "mock";
+  if (s === "ocr" || s === "tesseract") return "ocr";
+  return "unknown";
 }
 
 function statusTone(status: any): "ok" | "warn" | "critical" | "neutral" {
   const s = String(status ?? "").toLowerCase();
-  if (s === "ok" || s === "done" || s === "processed" || s === "verified") return "ok";
+  if (s === "ok" || s === "done" || s === "processed" || s === "verified" || s === "extracted")
+    return "ok";
   if (s === "pending" || s === "processing") return "warn";
   if (s === "error" || s === "failed") return "critical";
   return "neutral";
 }
 
-// Amber (mock) / green (real OCR) source badge — reused for upload + rows.
 function SourceBadge({ source }: { source: any }) {
-  return isMock(source) ? (
-    <span className="inline-flex items-center rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-semibold text-amber-600 dark:text-amber-400">
-      MOCK
-    </span>
-  ) : (
-    <span className="inline-flex items-center rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+  const kind = sourceKind(source);
+  if (kind === "mock") {
+    return (
+      <span className="inline-flex items-center rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-semibold text-amber-600 dark:text-amber-400">
+        MOCK
+      </span>
+    );
+  }
+  if (kind === "service") {
+    return (
+      <span className="inline-flex items-center rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+        eir-ocr
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center rounded-full bg-sky-500/15 px-2 py-0.5 text-[11px] font-semibold text-sky-700 dark:text-sky-400">
       OCR
     </span>
   );
@@ -72,11 +98,36 @@ function FieldGrid({ fields }: { fields: any }) {
   );
 }
 
+function ValidationStrip({ validation }: { validation: Record<string, any> | undefined }) {
+  const entries = Object.entries(validation || {});
+  if (!entries.length) return null;
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5">
+      {entries.map(([k, v]) => {
+        const ok = Boolean(v?.valid);
+        return (
+          <span
+            key={k}
+            className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+              ok
+                ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+                : "bg-amber-500/15 text-amber-700 dark:text-amber-400"
+            }`}
+            title={v?.normalised ? `normalised: ${v.normalised}` : undefined}
+          >
+            {k}: {ok ? "valid" : "check"}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function DocumentOCR() {
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
-  const [docType, setDocType] = useState<string>("LR");
+  const [docType, setDocType] = useState<string>("EIR");
   const [sourceRef, setSourceRef] = useState("");
   const [filterType, setFilterType] = useState("");
   const [viewId, setViewId] = useState<number | null>(null);
@@ -97,8 +148,9 @@ export default function DocumentOCR() {
     },
   });
 
-  const engine = String(healthQ.data?.engine ?? "");
-  const mockEngine = engine.toLowerCase() === "mock";
+  const activeRung = String(healthQ.data?.active_rung ?? "");
+  const upstreamReady = Boolean(healthQ.data?.upstream?.engine_ready);
+  const mockEngine = !upstreamReady && String(healthQ.data?.engine ?? "").toLowerCase() === "mock";
   const result = upload.data;
 
   function clearFile() {
@@ -106,12 +158,18 @@ export default function DocumentOCR() {
     if (fileRef.current) fileRef.current.value = "";
   }
 
+  const engineLabel = upstreamReady
+    ? "eir-ocr"
+    : mockEngine
+      ? "mock"
+      : String(healthQ.data?.engine || "tesseract");
+
   return (
     <PageContainer>
       <PageHeader
         icon={ScanText}
         title="Document OCR"
-        subtitle="Extract structured fields from transport documents — LR · Invoice · e-Way Bill · Permit · RC · DL · Form-13"
+        subtitle="EIR / gate-slip photos via eir_ocr — PNG · JPG · structured ContainerNo · LICNo · EIRNo"
         updatedAt={docsQ.dataUpdatedAt}
         isFetching={docsQ.isFetching && !docsQ.isLoading}
         onRefresh={() => qc.invalidateQueries({ queryKey: ["ocr-documents"] })}
@@ -124,36 +182,40 @@ export default function DocumentOCR() {
             </span>
           ) : (
             <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-2.5 py-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
-              Tesseract
+              {upstreamReady ? "eir-ocr LIVE" : "Tesseract"}
             </span>
           )
         }
       />
 
       <div className="space-y-3 px-4 py-3">
-        {/* ---------------- Engine health ---------------- */}
         <Card className="flex flex-wrap items-center gap-3 p-3 text-[13px]">
           <span className="font-semibold">OCR Engine</span>
-          <span className="font-mono">{engine || (healthQ.isLoading ? "…" : "unknown")}</span>
-          {!healthQ.isLoading &&
-            (mockEngine ? (
-              <span className="inline-flex items-center rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-semibold text-amber-600 dark:text-amber-400">
-                MOCK OCR
-              </span>
-            ) : (
-              <span className="inline-flex items-center rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
-                Tesseract
-              </span>
-            ))}
+          <span className="font-mono">{engineLabel}</span>
+          {activeRung && (
+            <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">
+              {activeRung}
+            </span>
+          )}
           <span className="text-muted-foreground">
-            {healthQ.data?.configured ? "configured" : "not configured"}
+            {healthQ.data?.configured ? "DB configured" : "DB not configured"}
           </span>
+          {healthQ.data?.upstream?.url && (
+            <span
+              className="truncate text-[11px] text-muted-foreground"
+              title={healthQ.data.upstream.url}
+            >
+              upstream {healthQ.data.upstream.reachable ? "reachable" : "down"}
+              {healthQ.data.upstream.tesseract_version
+                ? ` · tesseract ${healthQ.data.upstream.tesseract_version}`
+                : ""}
+            </span>
+          )}
           {healthQ.isError && (
             <span className="text-[12px] text-severity-critical">engine unreachable</span>
           )}
         </Card>
 
-        {/* ---------------- Upload card ---------------- */}
         <Card className="p-4">
           <div className="mb-3 flex items-center gap-2">
             <Upload size={15} />
@@ -161,11 +223,11 @@ export default function DocumentOCR() {
           </div>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
             <label className="flex flex-col gap-1 text-[11px] text-muted-foreground">
-              File (image / PDF)
+              File (PNG / JPG / PDF)
               <input
                 ref={fileRef}
                 type="file"
-                accept="image/*,application/pdf"
+                accept="image/png,image/jpeg,image/jpg,image/webp,image/*,application/pdf"
                 onChange={(e) => setFile(e.target.files?.[0] ?? null)}
                 className="rounded-md border border-border bg-card px-2 py-1.5 text-[13px] text-foreground file:mr-2 file:rounded file:border-0 file:bg-muted file:px-2 file:py-1 file:text-[12px]"
               />
@@ -189,7 +251,7 @@ export default function DocumentOCR() {
               <input
                 value={sourceRef}
                 onChange={(e) => setSourceRef(e.target.value)}
-                placeholder="e.g. LR-2026-00123"
+                placeholder="e.g. WhatsApp EIR photo"
                 className="rounded-md border border-border bg-card px-2 py-1.5 text-[13px] text-foreground outline-none"
               />
             </label>
@@ -202,7 +264,7 @@ export default function DocumentOCR() {
               className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-[13px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             >
               <ScanText className="h-3.5 w-3.5" />
-              {upload.isPending ? "Extracting…" : "Extract fields"}
+              {upload.isPending ? "Extracting…" : "Extract with eir-ocr"}
             </button>
             {file && (
               <span className="inline-flex items-center gap-1.5 text-[12px] text-muted-foreground">
@@ -238,10 +300,29 @@ export default function DocumentOCR() {
                 </span>
               </div>
               <FieldGrid fields={result.fields} />
+              <ValidationStrip validation={result.validation} />
+              {result.extras && Object.keys(result.extras).length > 0 && (
+                <details className="mt-3">
+                  <summary className="cursor-pointer text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Unmapped OCR labels ({Object.keys(result.extras).length}) — not in verify report
+                  </summary>
+                  <div className="mt-2">
+                    <FieldGrid fields={result.extras} />
+                  </div>
+                </details>
+              )}
               {result.status && (
                 <div className="mt-2 flex items-center gap-2 text-[11px] text-muted-foreground">
                   status{" "}
                   <StatusChip label={String(result.status)} tone={statusTone(result.status)} />
+                  {result.engine?.service && (
+                    <span className="font-mono">
+                      via {result.engine.service}
+                      {result.engine.tesseract_version
+                        ? ` · ${result.engine.tesseract_version}`
+                        : ""}
+                    </span>
+                  )}
                   {result.storage_url && (
                     <a
                       href={result.storage_url}
@@ -258,7 +339,6 @@ export default function DocumentOCR() {
           )}
         </Card>
 
-        {/* ---------------- Documents table ---------------- */}
         <Card className="p-4">
           <div className="mb-3 flex flex-wrap items-center gap-2">
             <FileSearch size={15} />
@@ -281,7 +361,7 @@ export default function DocumentOCR() {
           {docsQ.isLoading ? (
             <LoadingState />
           ) : !docsQ.data?.documents?.length ? (
-            <EmptyState>No documents processed yet — upload one above.</EmptyState>
+            <EmptyState>No documents processed yet — upload an EIR photo above.</EmptyState>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[640px] border-collapse text-[12px]">
@@ -289,6 +369,7 @@ export default function DocumentOCR() {
                   <tr className="text-left text-muted-foreground">
                     <th className="py-1 pr-3 font-medium">When</th>
                     <th className="py-1 pr-3 font-medium">Type</th>
+                    <th className="py-1 pr-3 font-medium">Engine</th>
                     <th className="py-1 pr-3 font-medium">Source ref</th>
                     <th className="py-1 pr-3 font-medium">Confidence</th>
                     <th className="py-1 pr-3 font-medium">Status</th>
@@ -305,6 +386,9 @@ export default function DocumentOCR() {
                         <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">
                           {d.doc_type ?? "—"}
                         </span>
+                      </td>
+                      <td className="py-1.5 pr-3">
+                        <SourceBadge source={d.source} />
                       </td>
                       <td className="py-1.5 pr-3 font-mono">{d.source_ref ?? "—"}</td>
                       <td className="py-1.5 pr-3 tabular-nums">{pct(d.confidence)}</td>
@@ -339,7 +423,8 @@ function DocumentDrawer({ id, onClose }: { id: number | null; onClose: () => voi
     queryFn: () => api.ocrDocument(id as number),
     enabled: id != null,
   });
-  const d = q.data;
+  const payload = q.data;
+  const d = payload?.document ?? payload;
   return (
     <Dialog open={id != null} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-2xl">
@@ -374,18 +459,9 @@ function DocumentDrawer({ id, onClose }: { id: number | null; onClose: () => voi
 
               <div>
                 <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  Extracted fields
+                  Extracted fields (eir_ocr)
                 </div>
                 <FieldGrid fields={d.fields} />
-              </div>
-
-              <div>
-                <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  Raw OCR text
-                </div>
-                <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-muted/40 p-3 font-mono text-[11px] leading-relaxed text-foreground">
-                  {d.raw_text || "(no raw text)"}
-                </pre>
               </div>
             </>
           )}

@@ -32,6 +32,7 @@ import { api } from "@/lib/api";
 import {
   PageContainer,
   PageHeader,
+  RefreshButton,
   StatCard,
   StatGrid,
   StatusChip,
@@ -41,6 +42,7 @@ import {
 import { Card } from "@/components/ui/card";
 import { LoadingState } from "@/components/ui/misc";
 import { fmtDateTimeIST } from "@/lib/utils";
+import { useVehicleNumbers } from "@/lib/vehicles";
 
 const PAGE_SIZE = 10;
 
@@ -260,6 +262,16 @@ export default function DriverMaster() {
                 <span className="ml-auto rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
                   {total.toLocaleString()}
                 </span>
+                {/* Registry-level re-fetch. The query key already carries the search,
+                    filters and offset, so refetching returns the SAME page the
+                    operator is on — no reload, no reset. */}
+                <RefreshButton
+                  onRefresh={() => {
+                    void listQ.refetch();
+                    void statsQ.refetch();
+                  }}
+                  isRefreshing={listQ.isFetching || statsQ.isFetching}
+                />
               </div>
               {/* Search */}
               <div className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20">
@@ -554,6 +566,7 @@ function DriverDetail({
   onEnroll: (name?: string, licence?: string) => void;
 }) {
   const [tab, setTab] = useState<"profile" | "pdp">("profile");
+  const vehicles = useVehicleNumbers();
   const profileQ = useQuery({
     queryKey: ["driver-master-detail", licence],
     queryFn: () => api.driverMaster(licence),
@@ -670,7 +683,12 @@ function DriverDetail({
                 value={<StatusChip label={en?.status || "—"} tone={enrolTone(en?.status)} />}
               />
               <Field label="Linked Driver" value={en?.linked_driver_id} />
-              <Field label="Vehicle" value={en?.vehicle_no} />
+              {/* The enrollment stores the internal Vehicle ID; operators identify a
+                  truck by its registration, so that is what is shown. */}
+              <Field
+                label="Vehicle"
+                value={en?.vehicle_no ? vehicles.label(en.vehicle_no) : null}
+              />
               {en?.status !== "ENROLLED" && (
                 <div className="col-span-2 flex items-end">
                   <button

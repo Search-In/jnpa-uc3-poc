@@ -682,3 +682,5 @@ so the next `make up` serves instantly without retraining. For a full teardown
 
 Exit code `0` + `BOOTSTRAP OK` only if all checks pass; otherwise a non-zero
 exit and a per-check PASS/FAIL table.
+
+Test

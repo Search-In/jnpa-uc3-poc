@@ -26,6 +26,7 @@ from .calinf import parse_calinf
 from .calinv import parse_calinv
 from .documents import document_type, safe_fromstring
 from .envelope import detect_format, extract_xml_documents
+from .paisps import parse_paisps
 from .pcs_common import MarineParseError
 from .pilot_memo import parse_ackplm, parse_pltmem
 from .registry import (DocumentTypeError, DocumentTypeMismatch, PARSER_REGISTRY,
@@ -52,14 +53,18 @@ REGISTRY: dict[str, Callable[..., list[dict[str, Any]]]] = {
     # Pilot ALLOTMENT -> core.pilotage. Writes a DIFFERENT target than the call spine, so
     # no existing record shape changes.
     #
-    # PLTMEM is deliberately NOT routed. It is the agent's APPLICATION for the same
-    # movement ACKPLM allots — 14 of its 15 corpus VCNs also appear in ACKPLM — so routing
-    # both would put TWO rows in a table whose contract is one row per MOVEMENT, and the
-    # application carries no boarding place from which to derive a direction. ACKPLM is
-    # strictly richer (pilot name, boarding time, boarding place). `parse_pltmem` is
-    # implemented and tested; adding it here is one line once the client confirms how an
-    # application should merge into its allotment.
+    # PLTMEM was originally NOT routed: in the SAMPLE-PACK corpus it duplicated
+    # ACKPLM (14 of 15 VCNs overlapped) and ACKPLM was strictly richer. The
+    # LIVE dt.jnpa.in corpus contains NO ACKPLM at all — PLTMEM is the only
+    # pilot-movement message it delivers (142 documents on the first backfill,
+    # all REJECTED while unrouted) — so the duplication argument no longer
+    # holds and the application is now routed. Re-imports of the dump corpus
+    # stay safe: pilotage rows dedup ON CONFLICT at the movement key.
+    "PLTMEM": parse_pltmem,
     "ACKPLM": parse_ackplm,
+    # PAISPS (Pre-Arrival Notification ISPS) — LIVE-corpus message absent from
+    # the sample pack; lands as an ISPS_DECLARED call event keyed by VCN.
+    "PAISPS": parse_paisps,
 }
 
 __all__ = [

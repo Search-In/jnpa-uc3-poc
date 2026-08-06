@@ -77,3 +77,6 @@ web/_attic/
 
 ingest/eir_ocr/output/
 package-lock.json
+
+# SSH keys for the jnpa3 EC2 tunnel host — never commit (a key was committed once already)
+*.pem

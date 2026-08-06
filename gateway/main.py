@@ -42,12 +42,14 @@ from .metrics import metrics_asgi_app
 from .pumps import KafkaPump, mqtt_truck_pump
 from .auth import install_auth, validate_auth_config
 from .routers import (
+    export_chain,
     ai_events,
     alerts,
     anpr,
     auth as auth_router,
     carbon,
     cargo,
+    cargo_simulation,
     checkin,
     control,
     debug,
@@ -72,6 +74,7 @@ from .routers import (
     traffic,
     trucks,
     ulip,
+    users as users_router,
     vahan,
     vehicle_identity,
     vehicles,
@@ -93,6 +96,7 @@ from .routers import (
     document_ocr,
     double_trip,
     driver_jobs,
+    edi_vessel,
     export_lifecycle,
     gate_documents,
     jnpa_api,
@@ -113,6 +117,7 @@ from .routers import (
     pdp,
     performance,
     performance_upload,
+    rail,
     reefer,
     rms_tas,
     shipping_lines,
@@ -412,7 +417,7 @@ async def _lifespan(app: FastAPI):
 
     # JNPA Port-Data API sync: the core.api_sync_state / api_ingest_run /
     # api_record / api_report_snapshot / api_defect_log tables. Idempotent,
-    # additive — mirrors v3 migration 0117 so a dev DB that never ran it still
+    # additive — mirrors v3 migration 0124 so a dev DB that never ran it still
     # gets the objects. Runs regardless of whether the sync loop is enabled
     # (the /api/integrations/jnpa/* reads need the tables).
     try:
@@ -430,6 +435,16 @@ async def _lifespan(app: FastAPI):
         await ensure_rail_schema(cfg.postgres_dsn or None)
     except Exception as exc:  # noqa: BLE001
         log.warning("rail_schema_boot_failed", error=str(exc))
+
+    # COARRI/COPRAR consumer (edi-messages group): the core.edi_import_file
+    # ledger + edi_vessel_container domain table. Idempotent, additive —
+    # mirrors v3 migration 0123 so a dev DB that never ran it still gets
+    # the objects.
+    try:
+        from services.edi_vessel.repository import ensure_edi_vessel_schema
+        await ensure_edi_vessel_schema(cfg.postgres_dsn or None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("edi_vessel_schema_boot_failed", error=str(exc))
 
     # Vehicle Master (fleet registry): ensure the table, then migrate the truck-sim
     # fleet into it (idempotent, never clobbering an operator edit) so no existing
@@ -667,6 +682,9 @@ log.info("gateway_runtime_mode", mode=mode_name())
 # Routers (order matters only where static paths must beat /{param} — kpi router
 # declares /sources + /cameras before /{view}, so it is safe).
 app.include_router(auth_router.router)
+# Console user administration — admin-only (/api/users is scoped to DTCCC_ADMIN
+# in auth._POLICY, unlike the public /api/auth bootstrap prefix).
+app.include_router(users_router.router)
 app.include_router(anpr.router)
 app.include_router(vahan.router)
 app.include_router(traffic.router)
@@ -697,6 +715,12 @@ app.include_router(fastag.router)
 # for both the Traffic Twin (POC-3) and the Cargo Twin (POC-2); POC-2 consumes
 # /api/cargo directly and keeps no backend/DB. Thin router → services.cargo
 # (CargoService → raw-SQL CargoRepository). See gateway/routers/cargo.py.
+# UC-3 what-if simulation — /api/cargo/simulate/* + /api/gate/hourly-profile.
+# Registered BEFORE cargo.router so the ordering against GET /api/cargo/{cn} is
+# explicit rather than incidental (the simulate paths carry two segments after the
+# prefix, so they could not be captured by it either way). READ-ONLY: the layer
+# answers "what would this cost" and never writes — see services/cargo/simulation.
+app.include_router(cargo_simulation.router)
 app.include_router(cargo.router)
 app.include_router(scenario_ext.router)
 # Appendix-C capability services (Empty-Container, Carbon, Gate-Data/Auto-LEO,
@@ -757,6 +781,9 @@ app.include_router(air_quality.router)       # OpenAQ air quality (LIVE→CACHED
 app.include_router(bhuvan.router)            # Bhuvan WMS geospatial layer (ISRO/NRSC, control-plane only)
 app.include_router(logistics.router)         # ULIP logistics intelligence (LIVE→CACHED→DATABASE→FALLBACK)
 app.include_router(jnpa_api.router)          # JNPA Port-Data API sync (dt.jnpa.in → upload services)
+app.include_router(export_chain.router)      # export-lifecycle reads (Form 11, COPRAR, COARRI, synth)
+app.include_router(rail.router)              # Rail feeds (FOIS / Form 11 / CTO — read path for the 0119 tables)
+app.include_router(edi_vessel.router)        # COARRI/COPRAR vessel-side container moves (read path for 0125)
 app.include_router(double_trip.router)       # TT double-trip workflow
 app.include_router(ws.router)
 app.include_router(checkin.router)

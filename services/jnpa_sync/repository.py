@@ -1,4 +1,4 @@
-"""DAO for the JNPA API sync tables (migration 0117) + the cross-ledger
+"""DAO for the JNPA API sync tables (migration 0124) + the cross-ledger
 dedup probe and the per-group advisory lock.
 
 Same conventions as every repository in this tree: SQLAlchemy 2.0 async over
@@ -7,7 +7,7 @@ asyncpg, `get_engine(self._dsn)` per statement block, writes inside
 transaction (see jnpa_shared/db.py:90 for why).
 
 `ensure_api_ingest_schema()` embeds the same DDL as
-infra/postgres/v3/0117_jnpa_api_ingest.sql (IF NOT EXISTS throughout) so the
+infra/postgres/v3/0124_jnpa_api_ingest.sql (IF NOT EXISTS throughout) so the
 gateway can boot the tables idempotently — the coexistence pattern every
 other module uses (e.g. gate_documents / mig 0112).
 """
@@ -16,8 +16,8 @@ from __future__ import annotations
 import hashlib
 import json
 from contextlib import asynccontextmanager
-from datetime import datetime
-from typing import Any, AsyncIterator, Dict, List, Optional, Sequence
+from datetime import date as _date, datetime
+from typing import Any, AsyncIterator, Dict, List, Optional, Sequence, Union
 
 from sqlalchemy import text
 
@@ -131,7 +131,7 @@ CREATE INDEX IF NOT EXISTS idx_api_defect_observed
 
 
 async def ensure_api_ingest_schema(dsn: Optional[str] = None) -> None:
-    """Idempotent boot DDL for the 0117 tables (gateway lifespan)."""
+    """Idempotent boot DDL for the 0124 tables (gateway lifespan)."""
     engine = get_engine(dsn)
     async with engine.begin() as conn:
         for statement in _DDL.split(";"):
@@ -406,8 +406,31 @@ class SyncRepository:
         return None
 
     # ------------------------------------------------------------ reports
+    @staticmethod
+    def _report_date_param(value: Optional[Union[str, _date]]) -> Optional[_date]:
+        """Coerce a report date to a real ``datetime.date`` for the bind.
+
+        ``report_date`` is threaded through the ingest layer as an ISO string
+        (it doubles as the snapshot bucket key), but the column is ``date`` and
+        the bind sits under ``CAST(:d AS date)`` — which makes asyncpg resolve
+        the parameter's type to ``date`` and then reject a ``str`` outright
+        ("'str' object has no attribute 'toordinal'"). Postgres never sees the
+        statement, so the whole report group fails. Convert here, at the single
+        DB boundary, so every caller is fixed at once.
+        """
+        if value is None or isinstance(value, _date):
+            return value
+        text_value = str(value).strip()
+        if not text_value:
+            return None
+        try:
+            return _date.fromisoformat(text_value[:10])
+        except ValueError:
+            log.warning("report_date_unparseable", report_date=text_value)
+            return None
+
     async def insert_report_snapshot(self, *, group: str,
-                                     report_date: Optional[str],
+                                     report_date: Optional[Union[str, _date]],
                                      terminal: Optional[str],
                                      payload: Dict[str, Any],
                                      item_count: int,
@@ -426,7 +449,7 @@ class SyncRepository:
                 "              'epoch'::date), COALESCE(terminal, ''),"
                 "              payload_sha256)"
                 " DO NOTHING RETURNING id"),
-                {"g": group, "d": report_date, "t": terminal,
+                {"g": group, "d": self._report_date_param(report_date), "t": terminal,
                  "p": json.dumps(payload, default=str), "n": item_count,
                  "sha": payload_sha256(payload),
                  "run": ingest_run_id})).mappings().first()

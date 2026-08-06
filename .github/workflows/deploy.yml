@@ -13,7 +13,7 @@ jobs:
 
   deploy:
     needs: ci
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, jnpa-ec2]
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -26,7 +26,8 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          # No `version:` — it must not be set alongside package.json's `packageManager`
+          # (pnpm/action-setup rejects the pair). See the same note in ci.yml.
           run_install: false
 
       - name: Install Dependencies
@@ -98,6 +99,11 @@ jobs:
             rm -rf /tmp/pip-* 2>/dev/null || true
             # Drop stale rsync temp files from any prior failed run.
             find /home/ec2-user/jnpa-uc3-poc -name '.*.??????' -type f -delete 2>/dev/null || true
+            # Containers write into bind-mounted repo dirs as root (data/,
+            # evidence/, secrets/, uploads); those root-owned files make the
+            # next rsync --delete fail with exit code 23 (permission denied)
+            # and abort the whole deploy. Reclaim ownership before syncing.
+            sudo chown -R "$(id -un)":"$(id -gn)" /home/ec2-user/jnpa-uc3-poc 2>/dev/null || true
 
             # THE BUILD CACHE IS THE DEPLOY'S BIGGEST TIME SAVER. With it warm, an
             # unchanged service is a cache-hit no-op and only genuinely-changed

@@ -84,8 +84,7 @@ export default function GateDocUploadPanel() {
   });
 
   const ocrUpload = useMutation({
-    mutationFn: () =>
-      api.ocrUpload(file as File, ocrDocType(docType), file?.name),
+    mutationFn: () => api.ocrUpload(file as File, ocrDocType(docType), file?.name),
     onSuccess: (data) => {
       setOcrResult(data);
       setPreview(null);
@@ -117,7 +116,11 @@ export default function GateDocUploadPanel() {
           </label>
 
           {!imageMode && (
-            <Button variant="outline" size="sm" onClick={() => api.gateDocDownloadTemplate(docType)}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => api.gateDocDownloadTemplate(docType)}
+            >
               <Download className="h-3.5 w-3.5" />
               Template
             </Button>
@@ -170,8 +173,8 @@ export default function GateDocUploadPanel() {
         </CardContent>
         {imageMode && (
           <CardContent className="pt-0 text-[11px] text-muted-foreground">
-            Image selected — PNG/JPG gate slips are OCR’d by the eir_ocr service
-            (<span className="font-mono"> ingest/eir_ocr</span>), not the CSV importer.
+            Image selected — PNG/JPG gate slips are OCR’d by the eir_ocr service (
+            <span className="font-mono"> ingest/eir_ocr</span>), not the CSV importer.
           </CardContent>
         )}
       </Card>
@@ -186,9 +189,7 @@ export default function GateDocUploadPanel() {
             aria-hidden
           />
           <span>
-            {String(
-              ((validate.error || upload.error || ocrUpload.error) as Error).message,
-            )}
+            {String(((validate.error || upload.error || ocrUpload.error) as Error).message)}
           </span>
         </div>
       )}

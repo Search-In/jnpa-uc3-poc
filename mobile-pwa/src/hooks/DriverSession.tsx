@@ -37,10 +37,29 @@ export interface DriverContext {
   deviceId: string;
   driverId: string | null;
   name: string | null;
+  /**
+   * INTERNAL Vehicle ID (TRK-000123) — the key the gateway is addressed by and the
+   * value an enrollment submits as `vehicle_no`. NOT for display: no driver knows
+   * their truck by this number. Render `vehicleNumber` instead.
+   */
   vehicle: string | null;
+  /**
+   * The registration painted on the truck (MH04QA9911) — what the driver, the gate
+   * and the control room all call the vehicle. Null until the profile (or the
+   * paired truck snapshot) supplies it; fall back to `vehicle` when rendering.
+   */
+  vehicleNumber: string | null;
   status: DriverStatus;
   // ISO timestamp of when this context was last assembled from the backend.
   loadedAt: string;
+}
+
+/** The vehicle as the driver should SEE it — registration, else the internal ID. */
+export function displayVehicle(session: {
+  vehicleNumber?: string | null;
+  vehicle?: string | null;
+}): string | null {
+  return session.vehicleNumber || session.vehicle || null;
 }
 
 interface SessionApi {
@@ -66,7 +85,12 @@ function readPersisted(deviceId: string): DriverContext | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as DriverContext;
     // Only honour a cached session that belongs to the currently paired device.
-    if (parsed && parsed.deviceId === deviceId) return parsed;
+    // A session stored before `vehicleNumber` existed would keep showing the
+    // internal Vehicle ID forever (it is hydrated, so nothing would re-fetch it) —
+    // treat it as absent so the context is assembled once against the new shape.
+    if (parsed && parsed.deviceId === deviceId && parsed.vehicleNumber !== undefined) {
+      return parsed;
+    }
   } catch {
     /* corrupt / unavailable — fall through to a fresh assemble */
   }
@@ -95,6 +119,9 @@ function readEnrollDriverId(): string | null {
 // yields a usable context (status UNVERIFIED) so Home can prompt enrollment.
 async function assemble(deviceId: string, plate?: string | null): Promise<DriverContext> {
   let vehicle = plate ?? null;
+  // Tracked ALONGSIDE `vehicle`, never instead of it: `vehicle` keeps feeding the
+  // enrollment submit (an API value), while this carries what we show.
+  let vehicleNumber = plate ?? null;
   let driverId = readEnrollDriverId();
   let name: string | null = null;
   let status: DriverStatus = "UNVERIFIED";
@@ -104,6 +131,7 @@ async function assemble(deviceId: string, plate?: string | null): Promise<Driver
     try {
       const env = await api.truck(deviceId);
       vehicle = env.record.plate ?? null;
+      vehicleNumber = env.record.plate ?? vehicleNumber;
     } catch {
       /* device not yet known to the gateway */
     }
@@ -120,6 +148,11 @@ async function assemble(deviceId: string, plate?: string | null): Promise<Driver
       driverId = prof.driver.id || driverId;
       name = prof.driver.name || name;
       vehicle = prof.vehicle?.vehicle_id || vehicle;
+      // THE DISPLAY FIX. `/api/driver/profile` returns both halves; taking only the
+      // id here is what put "TRK-000001" in front of the driver on every screen
+      // once a profile existed, replacing the registration the truck snapshot had
+      // already supplied.
+      vehicleNumber = prof.vehicle?.vehicle_number || vehicleNumber;
       status = normaliseStatus(prof.enrollment?.status || prof.driver.status);
     }
   } catch {
@@ -146,6 +179,7 @@ async function assemble(deviceId: string, plate?: string | null): Promise<Driver
     driverId,
     name,
     vehicle,
+    vehicleNumber,
     status,
     loadedAt: new Date().toISOString(),
   };
@@ -170,6 +204,7 @@ export function DriverSessionProvider({
         driverId: null,
         name: null,
         vehicle: plate ?? null,
+        vehicleNumber: plate ?? null,
         status: "UNVERIFIED",
         loadedAt: new Date().toISOString(),
       },

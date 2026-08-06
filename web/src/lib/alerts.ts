@@ -22,10 +22,9 @@ function str(v: unknown): string {
  */
 export function alertCoords(a: Alert): { lat: number; lon: number } | null {
   const p = (a.payload ?? {}) as Record<string, unknown>;
-  const nested = (typeof p.location === "object" && p.location !== null ? p.location : {}) as Record<
-    string,
-    unknown
-  >;
+  const nested = (
+    typeof p.location === "object" && p.location !== null ? p.location : {}
+  ) as Record<string, unknown>;
   const lat = [p.lat, p.latitude, nested.lat, nested.latitude].find((v) => typeof v === "number");
   const lon = [p.lon, p.lng, p.longitude, nested.lon, nested.lng, nested.longitude].find(
     (v) => typeof v === "number",

@@ -37,8 +37,13 @@ import type {
   Zone,
 } from "@/lib/types";
 import { gateColour, jamColour, MAP_TOKENS, parkingStatusColour, zoneColour } from "@/lib/tokens";
-import { JNPA_CENTER, JNPA_ZOOM } from "@/lib/basemap";
+import { JNPA_CENTER, JNPA_ZOOM, gateRoadHeading } from "@/lib/basemap";
 import { SATELLITE_BASEMAP, corridorExtent } from "@/lib/mapConfig";
+// Road-aligned corridor geometry — the SAME index the 2D map builds (OSRM
+// map-matched centreline). UC2 defines a road as a dense vertex path and has
+// every renderer slice it rather than re-derive it from endpoints; this is the
+// UC3 equivalent, so 2D and 3D draw the corridor from one geometry source.
+import { projectOnPath, sliceBetween, type LngLat, type PathIndex } from "@/lib/roadSnap";
 import { installBasemapFallback, isOfflineRequested, initialBasemap } from "./basemapFallback";
 import { applyGraphics, stableOid } from "./sceneUtils";
 // Static, display-only port-context assets (UC2-parity): quay aprons, yard
@@ -50,6 +55,8 @@ import {
   yardStackGraphics,
   craneGraphics,
   vesselGraphics,
+  gateAccessPosition,
+  gatePlacement,
 } from "./portAssets";
 
 const MODELS = "/models";
@@ -74,6 +81,9 @@ export interface Scene3DProps {
   highlights?: string[];
   highlightLabels?: Record<string, string>;
   focusPoint?: { lat: number; lon: number } | null;
+  /** Road-snapped corridor index from the parent map. Null/absent → the authored
+   *  straight-line geometry is used, exactly as the 2D map falls back. */
+  roadIndex?: PathIndex | null;
   basemap?: string;
   center?: [number, number];
   zoom?: number;
@@ -105,6 +115,7 @@ export function Scene3D({
   highlights = [],
   highlightLabels = {},
   focusPoint = null,
+  roadIndex = null,
   basemap,
   center = JNPA_CENTER,
   zoom = JNPA_ZOOM,
@@ -289,9 +300,15 @@ export function Scene3D({
     const jamBySeg = new Map(snapshots.map((s) => [s.segment_id, s.jam_factor]));
     for (const seg of corridor.segments) {
       const jf = jamBySeg.get(seg.id) ?? 0;
+      // Draw the actual road polyline for this segment when the snapped route is
+      // available (its real on-road vertices between the segment's endpoints);
+      // otherwise fall back to the authored straight line — same rule as 2D.
+      const path = roadIndex
+        ? sliceBetween(roadIndex, seg.start as LngLat, seg.end as LngLat)
+        : [seg.start, seg.end];
       layer.add(
         new Graphic({
-          geometry: new Polyline({ paths: [[seg.start, seg.end]], spatialReference: WGS84 }),
+          geometry: new Polyline({ paths: [path], spatialReference: WGS84 }),
           symbol: {
             type: "line-3d",
             symbolLayers: [
@@ -324,10 +341,14 @@ export function Scene3D({
       const jfRaw = jamBySeg.get(seg.id) ?? 0;
       const ratio = jfRaw > 1 ? jfRaw / 10 : jfRaw;
       if (ratio <= 0) continue;
-      const mid: [number, number] = [
+      const midRaw: [number, number] = [
         (seg.start[0] + seg.end[0]) / 2,
         (seg.start[1] + seg.end[1]) / 2,
       ];
+      // Keep the congestion column on the road when the snapped route is
+      // available (the 2D heat marker uses the same projection). The jam value,
+      // column size and height are untouched — only where it stands.
+      const mid = roadIndex ? projectOnPath(roadIndex, midRaw as LngLat).point : midRaw;
       const stop =
         MAP_TOKENS.heatStops.find((s) => ratio <= s.ratio) ??
         MAP_TOKENS.heatStops[MAP_TOKENS.heatStops.length - 1];
@@ -435,9 +456,21 @@ export function Scene3D({
     if (!layer) return;
     layer.removeAll();
     for (const g of gates) {
+      // Rotate the gate-house + canopy onto the access road it straddles. UC2
+      // does the same (its gate symbol layers carry heading: QUAY_HEADING); UC3
+      // has real per-gate road bearings from OSM, so it uses those. Rotation
+      // only — the gate point geometry is untouched.
+      // Draw the kiosk on UC2's committed checkpoint, not on the berth centroid
+      // the gate feed reports. Its heading squares the canopy across that road
+      // (UC2 $gateHeadingNote); gates UC2 has no record for keep UC3's own OSM
+      // road bearing. Render position only: g.id / g.name / throughput and the
+      // underlying data are untouched.
+      const placement = gatePlacement(g.id);
+      const heading = placement ? placement.heading : gateRoadHeading(g.id);
+      const [gLon, gLat] = gateAccessPosition(g.id, g.lon, g.lat);
       layer.add(
         new Graphic({
-          geometry: new Point({ longitude: g.lon, latitude: g.lat, spatialReference: WGS84 }),
+          geometry: new Point({ longitude: gLon, latitude: gLat, spatialReference: WGS84 }),
           symbol: {
             type: "point-3d",
             symbolLayers: [
@@ -448,6 +481,7 @@ export function Scene3D({
                 resource: { href: `${MODELS}/toll-naka.glb` },
                 height: 9,
                 anchor: "bottom",
+                heading,
               },
               // Canopy roof slab coloured by live throughput utilisation.
               {
@@ -456,6 +490,7 @@ export function Scene3D({
                 width: 30,
                 depth: 12,
                 height: 2.5,
+                heading,
                 material: { color: gateColour(g.utilisation) },
                 // Crisp solid edges give the canopy slab a defined, solid read
                 // under the scene lighting (material refinement only — the slab's
@@ -480,7 +515,7 @@ export function Scene3D({
   function renderTrucks() {
     const layer = trucksRef.current;
     if (!layer) return;
-    void applyGraphics(layer, truckGraphics(trucks));
+    void applyGraphics(layer, truckGraphics(trucks, roadIndex));
   }
 
   // Resolve a spotlight asset id (gate or corridor segment) to its ground point.
@@ -559,7 +594,7 @@ export function Scene3D({
     renderCorridor();
     renderHeatmap();
     frameToData();
-  }, [corridor, snapshots]);
+  }, [corridor, snapshots, roadIndex]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => renderZones(), [zones]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -573,7 +608,7 @@ export function Scene3D({
     frameToData();
   }, [gates]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => renderTrucks(), [trucks]);
+  useEffect(() => renderTrucks(), [trucks, roadIndex]);
 
   // Spotlight sync — redraw beams, then frame the assets when the id-set changes.
   useEffect(() => {
@@ -648,17 +683,23 @@ export function Scene3D({
 export default Scene3D;
 
 // ---- truck FeatureLayer (GPU-instanced glTF vehicles) --------------------
-function truckGraphics(trucks: TruckDevice[]): Graphic[] {
+function truckGraphics(trucks: TruckDevice[], roadIndex: PathIndex | null): Graphic[] {
   const capped = trucks.length > MAX_TRUCKS_3D ? sample(trucks, MAX_TRUCKS_3D) : trucks;
   const out: Graphic[] = [];
   for (const tk of capped) {
     if (typeof tk.position?.lon !== "number" || typeof tk.position?.lat !== "number") continue;
     const heading = typeof tk.heading === "number" ? tk.heading : 0;
+    // Keep every vehicle on the road network: snap its reported position onto
+    // the snapped corridor polyline (falls back to the raw point off-route).
+    // Identical to the 2D renderer — the reported position, heading, model and
+    // device id are unchanged; only where the model is drawn.
+    const raw: LngLat = [tk.position.lon, tk.position.lat];
+    const [lon, lat] = roadIndex ? projectOnPath(roadIndex, raw).point : raw;
     out.push(
       new Graphic({
         geometry: new Point({
-          longitude: tk.position.lon,
-          latitude: tk.position.lat,
+          longitude: lon,
+          latitude: lat,
           spatialReference: WGS84,
         }),
         attributes: {

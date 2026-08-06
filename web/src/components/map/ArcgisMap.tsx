@@ -69,8 +69,7 @@ import {
   CORRIDOR_ZOOM,
 } from "@/lib/mapConfig";
 import {
-  snapPathToRoads,
-  buildPathIndex,
+  buildCorridorRoadIndex,
   projectOnPath,
   sliceBetween,
   type PathIndex,
@@ -80,6 +79,8 @@ import { useClickOutside } from "@/hooks/useClickOutside";
 // 3D counterpart of this map — fed the SAME live-data props so a 2D↔3D toggle is
 // a pure view change over one data source (no separate page, no simulator/mock).
 import { Scene3D } from "./scene3d/Scene3D";
+// UC2's gate checkpoint offset, shared with the 3D scene so both views agree.
+import { gateAccessPosition } from "./scene3d/portAssets";
 
 const DEFAULT_BASEMAP = SATELLITE_BASEMAP;
 // Soft outer road "shoulder" drawn under the corridor casing so the ribbon has a
@@ -620,9 +621,14 @@ export function ArcgisMap({
     if (!layer) return;
     layer.removeAll();
     for (const g of gates) {
+      // Same checkpoint the 3D scene draws, from UC2's committed
+      // placements['gate3d:<id>'] — UC2 resolves BOTH its views through that one
+      // record (layers.ts gatePositions → pkeyPosition), so 2D and 3D agree here
+      // too. Render position only; the gate feed is untouched.
+      const [gLon, gLat] = gateAccessPosition(g.id, g.lon, g.lat);
       layer.add(
         new Graphic({
-          geometry: new Point({ longitude: g.lon, latitude: g.lat }),
+          geometry: new Point({ longitude: gLon, latitude: gLat }),
           symbol: new SimpleMarkerSymbol({
             style: "circle",
             color: gateColour(g.utilisation),
@@ -759,11 +765,7 @@ export function ArcgisMap({
       setRoadIndex(null);
       return;
     }
-    const ctrl = new AbortController();
-    void snapPathToRoads(corridor.polyline as LngLat[], ctrl.signal).then((road) => {
-      if (road) setRoadIndex(buildPathIndex(road));
-    });
-    return () => ctrl.abort();
+    setRoadIndex(buildCorridorRoadIndex(corridor.polyline as LngLat[]));
   }, [corridor]);
 
   // ---- reactive prop → layer updates ------------------------------------
@@ -999,6 +1001,7 @@ export function ArcgisMap({
           highlights={highlights}
           highlightLabels={highlightLabels}
           focusPoint={focusPoint}
+          roadIndex={roadIndex}
           basemap={basemap}
           center={center}
           zoom={zoom}

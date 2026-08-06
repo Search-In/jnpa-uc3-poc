@@ -355,7 +355,9 @@ export default function Uc3Lifecycle() {
                   <EmptyState>
                     <div className="flex flex-col items-center gap-2">
                       <Inbox className="h-6 w-6 text-muted-foreground" aria-hidden />
-                      <div className="font-medium text-foreground">No active container jobs found</div>
+                      <div className="font-medium text-foreground">
+                        No active container jobs found
+                      </div>
                       <p className="max-w-[26ch] text-xs text-muted-foreground">
                         {term
                           ? "No job matches this container. Clear the search to see all jobs."

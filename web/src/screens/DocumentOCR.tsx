@@ -201,7 +201,10 @@ export default function DocumentOCR() {
             {healthQ.data?.configured ? "DB configured" : "DB not configured"}
           </span>
           {healthQ.data?.upstream?.url && (
-            <span className="truncate text-[11px] text-muted-foreground" title={healthQ.data.upstream.url}>
+            <span
+              className="truncate text-[11px] text-muted-foreground"
+              title={healthQ.data.upstream.url}
+            >
               upstream {healthQ.data.upstream.reachable ? "reachable" : "down"}
               {healthQ.data.upstream.tesseract_version
                 ? ` · tesseract ${healthQ.data.upstream.tesseract_version}`

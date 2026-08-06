@@ -58,10 +58,37 @@ class ShippingLinesUploadService:
     # ---------------------------------------------------------------- parse core
     def _parse(self, list_type: str, content: bytes, filename: str):
         """Return (ParseResult-like dict, is_xml). Raises ValueError on unreadable file."""
+        # Raw CODECO XML (the JNPA API's edi-messages group serves the gate
+        # move report as application/xml, not wrapped in a workbook).
+        if list_type == "EDO" and (filename.lower().endswith(".xml")
+                                   or content.lstrip()[:1] == b"<"):
+            return self._parse_raw_codeco_xml(content), True
         header, rows = P.read_rows_from_bytes(content, filename)
         if list_type == "EDO" and P.is_codeco_xml_upload(header):
             return self._parse_xml_edo(content, filename), True
         return P.parse(list_type, header, rows), False
+
+    def _parse_raw_codeco_xml(self, content: bytes) -> "P.ParseResult":
+        """One bare CODECO XML document → canonical delivery-order rows."""
+        from .parsers.edo_codeco import parse_codeco_xml_text
+
+        res = P.ParseResult()
+        res.target = "delivery"
+        try:
+            orders = parse_codeco_xml_text(
+                content.decode("utf-8", errors="replace"))
+        except Exception as exc:  # noqa: BLE001 — structural, like parse_edo
+            raise ValueError(str(exc)) from exc
+        res.records = orders
+        res.row_count = len(orders)
+        res.preview = [{"Container": o.get("container_no"),
+                        "GatePass": o.get("gate_pass_no"),
+                        "Vehicle": o.get("vehicle_no"),
+                        "Agent": o.get("shipping_agent_code"),
+                        "ISO": o.get("iso_code"),
+                        "Status": o.get("equipment_status")}
+                       for o in orders[:20]]
+        return res
 
     def _parse_xml_edo(self, content: bytes, filename: str) -> "P.ParseResult":
         """Route a legacy CODECO-XML-in-xlsx upload through the existing parser."""

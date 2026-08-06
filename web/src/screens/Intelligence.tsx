@@ -24,6 +24,9 @@ import {
   Repeat,
   Camera,
   BarChart3,
+  History,
+  Building2,
+  ShieldCheck,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { getAdapter } from "@/data";
@@ -49,9 +52,9 @@ import {
   type Column,
   type Tone,
 } from "@/components/ui/dtccc";
-import { EmptyState, LoadingState, ErrorState } from "@/components/ui/misc";
-import { fmtDateTimeIST, relativeAge } from "@/lib/utils";
-import type { TruckDevice, VehicleIntel, DriverIntel } from "@/lib/types";
+import { EmptyState, LoadingState, ErrorState, Spinner } from "@/components/ui/misc";
+import { cn, fmtDateTimeIST, relativeAge } from "@/lib/utils";
+import type { TruckDevice, DriverIntel } from "@/lib/types";
 
 type Mode = "vehicle" | "driver" | "doubletrip" | "cameraai" | "driveranalytics";
 type Row = Record<string, unknown>;
@@ -161,9 +164,13 @@ function VehicleProfile({ plate }: { plate: string }) {
   const [identityOpen, setIdentityOpen] = useState(false);
   const [detectionOpen, setDetectionOpen] = useState(false);
 
+  // ONE call for the whole profile. /api/vahan/vehicle-360 resolves the master
+  // spine (vehicle -> assigned driver -> transport company) server-side and
+  // embeds the vehicle-intel payload under `intel`, so the screen never pays for
+  // a client-side lookup chain.
   const viQ = useQuery({
-    queryKey: ["vehicle-intel", plate],
-    queryFn: () => api.vehicleIntel(plate),
+    queryKey: ["vehicle-360", plate],
+    queryFn: () => api.vehicle360(plate),
     enabled,
   });
   const fbQ = useQuery({
@@ -208,6 +215,36 @@ function VehicleProfile({ plate }: { plate: string }) {
 
   const vi = viQ.data;
 
+  // Normalise the payload BEFORE anything reads it. The endpoint returns 200
+  // with a lean body in several legitimate cases — an empty envelope when the
+  // gateway has no DSN, and per-field defaults when one of the concurrent
+  // lookups raises — so `.length` on a raw field can throw mid-render. With no
+  // error boundary above this screen a render throw unmounts the tree and the
+  // panel stays frozen on the last painted frame, i.e. "Building 360° profile…"
+  // forever. Every field below is read through these guards instead.
+  // Memoised so the normalised arrays keep a stable identity across renders —
+  // they are the dependencies of the timeline memo further down.
+  const { rc, track, violations, challans, alerts, verifications, lifecycle } = useMemo(
+    () => ({
+      rc: asRecord(vi?.intel?.rc),
+      track: asArray(vi?.intel?.tracking),
+      violations: asArray(vi?.intel?.violations),
+      challans: asArray(vi?.intel?.challans),
+      alerts: asArray(vi?.alerts),
+      verifications: asArray(vi?.intel?.verification_history),
+      lifecycle: asArray(vi?.timeline),
+    }),
+    [vi],
+  );
+  const vehicle = vi?.vehicle ?? null;
+  const driver = vi?.driver ?? null;
+  const licence = driver?.license ?? null;
+  const transporter = vi?.transporter ?? null;
+  const compliance = vi?.compliance ?? null;
+  const vehicleNumber = String(
+    vehicle?.number ?? vi?.plate ?? rc.plate ?? plate ?? "",
+  ).toUpperCase();
+
   const matchPlate = (v: unknown) => String(v ?? "").toUpperCase() === plate;
   const customs = useMemo(
     () => (customsQ.data?.alerts ?? []).filter((a) => matchPlate(a.plate)) as unknown as Row[],
@@ -229,6 +266,18 @@ function VehicleProfile({ plate }: { plate: string }) {
     [aiQ.data, plate],
   );
 
+  // Does the response actually carry a profile? A 200 with `{}` is "nothing to
+  // show", not a success — but it is also not an error, so it gets its own state.
+  const hasProfile =
+    !!vi &&
+    (vi.found === true ||
+      !!vehicle ||
+      !!driver ||
+      !!transporter ||
+      Object.keys(rc).length > 0 ||
+      track.length + violations.length + challans.length + alerts.length + verifications.length >
+        0);
+
   if (!plate) {
     return (
       <div className="p-6">
@@ -236,66 +285,134 @@ function VehicleProfile({ plate }: { plate: string }) {
       </div>
     );
   }
-  if (viQ.isLoading)
+  // Exhaustive terminal states while there is no payload: error, paused (the
+  // browser is offline — TanStack would otherwise sit in `pending` forever),
+  // in-flight, and settled-but-empty. Once `vi` exists we always render, so the
+  // spinner can never outlive the request.
+  if (!vi) {
+    if (viQ.isError)
+      return (
+        <div className="p-6">
+          <ErrorState onRetry={() => void viQ.refetch()} detail={apiMessage(viQ.error)} />
+        </div>
+      );
+    if (viQ.fetchStatus === "paused")
+      return (
+        <div className="p-6">
+          <ErrorState
+            onRetry={() => void viQ.refetch()}
+            detail="Network unavailable — the request is paused."
+          />
+        </div>
+      );
+    if (viQ.isPending) return <Vehicle360Skeleton />;
+  }
+  if (!hasProfile)
     return (
       <div className="p-6">
-        <LoadingState label="Building 360° profile…" />
-      </div>
-    );
-  if (viQ.isError)
-    return (
-      <div className="p-6">
-        <ErrorState onRetry={() => viQ.refetch()} detail={(viQ.error as Error)?.message} />
-      </div>
-    );
-  if (!vi)
-    return (
-      <div className="p-6">
-        <EmptyState>No record found for {plate}.</EmptyState>
+        <EmptyState>No vehicle intelligence data available for {plate}.</EmptyState>
       </div>
     );
 
-  const rc = (vi.rc ?? {}) as Row;
-  const track = (vi.tracking ?? []) as Row[];
-  const last = track[track.length - 1];
-  const pseudoTruck: TruckDevice[] = last
-    ? [
-        {
-          device_id: plate,
-          plate,
-          gate_id: null,
-          state: "TRACKED",
-          position: { lat: Number(last.lat), lon: Number(last.lon) },
-          speed_kmh: Number(last.speed_kmh ?? 0),
-          heading: 0,
-          remaining_km: 0,
-          eta_s: null,
-          segment_id: null,
-        },
-      ]
-    : [];
+  // Telemetry arrives newest-first (ORDER BY ts DESC); the current position is
+  // the newest fix with usable coordinates, not the last row of the array.
+  const last = latestFix(track);
+  const lat = finite(last?.lat);
+  const lon = finite(last?.lon);
+  const pseudoTruck: TruckDevice[] =
+    lat != null && lon != null
+      ? [
+          {
+            device_id: plate,
+            plate,
+            gate_id: null,
+            state: "TRACKED",
+            position: { lat, lon },
+            speed_kmh: finite(last?.speed_kmh) ?? 0,
+            heading: 0,
+            remaining_km: 0,
+            eta_s: null,
+            segment_id: null,
+          },
+        ]
+      : [];
+
+  const blacklist = String(rc.blacklist_status ?? "").trim();
 
   return (
     <div className="space-y-3 p-4">
+      {/* Vehicle header — the registration number is the primary identifier;
+          every technical id stays secondary. */}
+      <Card className="p-0">
+        <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
+          <Car className="h-5 w-5 text-primary" />
+          <span className="font-mono text-xl font-semibold tracking-wide text-foreground">
+            {vehicleNumber}
+          </span>
+          <StatusChip
+            label={vehicle?.status ? String(vehicle.status) : "NOT IN MASTER"}
+            tone={vehicle?.status ? statusTone(String(vehicle.status)) : "neutral"}
+          />
+          {blacklist ? (
+            <StatusChip label={`Blacklist · ${blacklist}`} tone={blacklistTone(blacklist)} />
+          ) : null}
+          {rc.updated_at ? (
+            <span className="ml-auto text-[11px] text-muted-foreground">
+              RC updated {relativeAge(String(rc.updated_at))}
+            </span>
+          ) : null}
+        </div>
+        <div className="grid grid-cols-2 gap-x-6 gap-y-1 px-4 py-3 sm:grid-cols-3 lg:grid-cols-5">
+          <Field label="Vehicle ID" value={vehicle?.id} mono />
+          <Field label="Vehicle class" value={vehicle?.class ?? rc.vehicle_class} />
+          <Field label="Fuel" value={vehicle?.fuel ?? rc.fuel_type} />
+          <Field label="Vehicle type" value={vehicle?.type} />
+          <Field
+            label="Assignment"
+            value={humanizeCode(vehicle?.assignment_status)}
+            tone={assignmentTone(vehicle?.assignment_status)}
+          />
+        </div>
+      </Card>
+
+      {/* A refetch that fails over a profile we already hold must not blank the
+          screen — surface it inline and keep the last good data on display. */}
+      {viQ.isError ? (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[12px]"
+        >
+          <span className="font-medium">Refresh failed — showing the last loaded profile.</span>
+          <span className="truncate text-muted-foreground">{apiMessage(viQ.error)}</span>
+          <button
+            type="button"
+            onClick={() => void viQ.refetch()}
+            className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 font-medium hover:bg-muted"
+          >
+            Retry
+          </button>
+        </div>
+      ) : null}
+
       {/* Summary cards */}
       <StatGrid className="lg:grid-cols-6">
         <StatCard
           icon={FileWarning}
           label="Violations"
-          value={vi.violations.length}
-          tone={vi.violations.length ? "warn" : "ok"}
+          value={violations.length}
+          tone={violations.length ? "warn" : "ok"}
         />
         <StatCard
           icon={ShieldAlert}
           label="Challans"
-          value={vi.challans.length}
-          tone={vi.challans.length ? "warn" : "ok"}
+          value={challans.length}
+          tone={challans.length ? "warn" : "ok"}
         />
         <StatCard
           icon={Bell}
           label="Alerts"
-          value={vi.alerts.length}
-          tone={vi.alerts.length ? "warn" : "ok"}
+          value={alerts.length}
+          tone={alerts.length ? "warn" : "ok"}
         />
         <StatCard
           icon={MapPinned}
@@ -320,10 +437,201 @@ function VehicleProfile({ plate }: { plate: string }) {
         />
       </StatGrid>
 
-      {/* Profile + location */}
+      {/* Who is driving it, on whose licence, for which company. */}
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+        <InfoCard title="Driver Information" icon={IdCard}>
+          {driver ? (
+            <>
+              <div className="mb-2 flex items-center gap-3 sm:col-span-2">
+                <DriverPhoto src={driver.photo} name={driver.name} />
+                <div className="min-w-0">
+                  <div className="truncate text-[15px] font-semibold text-foreground">
+                    {driver.name || NA}
+                  </div>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                    <StatusChip
+                      label={driver.status ? String(driver.status) : "STATUS UNKNOWN"}
+                      tone={driver.status ? statusTone(String(driver.status)) : "neutral"}
+                    />
+                    {driver.enrollment_status ? (
+                      <StatusChip
+                        label={`Enrollment · ${driver.enrollment_status}`}
+                        tone={statusTone(String(driver.enrollment_status))}
+                      />
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+              <Field label="Driver ID" value={driver.id} mono />
+              <Field label="Mobile" value={driver.mobile} />
+              <Field label="Date of birth" value={fmtDateOrNA(driver.dob)} />
+              <Field label="Enrolled" value={fmtDateOrNA(driver.enrolled_at)} />
+            </>
+          ) : (
+            <div className="py-2 text-[13px] text-muted-foreground sm:col-span-2">
+              No driver is currently assigned to this vehicle.
+            </div>
+          )}
+        </InfoCard>
+
+        <InfoCard title="License" icon={ScanSearch}>
+          {licence && (licence.number || licence.in_master) ? (
+            <>
+              <Field label="License number" value={licence.number} mono />
+              <Field label="License type" value={licence.type} />
+              <Field label="Valid until" value={fmtDateOrNA(licence.valid_until)} />
+              <Field
+                label="License validity"
+                value={humanizeCode(licence.validity?.status)}
+                tone={validityTone(licence.validity?.status)}
+              />
+              <Field
+                label="PDP status"
+                value={humanizeCode(licence.pdp_status)}
+                tone={validityTone(licence.pdp_status)}
+              />
+              <Field label="PDP number" value={licence.pdp_number} mono />
+              <Field
+                label="Verification"
+                value={humanizeCode(licence.verification_status)}
+                tone={
+                  licence.verification_status ? statusTone(licence.verification_status) : undefined
+                }
+              />
+              <Field label="Verified on" value={fmtDateOrNA(licence.verified_at)} />
+            </>
+          ) : (
+            <div className="py-2 text-[13px] text-muted-foreground sm:col-span-2">
+              {driver
+                ? "This driver has no licence record in the driver master."
+                : "No licence to show until a driver is assigned."}
+            </div>
+          )}
+        </InfoCard>
+
+        <InfoCard title="Transporter" icon={Building2}>
+          {transporter ? (
+            <>
+              <div className="mb-1 sm:col-span-2">
+                <div className="truncate text-[15px] font-semibold text-foreground">
+                  {transporter.name || NA}
+                </div>
+                <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                  <StatusChip
+                    label={transporter.status ? String(transporter.status) : "STATUS UNKNOWN"}
+                    tone={
+                      transporter.blacklisted
+                        ? "critical"
+                        : transporter.status
+                          ? statusTone(String(transporter.status))
+                          : "neutral"
+                    }
+                  />
+                  <span className="text-[11px] text-muted-foreground">
+                    {TRANSPORTER_SOURCE[String(transporter.source)] ?? ""}
+                  </span>
+                </div>
+              </div>
+              <Field label="Transporter ID" value={transporter.id} mono />
+              <Field label="Transporter code" value={transporter.code} mono />
+              <Field label="GSTIN" value={transporter.gstin} mono />
+              <Field label="Contact" value={transporter.contact} />
+              {transporter.blacklisted ? (
+                <Field
+                  label="Blacklist reason"
+                  value={transporter.blacklist_reason}
+                  tone="critical"
+                />
+              ) : null}
+            </>
+          ) : (
+            <div className="py-2 text-[13px] text-muted-foreground sm:col-span-2">
+              This vehicle is not mapped to a transport company.
+            </div>
+          )}
+        </InfoCard>
+      </div>
+
+      {/* Compliance & risk + lifecycle */}
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+        <InfoCard title="Compliance & Risk" icon={ShieldCheck}>
+          <Field
+            label="RC"
+            value={humanizeCode(compliance?.rc?.status)}
+            tone={compliance?.rc?.status === "ON_RECORD" ? "ok" : "neutral"}
+          />
+          <Field
+            label="Insurance"
+            value={validityLabel(compliance?.insurance)}
+            tone={validityTone(compliance?.insurance?.status)}
+          />
+          <Field
+            label="PUC"
+            value={validityLabel(compliance?.puc)}
+            tone={validityTone(compliance?.puc?.status)}
+          />
+          <Field
+            label="Fitness"
+            value={validityLabel(compliance?.fitness)}
+            tone={validityTone(compliance?.fitness?.status)}
+          />
+          <Field
+            label="Blacklist"
+            value={humanizeCode(compliance?.blacklist?.status)}
+            tone={
+              compliance?.blacklist?.status === "BLACKLISTED"
+                ? "critical"
+                : compliance?.blacklist?.status === "CLEAR"
+                  ? "ok"
+                  : "neutral"
+            }
+          />
+          <Field label="FASTag" value={humanizeCode(compliance?.fastag?.status)} />
+          <Field
+            label="Alerts"
+            value={String(alerts.length)}
+            tone={alerts.length ? "warn" : "ok"}
+          />
+          {compliance?.blacklist?.reason ? (
+            <div className="pt-1 text-[12px] text-muted-foreground sm:col-span-2">
+              {String(compliance.blacklist.reason)}
+            </div>
+          ) : null}
+        </InfoCard>
+
+        <SectionCard title="Operational Timeline" icon={History} count={lifecycle.length}>
+          <LifecycleTimeline steps={lifecycle} />
+        </SectionCard>
+
+        <SectionCard title="Alerts" icon={Bell} count={alerts.length}>
+          {alerts.length === 0 ? (
+            <EmptyState>No alerts found.</EmptyState>
+          ) : (
+            <ul className="divide-y divide-border/50">
+              {alerts.slice(0, 8).map((a, i) => (
+                <li
+                  key={String(a.id ?? i)}
+                  className="flex items-center gap-2 px-3 py-2 text-[13px]"
+                >
+                  <StatusChip
+                    label={isBlank(a.severity) ? NA : String(a.severity)}
+                    tone={statusTone(String(a.severity ?? ""))}
+                  />
+                  <span className="truncate">{isBlank(a.kind) ? "Alert" : String(a.kind)}</span>
+                  <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
+                    {isBlank(a.ts) ? NA : fmtDateTimeIST(String(a.ts))}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </SectionCard>
+      </div>
+
+      {/* RC + FASTag + location */}
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
         <InfoCard
-          title={`RC · ${vi.vehicle_number}`}
+          title={`RC Details · ${vehicleNumber}`}
           icon={Car}
           actions={
             <>
@@ -344,23 +652,32 @@ function VehicleProfile({ plate }: { plate: string }) {
             </>
           }
         >
-          <KV label="Owner" value={rc.owner_name_masked ?? rc.owner_name} />
+          {/* Core RC fields always render (with an em-dash when the column is
+              null); the registration/validity fields only appear when the RC row
+              actually carries them — nothing here is invented. */}
+          <KV label="Plate" value={rc.plate ?? vehicleNumber} />
           <KV label="Vehicle class" value={rc.vehicle_class} />
-          <KV label="Fuel" value={rc.fuel_type} />
-          <KV label="Registered" value={rc.registration_date} />
-          <KV label="Fitness upto" value={rc.fitness_valid_to} />
-          <KV label="Insurance upto" value={rc.insurance_valid_to} />
-          <KV label="RTO / State" value={`${rc.rto_code ?? "—"} / ${rc.state ?? "—"}`} />
-          <KV label="Blacklist" value={rc.blacklist_status} />
+          <KV label="Fuel type" value={rc.fuel_type} />
+          <KV label="Blacklist status" value={rc.blacklist_status} />
+          {RC_OPTIONAL_FIELDS.map(([key, label, kind]) =>
+            isBlank(rc[key]) ? null : (
+              <KV key={key} label={label} value={formatValue(rc[key], kind)} />
+            ),
+          )}
+          {Object.keys(rc).length === 0 ? (
+            <div className="py-1 text-[13px] text-muted-foreground sm:col-span-2">
+              No RC record on file for this vehicle.
+            </div>
+          ) : null}
         </InfoCard>
 
         <VehicleIdentityDialog
-          vehicleNumber={vi.vehicle_number}
+          vehicleNumber={vehicleNumber}
           open={identityOpen}
           onOpenChange={setIdentityOpen}
         />
         <VehicleDetectionDialog
-          vehicleNumber={vi.vehicle_number}
+          vehicleNumber={vehicleNumber}
           open={detectionOpen}
           onOpenChange={setDetectionOpen}
         />
@@ -402,26 +719,60 @@ function VehicleProfile({ plate }: { plate: string }) {
               </span>
             )}
           </div>
-          {last ? (
+          {lat != null && lon != null ? (
             <div className="relative h-[220px]">
               <ArcgisMap
                 basemap={basemap}
                 corridor={corridorQ.data}
                 trucks={pseudoTruck}
-                center={[Number(last.lon), Number(last.lat)]}
+                center={[lon, lat]}
                 zoom={13}
               />
             </div>
           ) : (
             <div className="flex h-[220px] items-center justify-center text-sm text-muted-foreground">
-              No tracking on record.
+              No tracking data available.
             </div>
           )}
         </Card>
       </div>
 
+      {/* RC verification lineage — the audit trail behind the header status. */}
+      <SectionCard title="Verification History" icon={History} count={verifications.length}>
+        {verifications.length === 0 ? (
+          <EmptyState>No verification history available.</EmptyState>
+        ) : (
+          <ul className="divide-y divide-border/50">
+            {verifications.slice(0, 10).map((v, i) => (
+              <li key={i} className="flex items-center gap-2 px-3 py-2 text-[13px]">
+                <StatusChip
+                  label={isBlank(v.verification_status) ? NA : String(v.verification_status)}
+                  tone={statusTone(String(v.verification_status ?? ""))}
+                />
+                <span className="truncate text-muted-foreground">
+                  {isBlank(v.source) ? NA : String(v.source)}
+                </span>
+                <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
+                  {isBlank(v.created_at) ? NA : fmtDateTimeIST(String(v.created_at))}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </SectionCard>
+
       {/* Record tabs */}
-      <VehicleRecords vi={vi} customs={customs} parking={parking} geo={geo} ai={ai} track={track} />
+      <VehicleRecords
+        violations={violations}
+        challans={challans}
+        alerts={alerts}
+        verifications={verifications}
+        customs={customs}
+        parking={parking}
+        geo={geo}
+        ai={ai}
+        track={track}
+      />
     </div>
   );
 }
@@ -431,6 +782,7 @@ type RecTab =
   | "violations"
   | "challans"
   | "alerts"
+  | "verifications"
   | "customs"
   | "parking"
   | "geo"
@@ -438,14 +790,20 @@ type RecTab =
   | "tracking";
 
 function VehicleRecords({
-  vi,
+  violations,
+  challans,
+  alerts,
+  verifications,
   customs,
   parking,
   geo,
   ai,
   track,
 }: {
-  vi: VehicleIntel;
+  violations: Row[];
+  challans: Row[];
+  alerts: Row[];
+  verifications: Row[];
   customs: Row[];
   parking: Row[];
   geo: Row[];
@@ -455,8 +813,8 @@ function VehicleRecords({
   const [tab, setTab] = useState<RecTab>("timeline");
 
   const timeline = useMemo(
-    () => buildTimeline(vi, customs, parking, geo, ai),
-    [vi, customs, parking, geo, ai],
+    () => buildTimeline(violations, challans, alerts, customs, parking, geo, ai),
+    [violations, challans, alerts, customs, parking, geo, ai],
   );
 
   return (
@@ -467,9 +825,10 @@ function VehicleRecords({
         className="mb-3"
         tabs={[
           { key: "timeline", label: "Timeline", count: timeline.length },
-          { key: "violations", label: "Violations", count: vi.violations.length },
-          { key: "challans", label: "Challans", count: vi.challans.length },
-          { key: "alerts", label: "Alerts", count: vi.alerts.length },
+          { key: "violations", label: "Violations", count: violations.length },
+          { key: "challans", label: "Challans", count: challans.length },
+          { key: "alerts", label: "Alerts", count: alerts.length },
+          { key: "verifications", label: "Verifications", count: verifications.length },
           { key: "customs", label: "Customs", count: customs.length },
           { key: "parking", label: "Parking", count: parking.length },
           { key: "geo", label: "Geo-fence", count: geo.length },
@@ -481,40 +840,52 @@ function VehicleRecords({
         {tab === "timeline" && <Timeline events={timeline} />}
         {tab === "violations" && (
           <RecordsTable
-            rows={vi.violations}
+            rows={violations}
             cols={[
               ["case_id", "Case"],
               ["status", "Status"],
               ["total_fine", "Fine"],
               ["first_detected_at", "Detected"],
             ]}
-            empty="No violations on record."
+            empty="No violations found."
             searchKeys={["case_id", "status"]}
           />
         )}
         {tab === "challans" && (
           <RecordsTable
-            rows={vi.challans}
+            rows={challans}
             cols={[
               ["challan_no", "Challan"],
               ["total_fine", "Fine"],
               ["status", "Status"],
               ["issued_at", "Issued"],
             ]}
-            empty="No challans on record."
+            empty="No challans found."
             searchKeys={["challan_no", "status"]}
           />
         )}
         {tab === "alerts" && (
           <RecordsTable
-            rows={vi.alerts}
+            rows={alerts}
             cols={[
               ["kind", "Kind"],
               ["severity", "Severity"],
               ["ts", "When"],
             ]}
-            empty="No alerts on record."
+            empty="No alerts found."
             searchKeys={["kind", "severity"]}
+          />
+        )}
+        {tab === "verifications" && (
+          <RecordsTable
+            rows={verifications}
+            cols={[
+              ["verification_status", "Status"],
+              ["source", "Source"],
+              ["created_at", "When"],
+            ]}
+            empty="No verification history available."
+            searchKeys={["verification_status", "source"]}
           />
         )}
         {tab === "customs" && (
@@ -577,7 +948,7 @@ function VehicleRecords({
               ["lon", "Lon"],
               ["speed_kmh", "Speed"],
             ]}
-            empty="No tracking on record."
+            empty="No tracking data available."
           />
         )}
       </Card>
@@ -812,7 +1183,304 @@ function DriverAnalytics() {
   );
 }
 
+// --- Vehicle 360 presentation bits -------------------------------------------
+
+/** The single placeholder for "the source row has no value here". Used across
+ *  every 360 card so a blank never reads as a zero or a clean status. */
+const NA = "Not Available";
+
+/** Labelled value in the DTCCC card grid. Stacked (label above value) because
+ *  these cards mix long names with short codes. */
+function Field({
+  label,
+  value,
+  tone,
+  mono,
+}: {
+  label: string;
+  value: unknown;
+  tone?: Tone;
+  mono?: boolean;
+}) {
+  const blank = isBlank(value);
+  return (
+    <div className="border-b border-border/40 py-1.5">
+      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div
+        className={cn(
+          "truncate text-[13px] font-medium",
+          mono && !blank && "font-mono",
+          blank ? "text-muted-foreground" : tone ? TONE_TEXT[tone] : "text-foreground",
+        )}
+        title={blank ? NA : String(value)}
+      >
+        {blank ? NA : String(value)}
+      </div>
+    </div>
+  );
+}
+
+const TONE_TEXT: Record<Tone, string> = {
+  ok: "text-emerald-600 dark:text-emerald-400",
+  warn: "text-amber-600 dark:text-amber-400",
+  critical: "text-red-600 dark:text-red-400",
+  info: "text-sky-600 dark:text-sky-400",
+  neutral: "text-foreground",
+};
+
+/** Enrolment photo with an initials fallback — a broken image URL must not leave
+ *  a torn placeholder in the driver card. */
+function DriverPhoto({ src, name }: { src?: string | null; name?: string | null }) {
+  const [failed, setFailed] = useState(false);
+  const initials = String(name ?? "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase())
+    .join("");
+  if (src && !failed) {
+    return (
+      <img
+        src={src}
+        alt={name ? `Photo of ${name}` : "Driver photo"}
+        onError={() => setFailed(true)}
+        className="h-12 w-12 shrink-0 rounded-full border border-border object-cover"
+      />
+    );
+  }
+  return (
+    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-border bg-muted text-sm font-semibold text-muted-foreground">
+      {initials || <IdCard className="h-5 w-5" />}
+    </div>
+  );
+}
+
+/** ASSIGNED_TO_JOB -> "Assigned to job". Backend codes are SCREAMING_SNAKE; the
+ *  operator should never have to read one. */
+function humanizeCode(v: unknown): string | undefined {
+  if (isBlank(v)) return undefined;
+  const s = String(v).replace(/_/g, " ").toLowerCase();
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function fmtDateOrNA(v: unknown): string | undefined {
+  if (isBlank(v)) return undefined;
+  return fmtDateIST(v);
+}
+
+/** "Valid · till 12/05/2027" — status and the date that justifies it together. */
+function validityLabel(
+  v?: { status?: string | null; valid_to?: string | null } | null,
+): string | undefined {
+  if (!v || isBlank(v.status) || v.status === "NOT_AVAILABLE") return undefined;
+  const label = humanizeCode(v.status);
+  return v.valid_to ? `${label} · till ${fmtDateIST(v.valid_to)}` : label;
+}
+
+function validityTone(status?: string | null): Tone | undefined {
+  switch (String(status ?? "").toUpperCase()) {
+    case "VALID":
+    case "ACTIVE":
+      return "ok";
+    case "EXPIRING":
+      return "warn";
+    case "EXPIRED":
+    case "CANCELLED":
+      return "critical";
+    default:
+      return undefined;
+  }
+}
+
+function assignmentTone(status?: string | null): Tone | undefined {
+  const u = String(status ?? "").toUpperCase();
+  if (!u || u === "UNASSIGNED") return undefined;
+  if (u === "DRIVER_ASSIGNED") return "info";
+  return "ok";
+}
+
+/** Where the transport company came from — the vehicle mapping is authoritative;
+ *  the others are stated so an operator knows how firm the link is. */
+const TRANSPORTER_SOURCE: Record<string, string> = {
+  vehicle_mapping: "via vehicle mapping",
+  driver_employer: "via driver's employer",
+  driver_company: "via driver record",
+};
+
+/** Vehicle lifecycle: registered -> enrolled -> assigned -> gate -> cargo -> now. */
+function LifecycleTimeline({ steps }: { steps: Row[] }) {
+  if (steps.length === 0)
+    return <EmptyState>No lifecycle events recorded for this vehicle.</EmptyState>;
+  return (
+    <ol className="relative space-y-0 p-3 pl-5">
+      <span className="absolute left-[11px] top-5 bottom-5 w-px bg-border" aria-hidden />
+      {steps.map((s, i) => {
+        const current = s.stage === "CURRENT_STATUS";
+        return (
+          <li key={i} className="relative flex gap-3 pb-3 last:pb-0">
+            <span
+              className="absolute -left-[9px] mt-1 h-3 w-3 rounded-full ring-4 ring-card"
+              style={{ backgroundColor: current ? toneColour("info") : toneColour("ok") }}
+            />
+            <div className="ml-3 min-w-0 flex-1">
+              <div className="flex flex-wrap items-baseline gap-x-2">
+                <span className="text-[13px] font-medium text-foreground">
+                  {String(s.label ?? s.stage ?? "Event")}
+                </span>
+                {isBlank(s.ts) ? null : (
+                  <span className="text-[11px] text-muted-foreground">
+                    {fmtDateTimeIST(String(s.ts))}
+                  </span>
+                )}
+              </div>
+              {isBlank(s.detail) ? null : (
+                <div className="truncate text-[12px] text-muted-foreground">{String(s.detail)}</div>
+              )}
+            </div>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/** Skeleton that mirrors the real layout, so the page does not reflow when the
+ *  data lands. The label keeps the familiar "Building 360° profile…" wording. */
+function Vehicle360Skeleton() {
+  const bar = "animate-pulse rounded bg-muted";
+  return (
+    <div className="space-y-3 p-4" aria-busy="true" aria-live="polite">
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Spinner /> Building 360° profile…
+      </div>
+      <Card className="p-4">
+        <div className={cn(bar, "h-6 w-48")} />
+        <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="space-y-1.5">
+              <div className={cn(bar, "h-2.5 w-16")} />
+              <div className={cn(bar, "h-3.5 w-24")} />
+            </div>
+          ))}
+        </div>
+      </Card>
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <Card key={i} className="space-y-2 p-4">
+            <div className={cn(bar, "h-4 w-32")} />
+            {Array.from({ length: 4 }).map((__, j) => (
+              <div key={j} className={cn(bar, "h-3 w-full")} />
+            ))}
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // --- Shared bits -------------------------------------------------------------
+
+/** Array-or-nothing. Every list field on the intel payload is optional server-side. */
+function asArray(v: unknown): Row[] {
+  return Array.isArray(v) ? (v as Row[]) : [];
+}
+
+/** Object-or-nothing (`rc` is null for vehicles with no RC row). */
+function asRecord(v: unknown): Row {
+  return v && typeof v === "object" && !Array.isArray(v) ? (v as Row) : {};
+}
+
+function isBlank(v: unknown): boolean {
+  return v == null || v === "";
+}
+
+/** Number when the value really is one — `Number(null)` is 0, which would put a
+ *  vehicle with no fix on the map at (0, 0). */
+function finite(v: unknown): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) && v !== null && v !== "" ? n : null;
+}
+
+/** Newest telemetry row that carries usable coordinates. */
+function latestFix(track: Row[]): Row | undefined {
+  const fixes = track.filter((t) => finite(t.lat) != null && finite(t.lon) != null);
+  if (fixes.length === 0) return undefined;
+  return fixes.reduce((best, r) =>
+    (Date.parse(String(r.ts)) || 0) > (Date.parse(String(best.ts)) || 0) ? r : best,
+  );
+}
+
+/** Human-readable message off a thrown api error (falls back to a generic line). */
+function apiMessage(err: unknown): string | undefined {
+  const msg = err instanceof Error ? err.message : err ? String(err) : "";
+  return msg || undefined;
+}
+
+function fmtDateIST(v: unknown): string {
+  const d = new Date(String(v));
+  if (Number.isNaN(d.getTime())) return String(v);
+  return d.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
+}
+
+function formatValue(v: unknown, kind: FieldKind): string {
+  if (kind === "date") return fmtDateIST(v);
+  if (kind === "datetime") return fmtDateTimeIST(String(v));
+  if (kind === "bool") return v ? "Yes" : "No";
+  return String(v);
+}
+
+type FieldKind = "text" | "date" | "datetime" | "bool";
+
+/** Registration / validity columns of core.vehicle_rc, rendered only when the
+ *  row actually has them — never substituted with placeholder values. */
+const RC_OPTIONAL_FIELDS: [string, string, FieldKind][] = [
+  ["owner_name_masked", "Owner", "text"],
+  ["rc_type", "RC type", "text"],
+  ["registration_date", "Registration date", "date"],
+  ["rto_code", "RTO", "text"],
+  ["state", "State", "text"],
+  ["fitness_valid_to", "Fitness valid to", "date"],
+  ["insurance_valid_to", "Insurance valid to", "date"],
+  ["puc_valid_to", "PUC valid to", "date"],
+  ["fastag_status", "FASTag status", "text"],
+  ["provisional", "Provisional RC", "bool"],
+  ["provisional_until", "Provisional until", "datetime"],
+  ["updated_at", "Last updated", "datetime"],
+];
+
+function blacklistTone(status: string): Tone {
+  const u = status.toUpperCase();
+  if (/CLEAR|NONE|NO|FALSE|CLEAN/.test(u)) return "ok";
+  return "critical";
+}
+
+/** Card with a titled header and a free-form body (lists rather than KV pairs). */
+function SectionCard({
+  title,
+  icon: Icon,
+  count,
+  children,
+}: {
+  title: string;
+  icon: typeof Car;
+  count?: number;
+  children: React.ReactNode;
+}) {
+  return (
+    <Card className="overflow-hidden p-0">
+      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+        <Icon className="h-4 w-4 text-primary" />
+        <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+        {count != null && (
+          <span className="ml-auto rounded bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
+            {count}
+          </span>
+        )}
+      </div>
+      {children}
+    </Card>
+  );
+}
 
 function InfoCard({
   title,
@@ -914,9 +1582,16 @@ function RecordsTable({
 
 function statusTone(s: string): Tone {
   const u = s.toUpperCase();
-  if (/CRITICAL|BLOCKED|VIOLATION|TAMPERED|REJECT|FAIL/.test(u)) return "critical";
-  if (/WARN|PENDING|PROVISIONAL|ENTER|ELEVATED/.test(u)) return "warn";
-  if (/OK|READY|ACTIVE|VERIFIED|EXIT|PAID|CLOSED/.test(u)) return "ok";
+  // Negative states are tested FIRST: "INACTIVE"/"SUSPENDED" contain no negation
+  // marker the ok-branch could distinguish, and `ACTIVE` alone matches both.
+  if (
+    /CRITICAL|HIGH|BLOCKED|VIOLATION|TAMPERED|REJECT|FAIL|INACTIVE|SUSPEND|CANCEL|EXPIRED|BLACKLIST/.test(
+      u,
+    )
+  )
+    return "critical";
+  if (/WARN|MEDIUM|PENDING|PROVISIONAL|ENTER|ELEVATED|EXPIRING|REENROLL/.test(u)) return "warn";
+  if (/OK|READY|ACTIVE|VERIFIED|EXIT|PAID|CLOSED|CLEAR|ENROLLED|VALID/.test(u)) return "ok";
   return "neutral";
 }
 
@@ -931,7 +1606,9 @@ interface TLEvent {
 }
 
 function buildTimeline(
-  vi: VehicleIntel,
+  violations: Row[],
+  challans: Row[],
+  alerts: Row[],
   customs: Row[],
   parking: Row[],
   geo: Row[],
@@ -942,16 +1619,16 @@ function buildTimeline(
     const t = Date.parse(String(iso));
     if (!Number.isNaN(t)) out.push({ ts: t, iso: String(iso), kind, label, tone });
   };
-  for (const v of vi.violations as Row[])
+  for (const v of violations)
     push(
       v.first_detected_at ?? v.created_at,
       "Violation",
       `Violation ${v.case_id ?? ""} · ${v.status ?? ""}`,
       "warn",
     );
-  for (const c of vi.challans as Row[])
+  for (const c of challans)
     push(c.issued_at, "Challan", `Challan ${c.challan_no ?? ""} · ₹${c.total_fine ?? ""}`, "warn");
-  for (const a of vi.alerts as Row[])
+  for (const a of alerts)
     push(a.ts, "Alert", `${a.kind ?? "Alert"} · ${a.severity ?? ""}`, "critical");
   for (const g of geo)
     push(

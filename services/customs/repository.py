@@ -245,7 +245,17 @@ class CustomsRepository:
             "l.bl_no, l.bl_date, l.pol AS port_of_loading, l.pod AS port_of_destination, "
             "l.importer_name, l.nature_of_cargo, l.cargo_movement, "
             "l.gross_weight, l.weight_unit AS unit_of_weight, l.goods_desc AS goods_description, "
-            "l.selected_scan, "
+            # IMDG class as declared on the manifest line. Already on core.igm_line,
+            # which is joined above — surfacing it is a projection, not a new join.
+            # Drives the hazardous-cargo edge case (WS1 EC-4).
+            #
+            # 'ZZZ' is the manifest's sentinel for "no IMDG class declared" — it is
+            # NOT a hazard class. It covers 4,058 of the 4,276 lines, so passing it
+            # through would flag every ordinary container as hazardous. Normalised
+            # to NULL here, at the single point every consumer reads, rather than in
+            # each client. The 218 remaining values are genuine classes
+            # (1.6, 2.1, 2.2, 3, 4.1–4.3, 5.1, 5.2, 6.1, 8, 9).
+            "l.selected_scan, NULLIF(l.imdg_class, 'ZZZ') AS imdg_class, "
             # RMS scanner assignment for this box, when a scanning-division list
             # selected it. LATERAL + LIMIT 1 so a container on two lists cannot
             # duplicate the manifest row.
@@ -522,8 +532,20 @@ class CustomsRepository:
             "FROM core.rms_scan_container c "
             "JOIN core.rms_scan_report r ON r.report_id = c.report_id "
             f"WHERE c.container_no = :cn{_o('c')} ORDER BY c.sl_no", p)
+        # The message envelope that delivered this box's manifest — the drawer's
+        # "Customs Message ID" (message_id_code). Soft: absent without an IGM link.
+        message = None
+        igm_no = (vessel or {}).get("igm_no")
+        if igm_no is not None:
+            message = await self._one(
+                "SELECT id, message_id_code, message_type, module, sent_ts, source_file "
+                "FROM core.customs_message WHERE primary_ref = :ref"
+                + (" AND data_origin = :data_origin" if do is not None else "")
+                + " ORDER BY id DESC LIMIT 1",
+                {**p, "ref": str(igm_no)})
         return {"container_no": container_no, "status": status, "vessel": vessel,
-                "igm": igm, "ooc": ooc, "smtp": smtp, "rms": rms}
+                "igm": igm, "ooc": ooc, "smtp": smtp, "rms": rms,
+                "message": message}
 
     async def summary(self, *, data_origin: Optional[str] = None) -> dict:
         """Dashboard counts across the customs layer (one round trip per table).

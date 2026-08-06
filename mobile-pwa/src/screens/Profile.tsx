@@ -4,7 +4,7 @@ import { api } from "@/lib/api";
 import { Card, Chip, Row, Spinner } from "@/components/ui";
 import { clearPairing } from "@/lib/device";
 import { enablePush, type PushState } from "@/lib/pwa";
-import { useDriverSession } from "@/hooks/DriverSession";
+import { displayVehicle, useDriverSession } from "@/hooks/DriverSession";
 import { verifiedLabel } from "@/lib/driverLang";
 import { IconShield, IconLogout, IconBell } from "@/components/icons";
 import i18n, { SUPPORTED_LANGS, LANG_LABELS } from "@/i18n";
@@ -122,7 +122,10 @@ export default function Profile({ deviceId, plate }: { deviceId: string; plate?:
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="prof-name">{driverName}</div>
           <div className="prof-plate selectable">
-            {resolvedPlate || t("common.noData", { defaultValue: "—" })}
+            {/* Falls back to the session's vehicle number when the live truck
+                snapshot is unavailable, so the header shows the registration
+                rather than "—" for a driver who is signed in. */}
+            {resolvedPlate || displayVehicle(session) || t("common.noData", { defaultValue: "—" })}
           </div>
           <div className="prof-badges">
             <span className={`prof-badge ${verified ? "ok" : "muted"}`}>
@@ -177,13 +180,21 @@ export default function Profile({ deviceId, plate }: { deviceId: string; plate?:
           </Card>
 
           <Card title={t("driverProfile.vehicleInfo", { defaultValue: "Assigned Vehicle" })}>
-            <Row
-              k={t("driverProfile.vehicleId", { defaultValue: "Vehicle ID" })}
-              v={<span className="selectable">{profile.vehicle.vehicle_id || "—"}</span>}
-            />
+            {/* Registration first — it is how the driver, the gate and the control
+                room all refer to this truck. The internal Vehicle ID follows it
+                (still selectable) because it is the pairing credential this device
+                logs in with, so a driver calling support must be able to read it. */}
             <Row
               k={t("driverProfile.vehicleNumber", { defaultValue: "Vehicle Number" })}
-              v={profile.vehicle.vehicle_number || "—"}
+              v={
+                <span className="selectable">
+                  {profile.vehicle.vehicle_number || profile.vehicle.vehicle_id || "—"}
+                </span>
+              }
+            />
+            <Row
+              k={t("driverProfile.vehicleId", { defaultValue: "Vehicle ID (login)" })}
+              v={<span className="selectable">{profile.vehicle.vehicle_id || "—"}</span>}
             />
             <Row
               k={t("driverProfile.vehicleType", { defaultValue: "Type" })}

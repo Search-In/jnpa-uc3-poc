@@ -26,6 +26,7 @@ import { ChevronDown, Play, RotateCcw, Waypoints } from "lucide-react";
 import { SUPPORTED_LANGS, LANG_LABELS, type LangCode } from "@/i18n";
 import i18n from "@/i18n";
 import { HeaderActions } from "@/components/layout/HeaderActions";
+import { UserMenu } from "@/components/layout/UserMenu";
 import { DataSourceToggle } from "@/components/layout/DataSourceToggle";
 import { GlobalSearch } from "@/components/layout/GlobalSearch";
 import { canSeeScreen } from "@/lib/auth";
@@ -117,6 +118,9 @@ export function Shell({ children, onResetBaseline, resetDisabled }: ShellProps) 
             <RotateCcw className="h-3.5 w-3.5" />
             <span className="hidden md:inline">{t("common.resetToBaseline")}</span>
           </button>
+
+          {/* Signed-in identity + sign-out. Renders nothing when auth is off. */}
+          <UserMenu />
         </div>
       </header>
 

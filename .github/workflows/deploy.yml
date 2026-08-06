@@ -34,21 +34,6 @@ jobs:
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile=false
 
-      - name: Add temporary swap for memory relief
-        run: |
-          # Create 8 GB swap file to prevent hard OOM kills during concurrent Vite builds.
-          # This acts as a safety net: if the build process peaks above available RAM,
-          # the OS will spill to disk rather than SIGKILL the process (exit 137).
-          # Swap is slower than RAM, but no crash beats a fast crash.
-          sudo fallocate -l 8G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=8192
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
-          
-          # Verify swap was created and enabled
-          echo "=== Memory before build ==="
-          free -m
-
       - name: Build Workspace (dashboard compiles to LIVE)
         # Sequential builds: pnpm -r --workspace-concurrency=1 runs packages one at a time
         # so peak memory usage stays small. Without this, parallel `pnpm -r build` allows
@@ -56,12 +41,15 @@ jobs:
         # triggering the OS OOM killer (exit 137: SIGKILL).
         # 
         # NODE_OPTIONS heap size tuning:
-        # - 2048 MB was too low; Vite + TypeScript often exceed this on a single build.
-        # - 6144 MB (6 GB) gives breathing room for Node heap + V8 + module cache.
-        # - On an 8 GB runner with swap: 6 GB Node + 2 GB OS/overhead = safe.
+        # - 2048 MB was way too low; Vite + TypeScript bundling often exceed this.
+        # - 8192 MB (8 GB) is safe on GitHub's ubuntu-latest (16 GB runner):
+        #   gives Node max 8GB heap + 2GB for system/other processes = 10GB used,
+        #   leaves 6GB buffer for kernel caches and unexpected spikes.
+        # - --max-semi-space-size=512 tells V8 to do more frequent, smaller GC cycles
+        #   instead of rare, huge collections — reduces peak memory footprint.
         run: pnpm -r --workspace-concurrency=1 build
         env:
-          NODE_OPTIONS: "--max-old-space-size=6144"
+          NODE_OPTIONS: "--max-old-space-size=8192 --max-semi-space-size=512"
           # Production builds default to live anyway; set explicitly for clarity
           # and to make the verification step below meaningful.
           VITE_DATA_MODE: live
@@ -80,15 +68,13 @@ jobs:
           VITE_PWA_PAIRING_SECRET: ${{ secrets.PWA_PAIRING_SECRET }}
 
       - name: Check memory after build
-        if: always()  # Run even if the build step fails, so we see memory state on crash
+        if: always()  # Run even if build fails, for diagnostics
         run: |
           echo "=== Memory after build ==="
           free -m
           echo ""
-          echo "=== Swap usage ==="
-          swapon -s || echo "No swap info available"
-          echo ""
-          echo "Diagnostics: If 'Swap:' row shows usage > 0, memory pressure occurred but was handled by swap."
+          echo "Note: Sequential builds (--workspace-concurrency=1) ensure only one"
+          echo "Vite process runs at a time, so peak memory is bounded."
 
       - name: Verify dashboard bundle is LIVE (no mock shipped)
         run: bash scripts/verify_web_live_build.sh web/dist

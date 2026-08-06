@@ -301,11 +301,7 @@ export function buildPathIndex(path: LngLat[], authored?: LngLat[]): PathIndex {
 }
 
 /** Distance of `p` along a bare polyline (no re-parameterisation). */
-function alongRaw(
-  path: LngLat[],
-  cum: number[],
-  p: LngLat,
-): { point: LngLat; along: number } {
+function alongRaw(path: LngLat[], cum: number[], p: LngLat): { point: LngLat; along: number } {
   let best = { d2: Infinity, point: path[0] ?? p, along: 0 };
   for (let i = 0; i < path.length - 1; i++) {
     const { point, t } = projectToSegment(path[i], path[i + 1], p);

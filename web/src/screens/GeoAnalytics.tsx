@@ -11,7 +11,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Shapes, MapPinned, LogIn, TriangleAlert, Cpu, Flame, LogOut, Gauge } from "lucide-react";
+import { Shapes, MapPinned, LogIn, TriangleAlert, Cpu, Flame, Gauge } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api } from "@/lib/api";
 import { getAdapter } from "@/data";
@@ -32,9 +32,8 @@ import {
   Embedded,
   type Column,
 } from "@/components/ui/dtccc";
-import { EmptyState, LoadingState, ErrorState } from "@/components/ui/misc";
 import { STATUS } from "@/lib/tokens";
-import { fmtDateTimeIST, relativeAge } from "@/lib/utils";
+import { fmtDateTimeIST } from "@/lib/utils";
 import type { AiEvent, GeofenceEvent, GeoVehicleInZone } from "@/lib/types";
 
 type TabKey = "zones" | "inside" | "events" | "violations" | "ai" | "heatmap" | "bottlenecks";
@@ -189,11 +188,13 @@ export default function GeoAnalytics({ defaultTab = "zones" }: { defaultTab?: Ta
           </Card>
         )}
         {tab === "events" && (
-          <EventsTimeline
-            status={eventsQ}
-            rows={eventsQ.data?.events ?? []}
-            onRetry={() => eventsQ.refetch()}
-          />
+          <Card className="overflow-hidden">
+            <EventsTimeline
+              status={eventsQ}
+              rows={eventsQ.data?.events ?? []}
+              onRetry={() => eventsQ.refetch()}
+            />
+          </Card>
         )}
         {tab === "violations" && (
           <Card className="overflow-hidden">
@@ -237,6 +238,37 @@ function InsideTable({
   status: any;
   onRetry: () => void;
 }) {
+  // Per-occupancy trigger state, keyed by vehicle+zone+entry_time so a genuine
+  // re-entry (new entry_time) is triggerable again — mirroring the server's
+  // dedup key exactly, so the button never promises what the API would refuse.
+  const occKey = (v: GeoVehicleInZone) => `${v.vehicle_id}-${v.zone_id}-${v.entry_time}`;
+  const [busy, setBusy] = useState<string | null>(null);
+  const [done, setDone] = useState<Record<string, boolean>>({});
+  const [failed, setFailed] = useState<Record<string, string>>({});
+
+  async function onTrigger(v: GeoVehicleInZone) {
+    const key = occKey(v);
+    setBusy(key);
+    setFailed((f) => ({ ...f, [key]: "" }));
+    try {
+      // `created: false` = already triggered for this occupancy; still a success
+      // from the operator's point of view, so it settles into the same state.
+      await api.geoNotifyZone(v.vehicle_id, v.zone_id, v.entry_time);
+      setDone((d) => ({ ...d, [key]: true }));
+    } catch (e: any) {
+      // 409 = the vehicle left the zone, or re-entered since this row was drawn.
+      const msg = String(e?.message ?? "");
+      setFailed((f) => ({
+        ...f,
+        [key]: msg.includes("409")
+          ? "Vehicle is no longer in this occupancy — refresh"
+          : "Trigger failed",
+      }));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   const columns: Column<GeoVehicleInZone>[] = [
     { key: "vehicle", header: "Vehicle", className: "font-mono", render: (v) => v.vehicle_id },
     { key: "zone", header: "Zone", render: (v) => v.zone_id },
@@ -259,6 +291,31 @@ function InsideTable({
       render: (v) => (
         <StatusChip label={v.violated ? "VIOLATION" : "OK"} tone={v.violated ? "critical" : "ok"} />
       ),
+    },
+    {
+      key: "trigger",
+      header: "Action",
+      align: "right",
+      render: (v) => {
+        const key = occKey(v);
+        const isBusy = busy === key;
+        const isDone = !!done[key];
+        const err = failed[key];
+        if (isDone) return <StatusChip label="Notified" tone="ok" />;
+        return (
+          <div className="flex items-center justify-end gap-2">
+            {err && <span className="text-[11px] text-severity-critical">{err}</span>}
+            <button
+              type="button"
+              onClick={() => void onTrigger(v)}
+              disabled={isBusy}
+              className="rounded border border-border px-2 py-0.5 text-[11px] font-medium text-foreground transition hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isBusy ? "Triggering…" : err ? "Retry" : "Trigger"}
+            </button>
+          </div>
+        );
+      },
     },
   ];
   return (
@@ -287,102 +344,70 @@ function EventsTimeline({
   status: any;
   onRetry: () => void;
 }) {
-  const [q, setQ] = useState("");
-  const [limit, setLimit] = useState(20);
-  const filtered = useMemo(() => {
-    const list = rows.filter((e) => e.event_type === "ENTER" || e.event_type === "EXIT");
-    const query = q.trim().toLowerCase();
-    return (
-      query
-        ? list.filter((e) =>
-            `${e.vehicle_id ?? ""} ${e.zone_id ?? ""}`.toLowerCase().includes(query),
-          )
-        : list
-    ).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
-  }, [rows, q]);
+  // Same rows as before (ENTER/EXIT only, newest first) — only the presentation
+  // changes: a scannable table instead of a vertical timeline. An EXIT row
+  // already carries entry_time, exit_time and dwell_seconds from the engine, so
+  // every column below reads a field the API already returns.
+  const filtered = useMemo(
+    () =>
+      rows
+        .filter((e) => e.event_type === "ENTER" || e.event_type === "EXIT")
+        .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)),
+    [rows],
+  );
 
-  if (status.isLoading)
-    return (
-      <Card className="p-0">
-        <LoadingState />
-      </Card>
-    );
-  if (status.isError)
-    return (
-      <Card className="p-0">
-        <ErrorState onRetry={onRetry} />
-      </Card>
-    );
+  const columns: Column<GeofenceEvent>[] = [
+    {
+      key: "vehicle",
+      header: "Vehicle",
+      className: "font-mono",
+      render: (e) => e.vehicle_id ?? "—",
+    },
+    { key: "zone", header: "Zone", render: (e) => e.zone_id ?? "—" },
+    {
+      key: "entry",
+      header: "Entry",
+      className: "text-muted-foreground",
+      render: (e) => fmtDateTimeIST(e.entry_time ?? e.created_at),
+    },
+    {
+      key: "exit",
+      header: "Exit",
+      className: "text-muted-foreground",
+      render: (e) => (e.exit_time ? fmtDateTimeIST(e.exit_time) : "—"),
+    },
+    {
+      key: "duration",
+      header: "Duration",
+      align: "right",
+      className: "tabular-nums",
+      render: (e) => (e.dwell_seconds != null ? `${Math.round(e.dwell_seconds / 60)}m` : "—"),
+    },
+    {
+      key: "status",
+      header: "Status",
+      // An EXIT row has closed the visit; an ENTER row is still open.
+      render: (e) =>
+        e.exit_time || e.event_type === "EXIT" ? (
+          <StatusChip label="COMPLETED" tone="ok" />
+        ) : (
+          <StatusChip label="ACTIVE" tone="warn" />
+        ),
+    },
+  ];
 
   return (
-    <Card className="overflow-hidden">
-      <div className="border-b border-border p-3">
-        <input
-          type="search"
-          value={q}
-          onChange={(e) => {
-            setQ(e.target.value);
-            setLimit(20);
-          }}
-          placeholder="Search vehicle / zone…"
-          className="h-9 w-full max-w-xs rounded-md border border-border bg-background px-3 text-[13px] outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
-        />
-      </div>
-      {filtered.length === 0 ? (
-        <EmptyState>No entry/exit events yet.</EmptyState>
-      ) : (
-        <>
-          <ol className="relative space-y-0 p-4 pl-6">
-            <span className="absolute left-[13px] top-4 bottom-4 w-px bg-border" aria-hidden />
-            {filtered.slice(0, limit).map((e) => {
-              const enter = e.event_type === "ENTER";
-              return (
-                <li key={e.id} className="relative flex gap-3 pb-4 last:pb-0">
-                  <span
-                    className="absolute -left-[11px] mt-1 flex h-4 w-4 items-center justify-center rounded-full ring-4 ring-card"
-                    style={{ backgroundColor: enter ? STATUS.warning : STATUS.ok }}
-                  >
-                    {enter ? (
-                      <LogIn className="h-2.5 w-2.5 text-white" />
-                    ) : (
-                      <LogOut className="h-2.5 w-2.5 text-white" />
-                    )}
-                  </span>
-                  <div className="ml-4 flex flex-1 flex-wrap items-center gap-x-2 gap-y-0.5">
-                    <StatusChip label={e.event_type} tone={enter ? "warn" : "ok"} />
-                    <span className="font-mono text-[13px] font-medium text-foreground">
-                      {e.vehicle_id}
-                    </span>
-                    <span className="text-[13px] text-muted-foreground">→ {e.zone_id}</span>
-                    {e.dwell_seconds != null && (
-                      <span className="text-[11px] text-muted-foreground">
-                        · dwell {Math.round(e.dwell_seconds / 60)}m
-                      </span>
-                    )}
-                    <span
-                      className="ml-auto text-[11px] text-muted-foreground"
-                      title={fmtDateTimeIST(e.created_at)}
-                    >
-                      {relativeAge(e.created_at)}
-                    </span>
-                  </div>
-                </li>
-              );
-            })}
-          </ol>
-          {limit < filtered.length && (
-            <div className="border-t border-border px-4 py-2 text-center">
-              <button
-                onClick={() => setLimit((l) => l + 20)}
-                className="text-[12px] font-semibold text-primary hover:underline"
-              >
-                Load more ({filtered.length - limit} remaining)
-              </button>
-            </div>
-          )}
-        </>
-      )}
-    </Card>
+    <DataTable
+      columns={columns}
+      rows={filtered}
+      rowKey={(e) => String(e.id)}
+      status={status}
+      onRetry={onRetry}
+      emptyLabel="No entry/exit events yet."
+      search={(e, q) => `${e.vehicle_id ?? ""} ${e.zone_id ?? ""}`.toLowerCase().includes(q)}
+      searchPlaceholder="Search vehicle / zone…"
+      pageSize={12}
+    />
   );
 }
 

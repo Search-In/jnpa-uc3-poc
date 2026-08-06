@@ -1,4 +1,4 @@
-"""DAO for the JNPA API sync tables (migration 0117) + the cross-ledger
+"""DAO for the JNPA API sync tables (migration 0124) + the cross-ledger
 dedup probe and the per-group advisory lock.
 
 Same conventions as every repository in this tree: SQLAlchemy 2.0 async over
@@ -7,7 +7,7 @@ asyncpg, `get_engine(self._dsn)` per statement block, writes inside
 transaction (see jnpa_shared/db.py:90 for why).
 
 `ensure_api_ingest_schema()` embeds the same DDL as
-infra/postgres/v3/0117_jnpa_api_ingest.sql (IF NOT EXISTS throughout) so the
+infra/postgres/v3/0124_jnpa_api_ingest.sql (IF NOT EXISTS throughout) so the
 gateway can boot the tables idempotently — the coexistence pattern every
 other module uses (e.g. gate_documents / mig 0112).
 """
@@ -131,7 +131,7 @@ CREATE INDEX IF NOT EXISTS idx_api_defect_observed
 
 
 async def ensure_api_ingest_schema(dsn: Optional[str] = None) -> None:
-    """Idempotent boot DDL for the 0117 tables (gateway lifespan)."""
+    """Idempotent boot DDL for the 0124 tables (gateway lifespan)."""
     engine = get_engine(dsn)
     async with engine.begin() as conn:
         for statement in _DDL.split(";"):

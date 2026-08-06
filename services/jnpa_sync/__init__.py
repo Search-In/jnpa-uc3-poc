@@ -11,7 +11,7 @@ Layering:
   store.py      — raw-bytes store ({dir}/{group}/{sha}__{filename}); keeps
                   every downloaded file for re-parse, PoC-2 serving and
                   submission evidence
-  repository.py — DAO over the 0117 tables (api_sync_state / api_ingest_run /
+  repository.py — DAO over the 0124 tables (api_sync_state / api_ingest_run /
                   api_record / api_report_snapshot / api_defect_log) +
                   ensure_api_ingest_schema() boot DDL + the cross-ledger
                   known-sha probe + the per-group advisory lock

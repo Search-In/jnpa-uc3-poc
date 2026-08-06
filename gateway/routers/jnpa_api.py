@@ -20,7 +20,7 @@ the other module list endpoints.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import PlainTextResponse, Response
@@ -83,6 +83,10 @@ class SyncBody(BaseModel):
 
 class ReplayBody(BaseModel):
     group: str
+    # Which routed_status values to reprocess from the raw store. Default is
+    # the historical behaviour (newly-wired consumer); pass FAILED/REJECTED
+    # too after a consumer or schema fix.
+    statuses: List[str] = ["UNROUTED"]
 
 
 @router.get("/api/integrations/jnpa/health",
@@ -127,8 +131,11 @@ async def jnpa_sync(request: Request, body: SyncBody,
     return {"trigger": "MANUAL", "dry_run": body.dry_run, "result": result}
 
 
+_REPLAYABLE = {"UNROUTED", "FAILED", "REJECTED"}
+
+
 @router.post("/api/integrations/jnpa/replay",
-             summary="Re-route UNROUTED records from the raw store")
+             summary="Re-route landed records (UNROUTED / FAILED / REJECTED) from the raw store")
 async def jnpa_replay(request: Request, body: ReplayBody,
                       svc: JnpaSyncService = Depends(get_sync_service)
                       ) -> Dict[str, Any]:
@@ -137,8 +144,15 @@ async def jnpa_replay(request: Request, body: ReplayBody,
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"error": "unknown_group", "detail": body.group})
+    statuses = [s.strip().upper() for s in (body.statuses or ["UNROUTED"])]
+    bad = [s for s in statuses if s not in _REPLAYABLE]
+    if bad:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "unknown_status", "detail": bad,
+                    "allowed": sorted(_REPLAYABLE)})
     REQUESTS.labels(_API, "ok").inc()
-    return await svc.replay_unrouted(body.group)
+    return await svc.replay_unrouted(body.group, statuses=tuple(statuses))
 
 
 @router.get("/api/integrations/jnpa/runs",

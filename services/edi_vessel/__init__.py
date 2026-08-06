@@ -8,7 +8,7 @@ moves, per-vessel-call container documents:
 
 This package parses those XML documents into ``core.edi_vessel_container``
 (one row per container per document) behind the ``core.edi_import_file``
-ledger — migration 0123, mirroring the rail (0119) consumer pattern:
+ledger — migration 0125, mirroring the rail (0119) consumer pattern:
 idempotent, duplicate-safe, provenance-tagged.
 """
 from .service import EdiVesselService

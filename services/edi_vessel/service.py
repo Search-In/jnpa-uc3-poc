@@ -51,8 +51,11 @@ class EdiVesselService:
             "vcn": header.get("vcn"),
             "terminal_code": header.get("terminal_code"),
             "agent_code": header.get("agent_code"),
+            # Header-level line code (COPARN); item-level codes override it.
+            "line_code": header.get("line_code"),
             "rotation_no": header.get("rotation_no"),
             "rotation_date": header.get("rotation_date"),
+            "voyage": header.get("voyage"),
             "source_file": filename,
         }
         records = [{**doc_fields, **row} for row in rows]

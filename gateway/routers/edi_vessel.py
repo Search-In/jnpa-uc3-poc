@@ -1,6 +1,6 @@
 """/api/edi — COARRI/COPRAR vessel-side container moves (read-only, additive).
 
-Read path for the 0123 tables the jnpa_sync router fills from the
+Read path for the 0125 tables the jnpa_sync router fills from the
 edi-messages group (services.edi_vessel consumer). Same mould as
 gateway/routers/rail.py: thin over the repository, LIVE/DEMO narrowed via the
 shared ``data_mode`` dependency.

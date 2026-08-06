@@ -148,6 +148,15 @@ class GateDocumentService:
         return {"items": rows, "total": total, "limit": limit, "offset": offset,
                 "count": len(rows)}
 
+    async def list_source_documents(self, *, category: Optional[str] = None,
+                                    container: Optional[str] = None,
+                                    limit: int, offset: int) -> Dict[str, Any]:
+        """Parsed source gate documents (core.gate_document) — see the repository."""
+        rows, total = await self._repo.list_source_documents(
+            category=category, container=container, limit=limit, offset=offset)
+        return {"items": rows, "total": total, "limit": limit, "offset": offset,
+                "count": len(rows)}
+      
     async def hourly_profile(self, doc_type: str, *, filters,
                              group_by: str = "hour") -> Dict[str, Any]:
         """Hourly (or daily) document counts for a window — the aggregate view of

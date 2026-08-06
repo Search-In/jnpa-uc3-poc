@@ -263,6 +263,27 @@ async def list_form13(
     return await _list(svc, "FORM13", response, filters, limit, offset, request)
 
 
+@router.get("/documents", response_model=Page,
+            summary="Parsed source gate documents (Form 13 / EIR / PIN, as filed)")
+async def list_source_documents(
+    response: Response,
+    category: Optional[str] = Query(None, description="FORM13 | EIR | PIN_TICKET"),
+    container: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    svc: GateDocumentService = Depends(get_service),
+) -> Page:
+    """The customer's own gate documents, parsed verbatim from the shared corpus.
+
+    NOT the same store as `/form13`, which reads `core.gate_capture` — that is
+    202/203 seeded rows. These are the 13 real parsed documents (Form 13, EIR and
+    PIN tickets) with their full as-filed payload in `attrs`. Read-only.
+    """
+    res = await svc.list_source_documents(
+        category=category, container=container, limit=limit, offset=offset)
+    return _page(res["items"], res["total"], limit, offset, response)
+
+
 # ------------------------------------------------------------ cross-doc views
 @router.get("/container/{container_no}", summary="Every gate document for one container")
 async def docs_for_container(

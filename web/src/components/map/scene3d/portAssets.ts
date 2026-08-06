@@ -114,10 +114,10 @@ export interface GatePlacement {
 }
 
 const UC2_GATE_PLACEMENTS: Record<string, GatePlacement> = {
-  "G-NSICT": { lng: 72.96045, lat: 18.95295, heading: 90 },    // gate3d:NSICT-G1
+  "G-NSICT": { lng: 72.96045, lat: 18.95295, heading: 90 }, // gate3d:NSICT-G1
   "G-NSIGT": { lng: 72.964438, lat: 18.931437, heading: 346 }, // gate3d:NSIGT-G1
   "G-JNPCT": { lng: 72.953597, lat: 18.931123, heading: 141 }, // gate3d:JNPCT-G1
-  "G-BMCT": { lng: 72.951902, lat: 18.928423, heading: 317 },  // gate3d:BMCT-G1
+  "G-BMCT": { lng: 72.951902, lat: 18.928423, heading: 317 }, // gate3d:BMCT-G1
 };
 
 /** UC2's committed placement for a UC3 gate id, or null if it has none. */

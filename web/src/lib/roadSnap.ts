@@ -164,6 +164,12 @@ function projectToSegment(a: LngLat, b: LngLat, p: LngLat): { point: LngLat; t: 
 //
 // Rendering only: no API value, segment id, jam factor, threshold, gate position
 // or backend behaviour is derived from or altered by it.
+//
+// prettier-ignore — this is a coordinate TABLE, not code. Prettier reflows it to
+// one [lon, lat] pair per line, turning ~110 readable rows into ~440 and making
+// every future diff on the polyline unreadable. The 4-per-line grouping is the
+// point: it keeps the corridor scannable. Formatting is suppressed deliberately.
+// prettier-ignore
 export const CORRIDOR_ROAD: LngLat[] = [
   [72.94936, 18.94922], [72.95032, 18.94879], [72.95075, 18.94933], [72.95123, 18.94995],
   [72.95207, 18.95102], [72.95284, 18.95081], [72.95359, 18.95049], [72.95431, 18.95018],

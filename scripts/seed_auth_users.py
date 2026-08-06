@@ -30,8 +30,14 @@ Re-issue a password for an account that already exists:
 
     python scripts/seed_auth_users.py --user admin --reset-existing
 
-Every seeded account is created with must_change_password=true, so the holder is
-prompted to set their own password on first sign-in.
+Seeded accounts are flagged must_change_password=true by default, so the console
+shows a "change password" prompt until the holder sets their own. That flag is
+advisory — the gateway never blocks a login or an API call on it. To seed demo or
+pilot accounts without the prompt:
+
+    SEED_MUST_CHANGE_PASSWORD=false python scripts/seed_auth_users.py
+    # or equivalently
+    python scripts/seed_auth_users.py --no-force-password-change
 """
 from __future__ import annotations
 
@@ -73,6 +79,33 @@ DEFAULT_ACCOUNTS: tuple[dict[str, str], ...] = (
 # Generated password length in bytes of entropy (token_urlsafe -> ~1.3 chars/byte).
 _GENERATED_ENTROPY_BYTES = 12
 
+# Whether seeded accounts are flagged must_change_password. Defaults to true
+# (a bootstrap password the holder should replace), but configurable so a demo
+# or pilot deployment can seed accounts that are ready to use as-is instead of
+# carrying the "change password" prompt. Precedence: --no-force-password-change
+# overrides SEED_MUST_CHANGE_PASSWORD, which overrides the default.
+#
+# This only sets a column value. The flag is advisory everywhere it is read: the
+# gateway never blocks a login or an API call on it, so turning it off changes a
+# UI hint, not access.
+MUST_CHANGE_PASSWORD_ENV = "SEED_MUST_CHANGE_PASSWORD"
+_TRUTHY = {"1", "true", "yes", "on"}
+_FALSEY = {"0", "false", "no", "off"}
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    if raw in _TRUTHY:
+        return True
+    if raw in _FALSEY:
+        return False
+    if raw:
+        raise SystemExit(
+            f"{name}={raw!r} is not a boolean. Use one of: "
+            f"{', '.join(sorted(_TRUTHY | _FALSEY))}."
+        )
+    return default
+
 
 def _password_for(username: str) -> tuple[str, str]:
     """(password, source) for an account: the environment if provided, else a
@@ -106,7 +139,8 @@ async def _require_db(dsn: str) -> None:
         )
 
 
-async def _seed_one(dsn: str, spec: dict, *, reset_existing: bool) -> tuple[str, str, str, str]:
+async def _seed_one(dsn: str, spec: dict, *, reset_existing: bool,
+                    must_change_password: bool) -> tuple[str, str, str, str]:
     """Create (or optionally re-password) one account.
 
     Returns (username, role, password_or_marker, status)."""
@@ -130,7 +164,8 @@ async def _seed_one(dsn: str, spec: dict, *, reset_existing: bool) -> tuple[str,
         raise SystemExit(f"Password for {username!r} rejected: {exc}") from exc
 
     if existing is not None:
-        await users.set_password(dsn, username, password, must_change_password=True)
+        await users.set_password(dsn, username, password,
+                                 must_change_password=must_change_password)
         return username, canonical, password, f"password reset ({source})"
 
     await users.create_user(
@@ -140,12 +175,13 @@ async def _seed_one(dsn: str, spec: dict, *, reset_existing: bool) -> tuple[str,
         role=canonical,
         full_name=spec.get("full_name"),
         email=spec.get("email"),
-        must_change_password=True,
+        must_change_password=must_change_password,
     )
     return username, canonical, password, f"created ({source})"
 
 
-def _print_table(rows: list[tuple[str, str, str, str]]) -> None:
+def _print_table(rows: list[tuple[str, str, str, str]], *,
+                 must_change_password: bool) -> None:
     if not rows:
         print("Nothing to do.")
         return
@@ -163,8 +199,13 @@ def _print_table(rows: list[tuple[str, str, str, str]]) -> None:
     if any(r[2] not in ("(unchanged)",) for r in rows):
         print("These passwords are shown ONCE and are not recoverable — only the")
         print("PBKDF2 digest is stored. Record them in your secret manager now.")
-        print("Every account is flagged must_change_password: the holder will be")
-        print("asked to set their own password on first sign-in.")
+        if must_change_password:
+            print("Every account is flagged must_change_password: the console shows a")
+            print("'change password' prompt until the holder sets their own.")
+            print(f"To seed without that prompt: {MUST_CHANGE_PASSWORD_ENV}=false")
+        else:
+            print(f"Accounts were seeded with must_change_password=false "
+                  f"({MUST_CHANGE_PASSWORD_ENV}): no change-password prompt.")
         print()
 
 
@@ -196,10 +237,15 @@ async def _amain(args: argparse.Namespace) -> int:
     else:
         specs = [dict(a) for a in DEFAULT_ACCOUNTS]
 
+    # --no-force-password-change wins over the env var, which wins over the default.
+    must_change = (False if args.no_force_password_change
+                   else _env_flag(MUST_CHANGE_PASSWORD_ENV, True))
+
     results = []
     for spec in specs:
-        results.append(await _seed_one(dsn, spec, reset_existing=args.reset_existing))
-    _print_table(results)
+        results.append(await _seed_one(dsn, spec, reset_existing=args.reset_existing,
+                                       must_change_password=must_change))
+    _print_table(results, must_change_password=must_change)
 
     skipped = [r for r in results if r[3] == "exists"]
     if skipped:
@@ -225,6 +271,12 @@ def main() -> int:
     parser.add_argument("--email", default=None, help="Email for --user.")
     parser.add_argument("--reset-existing", action="store_true",
                         help="Issue a new password for accounts that already exist.")
+    parser.add_argument("--no-force-password-change", action="store_true",
+                        help="Seed accounts with must_change_password=false, so the console "
+                             f"shows no change-password prompt. Overrides "
+                             f"${MUST_CHANGE_PASSWORD_ENV} (default: true). Intended for demo "
+                             "and pilot deployments; the flag is advisory either way and never "
+                             "blocks a login.")
     parser.add_argument("--list", action="store_true",
                         help="List existing accounts and exit (no writes).")
     args = parser.parse_args()

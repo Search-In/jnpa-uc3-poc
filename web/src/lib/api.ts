@@ -792,10 +792,21 @@ export const api = {
       `/api/gate-docs/${docType}${qs.toString() ? `?${qs}` : ""}`,
     );
   },
-  gateDocsForContainer: (containerNo: string) =>
-    http<GateDocBundle>(`/api/gate-docs/container/${encodeURIComponent(containerNo)}`),
-  gateDocsForTruck: (truckNo: string) =>
-    http<GateDocBundle>(`/api/gate-docs/truck/${encodeURIComponent(truckNo)}`),
+  // Form-13 provenance: in LIVE data mode the timeline pins source=live so
+  // simulator-generated Form 13s never mix into the ingested document trail
+  // (the server default is "all"). Explicit `source` overrides the pin.
+  gateDocsForContainer: (containerNo: string, source?: "live" | "sim" | "all") => {
+    const pin = source ?? (getDataSourceMode() === "LIVE" ? "live" : undefined);
+    return http<GateDocBundle>(
+      `/api/gate-docs/container/${encodeURIComponent(containerNo)}${pin ? `?source=${pin}` : ""}`,
+    );
+  },
+  gateDocsForTruck: (truckNo: string, source?: "live" | "sim" | "all") => {
+    const pin = source ?? (getDataSourceMode() === "LIVE" ? "live" : undefined);
+    return http<GateDocBundle>(
+      `/api/gate-docs/truck/${encodeURIComponent(truckNo)}${pin ? `?source=${pin}` : ""}`,
+    );
+  },
   gateDocTat: (terminal?: string) =>
     http<GateDocTat>(
       `/api/gate-docs/tat${terminal ? `?terminal=${encodeURIComponent(terminal)}` : ""}`,

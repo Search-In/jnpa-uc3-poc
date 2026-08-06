@@ -166,12 +166,29 @@ async def jnpa_records(request: Request, group: Optional[str] = None,
     return {"items": records, "count": len(records)}
 
 
+@router.get("/api/integrations/jnpa/report-snapshots",
+            summary="Raw report-group snapshots (berthing/daily JSON, verbatim)")
+async def jnpa_report_snapshots(request: Request,
+                                group: Optional[str] = None,
+                                limit: int = 100,
+                                svc: JnpaSyncService = Depends(get_sync_service)
+                                ) -> Dict[str, Any]:
+    """The land-raw half of the report pipeline: exactly what the API answered
+    per (group, reportDate, terminal), incl. sections the mappers do not yet
+    map (portTotals, discharge/load moves) and each bucket's mapped_status."""
+    snapshots = await svc._repo.list_report_snapshots(
+        group=group, limit=min(max(limit, 1), 500))
+    REQUESTS.labels(_API, "ok").inc()
+    return {"items": snapshots, "count": len(snapshots)}
+
+
 @router.get("/api/integrations/jnpa/defects",
             summary="Runtime API defect log (json or md)")
 async def jnpa_defects(request: Request, format: str = "json",
-                       limit: int = 200,
+                       limit: int = 200, severity: Optional[str] = None,
                        svc: JnpaSyncService = Depends(get_sync_service)):
-    defects = await svc._repo.list_defects(limit=min(max(limit, 1), 1000))
+    defects = await svc._repo.list_defects(limit=min(max(limit, 1), 1000),
+                                           severity=severity)
     REQUESTS.labels(_API, "ok").inc()
     if format != "md":
         return {"items": defects, "count": len(defects)}

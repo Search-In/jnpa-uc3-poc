@@ -190,6 +190,32 @@ export default function ShippingLines() {
   const showingFrom = total ? offset + 1 : 0;
   const showingTo = offset + rows.length;
 
+  // Filter options come from the summary aggregates (by_terminal / by_category
+  // were previously received but unused); static lists remain as the fallback
+  // until the summary answers, so the dropdowns are never empty.
+  const terminalOptions = useMemo(() => {
+    const fromApi = [
+      ...new Set(
+        ((summaryQ.data?.by_terminal ?? []) as Array<{ terminal?: string | null }>)
+          .map((t) => t.terminal)
+          .filter((t): t is string => !!t),
+      ),
+    ].sort();
+    return fromApi.length ? fromApi : ["APMT", "BMCT", "GTI", "NSFT", "NSICT", "NSIGT"];
+  }, [summaryQ.data]);
+  const categoryOptions = useMemo(() => {
+    const labels: Record<string, string> = {
+      IMPORT: "Import",
+      EXPORT: "Export",
+      TRANSHIP: "Transhipment",
+    };
+    const fromApi = ((summaryQ.data?.by_category ?? []) as Array<{ category?: string | null }>)
+      .map((c) => c.category)
+      .filter((c): c is string => !!c);
+    const values = fromApi.length ? fromApi : Object.keys(labels);
+    return values.map((v) => ({ value: v, label: labels[v] ?? v }));
+  }, [summaryQ.data]);
+
   const filtersActive = !!(terminal || category || freightKind || searchInput || lineParam);
   const resetFilters = () => {
     setTerminal("");
@@ -332,22 +358,14 @@ export default function ShippingLines() {
               onChange={setTerminal}
               options={[
                 { value: "", label: "All terminals" },
-                ...["APMT", "BMCT", "GTI", "NSFT", "NSICT", "NSIGT"].map((t) => ({
-                  value: t,
-                  label: t,
-                })),
+                ...terminalOptions.map((t) => ({ value: t, label: t })),
               ]}
             />
             <FilterSelect
               label="Category"
               value={category}
               onChange={setCategory}
-              options={[
-                { value: "", label: "All categories" },
-                { value: "IMPORT", label: "Import" },
-                { value: "EXPORT", label: "Export" },
-                { value: "TRANSHIP", label: "Transhipment" },
-              ]}
+              options={[{ value: "", label: "All categories" }, ...categoryOptions]}
             />
             <FilterSelect
               label="Freight"

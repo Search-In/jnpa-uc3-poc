@@ -74,3 +74,6 @@ web/dist/
 mobile-pwa/dist/
 web/_attic/
 .env.migration-test
+
+ingest/eir_ocr/output/
+package-lock.json

@@ -72,6 +72,7 @@ from .routers import (
     traffic,
     trucks,
     ulip,
+    users as users_router,
     vahan,
     vehicle_identity,
     vehicles,
@@ -679,6 +680,9 @@ log.info("gateway_runtime_mode", mode=mode_name())
 # Routers (order matters only where static paths must beat /{param} — kpi router
 # declares /sources + /cameras before /{view}, so it is safe).
 app.include_router(auth_router.router)
+# Console user administration — admin-only (/api/users is scoped to DTCCC_ADMIN
+# in auth._POLICY, unlike the public /api/auth bootstrap prefix).
+app.include_router(users_router.router)
 app.include_router(anpr.router)
 app.include_router(vahan.router)
 app.include_router(traffic.router)

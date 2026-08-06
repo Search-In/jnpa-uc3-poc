@@ -3,7 +3,7 @@
 // gateway. Every helper returns parsed JSON and throws on non-2xx so TanStack
 // Query surfaces the error state.
 
-import { getToken } from "./auth";
+import { authEnabled, clearSession, getToken } from "./auth";
 import { getDataSourceMode } from "./dataSourceMode";
 import type { AvailableVehicle } from "./types";
 
@@ -75,6 +75,7 @@ async function http<T>(
     throw err;
   }
   if (!res.ok) {
+    if (res.status === 401) onUnauthorized();
     let detail: any = undefined;
     try {
       detail = await res.json();
@@ -87,6 +88,23 @@ async function http<T>(
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+/** Drop an expired/revoked session and return to the login gate.
+ *
+ *  A JWT lasts at most 8 h and cannot be revoked server-side, so the console has
+ *  to notice a dead session itself. Without this a 401 surfaced as a generic
+ *  panel error and the operator was stuck on a dashboard where nothing loaded
+ *  and nothing offered a way to sign in again. Guarded on a token actually being
+ *  present so an anonymous 401 can never loop the page. */
+function onUnauthorized(): void {
+  if (!authEnabled() || !getToken()) return;
+  clearSession();
+  try {
+    window.location.assign("/");
+  } catch {
+    /* navigation is unimplemented in jsdom (unit tests) */
+  }
 }
 
 // The gateway reports refusals as `{detail: {error, detail, ...extra}}` with a

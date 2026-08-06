@@ -2,7 +2,7 @@
 
 **From:** JNPA Digital Twin Programme
 **Contact:** dtinfo@jnport.gov.in
-**Subject:** Access to Simulated Port Data API for proof-of-concept evaluation
+**Subject:** Access to the Simulated Port Data API for proof-of-concept evaluation
 
 ---
 

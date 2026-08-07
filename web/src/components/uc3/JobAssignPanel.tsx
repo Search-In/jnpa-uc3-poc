@@ -132,8 +132,7 @@ export default function JobAssignPanel({
 
   const cn = container.trim().toUpperCase();
   const driverRequired = DRIVER_REQUIRED_MOVE_TYPES.has(moveType);
-  const ready =
-    cn.length > 0 && vehicleId !== NONE && (!driverRequired || driverId !== NONE);
+  const ready = cn.length > 0 && vehicleId !== NONE && (!driverRequired || driverId !== NONE);
 
   const payload = (): JobAssignInput => ({
     container_number: cn,
@@ -327,8 +326,8 @@ export default function JobAssignPanel({
               </span>
             ) : vehicleId !== NONE && driverRequired ? (
               <span className="text-xs text-amber-600 dark:text-amber-500">
-                No driver is assigned to this truck — pick one, or assign a driver to the
-                vehicle in Driver Management first.
+                No driver is assigned to this truck — pick one, or assign a driver to the vehicle in
+                Driver Management first.
               </span>
             ) : null}
           </label>

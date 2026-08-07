@@ -442,8 +442,13 @@ export interface DriverEnrollment {
 export interface AvailableVehicle {
   vehicle_id: string;
   plate?: string | null;
+  /** Explicit alias for `plate`; both are sent so older callers keep working. */
+  vehicle_number?: string | null;
   vehicle_type?: string | null;
   state?: string | null;
+  /** Driver bound to this truck in core.driver_identity, null when unassigned. */
+  driver_id?: string | null;
+  driver_name?: string | null;
 }
 
 // Vehicle Master lifecycle status.

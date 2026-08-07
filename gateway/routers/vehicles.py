@@ -102,13 +102,30 @@ async def list_vehicles(request: Request,
     return {"vehicles": rows, "count": len(rows)}
 
 
+async def _open_job_vehicles(dsn: Optional[str]) -> set:
+    """Vehicle IDs holding a non-terminal container job.
+
+    Best-effort: if the job spine is unreachable we return an empty set rather
+    than 500 the fleet endpoints. The cost of being wrong is a truck offered that
+    is already busy — and POST /api/jobs still rejects it with
+    ``vehicle_already_assigned``, so the invariant is never actually breached."""
+    try:
+        from services.container_job import ContainerJobService
+
+        return await ContainerJobService(dsn=dsn or None).vehicles_with_open_jobs()
+    except Exception as exc:  # noqa: BLE001 — availability must not hard-fail
+        log.warning("vehicles.open_jobs_lookup_failed", extra={"error": str(exc)})
+        return set()
+
+
 @router.get("/stats")
 async def vehicle_stats(request: Request,
                         state: GatewayState = Depends(get_state)) -> dict:
     await _ensure_seeded(state)
     dsn = state.cfg.postgres_dsn
     assigned = await enrollment.assigned_vehicles(dsn)
-    return await fleet.stats(dsn, assigned)
+    open_jobs = await _open_job_vehicles(dsn)
+    return await fleet.stats(dsn, assigned, open_jobs)
 
 
 @router.get("/available")
@@ -116,12 +133,23 @@ async def available_vehicles(request: Request,
                              q: Optional[str] = Query(default=None),
                              limit: int = Query(default=50, ge=1, le=500),
                              state: GatewayState = Depends(get_state)) -> dict:
-    """ACTIVE master vehicles not already assigned to an active driver / open
-    enrollment — the Control-Room 'assign vehicle' dropdown source."""
+    """ACTIVE master vehicles free to take a NEW container job — the Control-Room
+    'assign vehicle' dropdown source.
+
+    BUG-1: "free" means *no open job*, not *no driver*. Excluding driver-bound
+    trucks deadlocked the flow — the PWA can only sign in as a driver-bound
+    vehicle, so the console could never assign work to any truck a driver could
+    actually receive it on. Each row now also carries its bound driver
+    (``driver_id`` / ``driver_name``) so the console can auto-select the driver.
+
+    Driver-binding security is unchanged: the binding is still resolved from
+    core.driver_identity server-side, never from client input."""
     await _ensure_seeded(state)
     dsn = state.cfg.postgres_dsn
-    assigned = await enrollment.assigned_vehicles(dsn)
-    vehicles = await fleet.list_available(dsn, assigned, q=q, limit=limit)
+    open_jobs = await _open_job_vehicles(dsn)
+    driver_map = await enrollment.active_driver_vehicle_map(dsn)
+    vehicles = await fleet.list_available(dsn, open_jobs, q=q, limit=limit,
+                                          driver_map=driver_map)
     REQUESTS.labels("vehicles", "ok").inc()
     return {"vehicles": vehicles, "count": len(vehicles)}
 

@@ -46,6 +46,13 @@ TRANSITIONS: Dict[str, frozenset[str]] = {
 
 MOVE_TYPES = ("IMPORT_PICK", "EXPORT_DROP", "EMPTY_PICK", "EMPTY_DROP")
 
+# BUG-4: move types that may NOT be dispatched without an identified driver.
+# An import pick-up leaves the terminal with a laden box against a PIN/Form-13,
+# so the trip must be attributable to a person, not just a plate. Every job
+# created before this rule carried driver_id = NULL, which left the driver PWA
+# with nobody to notify and the audit trail with nobody to name.
+DRIVER_REQUIRED_MOVE_TYPES = frozenset({"IMPORT_PICK"})
+
 # Events emitted onto the job history (and, in Phase 6, onto the bus).
 EVENT_ASSIGNED = "job.assigned"
 EVENT_ACCEPTED = "job.accepted"
@@ -150,6 +157,15 @@ class ContainerJobService:
         if move_type not in MOVE_TYPES:
             raise ValidationFailed("invalid_move_type",
                                    f"move_type must be one of {list(MOVE_TYPES)}")
+        # BUG-4: a driver is mandatory for the move types that carry a laden box
+        # off the terminal. Checked here (a pure input rule) so it reports before
+        # any resource lookup, and enforced in the service rather than the router
+        # so BOTH /api/jobs/validate and /api/jobs are covered by one rule.
+        if move_type in DRIVER_REQUIRED_MOVE_TYPES and not (driver_id or "").strip():
+            raise ValidationFailed(
+                "driver_required",
+                f"{move_type} requires a driver; select the driver assigned to this vehicle",
+                move_type=move_type)
         if not (container_number or "").strip() and not (group_code or "").strip():
             raise ValidationFailed("container_or_group_required",
                                    "supply a container_number or a group_code (empty-by-group job)")
@@ -561,6 +577,11 @@ class ContainerJobService:
         total = await self._repo.count_jobs(filters=filters)
         return {"items": rows, "total": total, "limit": limit, "offset": offset,
                 "count": len(rows)}
+
+    async def vehicles_with_open_jobs(self) -> set:
+        """Vehicle IDs holding a non-terminal job — the real "truck is busy" set
+        used by the Control-Room availability dropdown (BUG-1)."""
+        return await self._repo.vehicles_with_open_jobs()
 
     async def assignment_for_container(self, container_number: str) -> Optional[Dict[str, Any]]:
         job = await self._repo.latest_job_for_container(container_number.strip().upper())

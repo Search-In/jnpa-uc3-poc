@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient
 
 from gateway.routers import container_job as R
 from services.container_job import ContainerJobService, JobConflict, ValidationFailed
+from services.container_job.service import normalize_plate
 
 
 class FakeRepo:
@@ -175,10 +176,19 @@ class FakeRepo:
     async def job_events(self, job_id):
         return [e for e in self.events if e["job_id"] == job_id]
 
+    async def vehicles_with_open_jobs(self):
+        return {j["vehicle_id"] for j in self.jobs.values()
+                if j["vehicle_id"] and j["status"] not in ("COMPLETED", "CANCELLED")}
+
     async def list_jobs(self, *, filters, limit, offset):
         rows = list(self.jobs.values())
         if filters.get("vehicle_id"):
-            rows = [r for r in rows if r["vehicle_id"] == filters["vehicle_id"]]
+            # Mirrors the real SQL: when a normalised plate is supplied EITHER
+            # binding matches, so the list scopes exactly like _owns() (BUG-2).
+            vid, plate = filters["vehicle_id"], filters.get("vehicle_plate")
+            rows = [r for r in rows
+                    if r["vehicle_id"] == vid
+                    or (plate and normalize_plate(r.get("vehicle_no")) == plate)]
         if filters.get("container_number"):
             rows = [r for r in rows if r["container_number"] == filters["container_number"]]
         if filters.get("status"):
@@ -525,7 +535,7 @@ def test_router_assign_and_conflicts(client, repo):
     # is fully registered so the truck rule is what refuses it, not the paperwork.
     repo.seed_container("NYKU4768188")
     r2 = client.post("/api/jobs", json={"container_number": "NYKU4768188",
-                                        "vehicle_id": "TRK-000001",
+                                        "vehicle_id": "TRK-000001", "driver_id": "DRV-1",
                                         "driver_licence": "UP6420140008203",
                                         "move_type": "IMPORT_PICK"})
     assert r2.status_code == 400
@@ -547,6 +557,7 @@ def test_router_assign_and_conflicts(client, repo):
 def test_router_validate_endpoint_reports_failure_reason(client):
     r = client.post("/api/jobs/validate", json={"container_number": "MRKU5014206",
                                                 "vehicle_id": "TRK-000002",
+                                                "driver_id": "DRV-1",
                                                 "move_type": "IMPORT_PICK"})
     assert r.status_code == 400
     assert r.json()["detail"]["error"] == "vehicle_not_active"
@@ -554,7 +565,7 @@ def test_router_validate_endpoint_reports_failure_reason(client):
 
 def test_router_gate_yard_scan_flow(client):
     jid = client.post("/api/jobs", json={"container_number": "MRKU5014206",
-                                         "vehicle_id": "TRK-000001",
+                                         "vehicle_id": "TRK-000001", "driver_id": "DRV-1",
                                          "driver_licence": "UP6420140008203",
                                          "move_type": "IMPORT_PICK"}).json()["job"]["id"]
 
@@ -592,7 +603,7 @@ def test_router_gate_yard_scan_flow(client):
 
 def test_router_job_actions_and_404s(client):
     jid = client.post("/api/jobs", json={"container_number": "MRKU5014206",
-                                         "vehicle_id": "TRK-000001",
+                                         "vehicle_id": "TRK-000001", "driver_id": "DRV-1",
                                          "driver_licence": "UP6420140008203",
                                          "move_type": "IMPORT_PICK"}).json()["job"]["id"]
     assert client.post(f"/api/jobs/{jid}/accept").status_code == 200
@@ -682,3 +693,71 @@ async def test_job_history_is_tagged_with_milestones_end_to_end(svc, repo):
     codes = [e["event_code"] for e in (await svc.get_job(jid))["events"]]
     assert codes == ["JOB_CREATED", "JOB_ACCEPTED", "JOB_GATE_IN",
                      "JOB_YARD", "JOB_PICKUP", "JOB_COMPLETE"]
+
+
+# =============================================== BUG-1/2/4 regression coverage
+@pytest.mark.asyncio
+async def test_import_pick_requires_a_driver(svc):
+    """BUG-4: IMPORT_PICK may not be dispatched without an identified driver.
+
+    A licence alone is not enough — the job row must carry driver_id, otherwise
+    the driver PWA has nobody to notify and the audit trail nobody to name."""
+    with pytest.raises(ValidationFailed) as exc:
+        await svc.assign(**_assign_kw(driver_id=None))
+    assert exc.value.code == "driver_required"
+
+    # ...and the rule is reported BEFORE any resource lookup, so a request that is
+    # also wrong about the vehicle still names the driver as the reason.
+    with pytest.raises(ValidationFailed) as exc2:
+        await svc.assign(**_assign_kw(driver_id="   ", vehicle_id="TRK-000002"))
+    assert exc2.value.code == "driver_required"
+
+
+@pytest.mark.asyncio
+async def test_move_types_without_the_driver_rule_still_assign(svc):
+    """Only the laden-import move is gated; an empty pick still dispatches with
+    no driver, so a truck can move boxes while a permit is being renewed."""
+    job = (await svc.assign(**_assign_kw(driver_id=None, driver_licence=None,
+                                         move_type="EMPTY_PICK")))["job"]
+    assert job["status"] == "ASSIGNED" and job["driver_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_driver_job_list_scopes_by_plate_as_well_as_id(svc, repo):
+    """BUG-2: the list must accept the same bindings as the detail ownership
+    check. A driver paired with the registration used to get an empty list while
+    still being able to open the very same job by id."""
+    job = (await svc.assign(**_assign_kw()))["job"]
+    plate = repo.jobs[job["id"]]["vehicle_no"]
+    assert plate, "fixture must give the job a plate for this test to mean anything"
+
+    by_id = await svc.list_jobs(filters={"vehicle_id": "TRK-000001", "open_only": True},
+                                limit=20, offset=0)
+    assert by_id["count"] == 1
+
+    # The plate binding alone resolves the same job.
+    by_plate = await svc.list_jobs(
+        filters={"vehicle_id": plate, "vehicle_plate": normalize_plate(plate),
+                 "open_only": True}, limit=20, offset=0)
+    assert by_plate["count"] == 1
+    assert by_plate["items"][0]["id"] == job["id"]
+
+    # Scoping still isolates: an unrelated vehicle sees nothing.
+    other = await svc.list_jobs(
+        filters={"vehicle_id": "TRK-999999", "vehicle_plate": "MH99ZZ9999",
+                 "open_only": True}, limit=20, offset=0)
+    assert other["count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_vehicles_with_open_jobs_tracks_only_live_work(svc):
+    """BUG-1: availability keys off OPEN jobs, so a truck is released the moment
+    its job reaches a terminal state — it is never gated on having a driver."""
+    job = (await svc.assign(**_assign_kw()))["job"]
+    assert await svc.vehicles_with_open_jobs() == {"TRK-000001"}
+
+    await svc.accept(job["id"])
+    assert await svc.vehicles_with_open_jobs() == {"TRK-000001"}
+
+    await svc.cancel(job["id"], reason="test")
+    assert await svc.vehicles_with_open_jobs() == set()

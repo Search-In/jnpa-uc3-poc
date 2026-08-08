@@ -1,0 +1,262 @@
+# ============================================================================
+# JNPA UC3 — QA overlay. Runs the SAME stack as production, on the SAME EC2
+# box, at the SAME time, without touching anything production owns.
+#
+# Usage (from the QA checkout ~/jnpa-uc3-poc-qa — see QA_DEPLOYMENT.md):
+#   docker compose --env-file .env.qa -p jnpa-uc3-poc-qa \
+#     -f docker-compose.yml -f docker-compose.aws.yml -f docker-compose.qa.yml \
+#     config          # validate first — ALWAYS
+#   ./deploy/qa/manage.sh up
+#
+# THIS FILE MUST COME LAST in the -f chain. docker-compose.aws.yml publishes web
+# on production's 80/443; the `!override` entries below REPLACE that (they do not
+# merge), so QA ends up with 18000/18080 only — but only if this file is applied
+# after it. `deploy/qa/manage.sh` always orders them correctly.
+#
+# HOW PRODUCTION IS KEPT SAFE — the five things Docker treats as global:
+#   1. PROJECT NAME   `name: jnpa-uc3-poc-qa` (prod is `jnpa-uc3-poc`). Networks
+#      and named volumes are project-scoped, so QA gets its own
+#      `jnpa-uc3-poc-qa_jnpa` bridge and its own pgdata/minio-data/kafka-data
+#      volumes. Nothing whatsoever is shared with the production stack.
+#   2. CONTAINER NAMES  every service is renamed `jnpa-qa-*`. docker-compose.yml
+#      hard-codes `container_name: jnpa-gateway` / `jnpa-web` / `jnpa-redis` …,
+#      which is GLOBAL to the daemon — without this rename `up` would collide
+#      with, and recreate, the running production containers.
+#   3. HOST PORTS  every host publish is `!reset []` except the two QA entry
+#      points below. Production keeps 80/443/3000/8000 and every internal port
+#      (8210, 8301, 9090, 3001 …) untouched.
+#          QA gateway -> 18000:8000     QA web -> 18080:3000
+#   4. IMAGE TAGS  every built service is retagged `jnpa/<name>:qa`. The base
+#      file pins `jnpa/<name>:0.1.0`, and a QA `up --build` would REPLACE those
+#      tags — the running production containers would survive on the old image
+#      ID, but production's next `up` would silently start QA's build.
+#   5. DATABASE  the env file (.env.qa) points every DSN at RDS/jnpa_qa. This
+#      overlay deliberately sets no DSN: the values come only from the env file,
+#      and docker-compose.yml's `${VAR:?…}` form aborts if one is missing rather
+#      than falling back to a local database.
+#
+# BACKING SERVICES (Redis / Kafka / MQTT / MinIO) ARE ISOLATED, NOT SHARED.
+# Production's copies hold live state and — under docker-compose.aws.yml — are
+# not published to the host at all, so they are reachable only from inside
+# production's own bridge network. Sharing them would mean attaching QA to that
+# network (defeating the isolation) and letting QA writes land in production's
+# event streams, caches and buckets. QA therefore runs its own, on the QA
+# network, with no host ports at all. They cost RAM but nothing else.
+#
+# NOT INCLUDED ON PURPOSE:
+#   * `postgres` stays behind the "localdb" profile (never started); its name and
+#     port are reset below only so an accidental `--profile localdb` cannot
+#     collide with the dev container.
+#   * `anomaly-train` (profile "train") has no container_name in the base file,
+#     so it already gets a project-scoped default name.
+# ============================================================================
+
+name: jnpa-uc3-poc-qa
+
+services:
+  # -- QA entry point 1: the API ---------------------------------------------
+  gateway:
+    container_name: jnpa-qa-gateway
+    image: jnpa/gateway:qa
+    # `!override` REPLACES the base list. A plain `ports:` would MERGE with
+    # docker-compose.yml's "8000:8000" and QA would try to grab production's
+    # port too ("port is already allocated" at best, a hijack at worst).
+    # Host 18000 -> container 8000. Production keeps 8000.
+    ports: !override
+      - "18000:8000"
+    restart: unless-stopped
+
+  # -- QA entry point 2: the dashboard + driver PWA --------------------------
+  web:
+    container_name: jnpa-qa-web
+    image: jnpa/web:qa
+    # `!override` REPLACES whatever the earlier files published — the base
+    # "3000:3000" AND docker-compose.aws.yml's "80:80"/"443:443". A plain
+    # `ports:` would MERGE with them and QA would fight production for 80/443.
+    # Host 18080 -> container 3000. Production keeps 80/443/3000.
+    ports: !override
+      - "18080:3000"
+    # The image bakes web/nginx/default.conf: listens on 80/443 and loads
+    # production's Let's Encrypt certificate for traffic-three.searchintech.in.
+    # QA has no hostname/certificate yet, so mount the plain-HTTP-on-3000 QA
+    # config over it — same pattern docker-compose.override.yml uses locally.
+    # `!override` also DROPS docker-compose.aws.yml's /etc/letsencrypt mount, so
+    # the QA container never even has production's TLS private keys in its
+    # filesystem. Its nginx proxies /api to `gateway`, which Docker's embedded
+    # DNS resolves on the QA network — i.e. jnpa-qa-gateway, never production's.
+    volumes: !override
+      - ./web/nginx/default.qa.conf:/etc/nginx/conf.d/default.conf:ro
+    # The baked HEALTHCHECK curls https://localhost/ , which cannot succeed with
+    # the config above; point it at the QA listener instead. It uses BusyBox
+    # `wget` rather than `curl` because the nginx:alpine base image ships the
+    # former and not the latter — a curl-based probe reports "unhealthy" forever
+    # even while nginx is serving normally.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3000/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+    restart: unless-stopped
+
+  # -- Everything else: renamed, unpublished, restart-on-reboot ---------------
+  # Same shape as docker-compose.aws.yml — these talk to each other over the
+  # private jnpa-qa bridge and need no host port.
+  postgres:
+    container_name: jnpa-qa-postgres
+    ports: !reset []
+
+  redis:
+    container_name: jnpa-qa-redis
+    ports: !reset []
+    restart: unless-stopped
+
+  zookeeper:
+    container_name: jnpa-qa-zookeeper
+    restart: unless-stopped
+
+  kafka:
+    container_name: jnpa-qa-kafka
+    ports: !reset []
+    restart: unless-stopped
+
+  kafka-ui:
+    container_name: jnpa-qa-kafka-ui
+    ports: !reset []
+    restart: unless-stopped
+
+  mosquitto:
+    container_name: jnpa-qa-mosquitto
+    ports: !reset []
+    restart: unless-stopped
+
+  minio:
+    container_name: jnpa-qa-minio
+    ports: !reset []
+    restart: unless-stopped
+
+  prometheus:
+    container_name: jnpa-qa-prometheus
+    ports: !reset []
+    restart: unless-stopped
+
+  grafana:
+    container_name: jnpa-qa-grafana
+    ports: !reset []
+    restart: unless-stopped
+
+  jaeger:
+    container_name: jnpa-qa-jaeger
+    ports: !reset []
+    restart: unless-stopped
+
+  anpr-ingest:
+    container_name: jnpa-qa-anpr-ingest
+    image: jnpa/anpr-ingest:qa
+    ports: !reset []
+    restart: unless-stopped
+
+  anpr:
+    container_name: jnpa-qa-anpr
+    image: jnpa/anpr-ai:qa
+    ports: !reset []
+    restart: unless-stopped
+
+  vahan-sim:
+    container_name: jnpa-qa-vahan-sim
+    image: jnpa/vahan-sim:qa
+    ports: !reset []
+    restart: unless-stopped
+
+  # Production publishes 8210 from docker-compose.yml (docker-compose.aws.yml
+  # does not reset it), so QA MUST reset it or `up` fails with "port is already
+  # allocated".
+  eir-ocr:
+    container_name: jnpa-qa-eir-ocr
+    image: jnpa/eir-ocr:qa
+    ports: !reset []
+    restart: unless-stopped
+
+  vahan-live:
+    container_name: jnpa-qa-vahan-live
+    image: jnpa/vahan-live:qa
+    ports: !reset []
+    restart: unless-stopped
+
+  rfid-emulator:
+    container_name: jnpa-qa-rfid-emulator
+    image: jnpa/rfid-ingest:qa
+    ports: !reset []
+    restart: unless-stopped
+
+  rfid-consumer:
+    container_name: jnpa-qa-rfid-consumer
+    image: jnpa/rfid-ingest:qa
+    ports: !reset []
+    restart: unless-stopped
+
+  rfid-correlator:
+    container_name: jnpa-qa-rfid-correlator
+    image: jnpa/rfid-ingest:qa
+    ports: !reset []
+    restart: unless-stopped
+
+  truck-sim:
+    container_name: jnpa-qa-truck-sim
+    image: jnpa/trucking-app:qa
+    ports: !reset []
+    restart: unless-stopped
+
+  congestion:
+    container_name: jnpa-qa-congestion
+    image: jnpa/congestion-ai:qa
+    ports: !reset []
+    restart: unless-stopped
+
+  anomaly:
+    container_name: jnpa-qa-anomaly
+    image: jnpa/anomaly-ai:qa
+    ports: !reset []
+    restart: unless-stopped
+
+  empty-container:
+    container_name: jnpa-qa-empty-container
+    image: jnpa/empty-container:qa
+    ports: !reset []
+    restart: unless-stopped
+
+  carbon:
+    container_name: jnpa-qa-carbon
+    image: jnpa/carbon:qa
+    ports: !reset []
+    restart: unless-stopped
+
+  gate-data:
+    container_name: jnpa-qa-gate-data
+    image: jnpa/gate-data:qa
+    ports: !reset []
+    restart: unless-stopped
+
+  identity:
+    container_name: jnpa-qa-identity
+    image: jnpa/identity:qa
+    ports: !reset []
+    restart: unless-stopped
+
+  parking:
+    container_name: jnpa-qa-parking
+    image: jnpa/parking:qa
+    ports: !reset []
+    restart: unless-stopped
+
+  scenarios:
+    container_name: jnpa-qa-scenarios
+    image: jnpa/scenarios:qa
+    ports: !reset []
+    restart: unless-stopped
+
+  # `anomaly-train` (profile "train") is not started by a deployment, but it
+  # shares the jnpa/anomaly-ai tag with the `anomaly` service, so retag it too
+  # in case someone runs `--profile train` from the QA checkout.
+  anomaly-train:
+    image: jnpa/anomaly-ai:qa

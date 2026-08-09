@@ -108,6 +108,38 @@ else
 fi
 sudo docker compose version >/dev/null 2>&1 || die "docker compose plugin still unavailable"
 
+# buildx is a SEPARATE plugin from compose, and Amazon Linux 2023's `docker`
+# package ships neither. `docker compose build` hard-fails with "compose build
+# requires buildx 0.17.0 or later" without it — after pulling every base image,
+# so the failure looks like a build error rather than a missing plugin.
+if sudo docker buildx version >/dev/null 2>&1; then
+  ok "buildx already installed ($(sudo docker buildx version | head -1))"
+elif [[ "$SKIP_DOCKER" == "1" ]]; then
+  ok "buildx: skipped (--skip-docker)"
+else
+  sudo "$pkg" install -y docker-buildx-plugin 2>/dev/null || {
+    warn "no docker-buildx-plugin package — installing the plugin binary directly"
+    cli_dir=/usr/libexec/docker/cli-plugins
+    sudo mkdir -p "$cli_dir"
+    case "$(uname -m)" in
+      x86_64)  bx_arch=amd64 ;;
+      aarch64) bx_arch=arm64 ;;
+      *)       die "unsupported architecture $(uname -m) for the buildx binary" ;;
+    esac
+    # The release asset embeds its own version, so resolve the tag first rather
+    # than guessing at a /latest/download/ filename.
+    bx_ver="$(curl -fsSL https://api.github.com/repos/docker/buildx/releases/latest \
+              | grep -m1 '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')"
+    [[ -n "$bx_ver" ]] || die "could not resolve the latest buildx release tag"
+    sudo curl -fsSL \
+      "https://github.com/docker/buildx/releases/download/${bx_ver}/buildx-${bx_ver}.linux-${bx_arch}" \
+      -o "$cli_dir/docker-buildx"
+    sudo chmod +x "$cli_dir/docker-buildx"
+  }
+  sudo docker buildx version >/dev/null 2>&1 || die "buildx still unavailable"
+  ok "buildx installed ($(sudo docker buildx version | head -1))"
+fi
+
 # Node + pnpm. Needed because web/Dockerfile COPIES web/dist and
 # mobile-pwa/dist rather than compiling them — the bundles must be built on the
 # box (or rsynced in) before the first `up`. pnpm comes from corepack so the
@@ -197,8 +229,12 @@ else
   ok "${ENV_FILE} written (mode 600)"
 fi
 
-# Whatever path we took, nothing may remain unsubstituted.
-if leftover="$(grep -n 'SET_ON_EC2_ONLY\|__QA_HOST__\|__RDS_HOST__\|<EC2_PUBLIC_IP>' "$ENV_FILE")"; then
+# Whatever path we took, nothing may remain unsubstituted. Match only ASSIGNMENT
+# lines — the template's own comments legitimately name the placeholders they
+# tell you to replace ("# Replace <EC2_PUBLIC_IP> with …"), and matching those
+# fails a correctly-filled env file.
+placeholder_re='^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=.*(SET_ON_EC2_ONLY|__QA_HOST__|__RDS_HOST__|<EC2_PUBLIC_IP>)'
+if leftover="$(grep -nE "$placeholder_re" "$ENV_FILE")"; then
   printf '%s\n' "$leftover" >&2
   die "^^ ${ENV_FILE} still has unfilled placeholders"
 fi

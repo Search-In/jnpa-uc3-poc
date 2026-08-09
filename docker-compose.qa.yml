@@ -75,7 +75,8 @@ services:
     # `ports:` would MERGE with them and QA would fight production for 80/443.
     # Host 18080 -> container 3000. Production keeps 80/443/3000.
     ports: !override
-      - "18080:3000"
+      - "18080:80"
+      - "18443:443"
     # The image bakes web/nginx/default.conf: listens on 80/443 and loads
     # production's Let's Encrypt certificate for traffic-three.searchintech.in.
     # QA has no hostname/certificate yet, so mount the plain-HTTP-on-3000 QA
@@ -85,14 +86,16 @@ services:
     # filesystem. Its nginx proxies /api to `gateway`, which Docker's embedded
     # DNS resolves on the QA network — i.e. jnpa-qa-gateway, never production's.
     volumes: !override
-      - ./web/nginx/default.qa.conf:/etc/nginx/conf.d/default.conf:ro
+      - /home/ec2-user/jnpa-uc3-poc-qa/web/nginx/default.qa.conf:/etc/nginx/conf.d/default.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+
     # The baked HEALTHCHECK curls https://localhost/ , which cannot succeed with
     # the config above; point it at the QA listener instead. It uses BusyBox
     # `wget` rather than `curl` because the nginx:alpine base image ships the
     # former and not the latter — a curl-based probe reports "unhealthy" forever
     # even while nginx is serving normally.
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3000/ || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:80/ || exit 1"]
       interval: 15s
       timeout: 5s
       start_period: 10s

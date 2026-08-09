@@ -44,7 +44,18 @@ sys.path.insert(0, str(_ROOT / "shared"))
 
 from services.berthing import pdf_parsers as PP  # noqa: E402
 
-DEFAULT_DATA_DIR = "/Users/pandurangdhage/Downloads/Digital Twin/Data/7-Berthing Reports"
+DEFAULT_DATA_DIR = (
+    Path(__file__).resolve().parents[2]
+    / "jnpa_poc_1"
+    / "data"
+    / "7 Berthing Report"
+)
+# Fall back to the historic Downloads path when the sibling PoC corpus is absent.
+if not DEFAULT_DATA_DIR.is_dir():
+    DEFAULT_DATA_DIR = Path(
+        "/Users/pandurangdhage/Downloads/Digital Twin/Data/7-Berthing Reports"
+    )
+DEFAULT_DATA_DIR = str(DEFAULT_DATA_DIR)
 # Application database = AWS RDS (jnpa_schema_v3). No local-postgres fallback:
 # set POSTGRES_DSN (or pass --dsn) or the script refuses to run.
 DEFAULT_DSN = os.environ.get("POSTGRES_DSN", "")

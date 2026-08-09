@@ -27,6 +27,7 @@ from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query, Reque
 from pydantic import BaseModel
 
 from ..auth import CONTROL_ROOM, Role, auth_enabled
+from ..data_mode import data_mode
 from ..metrics import REQUESTS
 from services.marine import MarineUploadService
 from services.marine.parsers import DocumentTypeMismatch, UnknownDocumentType
@@ -149,12 +150,17 @@ async def upload_import(request: Request,
     before, duplicates included. Supplied as true, the file is re-processed through the
     same upsert path so the business rows and the lifecycle projection refresh in place.
     The response shape is identical either way.
+
+    SPA Data Upload is always DEMO (``MANUAL``): the LIVE toggle is for JNPA-API
+    corpus only. Operators switch to DEMO to see what they uploaded.
     """
     uploader = require_uploader(request)
     content = await _read_upload(file)
     try:
+        # Always MANUAL — Data Upload is the DEMO corpus by product rule.
         res = await svc.import_file(content, file.filename or "upload.csv", uploader,
-                                    document_type=document_type, override=override)
+                                    document_type=document_type, override=override,
+                                    data_origin="MANUAL")
     except (UnknownDocumentType, DocumentTypeMismatch) as exc:
         REQUESTS.labels(_API, "error").inc()
         raise _document_type_error(exc) from exc
@@ -170,10 +176,14 @@ async def upload_history(
     source: Optional[str] = Query(default=None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    mode: Optional[str] = Depends(data_mode),
     svc: MarineUploadService = Depends(get_upload_service),
 ) -> Page:
+    """Ledger filtered by ``X-Data-Mode`` (LIVE→API, DEMO→MANUAL) so the history
+    panel matches Overview: DEMO shows Data Upload rows; LIVE shows API-sync rows.
+    """
     require_uploader(request)
-    filters = {"status": status_, "source": (source or None)}
+    filters = {"status": status_, "source": (source or None), "data_origin": mode}
     res = await svc.list_uploads(filters, limit=limit, offset=offset)
     return _page(res["items"], res["total"], limit, offset, response)
 

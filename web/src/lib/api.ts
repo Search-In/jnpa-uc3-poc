@@ -1094,6 +1094,8 @@ export const api = {
       page_count: number;
       table_count: number;
       row_count: number;
+      pdf_hash?: string;
+      pdf_available?: boolean;
       tables: {
         table_name: string;
         columns: string[];
@@ -1102,6 +1104,39 @@ export const api = {
         extraction_note: string | null;
       }[];
     }>(`/api/berthing/documents/${documentId}/full-view`),
+  /** Original source PDF for a verbatim berthing document (opens inline). */
+  berthingDocumentPdfUrl: (documentId: number) =>
+    `/api/berthing/documents/${documentId}/pdf`,
+  berthingOpenSourcePdf: async (documentId: number, filename?: string) => {
+    const token = getToken();
+    const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+    const res = await fetch(`/api/berthing/documents/${documentId}/pdf`, {
+      headers: { ...authHeader, "x-data-mode": getDataSourceMode() },
+      signal: timeoutSignal(UPLOAD_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      let detail: any;
+      try { detail = await res.json(); } catch { /* ignore */ }
+      throw new Error(
+        `${res.status} ${res.statusText}${detail ? ` — ${JSON.stringify(detail)}` : ""}`,
+      );
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    // Prefer a new tab (inline disposition) so the evaluator can compare side-by-side.
+    const w = window.open(url, "_blank", "noopener,noreferrer");
+    if (!w) {
+      // Popup blocked — fall back to a download.
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename || `berthing-${documentId}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+    // Revoke after the browser has had time to load the blob URL.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  },
 
   // --- Transporters & Drivers Data Upload (UC-III sub-module) — mirrors the cfs-ecy helpers ---
   tdUploadDownloadTemplate: (entity: string) =>

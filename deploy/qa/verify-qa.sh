@@ -209,12 +209,29 @@ else
   [[ "$code" == "301" ]] && echo "  OK       http://${QA_HOST}/ -> 301 https" \
                          || { echo "  FAIL     http://${QA_HOST}/ -> ${code} (want 301)"; fail=1; }
 
-  # HTTPS :443 — full chain validation (no -k), then the routes the UI needs.
-  for path in / /pwa/ /api/healthz; do
+  # HTTPS :443 — full chain validation (no -k). The two static entry points must
+  # serve the SPA shells.
+  for path in / /pwa/; do
     code="$(curl -s -o /dev/null -w '%{http_code}' --resolve "${QA_HOST}:443:127.0.0.1" "https://${QA_HOST}${path}" || echo 000)"
     [[ "$code" == "200" ]] && echo "  OK       https://${QA_HOST}${path} -> 200" \
                            || { echo "  FAIL     https://${QA_HOST}${path} -> ${code} (want 200)"; fail=1; }
   done
+
+  # The nginx -> gateway proxy hop. Do NOT assert 200: the gateway's health route
+  # is /healthz at the root, so /api/healthz is not a route, and auth.py's
+  # _PUBLIC allowlist does not cover it — the auth middleware answers 401 before
+  # routing ever happens. That 401 is the PROOF the hop works. What must not
+  # happen is 502/504 (nginx cannot reach the gateway) or 000 (nothing answered).
+  code="$(curl -s -o /dev/null -w '%{http_code}' --resolve "${QA_HOST}:443:127.0.0.1" "https://${QA_HOST}/api/healthz" || echo 000)"
+  case "$code" in
+    502|503|504|000) echo "  FAIL     https://${QA_HOST}/api/healthz -> ${code}: nginx cannot reach the gateway"; fail=1 ;;
+    *)               echo "  OK       https://${QA_HOST}/api/healthz -> ${code} (gateway answered through nginx)" ;;
+  esac
+
+  # And the gateway's REAL health route, direct on the debug publish.
+  code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:18000/healthz" || echo 000)"
+  [[ "$code" == "200" ]] && echo "  OK       gateway /healthz -> 200" \
+                         || { echo "  FAIL     gateway /healthz -> ${code} (want 200)"; fail=1; }
 fi
 
 echo

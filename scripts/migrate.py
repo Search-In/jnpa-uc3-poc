@@ -45,6 +45,15 @@ Design:
     Verify with --status first, and only baseline a version you have confirmed is
     really present in the schema.
 
+  * **A second directory, on request only.** ``--dir`` + ``--only`` point the same
+    ledger/checksum/transaction machinery at ``infra/postgres/migrations`` (the
+    hand-applied 0001..0053 set) for the few files a deployment genuinely needs,
+    without re-running the backfills that share that directory::
+
+        python scripts/migrate.py --dir infra/postgres/migrations --only 0036,0037
+
+    Defaults are unchanged: a bare ``make migrate`` still sees only v3.
+
   * **Superuser, briefly.** Migrations are the one thing that legitimately needs
     DDL rights (docs/RDS_SECURITY.md §3 gives the app role none). Pass the
     superuser DSN via --dsn for the run; the deployed services keep using
@@ -63,6 +72,16 @@ from typing import Iterable, NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS_DIR = REPO_ROOT / "infra" / "postgres" / "v3"
+
+#: The OTHER migration directory. Its files (0001..0053) predate this runner and
+#: have always been applied by hand — most of their objects are now also created
+#: at gateway boot by the ``ensure_*_schema`` functions (JNPA_RUNTIME_DDL). It is
+#: NOT the default: applying all of it unattended would re-run backfills such as
+#: 0022. Reach it deliberately with ``--dir`` + ``--only``, which is what the UC-1
+#: cold start does for the two files it genuinely needs:
+#:
+#:     python scripts/migrate.py --dir infra/postgres/migrations --only 0036,0037
+LEGACY_MIGRATIONS_DIR = REPO_ROOT / "infra" / "postgres" / "migrations"
 
 #: Files that must never be applied by an unattended `make migrate`.
 #: 0100 is a shell script (the legacy cross-database copy); 0900 DROPs the legacy
@@ -116,12 +135,13 @@ def _checksum(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
-def discover() -> list[Migration]:
-    """Every numbered .sql migration, ordered by version."""
+def discover(directory: Path | None = None) -> list[Migration]:
+    """Every numbered .sql migration in ``directory``, ordered by version."""
+    directory = directory or MIGRATIONS_DIR
     out: list[Migration] = []
-    if not MIGRATIONS_DIR.is_dir():
-        raise SystemExit(f"migrations directory not found: {MIGRATIONS_DIR}")
-    for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
+    if not directory.is_dir():
+        raise SystemExit(f"migrations directory not found: {directory}")
+    for path in sorted(directory.glob("*.sql")):
         m = re.match(r"^(\d{4})[_-](.+)\.sql$", path.name)
         if not m:
             continue  # hotfix_*.sql and friends are applied by hand, by design
@@ -131,6 +151,44 @@ def discover() -> list[Migration]:
         sql = path.read_text(encoding="utf-8")
         out.append(Migration(version, name, path, sql, _checksum(sql)))
     return out
+
+
+def select(migrations: list[Migration], only: str | None) -> list[Migration]:
+    """Narrow the discovered set to an explicit comma-separated version list.
+
+    Two jobs, both about applying a directory this runner does not own:
+
+      * **Pick exactly what was asked for.** ``--only 0036,0037`` against
+        ``infra/postgres/migrations`` applies those two files and nothing else,
+        so the backfills in that directory stay untouched.
+      * **Refuse an ambiguous version.** ``infra/postgres/migrations`` contains
+        BOTH ``0038_marine_vessel_call.sql`` and ``0038_perf_pdf_upload.sql``.
+        The ledger is keyed on version, so recording one would mark the other as
+        applied. Selecting a duplicated version is an error, not a coin toss.
+
+    An unknown version is an error too: silently applying nothing is how a
+    "migrated" database ends up missing a table.
+    """
+    if not only:
+        return migrations
+    wanted = [v.strip() for v in only.split(",") if v.strip()]
+    picked: list[Migration] = []
+    for version in wanted:
+        matches = [m for m in migrations if m.version == version]
+        if not matches:
+            raise SystemExit(
+                f"--only {version}: no migration with that version in the selected "
+                f"directory. Available: {', '.join(m.version for m in migrations)}"
+            )
+        if len(matches) > 1:
+            names = ", ".join(f"{m.version}_{m.name}.sql" for m in matches)
+            raise SystemExit(
+                f"--only {version}: AMBIGUOUS — {len(matches)} files share this version "
+                f"({names}). The ledger is keyed on version, so applying one would "
+                f"record the other as applied too. Rename one of them first."
+            )
+        picked.extend(matches)
+    return sorted(picked, key=lambda m: m.version)
 
 
 def resolve_dsn(explicit: str | None) -> str:
@@ -445,15 +503,28 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--baseline", metavar="VERSION",
                     help="record every migration up to VERSION as applied WITHOUT "
                          "running it (adopts a database migrated by hand)")
+    ap.add_argument("--dir", dest="directory", default=None,
+                    help=f"migration directory (default {MIGRATIONS_DIR.relative_to(REPO_ROOT)}). "
+                         f"Use with --only to reach {LEGACY_MIGRATIONS_DIR.relative_to(REPO_ROOT)}, "
+                         "whose backfills must not run unattended.")
+    ap.add_argument("--only", default=None, metavar="VERSIONS",
+                    help="apply ONLY these comma-separated versions, e.g. 0036,0037. "
+                         "Everything else in the directory is ignored.")
     args = ap.parse_args(argv)
 
-    migrations = discover()
+    directory = Path(args.directory) if args.directory else MIGRATIONS_DIR
+    if not directory.is_absolute():
+        directory = (REPO_ROOT / directory).resolve()
+
+    migrations = select(discover(directory), args.only)
     if not migrations:
         print("no migrations found", file=sys.stderr)
         return 1
 
     dsn = resolve_dsn(args.dsn)
     print(f"==> database: {_redact(dsn)}")
+    print(f"==> migrations: {directory}"
+          + (f"  (only {args.only})" if args.only else ""))
 
     conn = connect(dsn)
     try:

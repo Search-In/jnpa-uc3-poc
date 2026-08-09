@@ -2,6 +2,10 @@
 .env
 .env.local
 *.env.local
+# UC1-001 cold start: local-only config (carries the local DB superuser
+# password + a generated JWT secret) and its runtime dir (pids + logs).
+.env.uc1-local
+.uc1-run/
 # Runtime env files and the rolling backups/temp files written by
 # deploy/aws/use-rds.sh — these carry the live RDS password.
 .env.prod

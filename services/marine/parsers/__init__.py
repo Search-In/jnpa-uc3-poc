@@ -25,7 +25,7 @@ from .berman import parse_berman
 from .calinf import parse_calinf
 from .calinv import parse_calinv
 from .documents import document_type, safe_fromstring
-from .envelope import detect_format, extract_xml_documents
+from .envelope import decode, detect_format, extract_xml_documents, iter_journal_rows
 from .paisps import parse_paisps
 from .pcs_common import MarineParseError
 from .pilot_memo import parse_ackplm, parse_pltmem
@@ -72,6 +72,7 @@ __all__ = [
     "REGISTRY",
     "detect_format",
     "extract_xml_documents",
+    "iter_journal_rows",
     "document_type",
     "ParseResult",
     # registry (explicit document_type routing)
@@ -133,9 +134,14 @@ def parse_marine(content: bytes, filename: Optional[str] = None,
     if spec is not None and not spec.per_document:
         return spec.load()(content, filename)
 
-    # XML/LOG: per-message routing (unchanged). `expected` is set only when the client
+    # XML/LOG/JOURNAL: per-message routing. `expected` is set only when the client
     # declared a PCS type, and then acts as an assertion over each document.
     expected: Optional[str] = declared.document_type if declared is not None else None
+
+    # JOURNAL: walk every data row so empty / non-XML REQUEST cells are quarantined
+    # (UC1-007) instead of silently skipped by extract_xml_documents.
+    if fmt == "JOURNAL":
+        return _parse_journal(content, filename, expected)
 
     res = ParseResult()
     docs = extract_xml_documents(fmt, content)
@@ -146,37 +152,80 @@ def parse_marine(content: bytes, filename: Optional[str] = None,
         return res
 
     for i, doc in enumerate(docs, start=1):
-        try:
-            root: ET.Element = safe_fromstring(doc)
-        except ET.ParseError as exc:
-            res.err(i, None, "xml_parse_error", f"could not parse XML document {i}: {exc}")
+        _route_document(res, doc, i, filename, expected)
+
+    return res
+
+
+def _route_document(res: ParseResult, doc: str, i: int,
+                    filename: Optional[str], expected: Optional[str]) -> None:
+    """Parse one PCS XML document into records / typed row errors on ``res``."""
+    try:
+        root: ET.Element = safe_fromstring(doc)
+    except ET.ParseError as exc:
+        res.err(i, None, "xml_parse_error", f"could not parse XML document {i}: {exc}")
+        res.invalid_count += 1
+        return
+
+    msg = _document_type_of(root)
+    if expected is not None and msg != expected:
+        res.err(i, "DocumentType", "document_type_mismatch",
+                f"declared document_type {expected} but document {i} is "
+                f"{msg or 'unknown'}", msg)
+        res.invalid_count += 1
+        return
+
+    parser = REGISTRY.get(msg or "")
+    if parser is None:
+        res.err(i, "DocumentType", "unsupported_message_type",
+                f"unsupported PCS message type: {msg or 'unknown'}", msg)
+        res.invalid_count += 1
+        return
+
+    try:
+        records = parser(root, source_file=filename)
+    except MarineParseError as exc:
+        res.err(i, None, "parse_failed", str(exc))
+        res.invalid_count += 1
+        return
+
+    if not records:
+        res.warn(i, None, "no_records", f"{msg}: no records extracted from document {i}")
+    res.records.extend(records)
+
+
+def _parse_journal(content: bytes, filename: Optional[str],
+                   expected: Optional[str]) -> ParseResult:
+    """Parse a PCS message journal, quarantining failed transmissions.
+
+    ``row_count`` is the number of non-blank data rows (CSV transmission attempts).
+    Rows with an empty or non-XML REQUEST become ``empty_request`` / ``no_xml`` errors
+    (never silently dropped). Successful REQUEST cells are routed like XML/LOG docs.
+    """
+    res = ParseResult()
+    rows = iter_journal_rows(decode(content))
+    res.row_count = len(rows)
+    if not rows:
+        res.rejected = True
+        res.err(None, None, "no_documents", "no PCS rows found in JOURNAL file")
+        return res
+
+    for row in rows:
+        i = int(row["row_number"])
+        reason = row.get("skip_reason")
+        if reason:
+            msg_type = (row.get("message_type") or "").strip() or "unknown"
+            ref = (row.get("common_ref_no") or "").strip() or None
+            detail = (
+                f"failed transmission row {i}: REQUEST empty"
+                if reason == "empty_request"
+                else f"failed transmission row {i}: REQUEST has no PCS XML"
+            )
+            if msg_type != "unknown":
+                detail = f"{detail} (MESSAGE_TYPE={msg_type})"
+            res.err(i, "REQUEST", reason, detail, ref)
             res.invalid_count += 1
             continue
-
-        msg = _document_type_of(root)
-        if expected is not None and msg != expected:
-            res.err(i, "DocumentType", "document_type_mismatch",
-                    f"declared document_type {expected} but document {i} is "
-                    f"{msg or 'unknown'}", msg)
-            res.invalid_count += 1
-            continue
-
-        parser = REGISTRY.get(msg or "")
-        if parser is None:
-            res.err(i, "DocumentType", "unsupported_message_type",
-                    f"unsupported PCS message type: {msg or 'unknown'}", msg)
-            res.invalid_count += 1
-            continue
-
-        try:
-            records = parser(root, source_file=filename)
-        except MarineParseError as exc:
-            res.err(i, None, "parse_failed", str(exc))
-            res.invalid_count += 1
-            continue
-
-        if not records:
-            res.warn(i, None, "no_records", f"{msg}: no records extracted from document {i}")
-        res.records.extend(records)
+        _route_document(res, row["xml"], i, filename, expected)
 
     return res

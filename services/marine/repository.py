@@ -409,7 +409,9 @@ class VesselCallRepository:
             row = (await conn.execute(text(_RESOLVE_BY_VCN), {"vcn": vcn})).first()
             if row:
                 return int(row[0])
-        imo, voyage = e.get("imo_no"), e.get("via_no")
+        # voyage_no is the voyage key (CALINF/VESARR VoyageNumber). via_no is the short
+        # VIA from the VCN tail — they must not be conflated (UC1-019 / TSS AMBER).
+        imo, voyage = e.get("imo_no"), e.get("voyage_no")
         if imo and voyage:
             row = (await conn.execute(text(_RESOLVE_BY_IMO_VOYAGE),
                                       {"imo_no": imo, "voyage_no": voyage})).first()

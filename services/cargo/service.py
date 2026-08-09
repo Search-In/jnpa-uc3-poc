@@ -18,6 +18,7 @@ from jnpa_shared.logging import get_logger
 
 from .repository import (
     CargoConflict,
+    CargoCustomsBlocked,
     CargoNotFound,
     CargoRepository,
     CargoTransitionError,
@@ -90,6 +91,19 @@ LC_RAKE_ASSIGNED = "RAKE_ASSIGNED"
 LC_SCAN_PENDING = "SCAN_PENDING"
 LC_VERIFIED = "VERIFIED"
 LC_RELEASED = "RELEASED"
+
+# Customs dispositions that forbid a release, whatever the lifecycle says.
+#
+# `lifecycle_status` and `customs_status` are independent tracks, but not
+# orthogonal at this point: out-of-charge is what permits goods to leave customs
+# control, so a container customs is holding or examining cannot lawfully be
+# gate-out released. Release previously checked the lifecycle alone, which let
+# UNDER_INSPECTION + RELEASED rows exist — a state no real container can be in.
+#
+# PENDING is deliberately NOT here. It means customs has said nothing yet, which
+# is the state of most of the corpus; blocking on it would stop the whole demo
+# on missing data rather than on a customs decision.
+CUSTOMS_BLOCKS_RELEASE = frozenset({"HELD", "UNDER_INSPECTION"})
 
 _LIFECYCLE_RANK: dict[str, int] = {
     LC_CREATED: 0,
@@ -373,9 +387,14 @@ class CargoService:
                 # CargoNotFound if it vanished between the snapshot and the lock.
                 out = await self._advance(
                     container_number, target=LC_RELEASED, action="RELEASE",
-                    set_fields=fields)
+                    set_fields=fields, blocked_customs=CUSTOMS_BLOCKS_RELEASE)
             except CargoTransitionError:
                 self._observe("update", "illegal_transition", t0, container=container_number)
+                raise
+            except CargoCustomsBlocked:
+                # Same customs gate as POST /release — otherwise the guard would be
+                # bypassable by patching is_released instead of calling release.
+                self._observe("update", "customs_not_cleared", t0, container=container_number)
                 raise
         else:
             try:
@@ -405,7 +424,8 @@ class CargoService:
                        allowed_from: Optional[set[str]] = None, strict: bool = True,
                        actor_role: Optional[str] = None,
                        note: Optional[str] = None,
-                       set_fields: Optional[Mapping[str, Any]] = None) -> Optional[dict]:
+                       set_fields: Optional[Mapping[str, Any]] = None,
+                       blocked_customs: Optional[frozenset[str]] = None) -> Optional[dict]:
         """Drive one lifecycle transition through the repository (atomic + audited)
         and, when applied, emit ``cargo.lifecycle_changed``. Returns the updated
         cargo row, or ``None`` when a best-effort (``strict=False``) transition was
@@ -422,7 +442,8 @@ class CargoService:
         af = allowed_from if allowed_from is not None else allowed_predecessors(target)
         row = await self._repo.transition_lifecycle(
             container_number, target=target, allowed_from=af, action=action,
-            actor_role=actor_role, note=note, strict=strict, set_fields=set_fields)
+            actor_role=actor_role, note=note, strict=strict, set_fields=set_fields,
+            blocked_customs=blocked_customs)
         if row is None:
             return None
         old = row.pop("_old_status", None)
@@ -560,7 +581,8 @@ class CargoService:
         t0 = perf_counter()
         row = await self._advance(container_number, target=LC_RELEASED, action="RELEASE",
                                   actor_role=actor_role, note=note,
-                                  set_fields={"is_released": True})
+                                  set_fields={"is_released": True},
+                                  blocked_customs=CUSTOMS_BLOCKS_RELEASE)
         await self._emit(EVENT_RELEASED, container_number, {
             "status": LC_RELEASED,
             "is_released": True,

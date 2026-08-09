@@ -328,6 +328,34 @@ class VesselCallRepository:
         return {k: rec.get(k) for k in _VESSEL_COLS}
 
     @staticmethod
+    def _stub_candidates(vessels: Sequence[Mapping[str, Any]],
+                         *call_groups: Sequence[Mapping[str, Any]]) -> dict[str, Optional[str]]:
+        """IMOs referenced by a call that no VESPRO in this file profiles -> stub name.
+
+        Pure, so the rules are testable without a database (see persist() step 1b for why
+        the stub exists at all):
+
+          * **no IMO, no stub.** A call without an IMO does not constrain anything.
+          * **profiled here, no stub.** Step 1 upserts the real vessel moments later; a
+            stub would be redundant and would race the richer row.
+          * **first non-null name wins.** Several messages may name the same vessel and
+            some carry no name at all; a nameless one must never erase a name already seen.
+
+        A name is all a call can honestly contribute. Nothing else about the vessel is
+        inferred, so a stub stays distinguishable from a profiled record.
+        """
+        profiled = {v.get("imo_no") for v in vessels if v.get("imo_no")}
+        out: dict[str, Optional[str]] = {}
+        for group in call_groups:
+            for c in group:
+                imo = (c.get("imo_no") or "").strip()
+                if not imo or imo in profiled:
+                    continue
+                if out.get(imo) is None:
+                    out[imo] = (c.get("vessel_name") or "").strip() or None
+        return out
+
+    @staticmethod
     def _call_params(rec: Mapping[str, Any], data_origin: str) -> dict:
         return {**{k: rec.get(k) for k in _CALL_COLS}, "data_origin": data_origin}
 
@@ -503,6 +531,38 @@ class VesselCallRepository:
                             await conn.execute(text(_VESSEL_INSURANCE_UPSERT),
                                                {"imo_no": v.get("imo_no"), "pi_club": pi.get("pi_club"),
                                                 "valid_until": pi.get("valid_until")})
+
+                # 1b. Referential safety net for core.vessel_call.imo_no.
+                #
+                # core.vessel_call.imo_no -> core.vessel(imo_no) is attached NOT VALID
+                # (migration 0044), which skips the back-scan but ENFORCES every new write —
+                # 0044 says so explicitly and expects it to "become load-bearing once marine
+                # ingestion starts". The PCS corpus reaches that point: it carries calls for
+                # 107 IMOs whose VESPRO profile is in no file of the extract (the message was
+                # transmitted outside the window), and one such call aborted the whole
+                # 880-record inbound journal with an integrity_error.
+                #
+                # A MINIMAL stub keeps the constraint honest without inventing data: the IMO,
+                # plus the vessel_name only when the message itself carries one. Every
+                # particular (LOA, GRT, call sign, flag, vespro_ref) stays NULL, so a stub is
+                # self-evidently "seen but not profiled" rather than a fabricated vessel.
+                # ON CONFLICT DO NOTHING means an already-known vessel is never touched, and a
+                # VESPRO arriving later enriches the row in place through _VESSEL_UPSERT's
+                # COALESCE. Scoped to vessel_call ONLY: core.pilotage has no FK to core.vessel
+                # (checked against pg_constraint and migration 0042), so stubbing its IMOs
+                # would add rows nothing requires.
+                stub_names = self._stub_candidates(vessels, calls_pre, calls_vcn)
+                stubbed = 0
+                for imo, name in stub_names.items():
+                    r = (await conn.execute(text(_VESSEL_STUB_INSERT),
+                                            {"imo_no": imo, "vessel_name": name})).first()
+                    if r is not None:
+                        stubbed += 1
+                if stubbed:
+                    # Deliberately NOT added to `ins`: a stub is referential scaffolding, not
+                    # an imported business record, and counting it would overstate the import.
+                    log.info("marine.vessel_stubs_created",
+                             extra={"filename": filename, "stubs": stubbed})
 
                 # 2. CALINF pre-VCN seed (dedup on (imo_no, voyage_no) WHERE vcn IS NULL)
                 for c in calls_pre:
@@ -897,6 +957,22 @@ _STATUS_RANK_OLD = f"COALESCE(array_position({_STATUS_ORDER}, core.vessel_call.s
 _BERTH_LOOKUP = """coalesce(
      (SELECT b.berth_id FROM core.ref_berth b WHERE b.code = upper(:berth_code)),
      (SELECT ba.berth_id FROM core.ref_berth_alias ba WHERE ba.alias = upper(:berth_code)))"""
+
+# Minimal vessel row for an IMO a call references but no VESPRO profiles (see persist()
+# step 1b). Only the two columns the source actually supplies are written; every particular
+# and vespro_ref stay NULL, which is what distinguishes a stub from a profiled vessel:
+#
+#     SELECT * FROM core.vessel WHERE vespro_ref IS NULL AND loa_m IS NULL;
+#
+# DO NOTHING, not DO UPDATE: an existing row — stub or fully profiled — must be left
+# untouched, so this can never dilute a real profile. Enrichment is _VESSEL_UPSERT's job,
+# and its COALESCE fills a stub in place when the VESPRO finally arrives.
+_VESSEL_STUB_INSERT = """
+INSERT INTO core.vessel (imo_no, vessel_name)
+VALUES (:imo_no, :vessel_name)
+ON CONFLICT (imo_no) DO NOTHING
+RETURNING imo_no
+"""
 
 _VESSEL_UPSERT = """
 INSERT INTO core.vessel

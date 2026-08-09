@@ -17,7 +17,7 @@ from __future__ import annotations
 import io
 import json
 import re
-from typing import Literal, Optional
+from typing import Literal, NamedTuple, Optional
 
 Format = Literal["CSV", "XML", "LOG", "XLSX", "PDF", "SHP", "JSON", "JOURNAL"]
 
@@ -116,13 +116,55 @@ def journal_header_index(rows: list[list[str]]) -> int:
     return -1
 
 
-def _journal_documents(text: str) -> list[str]:
-    """Every PCS document carried by a journal's REQUEST column, in file order.
+#: Journal STATUS values that mean the PCS REJECTED the transmission. Lower-cased.
+#:
+#: Only an EXPLICIT negative is treated as a failure. A blank or unrecognised status still
+#: yields its document, so an unfamiliar value can never silently discard client data — the
+#: cost of a false negative here is an over-ingested row, the cost of a false positive is a
+#: lost one, and only the second is unrecoverable.
+_JOURNAL_FAILED_STATUSES = frozenset({"failed", "failure", "error", "rejected"})
+
+#: Response code carried by the outbound journals' RESPONSE cell.
+_RESP_CDE_RE = re.compile(r'"RespCde"\s*:\s*"?([^",;}]*)')
+
+
+class JournalRow(NamedTuple):
+    """One PCS document as delivered by a message journal, with its transmission verdict.
+
+    ``accepted`` is the whole point: a journal records what was SENT and how the PCS
+    answered, so a row can carry a perfectly well-formed message that the PCS refused. Such
+    a document describes an attempt, not a fact about the port, and must not become a
+    vessel/call/movement row.
+    """
+    doc_index: int      #: 1-based position among documents, matching the XML/LOG numbering
+    source_row: int     #: 1-based CSV record number of the journal row it came from
+    xml: str
+    status: str         #: verbatim STATUS cell ('' when the journal has no STATUS column)
+    resp_code: str      #: verbatim RespCde from RESPONSE ('' when absent)
+    accepted: bool
+    ref: str            #: COMMON_REF_NO
+    message_type: str   #: MESSAGE_TYPE cell, verbatim (corpus mixes 'Vespro'/'BERALT')
+    vessel_name: str
+    imo: str
+    detail: str         #: the RESPONSE cell, truncated — the PCS's own reason
+
+
+def _cell(row: list[str], idx: Optional[int]) -> str:
+    if idx is None or idx < 0 or len(row) <= idx:
+        return ""
+    return (row[idx] or "").strip()
+
+
+def journal_rows(text: str) -> list[JournalRow]:
+    """Every PCS document carried by a journal's REQUEST column, with its verdict.
 
     Handles BOTH corpus shapes without guessing: the outbound report wraps the message in
     a pseudo-JSON envelope (``ReqBody.XML``) that is NOT valid JSON — it uses semicolons
     as separators — so the embedded payload is taken with the same regex the .log path
     uses rather than by ``json.loads``. The inbound report carries the XML raw.
+
+    The STATUS column is read but NOT acted on here — this function reports, the caller
+    (``parse_marine``) decides — so the extraction contract stays pure and testable.
     """
     import csv as _csv
 
@@ -132,16 +174,24 @@ def _journal_documents(text: str) -> list[str]:
     if hi < 0:
         return []
     header = [c.strip().upper() for c in rows[hi]]
-    try:
-        req = header.index("REQUEST")
-    except ValueError:  # pragma: no cover — guarded by journal_header_index
-        return []
 
-    docs: list[str] = []
-    for row in rows[hi + 1:]:
-        if len(row) <= req:
-            continue
-        cell = (row[req] or "").strip()
+    def _col(name: str) -> Optional[int]:
+        try:
+            return header.index(name)
+        except ValueError:
+            return None
+
+    req = _col("REQUEST")
+    if req is None:  # pragma: no cover — guarded by journal_header_index
+        return []
+    c_status, c_resp, c_ref = _col("STATUS"), _col("RESPONSE"), _col("COMMON_REF_NO")
+    c_type, c_vessel = _col("MESSAGE_TYPE"), _col("VESSEL_NAME")
+    # The two corpus journals disagree on the IMO column name.
+    c_imo = _col("IMO") if _col("IMO") is not None else _col("IMO_NUMBER")
+
+    out: list[JournalRow] = []
+    for offset, row in enumerate(rows[hi + 1:], start=1):
+        cell = _cell(row, req)
         if not cell:
             continue
         m = _LOG_XML_RE.search(cell)
@@ -154,9 +204,36 @@ def _journal_documents(text: str) -> list[str]:
         else:
             xml = cell  # inbound report: the message sits in the cell verbatim
         xml = _strip_decl(xml)
-        if xml.startswith("<"):
-            docs.append(xml)
-    return docs
+        if not xml.startswith("<"):
+            continue
+
+        status = _cell(row, c_status)
+        response = _cell(row, c_resp)
+        rc = _RESP_CDE_RE.search(response)
+        out.append(JournalRow(
+            doc_index=len(out) + 1,
+            source_row=offset,
+            xml=xml,
+            status=status,
+            resp_code=(rc.group(1).strip() if rc else ""),
+            accepted=status.lower() not in _JOURNAL_FAILED_STATUSES,
+            ref=_cell(row, c_ref),
+            message_type=_cell(row, c_type),
+            vessel_name=_cell(row, c_vessel),
+            imo=_cell(row, c_imo),
+            detail=response[:500],
+        ))
+    return out
+
+
+def _journal_documents(text: str) -> list[str]:
+    """Every PCS document a journal carries, in file order — verdict ignored.
+
+    Kept as the extraction primitive behind ``extract_xml_documents``, whose contract is
+    "what does this file contain". Filtering by transmission verdict belongs to the
+    caller; see :func:`journal_rows`.
+    """
+    return [r.xml for r in journal_rows(text)]
 
 
 def extract_xml_documents(fmt: Format, content: bytes) -> list[str]:

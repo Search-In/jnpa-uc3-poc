@@ -25,7 +25,7 @@ from .berman import parse_berman
 from .calinf import parse_calinf
 from .calinv import parse_calinv
 from .documents import document_type, safe_fromstring
-from .envelope import detect_format, extract_xml_documents
+from .envelope import JournalRow, decode, detect_format, extract_xml_documents, journal_rows
 from .paisps import parse_paisps
 from .pcs_common import MarineParseError
 from .pilot_memo import parse_ackplm, parse_pltmem
@@ -72,6 +72,8 @@ __all__ = [
     "REGISTRY",
     "detect_format",
     "extract_xml_documents",
+    "journal_rows",
+    "JournalRow",
     "document_type",
     "ParseResult",
     # registry (explicit document_type routing)
@@ -138,11 +140,42 @@ def parse_marine(content: bytes, filename: Optional[str] = None,
     expected: Optional[str] = declared.document_type if declared is not None else None
 
     res = ParseResult()
-    docs = extract_xml_documents(fmt, content)
-    res.row_count = len(docs)
+
+    # A message JOURNAL records what was TRANSMITTED and how the PCS answered, so it is the
+    # one envelope that can carry a well-formed message the PCS REFUSED. Such a document
+    # describes a failed attempt, not a fact about the port: it is quarantined as a
+    # data-quality finding (row error -> core.marine_import_errors) and never reaches a
+    # parser, so it cannot become a vessel, a call or a movement.
+    #
+    # row_count still counts EVERY document the file carries, failed ones included, so the
+    # `summary.rows` figure on validate/import keeps its existing meaning.
+    rejected_rows: list[JournalRow] = []
+    if fmt == "JOURNAL":
+        rows = journal_rows(decode(content))
+        res.row_count = len(rows)
+        rejected_rows = [r for r in rows if not r.accepted]
+        docs = [r.xml for r in rows if r.accepted]
+        for r in rejected_rows:
+            who = " ".join(p for p in (r.vessel_name, f"IMO {r.imo}" if r.imo else "") if p)
+            res.err(r.doc_index, "STATUS", "transmission_failed",
+                    f"PCS rejected this {r.message_type or 'PCS'} transmission "
+                    f"(STATUS={r.status}) at journal row {r.source_row}"
+                    + (f", {who}" if who else "")
+                    + (f", ref {r.ref}" if r.ref else "")
+                    + (f": {r.detail}" if r.detail else ""),
+                    r.status)
+            res.invalid_count += 1
+    else:
+        docs = extract_xml_documents(fmt, content)
+        res.row_count = len(docs)
+
     if not docs:
+        # A journal whose every row failed is NOT an unreadable file: the errors above
+        # already say precisely what happened, and overwriting them with "no PCS XML
+        # found" would hide the real finding.
         res.rejected = True
-        res.err(None, None, "no_documents", f"no PCS XML found in {fmt} file")
+        if not rejected_rows:
+            res.err(None, None, "no_documents", f"no PCS XML found in {fmt} file")
         return res
 
     for i, doc in enumerate(docs, start=1):

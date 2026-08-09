@@ -127,6 +127,31 @@ _DDL: list[str] = [
         created_at        timestamptz NOT NULL DEFAULT now())""",
     "CREATE INDEX IF NOT EXISTS idx_brt_doc ON core.berthing_report_table (document_id, panel_index)",
     "CREATE INDEX IF NOT EXISTS idx_brt_name ON core.berthing_report_table (terminal, table_name)",
+
+    # ==================================================================
+    # Migration 0120 - data_origin provenance ('API' | 'MANUAL') for the berthing
+    # import ledger, and the per-origin file-hash uniqueness that replaces the
+    # single-origin one. Reproduced from infra/postgres/v3/0120_data_origin_provenance.sql
+    # section 2, statement for statement, and mirroring what gateway/marine_ext.py already
+    # does for core.marine_import_files.
+    #
+    # WHY IT IS HERE. services/berthing/repository.py de-dupes on
+    # (file_hash, data_origin) - `WHERE file_hash = :h AND data_origin = :o`. Without this
+    # block that column does not exist on a database this repository provisions, and the
+    # FIRST berthing import dies with UndefinedColumnError. It only ever worked because the
+    # shared instance had 0120 applied to it; berthing_ext mirrored 0036/0037 and stopped
+    # there. The UPDATE that back-tags existing 'jnpa-api' rows is included so an adopted
+    # database gets the same provenance the migration would have given it.
+    # ==================================================================
+    "ALTER TABLE core.berthing_import_file "
+    "ADD COLUMN IF NOT EXISTS data_origin text NOT NULL DEFAULT 'MANUAL'",
+    "UPDATE core.berthing_import_file SET data_origin = 'API' "
+    "WHERE uploaded_by = 'jnpa-api' AND data_origin <> 'API'",
+    "ALTER TABLE core.berthing_import_file "
+    "DROP CONSTRAINT IF EXISTS uq_berthing_import_file_hash",
+    "DROP INDEX IF EXISTS core.uq_berthing_import_file_hash",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_berthing_import_file_hash_origin "
+    "ON core.berthing_import_file (file_hash, data_origin)",
 ]
 
 

@@ -510,10 +510,45 @@ _DDL: list[str] = [
     END $$""",
 
     # ==================================================================
+    # core.bathymetry_survey — the per-chart survey header.
+    #
+    # Reproduced VERBATIM from the canonical schema.sql §10 (root of the workspace,
+    # `CREATE TABLE core.bathymetry_survey`), the agreed source of truth this module
+    # already follows. Column-for-column identical to the live instance, so a database
+    # provisioned here and one provisioned from schema.sql are the same table; the
+    # data_origin column both carry is added by the 0120/0121 block further down, not
+    # here, exactly as it is for every other marine table.
+    #
+    # WHY IT IS HERE. Migration 0051 and the block below were written against a database
+    # where this table ALREADY existed, because schema.sql had been applied to it by hand
+    # — something this repository never does. On a clean database the effect was not a
+    # missing chart header but a missing MARINE SCHEMA: ensure_marine_schema() runs the
+    # whole _DDL list in ONE transaction, so the unguarded
+    # `ALTER TABLE core.bathymetry_survey ADD COLUMN data_origin` below raised
+    # "relation does not exist", rolled the transaction back, and left the database with
+    # NO marine tables at all — including uq_marine_import_file_hash_origin, the index
+    # the import ledger's de-duplication depends on. gateway/main.py logs that rollback
+    # as a warning and boots anyway, so the failure was silent.
+    #
+    # ORDERING IS LOAD-BEARING: this statement must stay ahead of
+    # core.bathymetry_sounding (whose survey_id FK references it) and ahead of the
+    # 0120/0121 ALTER. Asserted by tests/test_marine_schema_bootstrap_order.py.
+    # ==================================================================
+    """CREATE TABLE IF NOT EXISTS core.bathymetry_survey (
+        survey_id      smallint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        drawing_no     text UNIQUE,
+        section_label  text,
+        design_depth_m numeric(5,2),
+        survey_start   date,
+        survey_end     date,
+        survey_vessel  text,
+        file_path      text)""",
+
+    # ==================================================================
     # Migration 0051 — bathymetry depth soundings (core.bathymetry_sounding) + the
     # 'JSON' physical_format widening. Additive; mirrors 0051 byte-for-byte.
-    # core.bathymetry_survey already exists (schema.sql §10); this is its detail table
-    # and the FIRST inbound FK it has ever had.
+    # This is core.bathymetry_survey's detail table and the FIRST inbound FK it has
+    # ever had — hence the header above must already exist.
     # ==================================================================
     """CREATE TABLE IF NOT EXISTS core.bathymetry_sounding (
         sounding_id    bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

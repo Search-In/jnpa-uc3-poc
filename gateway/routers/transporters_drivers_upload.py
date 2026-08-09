@@ -32,10 +32,13 @@ from pydantic import BaseModel
 from ..auth import CONTROL_ROOM, Role, auth_enabled
 from ..metrics import REQUESTS
 from services.transporters_drivers import TransportersDriversUploadService
+from gateway.upload_limits import MAX_UPLOAD_BYTES
 
 router = APIRouter(prefix="/api/td-upload", tags=["transporters-drivers-upload"])
 
-_MAX_UPLOAD_BYTES = 10 * 1024 * 1024   # 10 MB, mirrors the shipping-lines / cfs-ecy cap
+# Shared ceiling — see gateway/upload_limits.py. Was a 10 MB literal here,
+# duplicated across five routers, which refused the corpus's 24 MB file.
+_MAX_UPLOAD_BYTES = MAX_UPLOAD_BYTES
 # Roles allowed to upload: control room + customs (+ admin ⊂ control room).
 _UPLOADER_ROLES = CONTROL_ROOM | {Role.CUSTOMS.value}
 _ENTITIES = ("TRANSPORTER", "DRIVER")

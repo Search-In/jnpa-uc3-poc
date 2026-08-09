@@ -16,6 +16,7 @@ from .repository import (
     CargoNotFound,
     CargoRepository,
     CargoTransitionError,
+    CargoCustomsBlocked,
 )
 from .service import (
     EVENT_CREATED,
@@ -58,6 +59,7 @@ __all__ = [
     "CargoConflict",
     "CargoNotFound",
     "CargoTransitionError",
+    "CargoCustomsBlocked",
     "scope_filters_for_role",
     "can_transition",
     "allowed_predecessors",

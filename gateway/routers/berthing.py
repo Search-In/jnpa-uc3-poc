@@ -37,10 +37,13 @@ from services.berthing import BerthingService, BerthingUploadService
 from services.berthing import upload_parsers as P
 from services.berthing import full_extractor as FX
 from services.berthing.document_repository import BerthingDocumentRepository
+from gateway.upload_limits import MAX_UPLOAD_BYTES
 
 router = APIRouter(prefix="/api/berthing", tags=["berthing"])
 
-_MAX_UPLOAD_BYTES = 10 * 1024 * 1024   # 10 MB, mirrors the other upload modules
+# Shared ceiling — see gateway/upload_limits.py. Was a 10 MB literal here,
+# duplicated across five routers, which refused the corpus's 24 MB file.
+_MAX_UPLOAD_BYTES = MAX_UPLOAD_BYTES
 _UPLOADER_ROLES = CONTROL_ROOM | {Role.CUSTOMS.value}
 
 _service: Optional[BerthingService] = None

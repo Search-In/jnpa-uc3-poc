@@ -15,10 +15,12 @@
 #   1. every *_POSTGRES_DSN in the QA env file points at the RDS host + jnpa_qa
 #   2. the rendered QA compose config contains no local-postgres DSN and no
 #      reference to the production database
-#   3. the QA stack publishes ONLY the QA host ports (18000 / 18080)
+#   3. the QA stack publishes EXACTLY the expected host ports (80/443/18000 on
+#      the dedicated QA box; override with QA_EXPECTED_PORTS)
 #   4. each running QA container has a jnpa_qa DSN in its environment
 #   5. the QA gateway actually opens a connection to RDS (db name + ssl)
-#   6. PRODUCTION containers are still running and still on jnpa_schema_v3
+#   6. no production stack has been disturbed — a no-op on a QA-only instance,
+#      still enforced if the two are ever co-located again
 #
 # Exit code 0 = QA is correct and production is intact.
 # =============================================================================
@@ -35,6 +37,7 @@ PROD_DB="${PROD_DB:-jnpa_schema_v3}"
 QA_PROJECT="${QA_PROJECT:-jnpa-uc3-poc-qa}"
 PROD_PROJECT="${PROD_PROJECT:-jnpa-uc3-poc}"
 QA_GATEWAY="${QA_GATEWAY:-jnpa-qa-gateway}"
+QA_HOST="${QA_HOST:-qa.searchintech.in}"
 DC=(docker compose --env-file "$ENV_FILE" -p "$QA_PROJECT"
     -f docker-compose.yml -f docker-compose.aws.yml -f docker-compose.qa.yml)
 fail=0
@@ -72,23 +75,34 @@ else
 fi
 
 echo
-echo "== 3. QA publishes only its own host ports =="
+echo "== 3. QA publishes exactly its own host ports =="
+# On the DEDICATED QA instance nothing else is on the box, so `web` takes 80/443
+# and the gateway keeps the 18000 debug publish. `sort -un` is numeric, so the
+# expected string is "80 443 18000" in that order, not lexicographic.
+# Override for a co-located deployment:  QA_EXPECTED_PORTS="18000 18080 18443"
+QA_EXPECTED_PORTS="${QA_EXPECTED_PORTS:-80 443 18000}"
 if [[ -n "$cfg" ]]; then
   qa_ports="$(printf '%s' "$cfg" | grep -oE 'published: "[0-9]+"' | grep -oE '[0-9]+' | sort -un | tr '\n' ' ')"
   echo "  QA host ports: ${qa_ports:-<none>}"
   # Section-local flag: the global `fail` may already be set by an earlier check,
   # which would wrongly suppress this section's OK line.
   port_fail=0
-  for p in 80 443 3000 8000 8210; do
-    if [[ " $qa_ports " == *" $p "* ]]; then
-      echo "  CONFLICT QA publishes production port ${p}"; port_fail=1
-    fi
-  done
-  # Positive assertion too: anything beyond 18000/18080 is an unintended publish.
-  if [[ "$(printf '%s' "$qa_ports" | tr -s ' ' | sed 's/ $//')" != "18000 18080" ]]; then
-    echo "  UNEXPECTED QA host ports (want exactly '18000 18080'): ${qa_ports:-<none>}"; port_fail=1
+  # Exact-set assertion. Anything beyond the expected list is an unintended
+  # publish (e.g. a service that lost its `!reset []`), and anything missing
+  # means the entry point is unreachable.
+  if [[ "$(printf '%s' "$qa_ports" | tr -s ' ' | sed 's/ $//')" != "$QA_EXPECTED_PORTS" ]]; then
+    echo "  UNEXPECTED QA host ports (want exactly '${QA_EXPECTED_PORTS}'): ${qa_ports:-<none>}"; port_fail=1
   fi
-  [[ "$port_fail" -eq 0 ]] && echo "  OK — exactly 18000/18080; none of 80/443/3000/8000/8210 claimed by QA"
+  # If a production stack IS co-located, QA must not be holding its ports. This
+  # is skipped on a QA-only box, where owning 80/443 is the intended design.
+  if docker ps --filter "label=com.docker.compose.project=${PROD_PROJECT}" -q 2>/dev/null | grep -q .; then
+    for p in 80 443 3000 8000 8210; do
+      if [[ " $qa_ports " == *" $p "* ]]; then
+        echo "  CONFLICT a ${PROD_PROJECT} stack is running on this box and QA publishes port ${p}"; port_fail=1
+      fi
+    done
+  fi
+  [[ "$port_fail" -eq 0 ]] && echo "  OK — exactly ${QA_EXPECTED_PORTS}"
   [[ "$port_fail" -eq 0 ]] || fail=1
 fi
 
@@ -140,8 +154,9 @@ echo
 echo "== 6. Production is untouched (project=${PROD_PROJECT}) =="
 prod_containers="$(docker ps --filter "label=com.docker.compose.project=${PROD_PROJECT}" --format '{{.Names}}\t{{.Status}}')"
 if [[ -z "$prod_containers" ]]; then
-  echo "  (no containers with the ${PROD_PROJECT} project label — production may be"
-  echo "   managed by deploy/jnpa-uc3.sh instead; check 'docker ps' by hand)"
+  echo "  n/a — no ${PROD_PROJECT} containers on this box. Expected on the dedicated"
+  echo "  QA instance, where QA is the only stack. (If you believe production runs"
+  echo "  here, it may be managed by deploy/jnpa-uc3.sh — check 'docker ps' by hand.)"
 else
   printf '%s\n' "$prod_containers" | sed 's/^/  /'
   prod_gw="$(printf '%s' "$prod_containers" | awk -F'\t' '/gateway/ {print $1; exit}')"
@@ -156,5 +171,52 @@ else
 fi
 
 echo
-if [[ "$fail" -eq 0 ]]; then echo "RESULT: QA -> ${QA_DB}, production intact ✔"; else echo "RESULT: issues found ✘ (see the lines above)"; fi
+echo "== 7. TLS on ${QA_HOST} =="
+# --resolve pins the name to the loopback listener, so this tests THIS box's
+# certificate and nginx even before DNS has propagated (and never silently
+# validates some other server that currently holds the A record).
+if ! command -v curl >/dev/null 2>&1; then
+  echo "  SKIPPED (curl not installed)"
+elif ! docker ps --format '{{.Names}}' | grep -qx "jnpa-qa-web"; then
+  echo "  SKIPPED (jnpa-qa-web not running)"
+else
+  # Certificate: present, and not expiring inside 21 days. /etc/letsencrypt/live
+  # is root-only, so this needs sudo — but `sudo -n`, never a password prompt: a
+  # verify script that blocks on stdin is worse than one that skips a check.
+  cert="/etc/letsencrypt/live/${QA_HOST}/fullchain.pem"
+  SUDO=""
+  [[ -r "$cert" ]] || { sudo -n true 2>/dev/null && SUDO="sudo -n"; }
+  if [[ -r "$cert" || -n "$SUDO" ]]; then
+    if ! $SUDO test -f "$cert" 2>/dev/null; then
+      echo "  MISSING  ${cert} — issue it (QA_DEPLOYMENT.md §3)"; fail=1
+    elif $SUDO openssl x509 -in "$cert" -noout -checkend 1814400 >/dev/null 2>&1; then
+      echo "  OK       certificate present and valid for >21 days"
+      $SUDO openssl x509 -in "$cert" -noout -subject -enddate 2>/dev/null | sed 's/^/           /'
+    else
+      echo "  EXPIRING certificate expires in <21 days — check 'sudo certbot renew --dry-run'"; fail=1
+      $SUDO openssl x509 -in "$cert" -noout -subject -enddate 2>/dev/null | sed 's/^/           /'
+    fi
+  else
+    echo "  SKIPPED  cannot read ${cert} (needs passwordless sudo); the curl checks below"
+    echo "           still validate the served chain, which is what actually matters"
+  fi
+
+  # HTTP :80 must serve the healthcheck 200 and 301 everything else to https://.
+  code="$(curl -s -o /dev/null -w '%{http_code}' --resolve "${QA_HOST}:80:127.0.0.1" "http://${QA_HOST}/healthz" || echo 000)"
+  [[ "$code" == "200" ]] && echo "  OK       http://${QA_HOST}/healthz -> 200" \
+                         || { echo "  FAIL     http://${QA_HOST}/healthz -> ${code} (want 200)"; fail=1; }
+  code="$(curl -s -o /dev/null -w '%{http_code}' --resolve "${QA_HOST}:80:127.0.0.1" "http://${QA_HOST}/" || echo 000)"
+  [[ "$code" == "301" ]] && echo "  OK       http://${QA_HOST}/ -> 301 https" \
+                         || { echo "  FAIL     http://${QA_HOST}/ -> ${code} (want 301)"; fail=1; }
+
+  # HTTPS :443 — full chain validation (no -k), then the routes the UI needs.
+  for path in / /pwa/ /api/healthz; do
+    code="$(curl -s -o /dev/null -w '%{http_code}' --resolve "${QA_HOST}:443:127.0.0.1" "https://${QA_HOST}${path}" || echo 000)"
+    [[ "$code" == "200" ]] && echo "  OK       https://${QA_HOST}${path} -> 200" \
+                           || { echo "  FAIL     https://${QA_HOST}${path} -> ${code} (want 200)"; fail=1; }
+  done
+fi
+
+echo
+if [[ "$fail" -eq 0 ]]; then echo "RESULT: QA -> ${QA_DB}, TLS on ${QA_HOST}, production intact ✔"; else echo "RESULT: issues found ✘ (see the lines above)"; fi
 exit "$fail"

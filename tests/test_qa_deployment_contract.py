@@ -1,21 +1,28 @@
 """The QA stack must never collide with production.
 
 THE RISK THIS PREVENTS
-    QA and production run on the SAME EC2 box and the SAME RDS instance. Docker
-    treats container names, host ports and image tags as GLOBAL, and
-    docker-compose.yml hard-codes all three (`container_name: jnpa-*`,
-    `ports: "8000:8000"`, `image: jnpa/gateway:0.1.0`). A QA overlay that forgets
-    any one of them does not fail loudly — it takes production's name, steals its
-    port, or silently replaces the image tag production's next `up` will use.
-    The database is the same story: one copied DSN line and QA writes to
-    jnpa_schema_v3.
+    QA and production share an RDS instance, and the QA overlay is a thin diff
+    over the production compose files. Docker treats container names, host ports
+    and image tags as GLOBAL, and docker-compose.yml hard-codes all three
+    (`container_name: jnpa-*`, `ports: "8000:8000"`, `image: jnpa/gateway:0.1.0`).
+    An overlay that forgets any one of them does not fail loudly — it takes
+    production's name, steals its port, or silently replaces the image tag
+    production's next `up` will use. The database is the same story: one copied
+    DSN line and QA writes to jnpa_schema_v3.
+
+    QA now deploys to its OWN EC2 instance, which removes the host-port half of
+    that risk on today's topology but none of the rest — the two stacks still
+    share RDS, the image registry on any shared builder, and this repository.
+    The name/tag/database assertions therefore stay exactly as strict.
 
 WHAT IS ASSERTED
     * .env.qa.example points every DSN at RDS/jnpa_qa and never at the production
       database, and carries no credential.
     * docker-compose.qa.yml renames every container, retags every built image,
-      and resets every host port except the two QA entry points (18000/18080).
-    * The QA host ports do not intersect the production ones.
+      and resets every host port except the QA entry points (gateway 18000, web
+      80/443 on the dedicated instance).
+    * QA's nginx terminates TLS for the QA hostname only, never production's, and
+      the HTTPS redirect targets the port QA is actually served on.
     * The production files carry no QA-specific value (i.e. they were not edited).
     * .gitignore hides the filled-in .env.qa but keeps the template trackable.
 
@@ -39,9 +46,13 @@ AWS_ENV = ROOT / ".env.aws.example"
 QA_DB = "jnpa_qa"
 PROD_DB = "jnpa_schema_v3"
 QA_RDS_HOST = "__RDS_HOST__"  # templated on purpose — see tests/test_rds_security.py
-QA_HOST_PORTS = {"18000", "18080"}
+# QA runs on a dedicated instance: web owns 80/443, the gateway keeps 18000 for
+# the debug curls in QA_DEPLOYMENT.md §7.
+QA_HOST_PORTS = {"18000", "80", "443"}
 QA_PROJECT = "jnpa-uc3-poc-qa"
 PROD_PROJECT = "jnpa-uc3-poc"
+QA_HOSTNAME = "qa.searchintech.in"
+PROD_HOSTNAME = "traffic-three.searchintech.in"
 PLACEHOLDER = "<SET_ON_EC2_ONLY>"
 
 DSN_VARS = (
@@ -276,7 +287,11 @@ def test_qa_publishes_only_the_two_qa_entry_points():
         f"only the QA gateway and web may publish a host port; got {published}"
     )
     assert published["gateway"] == ["18000"]
-    assert published["web"] == ["18080"]
+    # QA runs on a DEDICATED EC2 instance, so `web` owns the host's 80/443 and
+    # the public URL needs no port suffix. If QA is ever co-located with a
+    # production stack again, these move to 18080/18443 — and the redirect in
+    # web/nginx/default.qa.conf has to grow an explicit :18443 with them.
+    assert published["web"] == ["80", "443"]
 
 
 def test_qa_port_overrides_replace_rather_than_merge():
@@ -290,17 +305,25 @@ def test_qa_port_overrides_replace_rather_than_merge():
         )
 
 
-def test_qa_host_ports_do_not_collide_with_production():
+def test_qa_publishes_no_internal_service_port():
+    """QA and production no longer share a box, so overlapping on 80/443 is the
+    intended design and not a collision. What still must not happen is QA
+    publishing an INTERNAL service to the host: Kafka, MinIO, Redis, Grafana,
+    Prometheus, the EIR-OCR sidecar and friends carry no auth of their own and
+    are only safe because they stay on the private bridge. A lost `!reset []`
+    exposes one straight to the internet on a public EC2 instance."""
     prod_ports = {p for spec in BASE.values() for p in spec["ports"]}
     aws = read_services(AWS_COMPOSE)
     for svc, spec in aws.items():
         if spec["ports_tag"] == "!reset":
             prod_ports -= set(BASE.get(svc, {}).get("ports", []))
         prod_ports |= set(spec["ports"])
-    # Both production shapes matter: the plain file and the AWS overlay.
-    prod_ports |= {"80", "443", "3000", "8000"}
-    assert not (QA_HOST_PORTS & prod_ports), (
-        f"QA ports {sorted(QA_HOST_PORTS & prod_ports)} are also published by production"
+    # Everything production publishes EXCEPT the two web entry points QA now
+    # legitimately owns on its own instance.
+    internal = prod_ports - {"80", "443"}
+    assert not (QA_HOST_PORTS & internal), (
+        f"QA publishes internal service port(s) {sorted(QA_HOST_PORTS & internal)} to "
+        f"the host; these must stay on the private bridge (`ports: !reset []`)"
     )
 
 
@@ -325,19 +348,26 @@ def test_the_qa_overlay_is_always_applied_last():
                 )
 
 
-def test_qa_web_does_not_mount_the_production_certificates():
-    """docker-compose.aws.yml bind-mounts /etc/letsencrypt into web. QA has no
-    certificate of its own, and must not carry production's private keys."""
+def test_qa_web_mounts_its_own_config_over_the_baked_production_one():
+    """QA now terminates TLS itself, so it DOES mount /etc/letsencrypt — but for
+    its own certificate. What must not survive is the baked production nginx
+    config, which references traffic-three's certificate; a name this box does
+    not hold, so nginx would refuse to start."""
     aws_web = AWS_COMPOSE.read_text(encoding="utf-8")
     assert "/etc/letsencrypt" in aws_web, "guard stale: the AWS overlay no longer mounts certs"
     qa_body = QA_COMPOSE.read_text(encoding="utf-8")
     assert re.search(r"^    volumes: !override\s*$", qa_body, re.M), (
-        "docker-compose.qa.yml must use `volumes: !override` on web, else the AWS "
-        "overlay's /etc/letsencrypt mount merges into the QA container"
+        "docker-compose.qa.yml must use `volumes: !override` on web, so the QA "
+        "mount list REPLACES the AWS overlay's rather than merging with it"
     )
     active = [ln for ln in qa_body.splitlines() if not ln.lstrip().startswith("#")]
-    assert not [ln for ln in active if "/etc/letsencrypt" in ln], (
-        "docker-compose.qa.yml must not mount production's certificate directory"
+    mounts = [ln.strip().lstrip("- ") for ln in active if ":/etc/nginx/conf.d/default.conf" in ln]
+    assert mounts, "docker-compose.qa.yml must mount the QA nginx config over the baked one"
+    assert mounts[0].startswith("./web/nginx/default.qa.conf:"), (
+        f"the QA nginx config must be bind-mounted by a path RELATIVE to the compose "
+        f"project dir, so the checkout can live anywhere. An absolute path silently "
+        f"creates an empty DIRECTORY at the mount point on a box that checked out "
+        f"elsewhere, and nginx then starts with no server block at all. Got: {mounts[0]}"
     )
 
 
@@ -390,24 +420,73 @@ def test_production_nginx_still_terminates_tls():
 # --------------------------------------------------------------------------- #
 # QA web + secrets hygiene
 # --------------------------------------------------------------------------- #
-def test_qa_nginx_serves_plain_http_on_the_qa_container_port():
+def test_qa_nginx_terminates_tls_for_the_qa_hostname_only():
     conf = ROOT / "web" / "nginx" / "default.qa.conf"
     assert conf.exists(), "docker-compose.qa.yml mounts web/nginx/default.qa.conf"
     body = conf.read_text(encoding="utf-8")
-    assert re.search(r"^\s*listen 3000;", body, re.M), (
-        "QA nginx must listen on 3000 — docker-compose.qa.yml publishes 18080:3000"
-    )
+    active = [ln for ln in body.splitlines() if not ln.lstrip().startswith("#")]
+    active_body = "\n".join(active)
+
+    assert re.search(r"^\s*listen 80;", active_body, re.M), "QA nginx must listen on 80"
+    assert re.search(r"^\s*listen 443 ssl;", active_body, re.M), "QA nginx must listen on 443 ssl"
     assert "set $gateway_upstream gateway:8000;" in body, (
         "QA nginx must proxy /api to `gateway`, resolved on the QA network (i.e. "
         "jnpa-qa-gateway). A hard-coded host/IP could reach production's gateway."
     )
-    active = [ln for ln in body.splitlines() if not ln.lstrip().startswith("#")]
-    assert not [ln for ln in active if "ssl_certificate" in ln], (
-        "QA has no certificate yet — referencing one (production's) would stop nginx from starting"
+
+    # Every server_name and every certificate path must be QA's. Referencing
+    # production's certificate would both leak its name into QA and stop nginx
+    # from starting on a box that has no such file.
+    for ln in active:
+        if "server_name" in ln or "ssl_certificate" in ln:
+            assert QA_HOSTNAME in ln, (
+                f"QA nginx line must reference {QA_HOSTNAME}, not another host: {ln.strip()}"
+            )
+        assert PROD_HOSTNAME not in ln, (
+            f"QA nginx must never reference the production hostname: {ln.strip()}"
+        )
+
+    # `certbot renew --webroot` writes the challenge to the host's /var/www/certbot,
+    # which docker-compose.qa.yml bind-mounts. Serving it from anywhere else means
+    # renewal 404s and the certificate silently expires after 90 days.
+    assert "root /var/www/certbot;" in active_body, (
+        "the ACME challenge location must be rooted at the /var/www/certbot bind mount"
     )
+    qa_compose = QA_COMPOSE.read_text(encoding="utf-8")
+    assert "/var/www/certbot:/var/www/certbot" in qa_compose, (
+        "docker-compose.qa.yml must mount the ACME webroot, or `certbot renew` cannot "
+        "reach the challenge nginx is serving"
+    )
+
+    # The healthcheck target must not be behind the HTTPS redirect — BusyBox wget
+    # would follow the 301 and fail the cert's hostname check against `localhost`.
+    assert "location = /healthz" in active_body, (
+        "QA nginx needs an unredirected /healthz on :80 for the compose healthcheck"
+    )
+
     # The proxy blocks the dashboard/PWA depend on must all be present.
     for loc in ("/api/ws", "/api/", "/minio/", "/pwa/", "/poc3/"):
         assert f"location {loc}" in body, f"QA nginx is missing the {loc} block"
+
+
+def test_qa_https_redirect_carries_the_port_it_is_actually_served_on():
+    """`return 301 https://$host…` drops the port. That is correct ONLY while QA
+    owns 443. If the web publish is moved back behind an offset (co-location),
+    the redirect must name the port or every plain-HTTP hit dead-ends on a
+    closed 443."""
+    web_ports = QA["web"]["ports"]
+    body = (ROOT / "web" / "nginx" / "default.qa.conf").read_text(encoding="utf-8")
+    redirect = [ln for ln in body.splitlines()
+                if not ln.lstrip().startswith("#") and "return 301 https://" in ln]
+    assert len(redirect) == 1, f"expected exactly one HTTPS redirect, got {redirect}"
+    if "443" in web_ports:
+        assert "$host$request_uri" in redirect[0], redirect[0]
+    else:
+        tls_port = next((p for p in web_ports if p != "80"), None)
+        assert tls_port and f"$host:{tls_port}$request_uri" in redirect[0], (
+            f"web publishes {web_ports}, so the redirect must target the TLS port "
+            f"explicitly: {redirect[0].strip()}"
+        )
 
 
 def test_the_filled_in_qa_env_is_git_ignored_but_the_template_is_not():

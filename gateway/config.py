@@ -42,7 +42,6 @@ class GatewayConfig:
     # --- Upstream services (reachable on the jnpa network) ---
     anpr_ai_url: str = "http://anpr:8301"
     vahan_sim_url: str = "http://vahan-sim:8201"
-    vahan_live_url: str = "http://vahan-live:8202"
     truck_api_url: str = "http://truck-sim:8240"
     congestion_url: str = "http://congestion:8311"
     anomaly_url: str = "http://anomaly:8321"
@@ -68,7 +67,6 @@ class GatewayConfig:
     mqtt_port: int = 1883
 
     # --- Credentials that drive fallback decisions ---
-    surepass_api_token: str = ""
     ulip_api_key: str = ""
 
     # --- Upstream call budget ---
@@ -139,6 +137,20 @@ class GatewayConfig:
     ulip_client_id: str = ""
     ulip_client_secret: str = ""
     cache_ttl_ulip_s: int = 300              # ULIP CACHED fallback rung
+    # Master switch for outbound ULIP traffic. Off by default: the credential
+    # can be present and still be unusable (NLDSL gates /user/login on a source
+    # IP allowlist and answers 412 until the deployment's egress IP is
+    # registered), so having a credential is NOT sufficient reason to start
+    # calling. Flip on only after a live 200 — see scripts/ulip_smoke.py.
+    ulip_live_enabled: bool = False
+
+    # --- FASTag toll accumulator (services.fastag.poller) ---
+    # ULIP's FASTAG/01 retains only 72 h of crossings per vehicle, so history
+    # has to be swept up continuously; the default cadence is far inside that
+    # window. See services/fastag/poller.py.
+    fastag_poll_interval_s: int = 3600
+    fastag_poll_active_days: int = 7
+    fastag_poll_max_plates: int = 500
 
     # --- Provisional vehicle flow ---
     provisional_window_h: int = 24           # 24-hour cure window (spec)
@@ -208,7 +220,6 @@ class GatewayConfig:
             port=_as_int(os.environ.get("PORT"), 8000),
             anpr_ai_url=os.environ.get("GATEWAY_ANPR_URL", "http://anpr:8301"),
             vahan_sim_url=os.environ.get("GATEWAY_VAHAN_SIM_URL", "http://vahan-sim:8201"),
-            vahan_live_url=os.environ.get("GATEWAY_VAHAN_LIVE_URL", "http://vahan-live:8202"),
             truck_api_url=os.environ.get("GATEWAY_TRUCK_URL", "http://truck-sim:8240"),
             congestion_url=os.environ.get("GATEWAY_CONGESTION_URL", "http://congestion:8311"),
             anomaly_url=os.environ.get("GATEWAY_ANOMALY_URL", "http://anomaly:8321"),
@@ -225,7 +236,6 @@ class GatewayConfig:
             kafka_brokers=os.environ.get("KAFKA_BROKERS", shared.kafka_brokers),
             mqtt_host=os.environ.get("MQTT_HOST", shared.mqtt_host),
             mqtt_port=_as_int(os.environ.get("MQTT_PORT"), shared.mqtt_port),
-            surepass_api_token=os.environ.get("SUREPASS_API_TOKEN", shared.surepass_api_token),
             ulip_api_key=os.environ.get("ULIP_API_KEY", shared.ulip_api_key),
             upstream_timeout_s=_as_float(os.environ.get("GATEWAY_UPSTREAM_TIMEOUT_S"), 2.0),
             anpr_lag_threshold_s=_as_float(os.environ.get("GATEWAY_ANPR_LAG_S"), 2.0),
@@ -251,6 +261,10 @@ class GatewayConfig:
             ulip_client_id=os.environ.get("ULIP_CLIENT_ID", "").strip(),
             ulip_client_secret=os.environ.get("ULIP_CLIENT_SECRET", "").strip(),
             cache_ttl_ulip_s=_as_int(os.environ.get("GATEWAY_CACHE_TTL_ULIP_S"), 300),
+            ulip_live_enabled=_as_bool(os.environ.get("ULIP_LIVE_ENABLED"), False),
+            fastag_poll_interval_s=_as_int(os.environ.get("FASTAG_POLL_INTERVAL_S"), 3600),
+            fastag_poll_active_days=_as_int(os.environ.get("FASTAG_POLL_ACTIVE_DAYS"), 7),
+            fastag_poll_max_plates=_as_int(os.environ.get("FASTAG_POLL_MAX_PLATES"), 500),
             provisional_window_h=_as_int(os.environ.get("GATEWAY_PROVISIONAL_WINDOW_H"), 24),
             require_driver_profile=_as_bool(os.environ.get("REQUIRE_DRIVER_PROFILE"), False),
             gate_boom_delay_s=_as_int(os.environ.get("GATEWAY_GATE_BOOM_DELAY_S"), 5),
@@ -296,11 +310,6 @@ class GatewayConfig:
         """True if a JNPA Port-Data client key is configured (enables the
         API sync loop and the LIVE face of /api/integrations/jnpa/*)."""
         return bool(self.jnpa_portdata_client_key.strip())
-
-    @property
-    def surepass_enabled(self) -> bool:
-        """True if a live Surepass token is configured (drives LIVE_PRIMARY)."""
-        return bool(self.surepass_api_token.strip())
 
     @property
     def firebase_enabled(self) -> bool:

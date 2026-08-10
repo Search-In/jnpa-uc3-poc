@@ -80,10 +80,6 @@ services:
     ports: !reset []
     restart: unless-stopped
 
-  vahan-live:
-    ports: !reset []
-    restart: unless-stopped
-
   rfid-emulator:
     ports: !reset []
     restart: unless-stopped

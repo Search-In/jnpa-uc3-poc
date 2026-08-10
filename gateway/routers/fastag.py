@@ -28,11 +28,21 @@ from pydantic import BaseModel, Field, field_validator
 
 from jnpa_shared.schemas import is_valid_plate, normalize_plate
 
+from integrations.ulip import (
+    UlipAccessDenied,
+    UlipAuthError,
+    UlipError,
+    UlipHTTPError,
+    UlipInvalidRequest,
+    UlipNotConfigured,
+    UlipTimeout,
+    UlipUnavailable,
+)
+from integrations.ulip import UlipClient
+
 from services.fastag import (
     FastagService,
-    UlipClientError,
-    UlipFastagClient,
-    map_fastag_balance,
+    map_fastag_tag_status,
     map_fastag_transactions,
     map_toll_enroute,
 )
@@ -61,15 +71,17 @@ VEHICLE_TYPES: frozenset[str] = frozenset(
 # dependency-injected so tests can override them (a MockTransport client + a
 # throwaway DSN) via ``app.dependency_overrides``. There is no explicit teardown:
 # the pools are closed by process exit / the gateway lifespan's ``state.aclose()``.
-_client: Optional[UlipFastagClient] = None
+_client: Optional[UlipClient] = None
 _service: Optional[FastagService] = None
 
 
-def get_client() -> UlipFastagClient:
+def get_client() -> UlipClient:
+    """The shared ULIP client — the same instance shape /api/logistics,
+    /api/ldb and /api/vahan use, so one login token, one retry budget and one
+    redaction policy cover every ULIP call the gateway makes."""
     global _client
     if _client is None:
-        # 10s timeout + 2 retries come from the client's own defaults / env.
-        _client = UlipFastagClient.from_env()
+        _client = UlipClient()
     return _client
 
 
@@ -162,6 +174,11 @@ class BalanceResult(BaseModel):
     vehicle_class: Optional[str] = None
     vehicle_class_desc: Optional[str] = None
     model_name: Optional[str] = None
+    # ULIP grants no wallet-balance API, so this surface can only ever replay a
+    # stored snapshot. ``data_available`` false + source NOT_PROVIDED_BY_ULIP is
+    # the honest answer for an RC we hold nothing for — never a made-up figure.
+    data_available: bool = True
+    source: Optional[str] = None
 
     model_config = {
         "json_schema_extra": {
@@ -259,9 +276,45 @@ def _log_gateway(endpoint: str, method: str, status: str, t0: float, client_id: 
              method=method, status=status, latency_ms=_ms(t0), client_id=client_id)
 
 
-# ULIP failure category -> HTTP status (see UlipClientError.category).
+# Retained for the demo/validation paths that still raise category strings.
 _ULIP_STATUS = {"timeout": 504, "unavailable": 502, "http_error": 502,
                 "bad_response": 502, "config": 500}
+
+
+async def _raw(awaitable) -> dict:
+    """Shared-client ``UlipEnvelope`` -> the plain dict the mappers consume.
+
+    The mappers are written against raw vendor JSON (they predate the typed
+    client and are also fed by recorded fixtures and the demo provider), so the
+    envelope is dumped back to a dict rather than leaking a pydantic model into
+    the contract layer."""
+    envelope = await awaitable
+    return envelope.model_dump()
+
+
+def _ulip_failure(exc: UlipError) -> tuple[int, str]:
+    """One shared UlipError -> (HTTP status, category) mapping.
+
+    ``access_denied`` (412) is called out separately from ``auth``: it is the
+    source-IP allowlist, so the operator's fix is registering an egress IP with
+    NLDSL, not rotating the credential. Both are 502 to the caller — the
+    upstream refused us, the request itself was fine.
+    """
+    if isinstance(exc, UlipInvalidRequest):
+        return 400, "invalid_request"
+    if isinstance(exc, UlipNotConfigured):
+        return 500, "config"
+    if isinstance(exc, UlipAccessDenied):
+        return 502, "access_denied"
+    if isinstance(exc, UlipAuthError):
+        return 502, "auth"
+    if isinstance(exc, UlipTimeout):
+        return 504, "timeout"
+    if isinstance(exc, UlipUnavailable):
+        return 502, "unavailable"
+    if isinstance(exc, UlipHTTPError):
+        return (429 if exc.is_rate_limited else 502), "http_error"
+    return 502, "bad_response"
 # Service FAILED reason -> HTTP status.
 _SERVICE_STATUS = {"validation_error": 400, "conflict": 409, "db_error": 500}
 
@@ -290,10 +343,10 @@ async def _run(endpoint, method, request, response, *, fetch, mapper, persist):
     # 1) transport
     try:
         raw = await fetch(cid)
-    except UlipClientError as exc:
-        http_status = _ULIP_STATUS.get(exc.category, 502)
+    except UlipError as exc:
+        http_status, category = _ulip_failure(exc)
         raise _fail(endpoint, method, t0, cid, http_status,
-                    "ulip_error", f"{exc.category}")
+                    "ulip_error", category)
 
     # 2) mapper (vendor-contract). A failed envelope == malformed vendor data.
     mapped = mapper(raw, client_id=cid)
@@ -317,39 +370,64 @@ async def _run(endpoint, method, request, response, *, fetch, mapper, persist):
 
 # --------------------------------------------------------------------- endpoints
 @router.post("/balance", response_model=BalanceResult, responses=_ERROR_RESPONSES,
-             summary="RC -> FASTag balance (fetch, persist snapshot)")
+             summary="RC -> last known FASTag balance snapshot (no live ULIP source)")
 async def balance(
     body: BalanceRequest, request: Request, response: Response,
-    client: UlipFastagClient = Depends(get_client),
     service: FastagService = Depends(get_service),
 ) -> BalanceResult:
-    result, cid, mapped = await _run(
-        "/api/fastag/balance", "POST", request, response,
-        fetch=lambda cid: client.balance(body.rc_number, client_id=cid),
-        mapper=map_fastag_balance,
-        persist=lambda m, cid: service.process_balance(m, client_id=cid),
-    )
-    db = mapped.get("db") or {}
+    """Serve the last persisted balance snapshot for an RC.
+
+    **ULIP grants no wallet-balance API.** FASTAG/01 returns toll crossings and
+    FASTAG/02 the tag registry; neither carries a balance
+    (ulip-docs/ULIP_FASTAG_Integration_Requirement.pdf §1.3–1.4). So this
+    endpoint no longer fetches: it reads back whatever
+    ``core.fastag_balance`` already holds and reports
+    ``source: NOT_PROVIDED_BY_ULIP`` when there is nothing.
+
+    Inventing a figure here would be worse than an empty answer — a fabricated
+    balance drives real decisions at the gate. Same no-fabrication rule the
+    logistics surfaces already enforce.
+    """
+    cid = _correlation_id(request)
+    response.headers[CORRELATION_HEADER] = cid
+    t0 = perf_counter()
+    row = await _read_balance_snapshot(request, body.rc_number)
+    _log_gateway("/api/fastag/balance", "POST", "SUCCESS", t0, cid)
+    if not row:
+        return BalanceResult(
+            rc_number=body.rc_number, data_available=False,
+            source="NOT_PROVIDED_BY_ULIP", correlation_id=cid, updated=False,
+        )
     return BalanceResult(
-        rc_number=db.get("rc_number"), tag_id=db.get("tag_id"),
-        available_balance=_dstr(db.get("available_balance")),
-        tag_status=db.get("tag_status"),
-        provider_name=db.get("provider_name"), provider_code=db.get("provider_code"),
-        customer_name=db.get("customer_name"),
-        available_recharge_limit=_dstr(db.get("available_recharge_limit")),
-        vehicle_class=db.get("vehicle_class"), vehicle_class_desc=db.get("vehicle_class_desc"),
-        model_name=db.get("model_name"),
-        updated=bool(result.get("updated", True)), correlation_id=cid,
+        rc_number=row.get("rc_number"), tag_id=row.get("tag_id"),
+        available_balance=_dstr(row.get("available_balance")),
+        tag_status=row.get("tag_status"),
+        provider_name=row.get("provider_name"), provider_code=row.get("provider_code"),
+        customer_name=row.get("customer_name"),
+        available_recharge_limit=_dstr(row.get("available_recharge_limit")),
+        vehicle_class=row.get("vehicle_class"),
+        vehicle_class_desc=row.get("vehicle_class_desc"),
+        model_name=row.get("model_name"),
+        data_available=True, source="DATABASE",
+        updated=False, correlation_id=cid,
     )
 
 
 @router.post("/toll-enroute", response_model=TollEnrouteResult, responses=_ERROR_RESPONSES,
-             summary="Toll plazas enroute (fetch, persist route + plaza JSONB)")
+             summary="Toll plazas enroute (resolved from the GatiShakti plaza registry)")
 async def toll_enroute(
     body: TollEnrouteRequest, request: Request, response: Response,
-    client: UlipFastagClient = Depends(get_client),
+    client: UlipClient = Depends(get_client),
     service: FastagService = Depends(get_service),
 ) -> TollEnrouteResult:
+    """Toll plazas along a source -> destination route.
+
+    ULIP grants no route-planning API — FASTAG/01 answers per-vehicle crossing
+    history, not "plazas between A and B". The plaza set therefore comes from
+    the **GatiShakti NHAI registry** (``GATISHAKTI/04``, persisted to
+    ``core.gs_toll_plaza`` — see services.gatishakti), which is the only
+    granted source that enumerates plazas by geography.
+    """
     payload = {
         "clientId": _correlation_id(request),
         "sourceState": body.source_state, "sourceName": body.source_name,
@@ -358,7 +436,7 @@ async def toll_enroute(
     }
     result, cid, mapped = await _run(
         "/api/fastag/toll-enroute", "POST", request, response,
-        fetch=lambda cid: client.toll_enroute(payload, client_id=cid),
+        fetch=lambda cid: _enroute_from_registry(request, body, payload),
         mapper=map_toll_enroute,
         persist=lambda m, cid: service.process_toll_enroute(m, client_id=cid),
     )
@@ -381,12 +459,15 @@ async def toll_enroute(
              summary="RC -> FASTag transactions (fetch, dedup-persist batch)")
 async def transactions(
     body: TransactionsRequest, request: Request, response: Response,
-    client: UlipFastagClient = Depends(get_client),
+    client: UlipClient = Depends(get_client),
     service: FastagService = Depends(get_service),
 ) -> TransactionsResult:
     result, cid, mapped = await _run(
         "/api/fastag/transactions", "POST", request, response,
-        fetch=lambda cid: client.transactions(body.rc_number, client_id=cid),
+        # FASTAG/01. NLDSL retains only the past 72 hours per VRN, so this live
+        # batch is a top-up: the durable history comes from the read-back below,
+        # accumulated by services.fastag.poller.
+        fetch=lambda cid: _raw(client.fetch_vehicle_movement(body.rc_number)),
         mapper=map_fastag_transactions,
         persist=lambda m, cid: service.process_transactions(m, client_id=cid),
     )
@@ -443,9 +524,160 @@ async def transactions_history(
     return {"source": "RDS", "rc_number": rc, "count": len(rows), "transactions": rows}
 
 
-def _fetch_source(client: "UlipFastagClient") -> str:
-    """LIVE when a real ULIP vendor base URL is configured, else SIM."""
-    return "LIVE" if bool(getattr(client, "_base_url", "")) else "SIM"
+class TagRow(BaseModel):
+    tag_id: Optional[str] = None
+    rc_number: Optional[str] = None
+    tid: Optional[str] = None
+    vehicle_class: Optional[str] = None
+    tag_status: Optional[str] = None
+    issue_date: Optional[str] = None
+    exc_code: Optional[str] = None
+    bank_id: Optional[str] = None
+    commercial_vehicle: Optional[str] = None
+
+
+class TagStatusResult(BaseModel):
+    rc_number: Optional[str] = None
+    tag_id: Optional[str] = None
+    count: int = 0
+    tags: list[TagRow] = []
+    correlation_id: str
+
+
+class TagStatusRequest(BaseModel):
+    """Exactly one of the two — FASTAG/02 rejects both together (respCode 239)."""
+
+    rc_number: Optional[str] = Field(default=None)
+    tag_id: Optional[str] = Field(default=None)
+
+    @field_validator("rc_number")
+    @classmethod
+    def _v_rc(cls, v: Optional[str]) -> Optional[str]:
+        return _clean_rc(v) if v and str(v).strip() else None
+
+
+@router.post("/tag-status", response_model=TagStatusResult, responses=_ERROR_RESPONSES,
+             summary="RC or tag id -> NETC tag registry entries (FASTAG/02)")
+async def tag_status(
+    body: TagStatusRequest, request: Request, response: Response,
+    client: UlipClient = Depends(get_client),
+) -> TagStatusResult:
+    """Look up the NETC tag registry for a vehicle or a tag id.
+
+    A vehicle legitimately carries SEVERAL tags (re-issues keep the old rows),
+    so ``tags`` is a list. Read-through only — there is no tag-registry table,
+    so nothing is persisted and the service layer is not involved.
+    """
+    cid = _correlation_id(request)
+    response.headers[CORRELATION_HEADER] = cid
+    t0 = perf_counter()
+    try:
+        raw = await _raw(client.fetch_tag_status(vehicle_number=body.rc_number,
+                                                 tag_id=body.tag_id))
+    except UlipError as exc:
+        http_status, category = _ulip_failure(exc)
+        raise _fail("/api/fastag/tag-status", "POST", t0, cid, http_status,
+                    "ulip_error", category)
+    mapped = map_fastag_tag_status(raw, client_id=cid)
+    if mapped.get("status") != "success":
+        raise _fail("/api/fastag/tag-status", "POST", t0, cid, 502, "ulip_error",
+                    f"mapper: {mapped.get('reason')}")
+    tags = [TagRow(**t) for t in (mapped.get("tags") or [])]
+    _log_gateway("/api/fastag/tag-status", "POST", "SUCCESS", t0, cid)
+    return TagStatusResult(rc_number=body.rc_number, tag_id=body.tag_id,
+                           count=len(tags), tags=tags, correlation_id=cid)
+
+
+def _fetch_source(client: "UlipClient") -> str:
+    """LIVE when a ULIP credential is configured, else SIM."""
+    return "LIVE" if getattr(client, "configured", False) else "SIM"
+
+
+async def _enroute_from_registry(request: Request, body: "TollEnrouteRequest",
+                                 payload: dict) -> dict:
+    """Build a toll-enroute answer from the GatiShakti plaza registry.
+
+    Returns the same shape :func:`map_toll_enroute` already consumes, so the
+    mapper, the service and the response model are all untouched. Plazas come
+    from ``core.gs_toll_plaza`` (GATISHAKTI/04); ``cost`` is left None because
+    no granted API publishes a tariff — a fabricated fare would be read as real
+    money.
+
+    An unseeded registry yields an empty plaza list rather than an error: the
+    route lookup itself succeeded, there is simply nothing to report yet.
+    """
+    dsn = getattr(getattr(getattr(request.app.state, "gw", None), "cfg", None),
+                  "postgres_dsn", None)
+    plazas: list[dict] = []
+    if dsn:
+        from jnpa_shared.db import fetch_all
+
+        try:
+            rows = await fetch_all(
+                """
+                SELECT name, latitude, longitude
+                FROM core.gs_toll_plaza
+                WHERE (:state_name IS NULL OR state_id = :state_name)
+                ORDER BY name
+                LIMIT 200
+                """,
+                {"state_name": _state_id_for(body.source_state)}, dsn=dsn,
+            )
+            plazas = [
+                {"name": r["name"], "cost": None,
+                 "lat": r["latitude"], "lng": r["longitude"]}
+                for r in rows
+            ]
+        except Exception as exc:  # noqa: BLE001 — registry not seeded yet
+            log.debug("toll_enroute_registry_unavailable", error=str(exc))
+    return {
+        "clientId": payload["clientId"],
+        "sourceState": body.source_state, "sourceName": body.source_name,
+        "destinationState": body.destination_state,
+        "destinationName": body.destination_name,
+        "vehicleType": body.vehicle_type,
+        "distance": None, "duration": None,
+        "tollPlazaDetails": plazas,
+    }
+
+
+# GatiShakti keys its road/plaza APIs by the LGD state code, not a name.
+_STATE_IDS = {"MAHARASHTRA": "27", "GUJARAT": "24", "GOA": "30",
+              "KARNATAKA": "29", "MADHYA PRADESH": "23", "RAJASTHAN": "08"}
+
+
+def _state_id_for(state_name: Optional[str]) -> Optional[str]:
+    return _STATE_IDS.get(str(state_name or "").strip().upper())
+
+
+async def _read_balance_snapshot(request: Request, rc: str) -> Optional[dict]:
+    """The stored balance snapshot for an RC from core.fastag_balance.
+
+    The only source this surface has — see :func:`balance` for why there is no
+    live fetch. A DB outage yields None (reported as data_available: false),
+    never a guess."""
+    dsn = getattr(getattr(getattr(request.app.state, "gw", None), "cfg", None),
+                  "postgres_dsn", None)
+    if not dsn:
+        return None
+    from jnpa_shared.db import fetch_all
+
+    try:
+        rows = await fetch_all(
+            """
+            SELECT rc_number, tag_id, provider_name, provider_code, customer_name,
+                   available_recharge_limit, available_balance, tag_status,
+                   vehicle_class, vehicle_class_desc, model_name, updated_at
+            FROM core.fastag_balance
+            WHERE rc_number = :rc
+            LIMIT 1
+            """,
+            {"rc": rc}, dsn=dsn,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.debug("fastag_balance_db_unavailable", error=str(exc))
+        return None
+    return dict(rows[0]) if rows else None
 
 
 async def _read_transactions_history(request: Request, rc: str, *, limit: int = 100) -> list[dict]:
@@ -484,7 +716,7 @@ async def _read_transactions_history(request: Request, rc: str, *, limit: int = 
 @router.get("/health", summary="FASTag module health (vendor config + DB reachability)")
 async def health(
     service: FastagService = Depends(get_service),
-    client: UlipFastagClient = Depends(get_client),
+    client: UlipClient = Depends(get_client),
 ) -> dict:
     """Lightweight readiness probe for the FASTag module.
 
@@ -493,7 +725,7 @@ async def health(
     side effects). ``status`` is ``ok`` only when the DB is reachable, all tables
     exist, and the vendor URL is configured.
     """
-    ulip_configured = bool(getattr(client, "_base_url", ""))
+    ulip_configured = bool(getattr(client, "configured", False))
     db_status = "ok"
     tables: dict[str, bool] = {}
     try:
@@ -515,4 +747,14 @@ async def health(
         "module": "fastag", "status": "ok" if ok else "degraded",
         "mode": "live" if ulip_configured else "demo",
         "ulip_configured": ulip_configured, "db": db_status, "tables": tables,
+        "auth_mode": getattr(client, "auth_mode", "none"),
+        "apis": {"transactions": client.api_path("FASTAG"),
+                 "tag_status": client.api_path("FASTAG_TAG")},
+        # Surfaced so the operator is not left guessing why these tiles are
+        # empty: neither is a fault, both are ULIP grant boundaries.
+        "notes": {
+            "balance": "NOT_PROVIDED_BY_ULIP — no wallet-balance API is granted",
+            "retention": "FASTAG/01 retains 72 h per VRN; history is accumulated "
+                         "by services.fastag.poller",
+        },
     }

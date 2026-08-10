@@ -716,6 +716,51 @@ export interface FastagBalance {
   vehicle_class?: string | null;
   vehicle_class_desc?: string | null;
   model_name?: string | null;
+  // ULIP grants no wallet-balance API, so this surface can only replay a
+  // stored snapshot. `data_available: false` with
+  // `source: "NOT_PROVIDED_BY_ULIP"` is the honest answer for an RC we hold
+  // nothing for — render that state, never a zero balance.
+  data_available?: boolean;
+  source?: string | null;
+}
+
+export interface FastagTagRow {
+  tag_id?: string | null;
+  rc_number?: string | null;
+  tid?: string | null;
+  vehicle_class?: string | null;
+  tag_status?: string | null;
+  issue_date?: string | null;
+  exc_code?: string | null;
+  bank_id?: string | null;
+  commercial_vehicle?: string | null;
+}
+
+export interface FastagTagStatus {
+  rc_number?: string | null;
+  tag_id?: string | null;
+  count: number;
+  tags: FastagTagRow[];
+  correlation_id: string;
+}
+
+export interface GatiShaktiRow {
+  state_id?: string | null;
+  nh_no?: string | null;
+  name?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  fetched_at?: string | null;
+}
+
+export interface GatiShaktiRows {
+  rows: GatiShaktiRow[];
+  count: number;
+  data_available: boolean;
+  path: string;
+  source: string;
+  status: string;
+  as_of: string;
 }
 
 export interface TollPlaza {

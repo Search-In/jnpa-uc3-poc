@@ -387,6 +387,36 @@ export const api = {
       body: JSON.stringify(body),
     }),
   fastagHealth: () => http<import("./types").FastagHealth>("/api/fastag/health"),
+  // NETC tag registry (ULIP FASTAG/02). Supply EXACTLY ONE of rcNumber /
+  // tagId — the upstream rejects both together (respCode 239). A vehicle can
+  // hold several tags (re-issues), so `tags` is a list.
+  fastagTagStatus: (body: { rc_number?: string; tag_id?: string }) =>
+    http<import("./types").FastagTagStatus>("/api/fastag/tag-status", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  // --- GatiShakti reference data — /api/gatishakti/* ---
+  // Backend-only reference master data (NHAI toll plazas, road network).
+  // Served from core.gs_*; `refresh` is what re-pulls it from ULIP.
+  gatishaktiHealth: () => http<any>("/api/gatishakti/health"),
+  gatishaktiTollPlazas: (stateId = "27", limit = 500) =>
+    http<import("./types").GatiShaktiRows>(
+      `/api/gatishakti/toll-plazas?state_id=${encodeURIComponent(stateId)}&limit=${limit}`,
+    ),
+  gatishaktiRoads: (params?: { state_id?: string; nh_no?: string; limit?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.state_id) q.set("state_id", params.state_id);
+    if (params?.nh_no) q.set("nh_no", params.nh_no);
+    if (params?.limit) q.set("limit", String(params.limit));
+    return http<import("./types").GatiShaktiRows>(
+      `/api/gatishakti/roads${q.toString() ? `?${q}` : ""}`,
+    );
+  },
+  gatishaktiRoadPoints: (stateId = "27", limit = 1000) =>
+    http<import("./types").GatiShaktiRows>(
+      `/api/gatishakti/road-points?state_id=${encodeURIComponent(stateId)}&limit=${limit}`,
+    ),
 
   // --- Terminal Appointment System (TFC-1) ---
   tasSlots: (gateId?: string) =>
@@ -542,6 +572,17 @@ export const api = {
     http<import("./types").Vehicle360>(`/api/vahan/vehicle-360/${encodeURIComponent(plate)}`),
   driverIntel: (key: string) =>
     http<import("./types").DriverIntel>(`/api/vahan/driver-intel/${encodeURIComponent(key)}`),
+  // Alternate-key RC lookups (ULIP VAHAN/02 and /03). ULIP-only — the
+  // simulator is keyed by plate — so these 503 when ULIP_LIVE_ENABLED is off
+  // and 404 on a miss rather than falling back to a different vehicle.
+  vahanByChassis: (chassisNumber: string) =>
+    http<{ chassis: string; decision_path: string; record: Record<string, unknown> }>(
+      `/api/vahan/chassis/${encodeURIComponent(chassisNumber)}`,
+    ),
+  vahanByEngine: (engineNumber: string) =>
+    http<{ engine: string; decision_path: string; record: Record<string, unknown> }>(
+      `/api/vahan/engine/${encodeURIComponent(engineNumber)}`,
+    ),
   dlLookup: (dl: string) =>
     http<{ dl: string; decision_path?: string; status?: string; record?: Record<string, unknown> }>(
       `/api/vahan/dl/${encodeURIComponent(dl)}`,

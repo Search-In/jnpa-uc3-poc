@@ -4,10 +4,16 @@ These run in-process via Starlette's TestClient — no docker stack required. Th
 upstream Vahan services and the Redis cache are stubbed so the four Vahan
 fallback rungs can be driven deterministically:
 
-    token present   -> LIVE_PRIMARY   (vahan-live answers)
-    token dropped    -> LIVE_FALLBACK  (vahan-sim answers)
+    ULIP enabled     -> LIVE_PRIMARY   (ULIP VAHAN/04 answers)
+    ULIP disabled    -> LIVE_FALLBACK  (vahan-sim answers)
     sim stopped      -> CACHED         (only the Redis cache has it)
     cache flushed    -> PROVISIONAL    (+ core.vehicle_rc row when PG is up)
+
+LIVE_PRIMARY is ULIP (VAHAN/04 for RC, SARATHI/02 for DL) since the Surepass
+path was retired — it was never exercised in any environment because
+SUREPASS_API_TOKEN was empty everywhere. ULIP is reached through the shared
+typed client rather than ``state.http``, so it is stubbed at the router's
+``_ulip_rc`` / ``_ulip_dl`` seam instead of through FakeHttp.
 
 The provisional-writeback assertion needs a live Postgres (compose publishes it
 on host 5433) and is skipped automatically when it is unreachable.
@@ -105,14 +111,24 @@ class FakeCache:
 # ---------------------------------------------------------------------------
 # Harness: build a TestClient with a controllable GatewayState
 # ---------------------------------------------------------------------------
-def _make_client(*, surepass_token: str, http: FakeHttp, cache: FakeCache):
-    """(Re)load the gateway with the given token, then swap in the test doubles.
+def _make_client(*, http: FakeHttp, cache: FakeCache,
+                 ulip_rc: Optional[Dict] = None,
+                 ulip_dl: Optional[Dict] = None,
+                 ulip_enabled: Optional[bool] = None):
+    """(Re)load the gateway, then swap in the test doubles.
 
     We let the app's lifespan build the real GatewayState (so routers' Depends
     resolve normally), then replace its ``http`` client and monkeypatch the
     cache module functions the routers call.
+
+    ``ulip_rc``/``ulip_dl`` are the payloads the LIVE_PRIMARY rung should
+    return; ``None`` makes that rung miss and fall through. Passing either one
+    enables ULIP unless ``ulip_enabled`` says otherwise, so a test that wants
+    the primary rung to answer just supplies its payload.
     """
-    os.environ["SUREPASS_API_TOKEN"] = surepass_token
+    enabled = ulip_enabled if ulip_enabled is not None else (ulip_rc is not None
+                                                             or ulip_dl is not None)
+    os.environ["ULIP_LIVE_ENABLED"] = "1" if enabled else "0"
     os.environ.setdefault("KAFKA_BROKERS", "127.0.0.1:1")  # pumps will just exit
     from jnpa_shared.config import get_settings
     get_settings.cache_clear()
@@ -128,6 +144,17 @@ def _make_client(*, surepass_token: str, http: FakeHttp, cache: FakeCache):
     vahanmod.cache.put = cache.put          # type: ignore[assignment]
     vahanmod.cache.get = cache.get          # type: ignore[assignment]
 
+    # Stub the ULIP rung at the router seam: the shared client talks httpx
+    # directly, not through state.http, so FakeHttp cannot reach it.
+    async def _fake_rc(_state, _plate):
+        return dict(ulip_rc) if ulip_rc else None
+
+    async def _fake_dl(_state, _dl):
+        return dict(ulip_dl) if ulip_dl else None
+
+    vahanmod._ulip_rc = _fake_rc            # type: ignore[assignment]
+    vahanmod._ulip_dl = _fake_dl            # type: ignore[assignment]
+
     client = TestClient(mainmod.app)
     client.__enter__()  # run lifespan (builds app.state.gw)
     mainmod.app.state.gw.http = http        # swap in the fake upstream client
@@ -139,21 +166,25 @@ def _vahan_live_url(state) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 1) token present -> LIVE_PRIMARY
+# 1) ULIP enabled and answering -> LIVE_PRIMARY
 # ---------------------------------------------------------------------------
-def test_live_primary_when_token_set():
+def test_live_primary_when_ulip_enabled():
     cache = FakeCache()
     http = FakeHttp({
-        "vahan-live": _Resp(200, {"rc_number": PLATE, "blacklist_status": "CLEAR"}),
         "vahan-sim": _Resp(200, {"rc_number": PLATE, "from": "sim"}),
     })
-    client, _ = _make_client(surepass_token="tok-123", http=http, cache=cache)
+    client, _ = _make_client(
+        http=http, cache=cache,
+        ulip_rc={"rc_number": PLATE, "blacklist_status": "CLEAR"},
+    )
     try:
         r = client.get(f"/api/vahan/rc/{PLATE}")
         assert r.status_code == 200
         body = r.json()
         assert body["decision_path"] == "LIVE_PRIMARY"
-        assert any("vahan-live" in c for c in http.calls)
+        assert body["record"]["blacklist_status"] == "CLEAR"
+        # The simulator must not have been consulted at all.
+        assert not any("vahan-sim" in c for c in http.calls)
         # And it got cached for a later CACHED rung.
         assert cache.store, "LIVE_PRIMARY response must be cached"
     finally:
@@ -161,22 +192,20 @@ def test_live_primary_when_token_set():
 
 
 # ---------------------------------------------------------------------------
-# 2) token dropped -> LIVE_FALLBACK
+# 2) ULIP disabled -> LIVE_FALLBACK
 # ---------------------------------------------------------------------------
-def test_live_fallback_when_token_absent():
+def test_live_fallback_when_ulip_disabled():
     cache = FakeCache()
     http = FakeHttp({
         "vahan-sim": _Resp(200, {"rc_number": PLATE, "from": "sim"}),
-        # vahan-live unmatched -> ConnectError, but it shouldn't even be tried.
     })
-    client, mainmod = _make_client(surepass_token="", http=http, cache=cache)
+    client, mainmod = _make_client(http=http, cache=cache)
     try:
-        assert mainmod.cfg.surepass_enabled is False
+        assert mainmod.cfg.ulip_live_enabled is False
         r = client.get(f"/api/vahan/rc/{PLATE}")
         assert r.status_code == 200
         assert r.json()["decision_path"] == "LIVE_FALLBACK"
-        # Live should be skipped entirely (no token).
-        assert not any("vahan-live" in c for c in http.calls)
+        assert r.json()["record"]["from"] == "sim"
     finally:
         client.__exit__(None, None, None)
 
@@ -197,7 +226,7 @@ def test_cached_when_upstreams_down():
         "vahan-live": httpx.ConnectError("down"),
         "vahan-sim": httpx.ConnectError("down"),
     })
-    client, _ = _make_client(surepass_token="tok-123", http=http, cache=cache)
+    client, _ = _make_client(http=http, cache=cache)
     try:
         r = client.get(f"/api/vahan/rc/{PLATE}")
         assert r.status_code == 200
@@ -218,7 +247,7 @@ def test_provisional_when_everything_exhausted():
         "vahan-live": httpx.ConnectError("down"),
         "vahan-sim": httpx.ConnectError("down"),
     })
-    client, _ = _make_client(surepass_token="tok-123", http=http, cache=cache)
+    client, _ = _make_client(http=http, cache=cache)
     try:
         r = client.get(f"/api/vahan/rc/{PLATE}")
         assert r.status_code == 200
@@ -258,7 +287,7 @@ def test_provisional_writes_vehicle_master_row(monkeypatch):
         "vahan-sim": httpx.ConnectError("down"),
     })
     monkeypatch.setenv("POSTGRES_DSN", dsn)
-    client, _ = _make_client(surepass_token="tok-123", http=http, cache=cache)
+    client, _ = _make_client(http=http, cache=cache)
     try:
         r = client.get(f"/api/vahan/rc/{plate}")
         assert r.status_code == 200
@@ -289,7 +318,7 @@ def test_provisional_writes_vehicle_master_row(monkeypatch):
 def test_debug_decisions_newest_first():
     cache = FakeCache()
     http = FakeHttp({"vahan-sim": _Resp(200, {"rc_number": PLATE})})
-    client, _ = _make_client(surepass_token="", http=http, cache=cache)
+    client, _ = _make_client(http=http, cache=cache)
     try:
         client.get(f"/api/vahan/rc/{PLATE}")
         client.get("/api/vahan/rc/MH43CD5678")
@@ -309,7 +338,7 @@ def test_push_subscribe_and_status():
     """/api/push accepts a subscription and reports it; invalid bodies 422."""
     cache = FakeCache()
     http = FakeHttp({})
-    client, _ = _make_client(surepass_token="", http=http, cache=cache)
+    client, _ = _make_client(http=http, cache=cache)
     try:
         # No VAPID configured in the test env -> key is null, push not configured.
         key = client.get("/api/push/vapid-public-key").json()
@@ -346,7 +375,7 @@ def test_reroute_broadcasts_advisory_and_is_pollable():
             "state": "EN_ROUTE_TO_PORT",
         }),
     })
-    client, _ = _make_client(surepass_token="", http=http, cache=cache)
+    client, _ = _make_client(http=http, cache=cache)
     try:
         with client.websocket_connect("/api/ws") as ws:
             assert ws.receive_json()["type"] == "hello"
@@ -385,10 +414,12 @@ def test_fault_force_vahan_provisional_overrides_live():
     """Forcing vahan->PROVISIONAL yields the cure path even when LIVE answers."""
     cache = FakeCache()
     http = FakeHttp({
-        "vahan-live": _Resp(200, {"rc_number": PLATE, "blacklist_status": "CLEAR"}),
         "vahan-sim": _Resp(200, {"rc_number": PLATE, "from": "sim"}),
     })
-    client, _ = _make_client(surepass_token="tok-123", http=http, cache=cache)
+    client, _ = _make_client(
+        http=http, cache=cache,
+        ulip_rc={"rc_number": PLATE, "blacklist_status": "CLEAR"},
+    )
     try:
         # Baseline: LIVE_PRIMARY answers.
         assert client.get(f"/api/vahan/rc/{PLATE}").json()["decision_path"] == "LIVE_PRIMARY"
@@ -416,7 +447,7 @@ def test_fault_force_camera_synthetic_flips_card():
     """Forcing camera->SYNTHETIC degrades every camera regardless of frame age."""
     cache = FakeCache()
     http = FakeHttp({})
-    client, _ = _make_client(surepass_token="", http=http, cache=cache)
+    client, _ = _make_client(http=http, cache=cache)
     try:
         client.post("/api/control/fault/camera", json={"rung": "SYNTHETIC"})
         cams = client.get("/api/anpr/cameras").json()["cameras"]
@@ -428,7 +459,7 @@ def test_fault_force_camera_synthetic_flips_card():
 
 def test_fault_control_validation_and_clear_all():
     cache = FakeCache()
-    client, _ = _make_client(surepass_token="", http=FakeHttp({}), cache=cache)
+    client, _ = _make_client(http=FakeHttp({}), cache=cache)
     try:
         # Unknown domain -> 404.
         assert client.post("/api/control/fault/nope", json={"rung": "X"}).status_code == 404

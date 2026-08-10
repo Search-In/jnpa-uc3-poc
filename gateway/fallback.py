@@ -12,7 +12,7 @@ Three fallback chains are encoded (matching the bid spec):
        SYNTHETIC  -> synthetic plate generator (text overlaid on a stock frame)
 
 2. Vahan / Sarathi / FastTag:
-       LIVE_PRIMARY  -> vahan-live (only if SUREPASS_API_TOKEN is set)
+       LIVE_PRIMARY  -> ULIP VAHAN/04->/01, SARATHI/02 (if ULIP_LIVE_ENABLED=1)
        LIVE_FALLBACK -> vahan-sim
        CACHED        -> last response from Redis (TTL 12 h)
        PROVISIONAL   -> admit with provisional=true + a 24 h cure window;

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+from xml.etree import ElementTree
 
 from pydantic import BaseModel, ConfigDict
 
@@ -79,6 +80,18 @@ def parse_geocode(value: Any) -> Tuple[Optional[float], Optional[float]]:
         return float(lat_s.strip()), float(lon_s.strip())
     except ValueError:
         return None, None
+
+
+def _as_coord(value: Any) -> Optional[float]:
+    """One coordinate -> float. GATISHAKTI and LDB both send coordinates as
+    high-precision *strings* (``"24.4059522538221785"``); anything unparseable
+    degrades to None rather than failing the surrounding record."""
+    if value in (None, ""):
+        return None
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
 
 
 class UlipEnvelope(BaseModel):
@@ -203,16 +216,24 @@ def normalize_container_events(envelope: UlipEnvelope,
     events: List[Dict[str, Any]] = []
     seen: set = set()
     for item in _walk_dicts(envelope.response_items()):
-        label = _first(item, "eventCode", "event", "activity", "movementType",
-                       "status")
-        ts_raw = _first(item, "eventTime", "actualTime", "eventDate",
-                        "timestamp", "time", "actualTimestamp")
-        location = _first(item, "location", "locationName", "place",
-                          "currentLocation", "terminal")
+        # The alias lists must include LDB's own all-lowercase spellings
+        # (``eventname``, ``currentlocation``, ``timestamptimezone`` …) — they
+        # do NOT match the camelCase aliases, so omitting them made every
+        # trackLog entry fail the guard below and vanish.
+        label = _first(item, "eventname", "eventCode", "event", "activity",
+                       "movementType", "status")
+        ts_raw = _first(item, "timestamptimezone", "timetimestamp", "infotime",
+                        "eventTime", "actualTime", "eventDate", "timestamp",
+                        "time", "actualTimestamp")
+        location = _first(item, "currentlocation", "location", "locationName",
+                          "place", "currentLocation", "terminal")
         if label is None and ts_raw is None:
             continue
         if location is None and label is None:
             continue
+        # ``seqNo`` is LDB's own per-leg ordinal and repeats across trails, so
+        # it cannot join the marker — the timestamp/label/location triple is
+        # what actually identifies a movement.
         marker = (str(label), str(ts_raw), str(location))
         if marker in seen:
             continue
@@ -223,8 +244,8 @@ def normalize_container_events(envelope: UlipEnvelope,
             event_type=EVENT_CONTAINER_MOVEMENT,
             event_ts=parse_ts(ts_raw),
             location=str(location) if location is not None else None,
-            latitude=None,
-            longitude=None,
+            latitude=_as_coord(_first(item, "latitude", "lat")),
+            longitude=_as_coord(_first(item, "longitude", "lon", "long")),
             source_api="LDB",
             detail=item,
         ))
@@ -232,10 +253,198 @@ def normalize_container_events(envelope: UlipEnvelope,
     return events
 
 
+# ------------------------------------------------------- VAHAN (RC) APIs
+def _rc_fields(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The RC particulars out of one payload dict, or None if it isn't one.
+
+    Accepts BOTH spellings ULIP emits for the same data: VAHAN/04 answers
+    camelCase JSON (``rcRegnNo``) while VAHAN/01·02·03 answer an XML document
+    whose elements are snake_case (``rc_regn_no``). Normalising both here is
+    what makes the four VAHAN APIs interchangeable upstream.
+    """
+    regn = _first(item, "rcRegnNo", "rc_regn_no", "registrationNumber")
+    if regn is None:
+        return None
+    return {
+        "rc_number": str(regn).strip().upper(),
+        "owner_name": _first(item, "rcOwnerName", "rc_owner_name"),
+        "vehicle_class": _first(item, "rcVhClassDesc", "rc_vh_class_desc",
+                                "rcVchCatgDesc", "rc_vch_catg_desc"),
+        "fuel_type": _first(item, "rcFuelDesc", "rc_fuel_desc"),
+        "fitness_valid_to": _first(item, "rcFitUpto", "rc_fit_upto"),
+        "puc_valid_to": _first(item, "rcPuccUpto", "rc_pucc_upto"),
+        "insurance_valid_to": _first(item, "rcInsuranceUpto", "rc_insurance_upto"),
+        "registration_date": _first(item, "rcRegnDt", "rc_regn_dt"),
+        "state": _first(item, "rcRegisteredAt", "rc_registered_at",
+                        "stateCd", "state_cd"),
+        "rto_code": _first(item, "rtoCd", "rto_cd"),
+        "blacklist_status": _first(item, "rcBlacklistStatus", "rc_blacklist_status"),
+        "chassis_number": _first(item, "rcChasiNo", "rc_chasi_no"),
+        "engine_number": _first(item, "rcEngNo", "rc_eng_no"),
+        "maker_model": _first(item, "rcMakerModel", "rc_maker_model"),
+        "status": _first(item, "rcStatus", "rc_status"),
+    }
+
+
+def _find_rc(envelope: "UlipEnvelope") -> Optional[Dict[str, Any]]:
+    for item in _walk_dicts(envelope.response_items()):
+        fields = _rc_fields(item)
+        if fields is not None:
+            return fields
+    return None
+
+
+def normalize_rc(envelope: "UlipEnvelope") -> Optional[Dict[str, Any]]:
+    """VAHAN/04 (native JSON) -> the flat RC dict, or None when the vehicle is
+    unknown.
+
+    A miss is NOT an error at the envelope level: ULIP answers HTTP 200 with
+    ``responseStatus: "ERROR"`` and ``message.text: "Vehicle Details not
+    Found"`` (code 231), so callers must treat None as "not found" and fall
+    through to their next rung rather than surfacing a failure.
+    """
+    return _find_rc(envelope)
+
+
+def normalize_vahan_xml(envelope: "UlipEnvelope") -> Optional[Dict[str, Any]]:
+    """VAHAN/01·02·03 -> the same flat RC dict as :func:`normalize_rc`.
+
+    These three answer an XML *document serialised as a string* inside the JSON
+    envelope's ``response`` key. Parsing is best-effort: a malformed or absent
+    document degrades to None (the caller's next rung) rather than raising.
+    """
+    for item in _walk_dicts(envelope.response_items()):
+        raw = item.get("response")
+        if not isinstance(raw, str) or "<" not in raw:
+            continue
+        try:
+            root = ElementTree.fromstring(raw.strip())
+        except ElementTree.ParseError:
+            continue
+        flat = {child.tag: (child.text or "").strip() for child in root.iter()}
+        fields = _rc_fields(flat)
+        if fields is not None:
+            return fields
+    return None
+
+
+# ----------------------------------------------------- SARATHI (licence) API
+def normalize_dl(envelope: "UlipEnvelope") -> Optional[Dict[str, Any]]:
+    """SARATHI/02 -> a flat DL dict, or None when the licence is unknown.
+
+    Like VAHAN, a miss arrives as HTTP 200: ``errorcode: -1`` with
+    ``errormessage: "Details not Found For Given DLNumber"`` (SARATHI/02), or a
+    ``dldetobj[].erormsg: "No Details are available."`` block (SARATHI/01 —
+    note the upstream's single-r spelling). Both yield None.
+    """
+    for item in _walk_dicts(envelope.response_items()):
+        info = item.get("DLinformation")
+        if not isinstance(info, dict):
+            continue
+        covs = info.get("Classofcovs")
+        classes: List[str] = []
+        if isinstance(covs, list):
+            for cov in covs:
+                if isinstance(cov, dict):
+                    desc = _first(cov, "CovDiscription", "CovDescription", "CovCode")
+                    if desc is not None:
+                        classes.append(str(desc))
+                elif cov not in (None, ""):
+                    classes.append(str(cov))
+        return {
+            "holder_name": _first(info, "DL_Holder_FullName", "DLHolderFullName"),
+            "dl_status": _first(info, "DL_status", "DLstatus"),
+            "vehicle_classes": classes,
+            "transport_valid_to": _first(info, "TransportValidityTodate"),
+            "non_transport_valid_to": _first(info, "NonTransportValidityTodate"),
+        }
+    return None
+
+
+# ------------------------------------------------------- FASTAG/02 (tag) API
+def normalize_tag_status(envelope: "UlipEnvelope") -> List[Dict[str, Any]]:
+    """FASTAG/02 -> one flat dict per tag registered against the reference.
+
+    The upstream models each tag as a list of ``{"name": …, "value": …}`` pairs
+    under ``vehicle.vehicledetails[].detail[]``; this flattens each to
+    ``{"tagid": …, "regnumber": …, "tagstatus": …}`` with lower-cased keys. A
+    vehicle legitimately carries several tags (re-issues), so the answer is a
+    list, ordered as ULIP sent it. An unknown reference yields ``[]``.
+    """
+    tags: List[Dict[str, Any]] = []
+    for item in _walk_dicts(envelope.response_items()):
+        details = item.get("detail")
+        if not isinstance(details, list):
+            continue
+        flat = {
+            str(pair.get("name", "")).strip().lower(): pair.get("value")
+            for pair in details
+            if isinstance(pair, dict) and pair.get("name")
+        }
+        if flat:
+            tags.append(flat)
+    return tags
+
+
+# ------------------------------------------------------- GATISHAKTI APIs
+def _gs_rows(envelope: "UlipEnvelope") -> List[Dict[str, Any]]:
+    """The ``response[].response.data[]`` rows every GATISHAKTI API wraps its
+    payload in. An empty ``data`` (the documented "id does not exist" answer)
+    yields ``[]`` — a legitimate empty result, not a failure."""
+    rows: List[Dict[str, Any]] = []
+    for item in _walk_dicts(envelope.response_items()):
+        data = item.get("data")
+        if isinstance(data, list):
+            rows.extend(row for row in data if isinstance(row, dict))
+    return rows
+
+
+def normalize_toll_plazas(envelope: "UlipEnvelope",
+                          state_id: Any) -> List[Dict[str, Any]]:
+    """GATISHAKTI/04 -> NHAI toll-plaza rows keyed for ``core.gs_toll_plaza``."""
+    plazas: List[Dict[str, Any]] = []
+    for row in _gs_rows(envelope):
+        name = _first(row, "vname", "name", "tollPlazaName", "plazaName")
+        if name is None:
+            continue
+        plazas.append({
+            "state_id": str(state_id),
+            "name": str(name),
+            "nh_no": _first(row, "nhno", "nh_no", "nhNumber"),
+            "latitude": _as_coord(_first(row, "lat", "latitude")),
+            "longitude": _as_coord(_first(row, "lon", "long", "longitude")),
+            "detail": row,
+        })
+    return plazas
+
+
+def normalize_road_network(envelope: "UlipEnvelope",
+                           **keys: Any) -> List[Dict[str, Any]]:
+    """GATISHAKTI/01·02·03 -> road rows keyed for ``core.gs_road_segment`` /
+    ``core.gs_road_point``. ``keys`` (``state_id`` / ``nh_no``) is stamped onto
+    every row so the caller's query parameter survives into the table."""
+    rows: List[Dict[str, Any]] = []
+    for row in _gs_rows(envelope):
+        rows.append({
+            **{k: (str(v) if v is not None else None) for k, v in keys.items()},
+            "name": _first(row, "vname", "name", "roadName"),
+            "latitude": _as_coord(_first(row, "lat", "latitude")),
+            "longitude": _as_coord(_first(row, "lon", "long", "longitude")),
+            "detail": row,
+        })
+    return rows
+
+
 __all__ = [
     "UlipEnvelope",
     "normalize_vehicle_events",
     "normalize_container_events",
+    "normalize_rc",
+    "normalize_vahan_xml",
+    "normalize_dl",
+    "normalize_tag_status",
+    "normalize_toll_plazas",
+    "normalize_road_network",
     "parse_ts",
     "parse_geocode",
     "REF_TYPE_VEHICLE",

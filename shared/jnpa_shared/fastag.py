@@ -232,14 +232,30 @@ class FastagBalanceResponse(_FastagBase):
 # ---------------------------------------------------------------------------
 class FastagTransactionItem(_FastagBase):
     """A single plaza crossing. ``seq_no`` is the vendor idempotency key
-    (UNIQUE in DB). ``toll_plaza_geocode`` is kept raw ("lat,lng")."""
+    (UNIQUE in DB). ``toll_plaza_geocode`` is kept raw ("lat,lng").
+
+    The alias sets accept BOTH the generic vendor spelling and the one NETC
+    actually sends through ULIP's ``FASTAG/01`` (``readerReadTime`` for the
+    crossing time, ``vehicleRegNo`` for the plate — see
+    ulip-docs/ULIP_FASTAG_Integration_Requirement.pdf §1.3). Only the input
+    aliases widen; every output field name is unchanged, so the persisted
+    columns and the /api/fastag/* contract are untouched.
+    """
 
     id: UUID = Field(default_factory=uuid4)
-    tag_id: Optional[str] = Field(default=None, validation_alias="tagId")
-    rc_number: Optional[str] = Field(default=None, validation_alias="rcNumber")
-    seq_no: Optional[str] = Field(default=None, validation_alias="seqNo")
+    tag_id: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("tagId", "tagid", "TAGID")
+    )
+    rc_number: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("rcNumber", "vehicleRegNo", "vehiclenumber"),
+    )
+    seq_no: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("seqNo", "seqno")
+    )
     transaction_date_time: Optional[datetime] = Field(
-        default=None, validation_alias="transactionDateTime"
+        default=None,
+        validation_alias=AliasChoices("transactionDateTime", "readerReadTime"),
     )
     lane_direction: Optional[str] = Field(default=None, validation_alias="laneDirection")
     toll_plaza_name: Optional[str] = Field(default=None, validation_alias="tollPlazaName")

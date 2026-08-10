@@ -613,15 +613,40 @@ export const api = {
     http<any>(`/api/accidents/${id}/resolve`, { method: "POST", body: JSON.stringify(body) }),
 
   // --- Transporter blacklist (Feature 2) ---
-  transporters: (params?: { q?: string; status?: string; limit?: number }) => {
+  transporters: (params?: {
+    q?: string;
+    status?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
     const q = new URLSearchParams();
     Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
-    return http<{ count: number; transporters: any[] }>(
-      `/api/transporters${q.toString() ? `?${q}` : ""}`,
-    );
+    // `total` is the registry-wide COUNT(*); `count` is only this page's length.
+    return http<{
+      items: any[];
+      transporters: any[];
+      total: number;
+      limit: number;
+      offset: number;
+      count: number;
+    }>(`/api/transporters${q.toString() ? `?${q}` : ""}`);
   },
-  transporterBlacklist: () =>
-    http<{ count: number; blacklist: any[] }>("/api/transporters/blacklist"),
+  transporterBlacklist: (params?: { limit?: number; offset?: number }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<{
+      items: any[];
+      blacklist: any[];
+      total: number;
+      limit: number;
+      offset: number;
+      count: number;
+    }>(`/api/transporters/blacklist${q.toString() ? `?${q}` : ""}`);
+  },
+  transporterStats: () =>
+    http<{ total: number; active: number; blacklisted: number; vehicles_assigned: number }>(
+      "/api/transporters/stats",
+    ),
   transporter: (id: number) =>
     http<{ transporter: any; vehicles: any[]; blacklist_history: any[] }>(
       `/api/transporters/${id}`,

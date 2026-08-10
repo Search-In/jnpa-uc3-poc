@@ -5,7 +5,8 @@ import-ledger tables (core.td_import_file / core.td_import_error, migration 0035
 and UPSERTS the valid records into the EXISTING masters — it creates NO business
 tables of its own:
   * TRANSPORTER -> core.transporter      ON CONFLICT (source_company_id) DO UPDATE
-  * DRIVER      -> core.driver      ON CONFLICT (licence_no_norm)  DO UPDATE
+  * DRIVER      -> core.driver      upsert keyed on licence_no_norm (writable
+    CTE — v3 has no unique index on that column, see _DRIVER_UPSERT)
 
 Every file imports atomically: the ledger row, all per-row upserts and the final
 status update run in ONE transaction. Each per-row upsert runs inside a SAVEPOINT so
@@ -340,30 +341,60 @@ ON CONFLICT (company_id) DO UPDATE SET
 RETURNING (xmax = 0) AS inserted
 """
 
-# Upsert on the EXISTING unique key (licence_no_norm).
-# licence_no_norm is a GENERATED column in core.driver — never inserted directly.
-# Arbiter: the partial unique index over managed rows (id < 100000000).
+# Upsert keyed on the licence — the upload template has no Srno, so licence
+# remains this path's documented idempotency key.
+#
+# It CANNOT be an ON CONFLICT, though: v3 has no unique index on
+# licence_no_norm (only the non-unique idx_driver_licence_norm), so
+# `ON CONFLICT (licence_no_norm) WHERE id < 100000000` is rejected at plan time
+# with "no unique or exclusion constraint matching the ON CONFLICT
+# specification". A writable CTE gives the same upsert semantics with no schema
+# change and no new index.
+#
+# One further v3 fact the previous statement got wrong: licence_no_norm is a
+# PLAIN column, not GENERATED, so it must be written explicitly or search, /stats
+# and the PDP join all break on the new row.
+#
+# driver_id (GENERATED ALWAYS AS IDENTITY) and id (DEFAULT nextval) are both left
+# to generate themselves here — unlike the sheet importer, an upload has no Srno
+# to pin them to. The importer bumps both sequences past its explicit 1..N range
+# so the two paths cannot collide.
+#
+# The UPDATE targets min(driver_id) for the licence: 348 licences are shared by
+# more than one driver row, and touching exactly one row keeps this
+# deterministic instead of silently rewriting a whole duplicate group.
 _DRIVER_UPSERT = """
-INSERT INTO core.driver
-    (licence_number, driver_name, company_name, transporter_id, licence_type,
-     licence_valid_to, latest_pdp_number, date_of_birth, status, import_file_id,
-     data_origin)
-VALUES
-    (:licence_no, :name, :company_name, :transporter_id, :licence_type,
-     :licence_valid_to, :latest_pdp_number, :dob, :status, :import_file_id,
-     :data_origin)
-ON CONFLICT (licence_no_norm) WHERE id < 100000000 DO UPDATE SET
-    licence_number    = EXCLUDED.licence_number,
-    driver_name       = EXCLUDED.driver_name,
-    company_name      = COALESCE(EXCLUDED.company_name, core.driver.company_name),
-    transporter_id    = COALESCE(EXCLUDED.transporter_id, core.driver.transporter_id),
-    licence_type      = EXCLUDED.licence_type,
-    licence_valid_to  = COALESCE(EXCLUDED.licence_valid_to, core.driver.licence_valid_to),
-    latest_pdp_number = COALESCE(EXCLUDED.latest_pdp_number, core.driver.latest_pdp_number),
-    date_of_birth     = COALESCE(EXCLUDED.date_of_birth, core.driver.date_of_birth),
-    status            = EXCLUDED.status,
-    import_file_id    = EXCLUDED.import_file_id,
-    data_origin       = EXCLUDED.data_origin,
-    updated_at        = now()
-RETURNING (xmax = 0) AS inserted
+WITH target AS (
+    SELECT min(driver_id) AS driver_id
+    FROM core.driver
+    WHERE licence_no_norm = :licence_no_norm
+), upd AS (
+    UPDATE core.driver d SET
+        licence_number    = :licence_no,
+        driver_name       = :name,
+        company_name      = COALESCE(CAST(:company_name AS text), d.company_name),
+        transporter_id    = COALESCE(CAST(:transporter_id AS bigint), d.transporter_id),
+        licence_type      = :licence_type,
+        licence_valid_to  = COALESCE(CAST(:licence_valid_to AS date), d.licence_valid_to),
+        latest_pdp_number = COALESCE(CAST(:latest_pdp_number AS text), d.latest_pdp_number),
+        date_of_birth     = COALESCE(CAST(:dob AS date), d.date_of_birth),
+        status            = :status,
+        import_file_id    = :import_file_id,
+        data_origin       = :data_origin,
+        updated_at        = now()
+    FROM target t
+    WHERE d.driver_id = t.driver_id
+    RETURNING d.driver_id
+), ins AS (
+    INSERT INTO core.driver
+        (licence_number, licence_no_norm, driver_name, company_name,
+         transporter_id, licence_type, licence_valid_to, latest_pdp_number,
+         date_of_birth, status, import_file_id, data_origin)
+    SELECT :licence_no, :licence_no_norm, :name, :company_name, :transporter_id,
+           :licence_type, :licence_valid_to, :latest_pdp_number, :dob, :status,
+           :import_file_id, :data_origin
+    WHERE NOT EXISTS (SELECT 1 FROM upd)
+    RETURNING driver_id
+)
+SELECT EXISTS (SELECT 1 FROM ins) AS inserted
 """

@@ -75,6 +75,9 @@ export const SCREEN_ROLES: Record<string, Role[]> = {
   // mirrors the gateway policy for /api/jobs, /api/gate-docs and /api/scan.
   "/uc3-lifecycle": [...CONTROL_ROOM, "CUSTOMS"],
   "/truck-ops": [...CONTROL_ROOM, "CUSTOMS"],
+  // T-04 Truck Visit Detail (real gate documents + original scans) — same
+  // audience and same gateway policy as /api/gate-docs.
+  "/truck-visit": [...CONTROL_ROOM, "CUSTOMS"],
   // Shipping Lines (IAL/EAL/EDO) — mirrors gateway/auth.py /api/shipping-lines policy.
   "/shipping-lines": [...CONTROL_ROOM, "CUSTOMS"],
   // Berthing Reports (module 7) — mirrors gateway/auth.py /api/berthing policy.

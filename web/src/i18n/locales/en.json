@@ -54,7 +54,8 @@
     "integrations": "Integrations",
     "doubleTrip": "Double Trip",
     "uc3Lifecycle": "Container Operations",
-    "truckOps": "Truck Operations"
+    "truckOps": "Truck Operations",
+    "truckVisit": "Truck Visit Detail"
   },
   "followBox": {
     "title": "Follow the Box",

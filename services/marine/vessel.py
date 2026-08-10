@@ -62,6 +62,15 @@ class VesselRepository:
             if val:
                 conds.append(f"v.{col} ILIKE :{key}")
                 params[key] = f"%{str(val).strip()}%"
+        # Demo replay date filter (UC1-004): core.vessel carries no port-visit date, only
+        # `updated_at` (last registry sync), so that is the one honest column to range-filter
+        # on. Same >=/<= idiom as VesselCallRepository's eta_from/eta_to.
+        if filters.get("date_from") is not None:
+            conds.append("v.updated_at >= :date_from")
+            params["date_from"] = filters["date_from"]
+        if filters.get("date_to") is not None:
+            conds.append("v.updated_at <= :date_to")
+            params["date_to"] = filters["date_to"]
         clause = ("WHERE " + " AND ".join(conds)) if conds else ""
         return clause, params
 

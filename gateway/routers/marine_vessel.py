@@ -114,9 +114,11 @@ class VesselStatsOut(BaseModel):
     by_flag: List[FlagStat]
 
 
-def _filters(flag, vessel_type, name, imo, owner, call_sign) -> Dict[str, Any]:
+def _filters(flag, vessel_type, name, imo, owner, call_sign,
+             date_from=None, date_to=None) -> Dict[str, Any]:
     return {"flag": flag, "vessel_type": vessel_type, "name": name, "imo": imo,
-            "owner": owner, "call_sign": call_sign}
+            "owner": owner, "call_sign": call_sign,
+            "date_from": date_from, "date_to": date_to}
 
 
 @router.get("", response_model=VesselListResponse,
@@ -128,6 +130,11 @@ async def list_vessels(
     imo: Optional[str] = Query(default=None, description="IMO contains"),
     owner: Optional[str] = Query(default=None, description="owner contains"),
     call_sign: Optional[str] = Query(default=None, description="call sign contains"),
+    # Demo replay date filter (UC1-004). core.vessel is a hull REGISTER, not a port
+    # visit, so there is no ETA/ATA to anchor on — updated_at (last registry sync) is
+    # the one honest timestamp the table carries. Same from/to idiom as /marine/calls.
+    date_from: Optional[_dt.datetime] = Query(default=None, alias="from", description="updated_at >="),
+    date_to: Optional[_dt.datetime] = Query(default=None, alias="to", description="updated_at <="),
     sort: str = Query(default="vessel_name"),
     direction: str = Query(default="asc"),
     limit: int = Query(default=100, ge=1, le=500),
@@ -135,7 +142,7 @@ async def list_vessels(
     service: VesselService = Depends(get_service),
 ) -> VesselListResponse:
     res = await service.list_vessels(
-        _filters(flag, vessel_type, name, imo, owner, call_sign),
+        _filters(flag, vessel_type, name, imo, owner, call_sign, date_from, date_to),
         sort=sort, direction=direction, limit=limit, offset=offset)
     REQUESTS.labels(_API, "ok").inc()
     return VesselListResponse(**res)
@@ -143,8 +150,12 @@ async def list_vessels(
 
 @router.get("/stats", response_model=VesselStatsOut,
             summary="Vessel-registry totals + particular completeness")
-async def stats(service: VesselService = Depends(get_service)) -> VesselStatsOut:
-    res = await service.stats(_filters(None, None, None, None, None, None))
+async def stats(
+    date_from: Optional[_dt.datetime] = Query(default=None, alias="from", description="updated_at >="),
+    date_to: Optional[_dt.datetime] = Query(default=None, alias="to", description="updated_at <="),
+    service: VesselService = Depends(get_service),
+) -> VesselStatsOut:
+    res = await service.stats(_filters(None, None, None, None, None, None, date_from, date_to))
     REQUESTS.labels(_API, "ok").inc()
     return VesselStatsOut(**res)
 

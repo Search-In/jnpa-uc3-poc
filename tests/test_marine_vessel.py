@@ -155,6 +155,27 @@ class TestVesselRepositoryQueryBuilding:
         clause, params = self._repo()._where({"name": ""})
         assert clause == "" and params == {}
 
+    def test_date_from_filters_updated_at_gte(self):
+        clause, params = self._repo()._where({"date_from": "2026-06-01T00:00:00"})
+        assert "v.updated_at >= :date_from" in clause
+        assert params["date_from"] == "2026-06-01T00:00:00"
+
+    def test_date_to_filters_updated_at_lte(self):
+        clause, params = self._repo()._where({"date_to": "2026-06-09T23:59:59"})
+        assert "v.updated_at <= :date_to" in clause
+        assert params["date_to"] == "2026-06-09T23:59:59"
+
+    def test_date_from_and_date_to_combine_with_and(self):
+        clause, params = self._repo()._where(
+            {"date_from": "2026-06-01T00:00:00", "date_to": "2026-06-09T23:59:59"})
+        assert clause.startswith("WHERE ") and " AND " in clause
+        assert params == {"date_from": "2026-06-01T00:00:00", "date_to": "2026-06-09T23:59:59"}
+
+    def test_none_date_values_are_ignored(self):
+        """None means 'no filter' — must not become `v.updated_at >= :date_from` with NULL."""
+        clause, params = self._repo()._where({"date_from": None, "date_to": None})
+        assert clause == "" and params == {}
+
 
 class TestVesselSortWhitelist:
     """Sort keys are whitelisted, so an arbitrary `sort` cannot reach ORDER BY."""

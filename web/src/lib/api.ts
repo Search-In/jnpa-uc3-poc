@@ -613,12 +613,7 @@ export const api = {
     http<any>(`/api/accidents/${id}/resolve`, { method: "POST", body: JSON.stringify(body) }),
 
   // --- Transporter blacklist (Feature 2) ---
-  transporters: (params?: {
-    q?: string;
-    status?: string;
-    limit?: number;
-    offset?: number;
-  }) => {
+  transporters: (params?: { q?: string; status?: string; limit?: number; offset?: number }) => {
     const q = new URLSearchParams();
     Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
     // `total` is the registry-wide COUNT(*); `count` is only this page's length.
@@ -834,10 +829,9 @@ export const api = {
     );
   },
   emptyTrtAnomaly: (code: string, params?: { limit?: number; offset?: number }) => {
+    // Numeric-only params, so no empty-string guard (and TS rejects one).
     const qs = new URLSearchParams();
-    Object.entries(params || {}).forEach(
-      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
-    );
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && qs.set(k, String(v)));
     return http<{ code: string; label: string; items: any[]; total: number }>(
       `/api/cfs-ecy/empty-trt/anomalies/${encodeURIComponent(code)}${qs.toString() ? `?${qs}` : ""}`,
     );
@@ -962,12 +956,8 @@ export const api = {
     offset?: number;
   }) => {
     const qs = new URLSearchParams();
-    Object.entries(params).forEach(
-      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
-    );
-    return http<GateSourceDocPage>(
-      `/api/gate-docs/documents${qs.toString() ? `?${qs}` : ""}`,
-    );
+    Object.entries(params).forEach(([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)));
+    return http<GateSourceDocPage>(`/api/gate-docs/documents${qs.toString() ? `?${qs}` : ""}`);
   },
   gateDocTat: (terminal?: string) =>
     http<GateDocTat>(

@@ -445,8 +445,7 @@ export default function TransporterBlacklist({
                     <span className="font-semibold text-foreground">
                       {showingFrom}–{showingTo}
                     </span>{" "}
-                    of{" "}
-                    <span className="font-semibold text-foreground">{fmt(resultTotal)}</span>
+                    of <span className="font-semibold text-foreground">{fmt(resultTotal)}</span>
                     {isBlacklistMode
                       ? q
                         ? " matches"

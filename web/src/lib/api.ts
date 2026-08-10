@@ -5,7 +5,7 @@
 
 import { authEnabled, clearSession, getToken } from "./auth";
 import { getDataSourceMode } from "./dataSourceMode";
-import type { AvailableVehicle } from "./types";
+import type { AvailableVehicle, DqIssue, EmptyTrtResponse } from "./types";
 
 // Request budget. Without one, `fetch` waits indefinitely: the 2026-08-04 audit
 // measured /api/kpi at 81s against RDS and the panel simply hung — no spinner
@@ -789,6 +789,96 @@ export const api = {
     );
   },
   cfsEcyUploadDetail: (fileId: number) => http<any>(`/api/cfs-ecy/uploads/${fileId}`),
+
+  // --- UC3-003: empty-container gate events + the TRT KPI (real CODECO corpus) ---
+  // These read core.container_event (the imported ECY/CFS CODECO gate log), not
+  // core.cfs_ecy_movement, so the KPI is computed from the corpus feed alone.
+  cfsEcyEvents: (params?: {
+    container?: string;
+    location_type?: string;
+    event_type?: string;
+    direction?: string;
+    from?: string;
+    to?: string;
+    sort?: string;
+    order?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/cfs-ecy/events${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  /** KPI 3 "TRT for empty containers from ECD" plus the evidence behind it. */
+  emptyTrt: () => http<EmptyTrtResponse>("/api/cfs-ecy/empty-trt"),
+  emptyTrtChains: (params?: {
+    container?: string;
+    chain_status?: string;
+    anomaly_code?: string;
+    anomaly_only?: boolean;
+    sort?: string;
+    order?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/cfs-ecy/empty-trt/chains${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  emptyTrtAnomaly: (code: string, params?: { limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ code: string; label: string; items: any[]; total: number }>(
+      `/api/cfs-ecy/empty-trt/anomalies/${encodeURIComponent(code)}${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  emptyTrtContainer: (containerNo: string) =>
+    http<any>(`/api/cfs-ecy/empty-trt/containers/${encodeURIComponent(containerNo)}`),
+
+  // --- Data Quality ledger (core.dq_issue) ---
+  dqIssues: (params?: {
+    source_table?: string;
+    issue_type?: string;
+    severity?: string;
+    file_id?: number;
+    q?: string;
+    sort?: string;
+    order?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: DqIssue[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/dq/issues${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  dqSummary: (params?: { source_table?: string; severity?: string }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{
+      total: number;
+      errors: number;
+      warnings: number;
+      info: number;
+      by_source_table: any[];
+      by_issue_type: any[];
+    }>(`/api/dq/summary${qs.toString() ? `?${qs}` : ""}`);
+  },
 
   // --- ECY→CFS repositioning chains (F-Y1 lifecycle, migration 0114) ---
   ecyCfsChains: (params?: {

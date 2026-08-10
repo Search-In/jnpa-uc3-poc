@@ -152,13 +152,18 @@ class MarineUploadService:
     async def import_file(self, content: bytes, filename: str,
                           uploaded_by: str,
                           document_type: Optional[str] = None,
-                          override: bool = False) -> Dict[str, Any]:
+                          override: bool = False,
+                          data_origin: Optional[str] = None) -> Dict[str, Any]:
         """Import one uploaded file.
 
         ``override`` re-processes a file already in the ledger instead of returning
         SKIPPED_DUPLICATE. Every write is an upsert, so this refreshes the business rows
         and the lifecycle projection in place — it deletes nothing. Default False keeps
         the normal import path unchanged.
+
+        ``data_origin`` is optional (``API`` | ``MANUAL``). When set — typically from
+        the SPA's ``X-Data-Mode`` LIVE/DEMO header — rows are tagged for that corpus
+        so an upload while LIVE is visible under the LIVE toggle.
         """
         t0 = perf_counter()
         sha = _sha256(content)
@@ -183,7 +188,7 @@ class MarineUploadService:
             file_id = await self._repo.record_rejected_upload(
                 physical_format=physical_format, filename=filename, file_hash=sha,
                 uploaded_by=uploaded_by, detail=detail, errors=res.errors,
-                document_type=doc_type)
+                document_type=doc_type, data_origin=data_origin)
             return {"file_id": file_id, "status": "REJECTED", "imported": 0, "updated": 0,
                     "skipped": 0, "invalid": res.invalid_count, "failed": 0,
                     "duplicate_file": False, "document_type": doc_type,
@@ -195,7 +200,8 @@ class MarineUploadService:
             res.records, filename=filename, file_hash=sha, physical_format=physical_format,
             document_type=doc_type, parse_errors=res.errors, parse_invalid=res.invalid_count,
             parse_duplicate=res.duplicate_count, file_size=len(content),
-            uploaded_by=uploaded_by, source="UPLOAD", override=override)
+            uploaded_by=uploaded_by, source="UPLOAD", override=override,
+            data_origin=data_origin)
 
         status = result["status"]  # SUCCESS | PARTIAL | FAILED | SKIPPED_DUPLICATE
         log.info("marine_upload.import", extra={"status": status, "document_type": doc_type,

@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Mapping, Optional
 
 from jnpa_shared.logging import get_logger
 
+from .arrival_times import assemble_arrival_times
 from .manual_pilot import ManualPilotService
 from .projection import MarineProjection, project
 from .pilot_milestones import PilotMilestoneService, merge_events
@@ -137,6 +138,18 @@ class VesselCallService:
                           data_origin: Optional[str] = None) -> List[Dict[str, Any]]:
         return await self._repo.list_events(call_id, limit=limit, offset=offset,
                                             data_origin=data_origin)
+
+    async def arrival_times(self, call_id: int, *,
+                            data_origin: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Six arrival-time definitions for one call (spec UI-025 / UC1-019).
+
+        Reuses :meth:`timeline` so the ladder sees the same merged actuals (ledger +
+        pilotage milestones) the detail pane does — one truth, two views.
+        """
+        call = await self.timeline(call_id, data_origin=data_origin)
+        if call is None:
+            return None
+        return assemble_arrival_times(call, call.get("events") or ())
 
     async def stats(self, filters: Mapping[str, Any]) -> Dict[str, Any]:
         return await self._repo.stats(filters)

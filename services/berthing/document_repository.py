@@ -31,8 +31,8 @@ class BerthingDocumentRepository:
     async def find_by_hash(self, pdf_hash: str) -> Optional[dict]:
         async with get_engine(self._dsn).connect() as conn:
             row = (await conn.execute(text(
-                "SELECT id, file_name, terminal, report_date, page_count, table_count, "
-                "row_count, uploaded_by, created_at "
+                "SELECT id, file_name, terminal, report_date, pdf_hash, page_count, "
+                "table_count, row_count, uploaded_by, created_at "
                 "FROM core.berthing_report_document WHERE pdf_hash = :h"),
                 {"h": pdf_hash})).mappings().first()
         return dict(row) if row else None
@@ -89,8 +89,8 @@ class BerthingDocumentRepository:
         params.update(limit=limit, offset=offset)
         async with get_engine(self._dsn).connect() as conn:
             items = (await conn.execute(text(
-                "SELECT id, file_name, terminal, report_date, page_count, table_count, "
-                "row_count, uploaded_by, created_at "
+                "SELECT id, file_name, terminal, report_date, pdf_hash, page_count, "
+                "table_count, row_count, uploaded_by, created_at "
                 f"FROM core.berthing_report_document{where} "
                 "ORDER BY id DESC LIMIT :limit OFFSET :offset"), params)).mappings().all()
             total = int((await conn.execute(text(
@@ -106,8 +106,8 @@ class BerthingDocumentRepository:
             params["data_origin"] = data_origin
         async with get_engine(self._dsn).connect() as conn:
             row = (await conn.execute(text(
-                "SELECT id, file_name, terminal, report_date, page_count, table_count, "
-                "row_count, uploaded_by, created_at "
+                "SELECT id, file_name, terminal, report_date, pdf_hash, page_count, "
+                "table_count, row_count, uploaded_by, created_at "
                 "FROM core.berthing_report_document WHERE id = :id" + clause),
                 params)).mappings().first()
         return dict(row) if row else None

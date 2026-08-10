@@ -48,9 +48,7 @@ function Field({ label, value }: { label: string; value: unknown }) {
       </dt>
       <dd
         className={
-          empty
-            ? "text-[13px] text-muted-foreground/60"
-            : "text-[13px] font-medium text-foreground"
+          empty ? "text-[13px] text-muted-foreground/60" : "text-[13px] font-medium text-foreground"
         }
       >
         {empty ? "—" : String(value)}
@@ -82,11 +80,7 @@ function OriginBadge({ origin }: { origin: string | null }) {
           ? "bg-emerald-500/10 text-emerald-600 ring-emerald-500/30 dark:text-emerald-400"
           : "bg-muted text-muted-foreground ring-border"
       }`}
-      title={
-        real
-          ? "Parsed verbatim from the customer's source document"
-          : `Provenance: ${origin}`
-      }
+      title={real ? "Parsed verbatim from the customer's source document" : `Provenance: ${origin}`}
     >
       {real ? "Real source" : origin}
     </span>
@@ -137,8 +131,7 @@ function ParsedPane({ doc }: { doc: GateSourceDoc }) {
   const tat =
     doc.truck_in_ts && doc.truck_out_ts
       ? Math.round(
-          (new Date(doc.truck_out_ts).getTime() - new Date(doc.truck_in_ts).getTime()) /
-            60000,
+          (new Date(doc.truck_out_ts).getTime() - new Date(doc.truck_in_ts).getTime()) / 60000,
         )
       : null;
 
@@ -169,8 +162,14 @@ function ParsedPane({ doc }: { doc: GateSourceDoc }) {
           <Field label="Driver name" value={doc.driver_name} />
           <Field label="Transporter" value={doc.transporter_name} />
           <Field label="Gate" value={doc.gate_no} />
-          <Field label="Truck in" value={doc.truck_in_ts ? fmtDateTimeIST(doc.truck_in_ts) : null} />
-          <Field label="Truck out" value={doc.truck_out_ts ? fmtDateTimeIST(doc.truck_out_ts) : null} />
+          <Field
+            label="Truck in"
+            value={doc.truck_in_ts ? fmtDateTimeIST(doc.truck_in_ts) : null}
+          />
+          <Field
+            label="Truck out"
+            value={doc.truck_out_ts ? fmtDateTimeIST(doc.truck_out_ts) : null}
+          />
           <Field label="Turnaround" value={tat != null ? `${tat} min` : null} />
         </dl>
       </section>
@@ -262,8 +261,8 @@ export default function TruckVisitDetail() {
       <header className="space-y-1">
         <h1 className="text-lg font-semibold tracking-tight">Truck Visit Detail</h1>
         <p className="text-xs text-muted-foreground">
-          Every gate document a tractor produced, parsed from the operator's own
-          paperwork and shown beside the original scan.
+          Every gate document a tractor produced, parsed from the operator's own paperwork and shown
+          beside the original scan.
         </p>
       </header>
 
@@ -305,8 +304,8 @@ export default function TruckVisitDetail() {
 
       {!query.isLoading && !query.isError && docs.length === 0 && (
         <p className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-          No gate documents on record for{" "}
-          <span className="font-mono text-foreground">{truck}</span>.
+          No gate documents on record for <span className="font-mono text-foreground">{truck}</span>
+          .
         </p>
       )}
 
@@ -327,9 +326,7 @@ export default function TruckVisitDetail() {
                 <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
                   {s.label}
                 </div>
-                <div className="text-sm font-semibold tabular-nums text-foreground">
-                  {s.value}
-                </div>
+                <div className="text-sm font-semibold tabular-nums text-foreground">{s.value}</div>
               </div>
             ))}
           </div>
@@ -346,9 +343,7 @@ export default function TruckVisitDetail() {
                       onClick={() => setSelected(d.doc_id)}
                       aria-current={active}
                       className={`w-full rounded-lg border px-3 py-2 text-left transition ${
-                        active
-                          ? "border-primary bg-primary/5"
-                          : "border-border hover:bg-muted/40"
+                        active ? "border-primary bg-primary/5" : "border-border hover:bg-muted/40"
                       }`}
                     >
                       <div className="flex items-center justify-between gap-2">
@@ -377,8 +372,7 @@ export default function TruckVisitDetail() {
                 <div className="mb-3 flex flex-wrap items-center gap-2 border-b border-border pb-3">
                   <CategoryChip category={current.doc_category} />
                   <h2 className="text-sm font-semibold text-foreground">
-                    {current.terminal ?? "Unknown terminal"} ·{" "}
-                    {fmtDateTimeIST(current.doc_ts)}
+                    {current.terminal ?? "Unknown terminal"} · {fmtDateTimeIST(current.doc_ts)}
                   </h2>
                   <OriginBadge origin={current.data_origin} />
                   <span className="text-[10px] text-muted-foreground">

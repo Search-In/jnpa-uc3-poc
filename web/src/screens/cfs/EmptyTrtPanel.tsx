@@ -29,13 +29,7 @@ import {
   ClipboardList,
 } from "lucide-react";
 
-import {
-  StatGrid,
-  StatCard,
-  SegmentedTabs,
-  StatusChip,
-  type Tone,
-} from "@/components/ui/dtccc";
+import { StatGrid, StatCard, SegmentedTabs, StatusChip, type Tone } from "@/components/ui/dtccc";
 import { Card } from "@/components/ui/card";
 import { LoadingState, ErrorState } from "@/components/ui/misc";
 import { api } from "@/lib/api";
@@ -307,8 +301,7 @@ export default function EmptyTrtPanel() {
                   <div className="font-mono font-medium text-foreground">{f.path}</div>
                   <div className="mt-0.5 text-muted-foreground">
                     {f.row_count?.toLocaleString() ?? "—"} source rows ·{" "}
-                    {f.imported_events.toLocaleString()} events stored · loaded{" "}
-                    {fmtTs(f.loaded_at)}
+                    {f.imported_events.toLocaleString()} events stored · loaded {fmtTs(f.loaded_at)}
                   </div>
                 </li>
               ))}
@@ -327,9 +320,8 @@ export default function EmptyTrtPanel() {
               <span className="font-semibold text-foreground">{src.ecy_in_events} gate-IN</span>{" "}
               events — a gap of{" "}
               <span className="font-semibold text-foreground">{src.ecy_pairing_gap}</span>. Every
-              source row was imported verbatim; none was deleted, re-dated or matched to an
-              invented partner. The CFS log{" "}
-              {src.cfs_paired ? "is perfectly paired" : "is unpaired"}.
+              source row was imported verbatim; none was deleted, re-dated or matched to an invented
+              partner. The CFS log {src.cfs_paired ? "is perfectly paired" : "is unpaired"}.
             </p>
           </div>
 
@@ -630,15 +622,7 @@ export default function EmptyTrtPanel() {
 }
 
 // --- pieces -----------------------------------------------------------------
-function Metric({
-  label,
-  value,
-  strong,
-}: {
-  label: string;
-  value: string;
-  strong?: boolean;
-}) {
+function Metric({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
   return (
     <div>
       <dt className="text-[10.5px] uppercase tracking-wide text-muted-foreground">{label}</dt>
@@ -726,7 +710,10 @@ function ContainerChain({ data }: { data: any }) {
               key={e.event_id}
               className="flex flex-wrap items-center gap-2 rounded-md border border-border px-3 py-1.5 text-[12px]"
             >
-              <StatusChip label={e.location_type} tone={e.location_type === "CFS" ? "info" : "warn"} />
+              <StatusChip
+                label={e.location_type}
+                tone={e.location_type === "CFS" ? "info" : "warn"}
+              />
               <span className="font-mono font-semibold text-foreground">{e.event_type}</span>
               {typeof e.details?.source_file === "string" && (
                 <span className="text-[11px] text-muted-foreground">

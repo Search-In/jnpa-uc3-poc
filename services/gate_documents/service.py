@@ -150,12 +150,30 @@ class GateDocumentService:
 
     async def list_source_documents(self, *, category: Optional[str] = None,
                                     container: Optional[str] = None,
+                                    vehicle: Optional[str] = None,
+                                    driver_licence: Optional[str] = None,
+                                    terminal: Optional[str] = None,
+                                    from_ts: Optional[Any] = None,
+                                    to_ts: Optional[Any] = None,
                                     limit: int, offset: int) -> Dict[str, Any]:
-        """Parsed source gate documents (core.gate_document) — see the repository."""
+        """Parsed source gate documents (core.gate_document) — see the repository.
+
+        Alongside the page, report the shape of the FULL filtered set (not just
+        the current page): which terminals it touches and the date span it
+        covers. That is what a truck-visit view states above the timeline, and
+        computing it here keeps the client from having to fetch everything.
+        """
         rows, total = await self._repo.list_source_documents(
-            category=category, container=container, limit=limit, offset=offset)
+            category=category, container=container, vehicle=vehicle,
+            driver_licence=driver_licence, terminal=terminal,
+            from_ts=from_ts, to_ts=to_ts, limit=limit, offset=offset)
+        terminals = sorted({r["terminal"] for r in rows if r.get("terminal")})
+        stamps = sorted(r["doc_ts"] for r in rows if r.get("doc_ts"))
         return {"items": rows, "total": total, "limit": limit, "offset": offset,
-                "count": len(rows)}
+                "count": len(rows), "terminals": terminals,
+                "terminal_count": len(terminals),
+                "first_doc_ts": stamps[0] if stamps else None,
+                "last_doc_ts": stamps[-1] if stamps else None}
       
     async def hourly_profile(self, doc_type: str, *, filters,
                              group_by: str = "hour") -> Dict[str, Any]:

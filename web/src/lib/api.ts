@@ -5,7 +5,7 @@
 
 import { authEnabled, clearSession, getToken } from "./auth";
 import { getDataSourceMode } from "./dataSourceMode";
-import type { AvailableVehicle } from "./types";
+import type { AvailableVehicle, DqIssue, EmptyTrtResponse } from "./types";
 
 // Request budget. Without one, `fetch` waits indefinitely: the 2026-08-04 audit
 // measured /api/kpi at 81s against RDS and the panel simply hung — no spinner
@@ -613,15 +613,35 @@ export const api = {
     http<any>(`/api/accidents/${id}/resolve`, { method: "POST", body: JSON.stringify(body) }),
 
   // --- Transporter blacklist (Feature 2) ---
-  transporters: (params?: { q?: string; status?: string; limit?: number }) => {
+  transporters: (params?: { q?: string; status?: string; limit?: number; offset?: number }) => {
     const q = new URLSearchParams();
     Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
-    return http<{ count: number; transporters: any[] }>(
-      `/api/transporters${q.toString() ? `?${q}` : ""}`,
-    );
+    // `total` is the registry-wide COUNT(*); `count` is only this page's length.
+    return http<{
+      items: any[];
+      transporters: any[];
+      total: number;
+      limit: number;
+      offset: number;
+      count: number;
+    }>(`/api/transporters${q.toString() ? `?${q}` : ""}`);
   },
-  transporterBlacklist: () =>
-    http<{ count: number; blacklist: any[] }>("/api/transporters/blacklist"),
+  transporterBlacklist: (params?: { limit?: number; offset?: number }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<{
+      items: any[];
+      blacklist: any[];
+      total: number;
+      limit: number;
+      offset: number;
+      count: number;
+    }>(`/api/transporters/blacklist${q.toString() ? `?${q}` : ""}`);
+  },
+  transporterStats: () =>
+    http<{ total: number; active: number; blacklisted: number; vehicles_assigned: number }>(
+      "/api/transporters/stats",
+    ),
   transporter: (id: number) =>
     http<{ transporter: any; vehicles: any[]; blacklist_history: any[] }>(
       `/api/transporters/${id}`,
@@ -765,6 +785,95 @@ export const api = {
   },
   cfsEcyUploadDetail: (fileId: number) => http<any>(`/api/cfs-ecy/uploads/${fileId}`),
 
+  // --- UC3-003: empty-container gate events + the TRT KPI (real CODECO corpus) ---
+  // These read core.container_event (the imported ECY/CFS CODECO gate log), not
+  // core.cfs_ecy_movement, so the KPI is computed from the corpus feed alone.
+  cfsEcyEvents: (params?: {
+    container?: string;
+    location_type?: string;
+    event_type?: string;
+    direction?: string;
+    from?: string;
+    to?: string;
+    sort?: string;
+    order?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/cfs-ecy/events${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  /** KPI 3 "TRT for empty containers from ECD" plus the evidence behind it. */
+  emptyTrt: () => http<EmptyTrtResponse>("/api/cfs-ecy/empty-trt"),
+  emptyTrtChains: (params?: {
+    container?: string;
+    chain_status?: string;
+    anomaly_code?: string;
+    anomaly_only?: boolean;
+    sort?: string;
+    order?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/cfs-ecy/empty-trt/chains${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  emptyTrtAnomaly: (code: string, params?: { limit?: number; offset?: number }) => {
+    // Numeric-only params, so no empty-string guard (and TS rejects one).
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && qs.set(k, String(v)));
+    return http<{ code: string; label: string; items: any[]; total: number }>(
+      `/api/cfs-ecy/empty-trt/anomalies/${encodeURIComponent(code)}${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  emptyTrtContainer: (containerNo: string) =>
+    http<any>(`/api/cfs-ecy/empty-trt/containers/${encodeURIComponent(containerNo)}`),
+
+  // --- Data Quality ledger (core.dq_issue) ---
+  dqIssues: (params?: {
+    source_table?: string;
+    issue_type?: string;
+    severity?: string;
+    file_id?: number;
+    q?: string;
+    sort?: string;
+    order?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: DqIssue[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/dq/issues${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  dqSummary: (params?: { source_table?: string; severity?: string }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{
+      total: number;
+      errors: number;
+      warnings: number;
+      info: number;
+      by_source_table: any[];
+      by_issue_type: any[];
+    }>(`/api/dq/summary${qs.toString() ? `?${qs}` : ""}`);
+  },
+
   // --- ECY→CFS repositioning chains (F-Y1 lifecycle, migration 0114) ---
   ecyCfsChains: (params?: {
     container?: string;
@@ -832,6 +941,23 @@ export const api = {
     return http<GateDocBundle>(
       `/api/gate-docs/truck/${encodeURIComponent(truckNo)}${pin ? `?source=${pin}` : ""}`,
     );
+  },
+  /** REAL parsed gate documents (core.gate_document) — the T-04 truck-visit
+   *  source. Distinct from gateDocsForTruck, which reads the upload tables. */
+  gateSourceDocs: (params: {
+    vehicle?: string;
+    container?: string;
+    driver_licence?: string;
+    category?: string;
+    terminal?: string;
+    from_date?: string;
+    to_date?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)));
+    return http<GateSourceDocPage>(`/api/gate-docs/documents${qs.toString() ? `?${qs}` : ""}`);
   },
   gateDocTat: (terminal?: string) =>
     http<GateDocTat>(
@@ -1845,6 +1971,57 @@ export interface GateDocSummary {
   containerless_docs: number;
   eir_with_tat: number;
   files: number;
+}
+/** One REAL gate document as filed, from `core.gate_document` (UC3-002).
+ *  A field the source slip does not print comes back null — never inferred. */
+export interface GateSourceDoc {
+  doc_id: number;
+  doc_category: "EIR" | "FORM13" | "PIN_TICKET";
+  doc_variant: string;
+  doc_ref: string | null;
+  pin_no: string | null;
+  visit_id: string | null;
+  doc_ts: string | null;
+  container_no: string | null;
+  iso_code: string | null;
+  load_status: string | null;
+  gross_weight_kg: number | null;
+  seal1: string | null;
+  seal2: string | null;
+  vehicle_no: string | null;
+  bat_no: string | null;
+  driver_name: string | null;
+  driver_licence: string | null;
+  transporter_name: string | null;
+  truck_in_ts: string | null;
+  truck_out_ts: string | null;
+  gate_no: string | null;
+  yard_position: string | null;
+  vessel_name: string | null;
+  voyage: string | null;
+  pol: string | null;
+  pod: string | null;
+  booking_no: string | null;
+  cfs: string | null;
+  group_code: string | null;
+  /** Verbatim parsed payload, exactly as the source file supplies it. */
+  attrs: Record<string, unknown> | null;
+  terminal: string | null;
+  /** Same-origin URL of the original scan, or null when none is linked. */
+  evidence_uri: string | null;
+  image_file: string | null;
+  data_origin: string | null;
+}
+export interface GateSourceDocPage {
+  items: GateSourceDoc[];
+  total: number;
+  limit: number;
+  offset: number;
+  count: number;
+  terminals: string[];
+  terminal_count: number;
+  first_doc_ts: string | null;
+  last_doc_ts: string | null;
 }
 export interface GateDocBundle {
   container_no?: string;

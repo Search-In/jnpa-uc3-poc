@@ -8,6 +8,9 @@
 .env.tmp
 .env*.bak*
 *.env.prod
+# The filled-in QA env file (RDS/jnpa_qa password). The TEMPLATE .env.qa.example
+# stays tracked — this exact-name pattern does not match it.
+.env.qa
 # Database dumps (deploy/jnpa-uc3.sh backup writes here)
 backups/
 *.sql.gz

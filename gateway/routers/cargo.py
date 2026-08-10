@@ -66,6 +66,7 @@ from services.cargo import (
     CargoNotFound,
     CargoService,
     CargoTransitionError,
+    CargoCustomsBlocked,
     scope_filters_for_role,
 )
 
@@ -779,6 +780,19 @@ def _actor_role(request: Request) -> Optional[str]:
     return getattr(principal, "role", None)
 
 
+def _customs_409(exc: CargoCustomsBlocked) -> HTTPException:
+    """Map a customs-blocked release to a 409 that names CUSTOMS as the reason.
+
+    Deliberately not ``illegal_transition``: the lifecycle transition is legal, so
+    reporting it as illegal would send the operator to fix the wrong track."""
+    return HTTPException(status_code=status.HTTP_409_CONFLICT, detail={
+        "error": "customs_not_cleared", "container_number": exc.container_number,
+        "customs_status": exc.customs_status, "attempted_status": exc.target,
+        "message": ("Customs has not released these goods "
+                    f"(customs_status={exc.customs_status}). A container that is held "
+                    "or under examination cannot be released from the port.")})
+
+
 def _transition_409(exc: CargoTransitionError) -> HTTPException:
     """Map an illegal lifecycle transition to a precise 409 (e.g. release before
     verify, or a duplicate release)."""
@@ -1060,6 +1074,9 @@ async def update_cargo(
     except CargoNotFound:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "not_found", "container_number": cn})
+    except CargoCustomsBlocked as exc:
+        # is_released=true on a container customs is holding or examining.
+        raise _customs_409(exc)
     except CargoTransitionError as exc:
         # is_released=true on a container that has not passed VERIFY.
         raise _transition_409(exc)
@@ -1208,6 +1225,8 @@ async def release_cargo(
     except CargoNotFound:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "not_found", "container_number": cn})
+    except CargoCustomsBlocked as exc:
+        raise _customs_409(exc)
     except CargoTransitionError as exc:
         raise _transition_409(exc)
     return ReleaseOut(container_number=cn,

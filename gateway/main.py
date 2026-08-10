@@ -95,6 +95,7 @@ from .routers import (
     container_job,
     document_ocr,
     double_trip,
+    corridor_sim,
     dq,
     driver_jobs,
     edi_vessel,
@@ -123,6 +124,7 @@ from .routers import (
     rms_tas,
     shipping_lines,
     transporters,
+    vehicle_registry,
     transporters_drivers_upload,
     trt,
     weather,
@@ -753,6 +755,8 @@ app.include_router(nvr.router)               # NVR device/stream integration
 app.include_router(trt.router)               # ECY TRT KPI
 app.include_router(cfs_ecy.router)           # CFS-ECY CODECO gate movements (module 13, read-only)
 app.include_router(dq.router)                # Data Quality ledger over core.dq_issue (read-only)
+app.include_router(vehicle_registry.router)   # UC3-004 vehicle->transporter registry (MIXED provenance)
+app.include_router(corridor_sim.router)      # UC3-005 frozen NH-348 20k simulation (SIMULATED only)
 app.include_router(customs.router)           # Customs docs (module 5: IGM/OOC/SMTP/RMS/LEO/SB)
 app.include_router(gate_documents.router)    # UC-III gate documents (EIR / PIN ticket / Form-13 + TAT)
 app.include_router(container_job.router)     # UC-III job spine: assignment + gate/yard/scan events

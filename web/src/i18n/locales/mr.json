@@ -40,7 +40,9 @@
     "uc3Lifecycle": "कंटेनर परिचालन",
     "truckOps": "ट्रक ऑपरेशन्स",
     "cargoWhatIf": "कार्गो व्हॉट-इफ",
-    "truckVisit": "ट्रक भेट तपशील"
+    "truckVisit": "ट्रक भेट तपशील",
+    "vehicleRegistry": "वाहन नोंदणी",
+    "corridorSim": "कॉरिडॉर सिम्युलेशन"
   },
   "followBox": {
     "title": "फॉलो द बॉक्स",

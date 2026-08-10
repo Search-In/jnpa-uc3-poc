@@ -39,7 +39,8 @@
     "vehicles": "वाहन प्रबंधन",
     "uc3Lifecycle": "कंटेनर संचालन",
     "truckOps": "ट्रक संचालन",
-    "cargoWhatIf": "कार्गो व्हॉट-इफ"
+    "cargoWhatIf": "कार्गो व्हॉट-इफ",
+    "truckVisit": "ट्रक विज़िट विवरण"
   },
   "followBox": {
     "title": "फॉलो द बॉक्स",

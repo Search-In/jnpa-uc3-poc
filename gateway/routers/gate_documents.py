@@ -38,10 +38,13 @@ from ..pii import mask_for_request
 from services.gate_documents import GateDocumentService
 from services.gate_documents.repository import FORM13_SOURCES
 from services.gate_documents.upload_parsers import DOC_TYPES, doc_type_ok
+from gateway.upload_limits import MAX_UPLOAD_BYTES
 
 router = APIRouter(prefix="/api/gate-docs", tags=["gate-documents"])
 
-_MAX_UPLOAD_BYTES = 10 * 1024 * 1024   # 10 MB — mirrors the other upload modules
+# Shared ceiling — see gateway/upload_limits.py. Was a 10 MB literal here,
+# duplicated across five routers, which refused the corpus's 24 MB file.
+_MAX_UPLOAD_BYTES = MAX_UPLOAD_BYTES
 _UPLOADER_ROLES = CONTROL_ROOM | {Role.CUSTOMS.value}
 #: Longest date window a single query may span (audit finding G1). Bounds the
 #: hourly profile at ~2200 buckets so an unbounded range cannot be requested.

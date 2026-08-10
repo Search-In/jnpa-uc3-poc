@@ -150,6 +150,15 @@ jobs:
           # Ship source + the prebuilt web/mobile dist (the web image COPYies dist;
           # it does NOT build the frontend), but exclude everything the host never
           # needs — these are what filled the disk (rsync ignores .dockerignore).
+          #
+          # ⚠ `--delete` removes anything on the host that is not in the source, so
+          # every HOST-WRITTEN directory that lives under this path must be excluded
+          # or the deploy destroys it. `data/jnpa_api` is the JNPA Port-Data
+          # raw-bytes store (bind-mounted into the gateway, see docker-compose.yml):
+          # without this exclude each deploy wiped all downloaded originals, leaving
+          # core.api_record pointing at files that no longer existed — which is what
+          # made `/api/jnpa/files/{sha}` 404 for all 4,757 records and left
+          # `POST /api/integrations/jnpa/replay` with nothing to replay.
           rsync -avz --delete \
             --exclude '.git' \
             --exclude '.github' \
@@ -173,6 +182,7 @@ jobs:
             --exclude 'data/clips/*.mp4' \
             --exclude 'data/clips/*.mov' \
             --exclude 'evidence/screenshots' \
+            --exclude 'data/jnpa_api' \
             -e "ssh -i ~/.ssh/id_rsa" \
             ./ ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}:/home/ec2-user/jnpa-uc3-poc/
 

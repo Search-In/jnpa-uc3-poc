@@ -43,7 +43,9 @@ from services.cfs_ecy.trt_repository import CODECO_EVENT_TYPES as _CODECO_EVENT_
 
 router = APIRouter(prefix="/api/cfs-ecy", tags=["cfs-ecy"])
 
-_MAX_UPLOAD_BYTES = 10 * 1024 * 1024   # 10 MB, mirrors the shipping-lines upload cap
+# Shared ceiling — see gateway/upload_limits.py. Was a 10 MB literal here,
+# duplicated across five routers, which refused the corpus's 24 MB file.
+_MAX_UPLOAD_BYTES = MAX_UPLOAD_BYTES
 # Roles allowed to upload: control room + customs (+ admin ⊂ control room).
 _UPLOADER_ROLES = CONTROL_ROOM | {Role.CUSTOMS.value}
 

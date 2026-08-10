@@ -30,11 +30,14 @@ from ..auth import CONTROL_ROOM, Role, auth_enabled
 from ..metrics import REQUESTS
 from services.marine import MarineUploadService
 from services.marine.parsers import DocumentTypeMismatch, UnknownDocumentType
+from gateway.upload_limits import MAX_UPLOAD_BYTES
 
 router = APIRouter(prefix="/api/marine", tags=["marine"])
 
 _API = "marine_imports"
-_MAX_UPLOAD_BYTES = 10 * 1024 * 1024   # 10 MB, mirrors the other upload modules
+# Shared ceiling — see gateway/upload_limits.py. Was a 10 MB literal here,
+# duplicated across five routers, which refused the corpus's 24 MB file.
+_MAX_UPLOAD_BYTES = MAX_UPLOAD_BYTES
 _UPLOADER_ROLES = CONTROL_ROOM | {Role.CUSTOMS.value}
 
 _upload_service: Optional[MarineUploadService] = None

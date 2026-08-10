@@ -50,7 +50,7 @@ _DDL: list[str] = [
         ('NSDT',   'Nhava Sheva Distribution Terminal',          'NSDT',          'MULTIPURPOSE', false, ARRAY['NSDT']::text[],                       60),
         ('JNPCT',  'Jawaharlal Nehru Port Container Terminal',   'JNPA',          'CONTAINER',    true,  ARRAY['JNPCT']::text[],                       70),
         ('JN_PORT','JN Port (all terminals)',                    'JNPA',          'TOTAL',        true,  ARRAY['JN PORT','JNPORT','JN_PORT']::text[], 90)
-        ON CONFLICT ON CONSTRAINT uq_perf_terminals_code DO NOTHING""",
+        ON CONFLICT (code) DO NOTHING""",
     """CREATE TABLE IF NOT EXISTS core.perf_daily_snapshot (
         id          bigserial PRIMARY KEY,
         report_date date NOT NULL,
@@ -277,11 +277,44 @@ _DDL: list[str] = [
             EXECUTE format('ALTER TABLE core.%I ADD COLUMN IF NOT EXISTS source_file text', t);
             EXECUTE format('ALTER TABLE core.%I ADD COLUMN IF NOT EXISTS upload_id uuid', t);
             EXECUTE format('ALTER TABLE core.%I ADD COLUMN IF NOT EXISTS uploaded_at timestamptz', t);
-            EXECUTE format('CREATE INDEX IF NOT EXISTS ix_%s_upload ON jnpa.%I (upload_id)', t, t);
+            EXECUTE format('CREATE INDEX IF NOT EXISTS ix_%s_upload ON core.%I (upload_id)', t, t);
         END LOOP;
     END $$""",
     "ALTER TABLE core.perf_daily_snapshot ADD COLUMN IF NOT EXISTS upload_id uuid",
     "ALTER TABLE core.perf_daily_snapshot ADD COLUMN IF NOT EXISTS uploaded_at timestamptz",
+    # LIVE/DEMO provenance (mirrors 0121). Cold-start applies 0121 BEFORE gateway
+    # boot creates these tables, so without this the DEMO header 500s with
+    # UndefinedColumnError: column "data_origin" does not exist.
+    """DO $$
+    DECLARE
+        t text;
+        cn text;
+        tbls text[] := ARRAY[
+            'core.perf_daily_snapshot', 'core.perf_daily_traffic',
+            'core.perf_daily_tonnage', 'core.perf_daily_terminal_status',
+            'core.perf_daily_vessel', 'core.perf_monthly_teu',
+            'core.perf_ldb_port_dwell', 'core.perf_ldb_facility_dwell',
+            'core.perf_ldb_congestion', 'core.perf_ldb_route_movement',
+            'core.perf_ldb_weather'
+        ];
+    BEGIN
+        FOREACH t IN ARRAY tbls LOOP
+            IF to_regclass(t) IS NULL THEN CONTINUE; END IF;
+            EXECUTE format(
+                'ALTER TABLE %s ADD COLUMN IF NOT EXISTS data_origin text NOT NULL DEFAULT ''MANUAL''', t);
+            cn := 'ck_' || split_part(t, '.', 2) || '_data_origin';
+            EXECUTE format('ALTER TABLE %s DROP CONSTRAINT IF EXISTS %I', t, cn);
+            BEGIN
+                EXECUTE format(
+                    'ALTER TABLE %s ADD CONSTRAINT %I CHECK (data_origin IN (''API'',''MANUAL''))',
+                    t, cn);
+            EXCEPTION WHEN duplicate_object THEN NULL;
+            END;
+            EXECUTE format(
+                'CREATE INDEX IF NOT EXISTS %I ON %s (data_origin)',
+                'idx_' || split_part(t, '.', 2) || '_data_origin', t);
+        END LOOP;
+    END $$""",
 ]
 
 
@@ -296,7 +329,15 @@ async def ensure_performance_schema(dsn: Optional[str] = None) -> None:
     from jnpa_shared.db import get_engine
 
     engine = get_engine(dsn)
-    async with engine.begin() as conn:
-        for stmt in _DDL:
-            await conn.execute(text(stmt))
-    log.info("performance_schema_ready")
+    applied = 0
+    # One statement per transaction: a mid-list failure (e.g. renamed constraint)
+    # must not roll back later additive ALTERs such as data_origin.
+    for stmt in _DDL:
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text(stmt))
+            applied += 1
+        except Exception as exc:  # noqa: BLE001 — best-effort boot DDL
+            log.warning("performance_schema_stmt_failed",
+                        error=str(exc).split("\n")[0][:240])
+    log.info("performance_schema_ready", statements=applied, total=len(_DDL))

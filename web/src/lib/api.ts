@@ -858,6 +858,27 @@ export const api = {
       `/api/gate-docs/truck/${encodeURIComponent(truckNo)}${pin ? `?source=${pin}` : ""}`,
     );
   },
+  /** REAL parsed gate documents (core.gate_document) — the T-04 truck-visit
+   *  source. Distinct from gateDocsForTruck, which reads the upload tables. */
+  gateSourceDocs: (params: {
+    vehicle?: string;
+    container?: string;
+    driver_licence?: string;
+    category?: string;
+    terminal?: string;
+    from_date?: string;
+    to_date?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<GateSourceDocPage>(
+      `/api/gate-docs/documents${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
   gateDocTat: (terminal?: string) =>
     http<GateDocTat>(
       `/api/gate-docs/tat${terminal ? `?terminal=${encodeURIComponent(terminal)}` : ""}`,
@@ -1870,6 +1891,57 @@ export interface GateDocSummary {
   containerless_docs: number;
   eir_with_tat: number;
   files: number;
+}
+/** One REAL gate document as filed, from `core.gate_document` (UC3-002).
+ *  A field the source slip does not print comes back null — never inferred. */
+export interface GateSourceDoc {
+  doc_id: number;
+  doc_category: "EIR" | "FORM13" | "PIN_TICKET";
+  doc_variant: string;
+  doc_ref: string | null;
+  pin_no: string | null;
+  visit_id: string | null;
+  doc_ts: string | null;
+  container_no: string | null;
+  iso_code: string | null;
+  load_status: string | null;
+  gross_weight_kg: number | null;
+  seal1: string | null;
+  seal2: string | null;
+  vehicle_no: string | null;
+  bat_no: string | null;
+  driver_name: string | null;
+  driver_licence: string | null;
+  transporter_name: string | null;
+  truck_in_ts: string | null;
+  truck_out_ts: string | null;
+  gate_no: string | null;
+  yard_position: string | null;
+  vessel_name: string | null;
+  voyage: string | null;
+  pol: string | null;
+  pod: string | null;
+  booking_no: string | null;
+  cfs: string | null;
+  group_code: string | null;
+  /** Verbatim parsed payload, exactly as the source file supplies it. */
+  attrs: Record<string, unknown> | null;
+  terminal: string | null;
+  /** Same-origin URL of the original scan, or null when none is linked. */
+  evidence_uri: string | null;
+  image_file: string | null;
+  data_origin: string | null;
+}
+export interface GateSourceDocPage {
+  items: GateSourceDoc[];
+  total: number;
+  limit: number;
+  offset: number;
+  count: number;
+  terminals: string[];
+  terminal_count: number;
+  first_doc_ts: string | null;
+  last_doc_ts: string | null;
 }
 export interface GateDocBundle {
   container_no?: string;

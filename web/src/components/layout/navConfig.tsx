@@ -102,6 +102,7 @@ export const NAV_SECTIONS: NavSection[] = [
       leaf("/uc3-lifecycle", "nav.uc3Lifecycle", Box),
       leaf("/gate-customs", "nav.gateCustoms", ShieldCheck),
       leaf("/truck-ops", "nav.truckOps", Truck),
+      leaf("/truck-visit", "nav.truckVisit", FileText),
       leaf("/cfs-ecy", "nav.cfsEcy", Boxes),
       leaf("/shipping-lines", "nav.shippingLines", Ship),
       // Cargo What-If sits at the end of the lifecycle section: it asks "what

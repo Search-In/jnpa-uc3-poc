@@ -24,6 +24,7 @@ import Intelligence from "@/screens/Intelligence";
 import Uc3Lifecycle from "@/screens/Uc3Lifecycle";
 import CargoWhatIf from "@/screens/CargoWhatIf";
 import TruckOperations from "@/screens/TruckOperations";
+import TruckVisitDetail from "@/screens/TruckVisitDetail";
 import ParkingManagement from "@/screens/ParkingManagement";
 import SystemHealth from "@/screens/SystemHealth";
 import WhatIfConsole from "@/screens/WhatIfConsole";
@@ -201,6 +202,14 @@ function DashboardShell({
             element={
               <Guard path="/truck-ops">
                 <TruckOperations />
+              </Guard>
+            }
+          />
+          <Route
+            path="/truck-visit"
+            element={
+              <Guard path="/truck-visit">
+                <TruckVisitDetail />
               </Guard>
             }
           />

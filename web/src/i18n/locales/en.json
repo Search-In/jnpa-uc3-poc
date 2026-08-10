@@ -55,7 +55,9 @@
     "doubleTrip": "Double Trip",
     "uc3Lifecycle": "Container Operations",
     "truckOps": "Truck Operations",
-    "truckVisit": "Truck Visit Detail"
+    "truckVisit": "Truck Visit Detail",
+    "vehicleRegistry": "Vehicle Registry",
+    "corridorSim": "Corridor Simulation"
   },
   "followBox": {
     "title": "Follow the Box",

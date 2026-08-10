@@ -944,6 +944,36 @@ export const api = {
   },
   /** REAL parsed gate documents (core.gate_document) — the T-04 truck-visit
    *  source. Distinct from gateDocsForTruck, which reads the upload tables. */
+  // --- UC3-004 vehicle -> transporter registry ---
+  vehicleMappings: (params: {
+    provenance?: VehicleProvenance;
+    q?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)));
+    return http<VehicleMappingPage>(
+      `/api/vehicle-registry/mappings${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  vehicleMapping: (plate: string) =>
+    http<VehicleMapping>(`/api/vehicle-registry/vehicle/${encodeURIComponent(plate)}`),
+  vehicleRegistrySummary: () => http<VehicleRegistrySummary>("/api/vehicle-registry/summary"),
+
+  // --- UC3-005 corridor simulation ---
+  corridorSimSummary: () => http<CorridorSimSummary>("/api/corridor-sim/summary"),
+  corridorSimTrucks: (params: {
+    segment?: string;
+    direction?: "IN" | "OUT";
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)));
+    return http<CorridorSimTruckPage>(`/api/corridor-sim/trucks${qs.toString() ? `?${qs}` : ""}`);
+  },
+
   gateSourceDocs: (params: {
     vehicle?: string;
     container?: string;
@@ -2012,6 +2042,110 @@ export interface GateDocSummary {
 }
 /** One REAL gate document as filed, from `core.gate_document` (UC3-002).
  *  A field the source slip does not print comes back null — never inferred. */
+// ---- UC3-004 vehicle -> transporter registry (MIXED provenance) -------------
+/** Gap G6: the supplied masters carry no plates, so a mapping is either read
+ *  off a REAL gate document (DOCUMENT_EVIDENCED, with source_ref) or generated
+ *  and labelled SYNTHETIC under assumption A-G6. Never both, never neither. */
+export type VehicleProvenance = "DOCUMENT_EVIDENCED" | "SYNTHETIC";
+
+export interface VehicleMapping {
+  id: number;
+  vehicle_no: string;
+  vehicle_no_norm: string;
+  driver_id: string | null;
+  provenance: VehicleProvenance;
+  /** Present only on SYNTHETIC rows (enforced by a DB CHECK). */
+  assumption_ref: string | null;
+  /** Present only on DOCUMENT_EVIDENCED rows: the gate document it came from. */
+  source_ref: string | null;
+  transporter_id: number;
+  company_id: number;
+  transporter: string;
+  transporter_contact: string | null;
+  is_synthetic: boolean;
+  seed: string | null;
+  assumption_text: string | null;
+}
+export interface VehicleMappingPage {
+  items: VehicleMapping[];
+  total: number;
+  limit: number;
+  offset: number;
+  count: number;
+}
+export interface VehicleRegistrySummary {
+  total: number;
+  document_evidenced: number;
+  synthetic: number;
+  assumption_ref: string;
+  assumption_text: string;
+  seed: string;
+}
+
+// ---- UC3-005 NH-348 corridor simulation (SIMULATED only) --------------------
+export interface CorridorSimSegment {
+  segment_code: string;
+  trucks: number;
+  inbound: number;
+  outbound: number;
+}
+export interface CorridorSimSummary {
+  run: {
+    run_id: string;
+    corridor: string;
+    seed: string;
+    seed_version: string;
+    config_sha256: string;
+    truck_count: number;
+    segment_count: number;
+    calibration_from: string;
+    calibration_to: string;
+    anchor_date: string;
+    anchor_in_teu: number;
+    anchor_out_teu: number;
+    anchor_total_teu: number;
+    calibration_note: string | null;
+    frozen_at: string;
+    simulated: boolean;
+  };
+  simulated: boolean;
+  provenance: string;
+  trucks_total: number;
+  inbound: number;
+  outbound: number;
+  segments: CorridorSimSegment[];
+  segment_count: number;
+  states: { state: string; trucks: number }[];
+  calibration: {
+    anchor_date: string;
+    anchor_in_teu: number;
+    anchor_out_teu: number;
+    anchor_total_teu: number;
+    window_from: string;
+    window_to: string;
+    note: string | null;
+  };
+  reproducibility: { seed: string; seed_version: string; config_sha256: string };
+}
+export interface CorridorSimTruck {
+  truck_uid: string;
+  truck_no: string;
+  segment_code: string;
+  direction: "IN" | "OUT";
+  state: string;
+  replay_ts: string;
+  simulated: boolean;
+  provenance: string;
+}
+export interface CorridorSimTruckPage {
+  items: CorridorSimTruck[];
+  count: number;
+  limit: number;
+  offset: number;
+  simulated: boolean;
+  provenance: string;
+}
+
 export interface GateSourceDoc {
   doc_id: number;
   doc_category: "EIR" | "FORM13" | "PIN_TICKET";

@@ -35,9 +35,11 @@ dependencies = [
 torch = ["torch>=2.0"]
 # Optional PyTorch-Geometric (Data graph object); the model does not require it.
 pyg = ["torch-geometric>=2.5"]
+# Keep [dev] torch-free so CI / self-hosted runners don't pull multi-GB CUDA
+# wheels from PyPI. Use `pip install -e '.[torch]'` (or the Dockerfile CPU
+# index) when you need the model.
 dev = [
     "pytest==8.3.*",
-    "torch>=2.0",
 ]
 
 [project.scripts]

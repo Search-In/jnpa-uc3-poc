@@ -1469,14 +1469,24 @@ export class MockAdapter implements DataAdapter {
       MGV: 980,
       LGV: 340,
     };
+    // Vehicles per class — same key-set as by_class, summing to vehicle_count so
+    // the tile's breakdown total always reconciles with the headline figure.
+    const vehicles_by_class: Record<string, number> = {
+      HGV: 128,
+      REEFER: 39,
+      MGV: 32,
+      LGV: 19,
+    };
     const total_kg = Object.values(by_class).reduce((a, b) => a + b, 0);
+    const vehicle_count = Object.values(vehicles_by_class).reduce((a, b) => a + b, 0);
     // Split total into moving vs idle so the two always sum back to total_kg.
     const moving = Math.round(total_kg * 0.62);
     const idle = total_kg - moving;
     return Promise.resolve({
       total_kg,
-      vehicle_count: 218,
+      vehicle_count,
       by_class,
+      vehicles_by_class,
       by_source: { moving, idle },
     });
   }

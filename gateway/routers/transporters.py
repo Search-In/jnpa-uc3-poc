@@ -118,19 +118,17 @@ async def create_transporter(body: Dict[str, Any] = Body(...),
     return {"created": True, "transporter": _iso(dict(row)) if row else None}
 
 
-@router.get("")
-async def list_transporters(request: Request,
-                            q: Optional[str] = Query(default=None),
-                            status: Optional[str] = Query(default=None),
-                            limit: int = Query(default=100, ge=1, le=1000),
-                            mode: Optional[str] = Depends(data_mode),
-                            state: GatewayState = Depends(get_state)) -> dict:
-    dsn = state.cfg.postgres_dsn
-    if not dsn:
-        return {"count": 0, "transporters": []}
-    from jnpa_shared.db import fetch_all
+def _list_filters(q: Optional[str], status: Optional[str],
+                  mode: Optional[str]) -> tuple[str, Dict[str, Any]]:
+    """Build the shared WHERE clause + bind params for the registry list.
+
+    ONE builder feeds both the page query and the COUNT query, so ``total`` can
+    never disagree with ``items`` — including under the LIVE/DEMO provenance
+    filter, where every imported row is ``data_origin='MANUAL'`` and a LIVE
+    request must legitimately see zero.
+    """
     where: List[str] = []
-    params: Dict[str, Any] = {"limit": limit}
+    params: Dict[str, Any] = {}
     if q:
         where.append(
             "(lower(company_name) LIKE :q OR lower(coalesce(code,'')) LIKE :q "
@@ -147,30 +145,62 @@ async def list_transporters(request: Request,
     if mode:
         where.append("t.data_origin = :data_origin")
         params["data_origin"] = mode
-    clause = ("WHERE " + " AND ".join(where)) if where else ""
+    return (("WHERE " + " AND ".join(where)) if where else ""), params
+
+
+@router.get("")
+async def list_transporters(request: Request,
+                            q: Optional[str] = Query(default=None),
+                            status: Optional[str] = Query(default=None),
+                            limit: int = Query(default=50, ge=1, le=200),
+                            offset: int = Query(default=0, ge=0),
+                            mode: Optional[str] = Depends(data_mode),
+                            state: GatewayState = Depends(get_state)) -> dict:
+    """One page of the registry plus the EXACT registry-wide total.
+
+    ``total`` is a server-side ``count(*)`` over the same predicate as the page
+    — never ``len(items)``, which is what previously capped the UI at 1000. Page
+    size and total are independent: 2,191 rows report ``total=2191`` whatever
+    ``limit`` is.
+    """
+    dsn = state.cfg.postgres_dsn
+    if not dsn:
+        return {"items": [], "transporters": [], "total": 0,
+                "limit": limit, "offset": offset, "count": 0}
+    from jnpa_shared.db import fetch_all, fetch_one
+    clause, params = _list_filters(q, status, mode)
     rows = await fetch_all(
         f"""SELECT {_T_COLS_T},
               (SELECT count(*) FROM core.transporter_vehicle v WHERE v.transporter_id = t.id) AS vehicle_count,
               EXISTS(SELECT 1 FROM core.transporter_blacklist b
                      WHERE b.transporter_id = t.id AND b.status = 'ACTIVE') AS blacklisted
             FROM core.transporter t {clause}
-            ORDER BY t.created_at DESC LIMIT :limit""",
-        params, dsn=dsn)
+            ORDER BY t.created_at DESC, t.id
+            LIMIT :limit OFFSET :offset""",
+        {**params, "limit": limit, "offset": offset}, dsn=dsn)
+    total_row = await fetch_one(
+        f"SELECT count(*) AS n FROM core.transporter t {clause}", params, dsn=dsn)
+    total = int(total_row["n"]) if total_row else 0
     REQUESTS.labels("transporters", "ok").inc()
-    return mask_for_request(
-        request, {"count": len(rows), "transporters": [_iso(dict(r)) for r in rows]},
-        surface="transporters.list")
+    items = mask_for_request(request, [_iso(dict(r)) for r in rows],
+                             surface="transporters.list")
+    # ``transporters`` is the pre-pagination key name, kept as an alias so older
+    # callers keep working; ``count`` stays the page length it always was.
+    return {"items": items, "transporters": items, "total": total,
+            "limit": limit, "offset": offset, "count": len(items)}
 
 
 @router.get("/blacklist")
-async def active_blacklist(limit: int = Query(default=200, ge=1, le=1000),
+async def active_blacklist(limit: int = Query(default=50, ge=1, le=200),
+                           offset: int = Query(default=0, ge=0),
                            mode: Optional[str] = Depends(data_mode),
                            state: GatewayState = Depends(get_state)) -> dict:
     dsn = state.cfg.postgres_dsn
     if not dsn:
-        return {"count": 0, "blacklist": []}
-    from jnpa_shared.db import fetch_all
-    params: Dict[str, Any] = {"limit": limit}
+        return {"items": [], "blacklist": [], "total": 0,
+                "limit": limit, "offset": offset, "count": 0}
+    from jnpa_shared.db import fetch_all, fetch_one
+    params: Dict[str, Any] = {}
     origin_clause = ""
     # LIVE/DEMO provenance filter — None ⇒ no predicate (identical SQL).
     if mode:
@@ -181,9 +211,62 @@ async def active_blacklist(limit: int = Query(default=200, ge=1, le=1000),
            FROM core.transporter_blacklist b
            JOIN core.transporter t ON t.id = b.transporter_id
            WHERE b.status = 'ACTIVE'{origin_clause}
-           ORDER BY b.blacklisted_at DESC LIMIT :limit""",
-        params, dsn=dsn)
-    return {"count": len(rows), "blacklist": [_iso(dict(r)) for r in rows]}
+           ORDER BY b.blacklisted_at DESC, b.id
+           LIMIT :limit OFFSET :offset""",
+        {**params, "limit": limit, "offset": offset}, dsn=dsn)
+    total_row = await fetch_one(
+        f"""SELECT count(*) AS n
+            FROM core.transporter_blacklist b
+            JOIN core.transporter t ON t.id = b.transporter_id
+            WHERE b.status = 'ACTIVE'{origin_clause}""", params, dsn=dsn)
+    total = int(total_row["n"]) if total_row else 0
+    items = [_iso(dict(r)) for r in rows]
+    return {"items": items, "blacklist": items, "total": total,
+            "limit": limit, "offset": offset, "count": len(items)}
+
+
+@router.get("/stats")
+async def transporter_stats(mode: Optional[str] = Depends(data_mode),
+                            state: GatewayState = Depends(get_state)) -> dict:
+    """Registry-wide KPI aggregates, computed in the database.
+
+    The dashboard cards read these instead of reducing over a loaded page — the
+    old approach both capped the totals at the page size and mis-summed
+    ``vehicles_assigned``. Declared before ``/{transporter_id}`` so the literal
+    path wins the route match.
+    """
+    dsn = state.cfg.postgres_dsn
+    if not dsn:
+        return {"total": 0, "active": 0, "blacklisted": 0, "vehicles_assigned": 0}
+    from jnpa_shared.db import fetch_one
+    params: Dict[str, Any] = {}
+    clause = ""
+    if mode:
+        clause = " WHERE t.data_origin = :data_origin"
+        params["data_origin"] = mode
+    # One pass over core.transporter: the two FILTERs partition it, and
+    # vehicles_assigned joins the mapping table so it counts EVERY mapped
+    # vehicle in scope rather than only those on the loaded page.
+    row = await fetch_one(
+        f"""WITH scope AS (SELECT t.id FROM core.transporter t{clause})
+            SELECT (SELECT count(*) FROM scope) AS total,
+                   (SELECT count(*) FROM scope s
+                     WHERE NOT EXISTS (SELECT 1 FROM core.transporter_blacklist b
+                                       WHERE b.transporter_id = s.id AND b.status = 'ACTIVE')
+                   ) AS active,
+                   (SELECT count(*) FROM scope s
+                     WHERE EXISTS (SELECT 1 FROM core.transporter_blacklist b
+                                   WHERE b.transporter_id = s.id AND b.status = 'ACTIVE')
+                   ) AS blacklisted,
+                   (SELECT count(*) FROM core.transporter_vehicle v
+                     WHERE v.transporter_id IN (SELECT id FROM scope)
+                   ) AS vehicles_assigned""", params, dsn=dsn)
+    REQUESTS.labels("transporters", "ok").inc()
+    if not row:
+        return {"total": 0, "active": 0, "blacklisted": 0, "vehicles_assigned": 0}
+    return {"total": int(row["total"] or 0), "active": int(row["active"] or 0),
+            "blacklisted": int(row["blacklisted"] or 0),
+            "vehicles_assigned": int(row["vehicles_assigned"] or 0)}
 
 
 @router.get("/validate/vehicle/{plate}")

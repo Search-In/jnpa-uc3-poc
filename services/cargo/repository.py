@@ -128,6 +128,32 @@ class CargoTransitionError(Exception):
             f"{current or 'UNKNOWN'} -> {target}")
 
 
+class CargoCustomsBlocked(Exception):
+    """Raised when a lifecycle transition is refused because CUSTOMS, not the
+    lifecycle, forbids it.
+
+    The two tracks are independent — ``lifecycle_status`` is the port's custody of
+    the box, ``customs_status`` is customs' disposition of the goods — but they are
+    not orthogonal at every point. Out-of-charge is what permits goods to leave
+    customs control, so releasing a container that is HELD or UNDER_INSPECTION
+    produces a record no real container can be in. Release used to check the
+    lifecycle alone and allow it silently.
+
+    Distinct from :class:`CargoTransitionError` so the router can answer
+    ``customs_not_cleared`` rather than ``illegal_transition``: the lifecycle IS
+    legal here, and telling an operator otherwise sends them to fix the wrong
+    thing."""
+
+    def __init__(self, container_number: str, customs_status: Optional[str],
+                 target: str) -> None:
+        self.container_number = container_number
+        self.customs_status = customs_status
+        self.target = target
+        super().__init__(
+            f"customs blocks {target} for {container_number}: "
+            f"customs_status={customs_status or 'UNKNOWN'}")
+
+
 # The ONE audit-row shape for core.cargo_lifecycle_event (see
 # CargoRepository.record_lifecycle_event).
 _LIFECYCLE_EVENT_INSERT = (
@@ -515,6 +541,27 @@ class CargoRepository:
             result = await conn.execute(text(sql))
             return [dict(r) for r in result.mappings().all()]
 
+    async def yard_block_capacity(self) -> dict[str, int]:
+        """Real per-block slot capacity from ``core.yard_block`` (migration 0130),
+        keyed by ``block_code``.
+
+        Returns ``{}`` when the master is absent or empty — the caller then falls
+        back to the nominal constant AND declares that fallback as an assumption
+        (audit finding Y1: the congestion score used to divide by a hardcoded 10
+        with nothing saying so). Never raises: an un-migrated database must not
+        break GET /api/cargo/yard-optimization, which worked before this table
+        existed."""
+        sql = ("SELECT block_code, capacity_teus FROM core.yard_block "
+               "WHERE capacity_teus IS NOT NULL AND capacity_teus > 0")
+        try:
+            async with get_engine(self._dsn).connect() as conn:
+                result = await conn.execute(text(sql))
+                return {str(r["block_code"]): int(r["capacity_teus"])
+                        for r in result.mappings().all()}
+        except Exception as exc:  # noqa: BLE001 — table may not exist yet
+            log.debug("cargo.yard_block_capacity.unavailable", error=str(exc))
+            return {}
+
     async def create_rake_plan(self, rake_id: str, containers: Any) -> dict:
         import json as _json
         items = list(containers or [])
@@ -541,6 +588,8 @@ class CargoRepository:
         actor_role: Optional[str] = None,
         note: Optional[str] = None,
         strict: bool = True,
+        set_fields: Optional[Mapping[str, Any]] = None,
+        blocked_customs: Optional[frozenset[str]] = None,
     ) -> Optional[dict]:
         """Atomically advance ``core.cargo.lifecycle_status`` to ``target``.
 
@@ -558,7 +607,21 @@ class CargoRepository:
 
         The update and the audit insert share one transaction, so the record's
         state and its audit trail can never diverge. The ``allowed_from`` policy is
-        supplied by the service (the single source of the state machine)."""
+        supplied by the service (the single source of the state machine).
+
+        ``set_fields`` (audit W2/W3) patches writable business columns in the SAME
+        locked statement as the status change. Release used to be two transactions
+        — ``transition_lifecycle`` then a separate ``update(is_released=True)`` —
+        so a crash between them left ``lifecycle_status='RELEASED'`` with
+        ``is_released=false``. Folding the write in here makes the whole release a
+        single commit, and because the gate is evaluated *under* the row lock, two
+        concurrent releases can no longer both pass it.
+
+        ``blocked_customs`` adds a CUSTOMS gate on top of the lifecycle one, checked
+        under the SAME lock and against the same freshly-read row, so a customs hold
+        landing concurrently cannot slip past it. Used by release: a container that
+        is HELD or UNDER_INSPECTION may not leave, whatever its lifecycle says."""
+        patch = {k: v for k, v in dict(set_fields or {}).items() if k in _WRITABLE}
         async with get_engine(self._dsn).begin() as conn:
             cur = await conn.execute(
                 text(f"SELECT {_SELECT_COLS} FROM core.cargo "
@@ -574,10 +637,28 @@ class CargoRepository:
                 if strict:
                     raise CargoTransitionError(container_number, current, target)
                 return None
+            # Customs gate, under the same lock as the lifecycle gate above.
+            #
+            # Evaluated against the EFFECTIVE status: a patch that clears customs
+            # in the same call it releases (PUT {customs_status:'CLEARED',
+            # is_released:true}) is a legitimate single act, whereas releasing
+            # without touching a hold is the thing being prevented.
+            if blocked_customs:
+                cs = str(patch.get("customs_status")
+                         or existing.get("customs_status") or "").upper()
+                if cs in blocked_customs:
+                    if strict:
+                        raise CargoCustomsBlocked(container_number, cs, target)
+                    return None
+            # Column identifiers come from the _WRITABLE whitelist above (never from
+            # client input); every value is bound — injection-safe by construction.
+            extra = "".join(f", {k} = :f_{k}" for k in patch)
+            params: dict[str, Any] = {"ns": target, "cn": container_number}
+            params.update({f"f_{k}": v for k, v in patch.items()})
             upd = await conn.execute(
-                text("UPDATE core.cargo SET lifecycle_status = :ns "
+                text(f"UPDATE core.cargo SET lifecycle_status = :ns{extra} "
                      f"WHERE container_number = :cn RETURNING {_SELECT_COLS}"),
-                {"ns": target, "cn": container_number})
+                params)
             row = upd.mappings().first()
             # Same writer as create()'s opening entry — one audit-row shape.
             await self.record_lifecycle_event(

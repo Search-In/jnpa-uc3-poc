@@ -70,7 +70,17 @@ _TRK_ID = re.compile(r"^TRK-\d{6}$")
 
 
 class DriverLoginBody(BaseModel):
-    vehicle_number: str
+    """BUG-7: the route historically required ``vehicle_number``, but the field
+    carries either identifier (the handler already accepts a TRK-id) and some
+    clients send ``vehicle_id``. Both are optional at the schema level and one is
+    required at the handler, so a ``vehicle_id`` payload resolves instead of
+    failing 422. ``vehicle_number`` keeps precedence — existing callers are
+    byte-for-byte unaffected."""
+    vehicle_number: Optional[str] = None
+    vehicle_id: Optional[str] = None
+
+    def identifier(self) -> str:
+        return (self.vehicle_number or self.vehicle_id or "").strip()
 
 
 @router.post("/login")
@@ -82,9 +92,10 @@ async def driver_login(body: DriverLoginBody,
     an internal TRK-id — operations staff quoting the pairing id to a driver on
     the phone must not be locked out. Unknown -> 404, non-ACTIVE -> 403."""
     dsn = state.cfg.postgres_dsn
-    raw = (body.vehicle_number or "").strip().upper()
+    raw = body.identifier().upper()
     if not raw:
-        raise HTTPException(status_code=400, detail="vehicle_number is required")
+        raise HTTPException(status_code=400,
+                            detail="vehicle_number (or vehicle_id) is required")
 
     vehicle = (await fleet.get_vehicle(dsn, raw) if _TRK_ID.match(raw)
                else await fleet.find_by_number(dsn, raw))

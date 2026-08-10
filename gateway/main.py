@@ -42,12 +42,14 @@ from .metrics import metrics_asgi_app
 from .pumps import KafkaPump, mqtt_truck_pump
 from .auth import install_auth, validate_auth_config
 from .routers import (
+    export_chain,
     ai_events,
     alerts,
     anpr,
     auth as auth_router,
     carbon,
     cargo,
+    cargo_simulation,
     checkin,
     control,
     debug,
@@ -93,6 +95,7 @@ from .routers import (
     container_job,
     document_ocr,
     double_trip,
+    dq,
     driver_jobs,
     edi_vessel,
     export_lifecycle,
@@ -713,6 +716,12 @@ app.include_router(fastag.router)
 # for both the Traffic Twin (POC-3) and the Cargo Twin (POC-2); POC-2 consumes
 # /api/cargo directly and keeps no backend/DB. Thin router → services.cargo
 # (CargoService → raw-SQL CargoRepository). See gateway/routers/cargo.py.
+# UC-3 what-if simulation — /api/cargo/simulate/* + /api/gate/hourly-profile.
+# Registered BEFORE cargo.router so the ordering against GET /api/cargo/{cn} is
+# explicit rather than incidental (the simulate paths carry two segments after the
+# prefix, so they could not be captured by it either way). READ-ONLY: the layer
+# answers "what would this cost" and never writes — see services/cargo/simulation.
+app.include_router(cargo_simulation.router)
 app.include_router(cargo.router)
 app.include_router(scenario_ext.router)
 # Appendix-C capability services (Empty-Container, Carbon, Gate-Data/Auto-LEO,
@@ -743,6 +752,7 @@ app.include_router(document_ocr.router)      # document OCR
 app.include_router(nvr.router)               # NVR device/stream integration
 app.include_router(trt.router)               # ECY TRT KPI
 app.include_router(cfs_ecy.router)           # CFS-ECY CODECO gate movements (module 13, read-only)
+app.include_router(dq.router)                # Data Quality ledger over core.dq_issue (read-only)
 app.include_router(customs.router)           # Customs docs (module 5: IGM/OOC/SMTP/RMS/LEO/SB)
 app.include_router(gate_documents.router)    # UC-III gate documents (EIR / PIN ticket / Form-13 + TAT)
 app.include_router(container_job.router)     # UC-III job spine: assignment + gate/yard/scan events
@@ -773,6 +783,7 @@ app.include_router(air_quality.router)       # OpenAQ air quality (LIVE→CACHED
 app.include_router(bhuvan.router)            # Bhuvan WMS geospatial layer (ISRO/NRSC, control-plane only)
 app.include_router(logistics.router)         # ULIP logistics intelligence (LIVE→CACHED→DATABASE→FALLBACK)
 app.include_router(jnpa_api.router)          # JNPA Port-Data API sync (dt.jnpa.in → upload services)
+app.include_router(export_chain.router)      # export-lifecycle reads (Form 11, COPRAR, COARRI, synth)
 app.include_router(rail.router)              # Rail feeds (FOIS / Form 11 / CTO — read path for the 0119 tables)
 app.include_router(edi_vessel.router)        # COARRI/COPRAR vessel-side container moves (read path for 0125)
 app.include_router(double_trip.router)       # TT double-trip workflow

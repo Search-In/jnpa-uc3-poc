@@ -148,6 +148,49 @@ class GateDocumentService:
         return {"items": rows, "total": total, "limit": limit, "offset": offset,
                 "count": len(rows)}
 
+    async def list_source_documents(self, *, category: Optional[str] = None,
+                                    container: Optional[str] = None,
+                                    vehicle: Optional[str] = None,
+                                    driver_licence: Optional[str] = None,
+                                    terminal: Optional[str] = None,
+                                    from_ts: Optional[Any] = None,
+                                    to_ts: Optional[Any] = None,
+                                    limit: int, offset: int) -> Dict[str, Any]:
+        """Parsed source gate documents (core.gate_document) — see the repository.
+
+        Alongside the page, report the shape of the FULL filtered set (not just
+        the current page): which terminals it touches and the date span it
+        covers. That is what a truck-visit view states above the timeline, and
+        computing it here keeps the client from having to fetch everything.
+        """
+        rows, total = await self._repo.list_source_documents(
+            category=category, container=container, vehicle=vehicle,
+            driver_licence=driver_licence, terminal=terminal,
+            from_ts=from_ts, to_ts=to_ts, limit=limit, offset=offset)
+        terminals = sorted({r["terminal"] for r in rows if r.get("terminal")})
+        stamps = sorted(r["doc_ts"] for r in rows if r.get("doc_ts"))
+        return {"items": rows, "total": total, "limit": limit, "offset": offset,
+                "count": len(rows), "terminals": terminals,
+                "terminal_count": len(terminals),
+                "first_doc_ts": stamps[0] if stamps else None,
+                "last_doc_ts": stamps[-1] if stamps else None}
+      
+    async def hourly_profile(self, doc_type: str, *, filters,
+                             group_by: str = "hour") -> Dict[str, Any]:
+        """Hourly (or daily) document counts for a window — the aggregate view of
+        the same filter set :meth:`list_docs` pages through (audit finding G1)."""
+        rows = await self._repo.hourly_profile(doc_type, filters=filters,
+                                               group_by=group_by)
+        buckets = [{"bucket": r["bucket"], "documents": int(r["documents"] or 0),
+                    "unique_trucks": int(r.get("unique_trucks") or 0)} for r in rows]
+        total = sum(b["documents"] for b in buckets)
+        peak = max(buckets, key=lambda b: b["documents"]) if buckets else None
+        return {"group_by": group_by, "count": len(buckets), "total_documents": total,
+                "peak_bucket": peak["bucket"] if peak else None,
+                "peak_documents": peak["documents"] if peak else 0,
+                "mean_per_bucket": round(total / len(buckets), 2) if buckets else 0.0,
+                "buckets": buckets}
+
     async def docs_for_container(self, container_no: str, *,
                                  source: Optional[str] = None) -> Dict[str, Any]:
         docs = await self._repo.docs_for_container(container_no, source=source)

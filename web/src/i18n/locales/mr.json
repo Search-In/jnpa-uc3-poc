@@ -38,7 +38,9 @@
     "enrollments": "चालक नोंदणी",
     "vehicles": "वाहन व्यवस्थापन",
     "uc3Lifecycle": "कंटेनर परिचालन",
-    "truckOps": "ट्रक ऑपरेशन्स"
+    "truckOps": "ट्रक ऑपरेशन्स",
+    "cargoWhatIf": "कार्गो व्हॉट-इफ",
+    "truckVisit": "ट्रक भेट तपशील"
   },
   "followBox": {
     "title": "फॉलो द बॉक्स",
@@ -273,7 +275,16 @@
       "moving": "हलणारे",
       "idle": "निष्क्रिय",
       "byClass": "वाहन वर्गानुसार",
-      "empty": "कार्बन डेटा नाही."
+      "empty": "कार्बन डेटा नाही.",
+      "totalVehicles": "एकूण वाहने",
+      "vehicleBreakdown": "वाहन तपशील",
+      "colCategory": "श्रेणी",
+      "colVehicles": "वाहने",
+      "colShare": "वाटा",
+      "totalRow": "एकूण",
+      "vehiclesUnit": "वाहने",
+      "breakdownUnavailable": "या डेटा स्रोतातून श्रेणीनिहाय तपशील उपलब्ध नाही.",
+      "contributesTo": "वरील CO₂e गणनेत समाविष्ट वाहने"
     },
     "leo": {
       "title": "ऑटो-LEO गेट-आउट रांग",

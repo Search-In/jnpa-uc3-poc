@@ -21,7 +21,7 @@ is configured, otherwise a deterministic mock list — never a silent hardcode.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date as _date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query
@@ -119,8 +119,15 @@ async def list_slots(gate_id: Optional[str] = Query(default=None),
         where.append("gate_id = :gate_id")
         params["gate_id"] = gate_id
     if date:
+        # asyncpg types this bind as `date` (from the CAST) and rejects a str,
+        # so parse here; an unparseable value can match no slot.
+        try:
+            params["d"] = _date.fromisoformat(date.strip()[:10])
+        except ValueError:
+            raise HTTPException(status_code=422, detail={
+                "error": "invalid_date", "date": date,
+                "expected": "YYYY-MM-DD"})
         where.append("window_start::date = CAST(:d AS date)")
-        params["d"] = date
     clause = ("WHERE " + " AND ".join(where)) if where else ""
     rows = await fetch_all(
         f"""SELECT slot_code, gate_id, window_start, window_end,

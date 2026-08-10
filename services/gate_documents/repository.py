@@ -12,6 +12,8 @@ whitelist keyed by doc_type; every value is a bound parameter.
 from __future__ import annotations
 
 import json
+import re
+from datetime import timedelta
 from typing import Any, Mapping, Optional, Sequence
 
 from sqlalchemy import text
@@ -49,6 +51,12 @@ _FORM13_PAYLOAD = ("form13_no", "visit_id", "terminal", "iso_valid", "transporte
 
 # Truck/vehicle column per doc type (the required key).
 TRUCK_COL = {"EIR": "truck_no", "PIN": "truck_no", "FORM13": "vehicle_plate"}
+
+# The timestamp each document type is filtered/bucketed on. EIR carries the gate
+# arrival (truck_in_time), which is what a date-ranged query and an hourly profile
+# both mean by "when"; PIN uses its issue time and FORM13 its capture time. Fixed
+# identifiers — never interpolated from client input.
+TIME_COL = {"EIR": "truck_in_time", "PIN": "issued_at", "FORM13": "captured_at"}
 
 # Reading Form-13 back out of gate_capture with the same field names the EIR/PIN
 # rows expose, so the API shape is uniform across all three document types.
@@ -165,6 +173,97 @@ def _data_origin(uploaded_by: Optional[str]) -> str:
 class GateDocumentRepository:
     def __init__(self, dsn: Optional[str] = None) -> None:
         self._dsn = dsn
+
+    # ------------------------------------------------- parsed source documents
+    # Columns served by the source-document read. `image_file` is the
+    # bucket-relative key of the original scan (migration 0132), turned into a
+    # browser-loadable `/api/evidence/...` URL below; `data_origin` marks the row
+    # as REAL customer paperwork rather than anything generated.
+    _SOURCE_DOC_COLS = (
+        "doc_id, doc_category, doc_variant, doc_ref, pin_no, visit_id, doc_ts, "
+        "container_no, iso_code, load_status, gross_weight_kg, seal1, seal2, "
+        "vehicle_no, bat_no, driver_name, driver_licence, transporter_name, "
+        "truck_in_ts, truck_out_ts, gate_no, yard_position, vessel_name, voyage, "
+        "pol, pod, booking_no, cfs, group_code, attrs, image_file, data_origin, "
+        "terminal_id, source_file"
+    )
+
+    async def list_source_documents(self, *, category: Optional[str] = None,
+                                    container: Optional[str] = None,
+                                    vehicle: Optional[str] = None,
+                                    driver_licence: Optional[str] = None,
+                                    terminal: Optional[str] = None,
+                                    from_ts: Optional[Any] = None,
+                                    to_ts: Optional[Any] = None,
+                                    limit: int = 100, offset: int = 0) -> tuple[list[dict], int]:
+        """The PARSED SOURCE gate documents in ``core.gate_document``.
+
+        Distinct from the Form-13 read above, which serves ``core.gate_capture``
+        — that store is seeded (`source_mode='sim'`), whereas these rows are the
+        customer's own Form 13 / EIR / PIN-ticket documents parsed verbatim from
+        the shared corpus, with the full as-filed payload in ``attrs`` and the
+        original scan referenced by ``image_file``. Read-only; the API never
+        writes here (scripts/import_gate_documents.py owns the load).
+
+        Since migration 0132 the table carries a UNIQUE (doc_category,
+        doc_variant), so one physical document is exactly one row and no
+        read-time de-duplication is needed. `terminal` matches the joined
+        ref_terminal code or name, case-insensitively.
+        """
+        conds, params = [], {}
+        if category:
+            conds.append("d.doc_category = :cat")
+            params["cat"] = category.strip().upper()
+        if container:
+            conds.append("d.container_no = :cn")
+            params["cn"] = container.strip().upper()
+        if vehicle:
+            # Plates are stored normalised (no spaces/dashes); normalise the
+            # filter the same way so "mh 43 bx 1488" finds MH43BX1488.
+            conds.append("d.vehicle_no = :veh")
+            params["veh"] = re.sub(r"[^A-Z0-9]", "", vehicle.strip().upper())
+        if driver_licence:
+            conds.append("upper(d.driver_licence) = :dl")
+            params["dl"] = driver_licence.strip().upper()
+        if terminal:
+            conds.append("(upper(t.code) = :term OR t.name ILIKE :term_like)")
+            params["term"] = terminal.strip().upper()
+            params["term_like"] = f"%{terminal.strip()}%"
+        if from_ts is not None:
+            conds.append("d.doc_ts >= :from_ts")
+            params["from_ts"] = from_ts
+        if to_ts is not None:
+            conds.append("d.doc_ts < :to_ts")
+            params["to_ts"] = to_ts
+        where = ("WHERE " + " AND ".join(conds)) if conds else ""
+        joined = ("FROM core.gate_document d "
+                  "LEFT JOIN core.ref_terminal t ON t.terminal_id = d.terminal_id ")
+        async with get_engine(self._dsn).connect() as conn:
+            total = (await conn.execute(text(
+                f"SELECT count(*) {joined}{where}"), params)).scalar()
+            params.update({"limit": limit, "offset": offset})
+            cols = ", ".join(f"d.{c.strip()}" for c in self._SOURCE_DOC_COLS.split(","))
+            rows = (await conn.execute(text(
+                f"SELECT {cols}, t.code AS terminal_code, t.name AS terminal_name "
+                f"{joined}{where} "
+                "ORDER BY d.doc_ts DESC NULLS LAST, d.doc_id DESC "
+                "LIMIT :limit OFFSET :offset"),
+                params)).mappings().all()
+        out = []
+        for r in rows:
+            d = dict(r)
+            # attrs is jsonb; normalise a string payload so callers always get an object.
+            if isinstance(d.get("attrs"), str):
+                try:
+                    d["attrs"] = json.loads(d["attrs"])
+                except Exception:
+                    pass
+            # The scan is served through the gateway's same-origin MinIO proxy —
+            # never a raw bucket URL, and never a local filesystem path.
+            d["evidence_uri"] = evidence_uri_for(d.get("image_file"))
+            d["terminal"] = d.get("terminal_code") or d.get("terminal_name")
+            out.append(d)
+        return out, int(total or 0)
 
     # ---------------------------------------------------------------- dedup
     async def find_file_by_sha(self, sha256: str, *,
@@ -388,7 +487,47 @@ class GateDocumentRepository:
         if not form13 and f.get("data_origin"):
             clauses.append("data_origin = :data_origin")
             p["data_origin"] = f["data_origin"]
+        # Date window (audit finding G1). Before this the EIR surface had no way to
+        # select a historical period at all, so the JNPA scenarios that need
+        # 1-3 August gate arrivals could not be served from the API — only by raw
+        # SQL, which fails the Notice's "cite the queries used" requirement.
+        # from_date is inclusive, to_date is inclusive of the whole day.
+        time_col = TIME_COL[doc_type]
+        if f.get("from_date"):
+            clauses.append(f"{time_col} >= :from_date")
+            p["from_date"] = f["from_date"]
+        if f.get("to_date"):
+            clauses.append(f"{time_col} < :to_date_excl")
+            p["to_date_excl"] = f["to_date"] + timedelta(days=1)
         return ((" WHERE " + " AND ".join(clauses)) if clauses else ""), p
+
+    async def hourly_profile(self, doc_type: str, *, filters: Mapping[str, Any],
+                             group_by: str = "hour") -> list[dict]:
+        """Bucket documents by hour (or day) of their timestamp column.
+
+        The aggregate counterpart of :meth:`list_docs`, sharing the SAME
+        ``_doc_where`` clause so a profile and the rows behind it can never
+        disagree. ``group_by`` is validated against a fixed set by the caller and
+        re-checked here — it lands in the SQL as an identifier, never a bound
+        value, so it may not come from raw client input."""
+        bucket = "hour" if str(group_by).lower() != "day" else "day"
+        where, p = self._doc_where(doc_type, filters)
+        time_col = TIME_COL[doc_type]
+        table = TABLES[doc_type]
+        scope = where or ""
+        if doc_type == "FORM13":
+            # gate_capture holds every capture type; keep the Form-13 scope.
+            scope = where or f" WHERE {_FORM13_SCOPE}"
+        sql = (
+            f"SELECT date_trunc('{bucket}', {time_col}) AS bucket, "
+            f"       count(*) AS documents, "
+            f"       count(DISTINCT {TRUCK_COL[doc_type]}) AS unique_trucks "
+            f"FROM {table}{scope} "
+            f"{'AND' if scope else 'WHERE'} {time_col} IS NOT NULL "
+            f"GROUP BY date_trunc('{bucket}', {time_col}) "
+            f"ORDER BY bucket ASC"
+        )
+        return await self._rows(sql, p)
 
     # The `terminal` printed on a gate document is free text and spelled a dozen
     # ways ("Nhava Sheva IGT", "DP World Nhava Sheva ICT", "PSA Mumbai BMCT"...).

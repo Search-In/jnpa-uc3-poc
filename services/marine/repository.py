@@ -585,25 +585,39 @@ class VesselCallRepository:
                     else:
                         dup += 1  # ON CONFLICT (row_sha256) DO NOTHING
 
-                # 9. BATHYMETRY soundings (resolve survey_id from drawing_no; unresolved →
-                #    error, never a stub survey). Row-hash idempotent, inserted in batches
-                #    of _BATHYMETRY_BATCH: one chart is 15k-30k soundings, so a per-row
-                #    execute would make an import take hours.
+                # 9. BATHYMETRY soundings (resolve survey_id from drawing_no; auto-ensure
+                #    the survey header on first sight so chart PDF/JSON import works
+                #    without a separate register step). Row-hash idempotent, inserted in
+                #    batches of _BATHYMETRY_BATCH: one chart is 15k-30k soundings, so a
+                #    per-row execute would make an import take hours.
                 survey_ids: dict[str, Optional[int]] = {}
                 pending: list[dict] = []
                 for bs in bathy_soundings:
                     dn = bs.get("drawing_no")
+                    if not dn:
+                        repo_errors.append({
+                            "row_number": None, "column_name": "drawing_no",
+                            "error_code": "missing_drawing_no",
+                            "error_detail": "bathymetry sounding has no drawing_no",
+                            "raw_value": None})
+                        continue
                     if dn not in survey_ids:
-                        survey_ids[dn] = (await conn.execute(
+                        sid = (await conn.execute(
                             text(_RESOLVE_SURVEY_BY_DRAWING), {"drawing_no": dn})).scalar()
+                        if sid is None:
+                            sid = (await conn.execute(text(_ENSURE_SURVEY), {
+                                "drawing_no": dn,
+                                "file_path": filename,
+                                "data_origin": origin,
+                            })).scalar()
+                        survey_ids[dn] = sid
                     sid = survey_ids[dn]
                     if sid is None:
                         repo_errors.append({
                             "row_number": None, "column_name": "drawing_no",
                             "error_code": "unresolved_survey",
-                            "error_detail": (f"no core.bathymetry_survey with drawing_no "
-                                             f"{dn!r}; register the survey before importing "
-                                             f"its soundings"),
+                            "error_detail": (f"could not resolve or create "
+                                             f"core.bathymetry_survey for drawing_no {dn!r}"),
                             "raw_value": dn})
                         continue
                     pending.append(self._bathymetry_sounding_params(bs, sid, fid, origin))
@@ -1103,12 +1117,23 @@ RETURNING channel_id
 
 # --------------------------------------------------------------------------- bathymetry
 # Soundings arrive keyed by the survey's NATURAL key (drawing_no) — survey_id is a
-# per-database identity surrogate and never crosses the wire. Resolve-or-error, the same
-# posture as vessel_call_event: a sounding whose survey is unknown becomes a typed row
-# error, never a stub survey.
+# per-database identity surrogate and never crosses the wire. Phase 2: ensure the
+# survey header exists (upsert on drawing_no) so a chart PDF/JSON import can land
+# without a separate pre-registration step. Metadata-only columns are COALESCE-
+# enriched so a re-import never nulls known title-block fields.
 _RESOLVE_SURVEY_BY_DRAWING = (
     "SELECT survey_id FROM core.bathymetry_survey WHERE drawing_no = :drawing_no LIMIT 1"
 )
+
+_ENSURE_SURVEY = """
+INSERT INTO core.bathymetry_survey
+    (drawing_no, file_path, data_origin)
+VALUES
+    (:drawing_no, :file_path, :data_origin)
+ON CONFLICT (drawing_no) DO UPDATE SET
+    file_path = COALESCE(EXCLUDED.file_path, core.bathymetry_survey.file_path)
+RETURNING survey_id
+"""
 
 # Idempotent on the content hash (uq_bathymetry_sounding_row): a sounding has no natural
 # key, so this follows core.sea_channel rather than the port_craft natural-key upsert.

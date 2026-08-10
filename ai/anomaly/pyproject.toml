@@ -41,9 +41,11 @@ track = [
     "supervision==0.22.*",
     "ultralytics==8.3.*",
 ]
+# Keep [dev] torch-free so CI / self-hosted runners don't pull multi-GB CUDA
+# wheels from PyPI. Use `pip install -e '.[torch]'` (or the Dockerfile CPU
+# index) when you need the AE.
 dev = [
     "pytest==8.3.*",
-    "torch>=2.0",
 ]
 
 [project.scripts]

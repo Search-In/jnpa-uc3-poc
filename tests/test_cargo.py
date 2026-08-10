@@ -36,6 +36,7 @@ from starlette.testclient import TestClient  # noqa: E402
 from jnpa_shared.iso6346 import is_valid_container_no, with_check_digit  # noqa: E402
 from services.cargo import (  # noqa: E402
     CargoConflict,
+    CargoCustomsBlocked,
     CargoNotFound,
     CargoService,
     CargoTransitionError,
@@ -231,6 +232,12 @@ class FakeCargoRepo:
         return [{"container_number": cn, "yard_block": r.get("yard_block")}
                 for cn, r in self._rows.items() if r.get("yard_block")]
 
+    async def yard_block_capacity(self) -> dict:
+        """core.yard_block master (migration 0130). Empty by default so the
+        fallback-to-nominal path is what the legacy tests exercise; a test that
+        wants real capacity assigns to ``repo._yard_capacity``."""
+        return dict(getattr(self, "_yard_capacity", {}) or {})
+
     async def create_rake_plan(self, rake_id, containers) -> dict:
         items = list(containers or [])
         self._rake_plan_seq += 1
@@ -270,7 +277,31 @@ class FakeCargoRepo:
 
 
     async def transition_lifecycle(self, container_number, *, target, allowed_from,
-                                   action, actor_role=None, note=None, strict=True):
+                                   action, actor_role=None, note=None, strict=True,
+                                   set_fields=None, blocked_customs=None):
+        # `model_row_lock` makes the fake behave like SELECT … FOR UPDATE: the
+        # read-check-write runs under a lock, with a yield inside it so concurrent
+        # callers genuinely interleave. Off by default — the lock is only needed by
+        # the concurrency test and would otherwise serialise every other test.
+        if getattr(self, "model_row_lock", False):
+            import asyncio
+            lock = getattr(self, "_row_lock", None)
+            if lock is None:
+                lock = self._row_lock = asyncio.Lock()
+            async with lock:
+                await asyncio.sleep(0)   # force a scheduling point inside the lock
+                return await self._transition_unlocked(
+                    container_number, target=target, allowed_from=allowed_from,
+                    action=action, actor_role=actor_role, note=note, strict=strict,
+                    set_fields=set_fields, blocked_customs=blocked_customs)
+        return await self._transition_unlocked(
+            container_number, target=target, allowed_from=allowed_from, action=action,
+            actor_role=actor_role, note=note, strict=strict, set_fields=set_fields,
+            blocked_customs=blocked_customs)
+
+    async def _transition_unlocked(self, container_number, *, target, allowed_from,
+                                   action, actor_role=None, note=None, strict=True,
+                                   set_fields=None, blocked_customs=None):
         rec = self._rows.get(container_number)
         if rec is None:
             if strict:
@@ -281,7 +312,20 @@ class FakeCargoRepo:
             if strict:
                 raise CargoTransitionError(container_number, current, target)
             return None
+        # Customs gate, on the EFFECTIVE status — same rule as the real repository.
+        if blocked_customs:
+            patch_cs = _enum_val(dict(set_fields or {}).get("customs_status"))
+            cs = str(patch_cs or rec.get("customs_status") or "").upper()
+            if cs in blocked_customs:
+                if strict:
+                    raise CargoCustomsBlocked(container_number, cs, target)
+                return None
         rec["lifecycle_status"] = target
+        # Mirrors the real repository: writable business columns are patched in the
+        # SAME operation as the status change (audit W2/W3 — one commit, or none).
+        for k, v in dict(set_fields or {}).items():
+            if k in _WRITABLE:
+                rec[k] = _enum_val(v) if k == "customs_status" else v
         await self.record_lifecycle_event(
             container_number, action=action, old_status=current,
             new_status=target, actor_role=actor_role, note=note)
@@ -350,6 +394,22 @@ def _payload(**over) -> dict:
     return base
 
 
+def _seed_released(client, cn: str = VALID_CN, **over) -> None:
+    """Create a container and drive it all the way to RELEASED.
+
+    ``POST /api/cargo {"is_released": true}`` is refused since audit fix W1 (a new
+    record always lands on CREATED, so it may not also claim RELEASED). Tests that
+    just need a released row to filter on walk the real lifecycle instead — which
+    is what a caller has to do in production too."""
+    over.pop("is_released", None)
+    client.post("/api/cargo", json=_payload(container_number=cn, **over))
+    client.post(f"/api/cargo/{cn}/discharge", json={})
+    client.put(f"/api/cargo/{cn}/yard-assignment", json={"yard_block": "A-01"})
+    client.post(f"/api/cargo/{cn}/verify", json={"verified": True})
+    r = client.post(f"/api/cargo/{cn}/release", json={})
+    assert r.status_code == 200, r.text
+
+
 # --------------------------------------------------------------------- pure layer
 def test_iso6346_pk_validation():
     assert is_valid_container_no(with_check_digit("MSCU778901"))
@@ -370,8 +430,7 @@ def test_create_returns_201(client):
 
 def test_get_all(client):
     client.post("/api/cargo", json=_payload())
-    client.post("/api/cargo", json=_payload(container_number="MSCU7789010",
-                                            customs_status="CLEARED", is_released=True))
+    _seed_released(client, "MSCU7789010", customs_status="CLEARED")
     r = client.get("/api/cargo")
     assert r.status_code == 200
     rows = r.json()
@@ -586,7 +645,7 @@ def test_invalid_new_enum_400(client):
 # ------------------------------------------------------------- role-based filtering
 def test_role_filtering_scopes_visibility(client):
     # One released + one held/unreleased box.
-    client.post("/api/cargo", json=_payload(is_released=True))
+    _seed_released(client)
     client.post("/api/cargo", json=_payload(container_number="MSCU7789010",
                                             is_released=False, customs_status="HELD"))
     # operator / control room see everything (existing contract unchanged).
@@ -604,7 +663,7 @@ def test_role_filtering_scopes_visibility(client):
 def test_role_scope_overrides_conflicting_filter(client):
     """A role's scope is a hard constraint — it wins over a conflicting client
     filter (a driver cannot ask to see unreleased boxes)."""
-    client.post("/api/cargo", json=_payload(is_released=True))
+    _seed_released(client)
     client.post("/api/cargo", json=_payload(container_number="MSCU7789010", is_released=False))
     rows = client.get("/api/cargo", params={"role": "driver", "is_released": "false"}).json()
     assert [x["container_number"] for x in rows] == [VALID_CN]  # released only, role wins
@@ -954,6 +1013,77 @@ def test_release_before_verify_409(client):
     assert r.json()["detail"]["current_status"] == "YARD_ASSIGNED"
 
 
+def _verified(client, cn: str = VALID_CN) -> None:
+    """Drive a container to VERIFIED — the last state before release."""
+    client.post("/api/cargo", json=_lc_payload())
+    client.post(f"/api/cargo/{cn}/discharge", json={})
+    client.put(f"/api/cargo/{cn}/yard-assignment", json={"yard_block": "A-01"})
+    client.post(f"/api/cargo/{cn}/verify", json={"verified": True})
+
+
+def test_release_blocked_while_customs_holds_the_goods(client):
+    """Customs, not the lifecycle, forbids this release.
+
+    The lifecycle gate passes — the container IS verified — so this used to
+    succeed and produce a HELD + RELEASED row: a state no real container can be
+    in, because out-of-charge is what permits goods to leave customs control.
+    """
+    _verified(client)
+    client.put(f"/api/cargo/{VALID_CN}", json={"customs_status": "HELD"})
+
+    r = client.post(f"/api/cargo/{VALID_CN}/release")
+
+    assert r.status_code == 409
+    # NOT illegal_transition: the transition is legal, customs is the blocker, and
+    # naming the wrong track sends the operator to fix the wrong thing.
+    assert r.json()["detail"]["error"] == "customs_not_cleared"
+    assert r.json()["detail"]["customs_status"] == "HELD"
+    assert client.get(f"/api/cargo/{VALID_CN}").json()["lifecycle_status"] == "VERIFIED"
+
+
+def test_release_blocked_while_under_inspection(client):
+    _verified(client)
+    client.put(f"/api/cargo/{VALID_CN}", json={"customs_status": "UNDER_INSPECTION"})
+
+    r = client.post(f"/api/cargo/{VALID_CN}/release")
+
+    assert r.status_code == 409
+    assert r.json()["detail"]["error"] == "customs_not_cleared"
+
+
+def test_put_is_released_faces_the_same_customs_gate(client):
+    """Otherwise the guard is bypassable by patching the column instead."""
+    _verified(client)
+    client.put(f"/api/cargo/{VALID_CN}", json={"customs_status": "HELD"})
+
+    r = client.put(f"/api/cargo/{VALID_CN}", json={"is_released": True})
+
+    assert r.status_code == 409
+    assert r.json()["detail"]["error"] == "customs_not_cleared"
+    assert client.get(f"/api/cargo/{VALID_CN}").json()["is_released"] is False
+
+
+def test_clearing_customs_in_the_same_patch_allows_the_release(client):
+    """The gate reads the EFFECTIVE status, so clearing-and-releasing in one call
+    is a legitimate single act rather than a false positive."""
+    _verified(client)
+    client.put(f"/api/cargo/{VALID_CN}", json={"customs_status": "HELD"})
+
+    r = client.put(f"/api/cargo/{VALID_CN}",
+                   json={"customs_status": "CLEARED", "is_released": True})
+
+    assert r.status_code == 200
+    assert r.json()["lifecycle_status"] == "RELEASED"
+
+
+def test_pending_customs_does_not_block_release(client):
+    """PENDING means customs has said nothing — the state of most of the corpus.
+    Blocking on it would stop the demo on missing data, not on a customs decision."""
+    _verified(client)
+
+    assert client.post(f"/api/cargo/{VALID_CN}/release").status_code == 200
+
+
 def test_duplicate_release_409(client):
     client.post("/api/cargo", json=_lc_payload())
     client.post(f"/api/cargo/{VALID_CN}/discharge", json={})
@@ -1017,6 +1147,290 @@ def _walk_to_verified(client, cn=None):
     client.post(f"/api/cargo/{cn}/discharge", json={})
     client.put(f"/api/cargo/{cn}/yard-assignment", json={"yard_block": "A-01"})
     client.post(f"/api/cargo/{cn}/verify", json={"verified": True})
+
+
+# ------------------------------------------- audit fixes W1 / W2 / W3 (2026-08-06)
+def test_create_rejects_release_true(client):
+    """W1: a create always lands on CREATED, so it may not also claim RELEASED.
+
+    Before this fix POST /api/cargo {"is_released": true} produced a row with
+    is_released=true and lifecycle_status='CREATED' — a box released without ever
+    being discharged, yarded, scanned or verified. That is exactly the corruption
+    migration 0115 had to backfill away (5 such rows), and the PUT path was fixed
+    then while the POST path was not."""
+    r = client.post("/api/cargo", json=_payload(is_released=True))
+    assert r.status_code == 409, r.text
+    detail = r.json()["detail"]
+    assert detail["error"] == "illegal_transition"
+    assert detail["current_status"] == "CREATED"
+    assert detail["attempted_status"] == "RELEASED"
+    # Nothing was written — not even a half-created row.
+    assert client.get(f"/api/cargo/{VALID_CN}").status_code == 404
+
+
+def test_create_still_accepts_is_released_false(client):
+    """The gate must not break the ordinary create path."""
+    assert client.post("/api/cargo", json=_payload(is_released=False)).status_code == 201
+
+
+def test_release_is_atomic(client):
+    """W2: lifecycle_status and is_released must commit together.
+
+    They used to be two transactions — transition_lifecycle, then a separate
+    update(is_released=True) — so a failure between them left the row RELEASED to
+    the state machine but invisible to every is_released filter. The repository
+    now writes both in one locked statement, which this asserts by proving the
+    repository is asked exactly ONCE to write on the release path."""
+    client.post("/api/cargo", json=_payload())
+    _walk_to_verified(client)
+
+    from services.cargo import CargoService
+    from gateway.routers import cargo as cargo_router
+    service = client.app.dependency_overrides[cargo_router.get_service]()
+    repo = service._repo
+    writes: list[dict] = []
+    original = repo.transition_lifecycle
+
+    async def spy(cn, **kw):
+        writes.append(kw)
+        return await original(cn, **kw)
+
+    repo.transition_lifecycle = spy
+    try:
+        r = client.post(f"/api/cargo/{VALID_CN}/release", json={})
+    finally:
+        repo.transition_lifecycle = original
+
+    assert r.status_code == 200, r.text
+    assert len(writes) == 1, "release must be a single locked write, not two"
+    assert writes[0]["set_fields"] == {"is_released": True}
+    row = client.get(f"/api/cargo/{VALID_CN}").json()
+    assert row["is_released"] is True and row["lifecycle_status"] == "RELEASED"
+
+
+def test_release_failure_leaves_no_divergence(client):
+    """W2, the failure case: if the single write fails, NEITHER the status nor the
+    flag may have moved. Previously a failure in the second transaction left
+    lifecycle_status='RELEASED' with is_released=false."""
+    client.post("/api/cargo", json=_payload())
+    _walk_to_verified(client)
+
+    from gateway.routers import cargo as cargo_router
+    service = client.app.dependency_overrides[cargo_router.get_service]()
+    repo = service._repo
+    original = repo.transition_lifecycle
+
+    async def boom(cn, **kw):
+        raise RuntimeError("simulated commit failure")
+
+    repo.transition_lifecycle = boom
+    try:
+        with pytest.raises(RuntimeError):
+            client.post(f"/api/cargo/{VALID_CN}/release", json={})
+    finally:
+        repo.transition_lifecycle = original
+
+    row = client.get(f"/api/cargo/{VALID_CN}").json()
+    assert row["is_released"] is False
+    assert row["lifecycle_status"] == "VERIFIED"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_release_produces_exactly_one_winner():
+    """W3, the actual race: two callers release the same container at once.
+
+    Before the fix `update_cargo` did get() -> check can_transition -> update()
+    with no lock between the read and the write, so both callers could read a
+    pre-release snapshot, both pass the gate, and both write. The gate now sits
+    inside the repository's locked transition.
+
+    The fake repo models `SELECT … FOR UPDATE` with an asyncio.Lock held across
+    the read-check-write, and yields inside it — so without the fix both
+    coroutines would observe VERIFIED and both succeed."""
+    import asyncio
+
+    from services.cargo import CargoService
+
+    repo = FakeCargoRepo()
+    await repo.create({"container_number": VALID_CN})
+    repo._rows[VALID_CN]["lifecycle_status"] = "VERIFIED"
+    repo.model_row_lock = True          # see FakeCargoRepo.transition_lifecycle
+    service = CargoService(repository=repo)
+
+    results = await asyncio.gather(
+        service.update_cargo(VALID_CN, {"is_released": True}),
+        service.update_cargo(VALID_CN, {"is_released": True}),
+        return_exceptions=True,
+    )
+    winners = [r for r in results if not isinstance(r, Exception)]
+    losers = [r for r in results if isinstance(r, CargoTransitionError)]
+    assert len(winners) == 1, f"expected exactly one release to win, got {results}"
+    assert len(losers) == 1, f"the loser must be refused, got {results}"
+    assert losers[0].current == "RELEASED"
+
+    # …and exactly one RELEASE transition reached the audit log.
+    history = await repo.list_lifecycle_events(VALID_CN)
+    assert sum(1 for h in history if h["action"] == "RELEASE") == 1
+    assert repo._rows[VALID_CN]["is_released"] is True
+
+
+def test_duplicate_put_release_is_an_idempotent_no_op(client):
+    """A repeated PUT with is_released=true on an already-released box is a no-op
+    patch (standard PUT semantics), NOT a second release: no duplicate audit row.
+
+    POST /release differs deliberately — it is an explicit action and 409s on a
+    duplicate (see test_duplicate_release_409)."""
+    client.post("/api/cargo", json=_payload())
+    _walk_to_verified(client)
+    assert client.put(f"/api/cargo/{VALID_CN}", json={"is_released": True}).status_code == 200
+    assert client.put(f"/api/cargo/{VALID_CN}", json={"is_released": True}).status_code == 200
+    history = client.get(f"/api/cargo/{VALID_CN}/lifecycle").json()
+    assert sum(1 for h in history if h["action"] == "RELEASE") == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_release_gate_is_evaluated_under_the_lock():
+    """W3 at the service layer: the release branch must route through
+    transition_lifecycle (which locks) and must NOT pre-check with a bare get()
+    followed by an unlocked update()."""
+    from services.cargo import CargoService
+
+    repo = FakeCargoRepo()
+    await repo.create({"container_number": VALID_CN})
+    repo._rows[VALID_CN]["lifecycle_status"] = "VERIFIED"
+    service = CargoService(repository=repo)
+
+    seen: list[dict] = []
+    original = repo.transition_lifecycle
+
+    async def spy(cn, **kw):
+        seen.append(kw)
+        return await original(cn, **kw)
+
+    repo.transition_lifecycle = spy
+    await service.update_cargo(VALID_CN, {"is_released": True})
+    assert len(seen) == 1
+    assert seen[0]["strict"] is True, "the gate must be enforced inside the lock"
+    assert seen[0]["set_fields"]["is_released"] is True
+
+
+# ------------------------------------------------------- PENDENCY (migration 0131)
+def test_pendency_state_between_discharge_and_yard(client):
+    client.post("/api/cargo", json=_lc_payload())
+    client.post(f"/api/cargo/{VALID_CN}/discharge", json={})
+    r = client.post(f"/api/cargo/{VALID_CN}/pendency",
+                    json={"reason": "awaiting rail rake"})
+    assert r.status_code == 200, r.text
+    assert r.json()["lifecycle_status"] == "PENDENCY"
+    # …and the box can still be yard-assigned from there.
+    assert client.put(f"/api/cargo/{VALID_CN}/yard-assignment",
+                      json={"yard_block": "A-01"}).status_code == 200
+    assert client.get(f"/api/cargo/{VALID_CN}").json()["lifecycle_status"] == "YARD_ASSIGNED"
+
+
+def test_pendency_is_optional_so_the_legacy_path_still_works(client):
+    """PENDENCY must NOT be a mandatory gate — every container already recorded as
+    VESSEL_DISCHARGED -> YARD_ASSIGNED would otherwise be invalidated."""
+    client.post("/api/cargo", json=_lc_payload())
+    client.post(f"/api/cargo/{VALID_CN}/discharge", json={})
+    r = client.put(f"/api/cargo/{VALID_CN}/yard-assignment", json={"yard_block": "A-01"})
+    assert r.status_code == 200
+    assert client.get(f"/api/cargo/{VALID_CN}").json()["lifecycle_status"] == "YARD_ASSIGNED"
+
+
+def test_pendency_before_discharge_is_409(client):
+    client.post("/api/cargo", json=_lc_payload())
+    r = client.post(f"/api/cargo/{VALID_CN}/pendency", json={})
+    assert r.status_code == 409
+    assert r.json()["detail"]["current_status"] == "CREATED"
+
+
+def test_pendency_writes_an_audit_row(client):
+    client.post("/api/cargo", json=_lc_payload())
+    client.post(f"/api/cargo/{VALID_CN}/discharge", json={})
+    client.post(f"/api/cargo/{VALID_CN}/pendency", json={"reason": "no rake"})
+    history = client.get(f"/api/cargo/{VALID_CN}/lifecycle").json()
+    row = next(h for h in history if h["action"] == "PENDENCY")
+    assert row["old_status"] == "VESSEL_DISCHARGED"
+    assert row["new_status"] == "PENDENCY"
+    assert row["note"] == "no rake"
+
+
+def test_pendency_emits_its_own_event(client):
+    client.post("/api/cargo", json=_lc_payload())
+    client.post(f"/api/cargo/{VALID_CN}/discharge", json={})
+    client.post(f"/api/cargo/{VALID_CN}/pendency", json={})
+    events = {e["event"] for e in client.get("/api/cargo/events").json()}
+    assert "cargo.pendency_recorded" in events
+
+
+def test_pendency_state_machine_ranking():
+    """PENDENCY is optional: discharge may skip it, and it may not be reached from
+    an already-yarded state."""
+    from services.cargo.service import can_transition
+    assert can_transition("VESSEL_DISCHARGED", "PENDENCY")
+    assert can_transition("PENDENCY", "YARD_ASSIGNED")
+    assert can_transition("VESSEL_DISCHARGED", "YARD_ASSIGNED")   # skippable
+    assert not can_transition("YARD_ASSIGNED", "PENDENCY")        # never backwards
+    assert not can_transition("CREATED", "PENDENCY")              # discharge first
+
+
+# ------------------------------------------ yard capacity (migration 0130, fix Y1)
+def test_yard_capacity_uses_the_real_master_when_present(client):
+    """The congestion denominator must come from core.yard_block, not the nominal
+    constant, and the response must say which it used."""
+    from gateway.routers import cargo as cargo_router
+    service = client.app.dependency_overrides[cargo_router.get_service]()
+    service._repo._yard_capacity = {"A": 4, "B": 10}
+
+    for idx, cn in enumerate(("MSCU7789010", "GESU5123996", "TCLU1234568")):
+        client.post("/api/cargo", json=_payload(container_number=cn))
+        client.put(f"/api/cargo/{cn}/yard-assignment", json={"yard_block": "A-0%d" % idx})
+
+    body = client.get("/api/cargo/yard-optimization").json()
+    assert body["capacity_source"] == "core.yard_block"
+    assert body["capacity"] == 4          # zone A only — no B containers exist
+    assert body["occupied"] == 3
+    assert body["yard_congestion"] == 0.75
+    assert body["assumptions"] == []      # nothing had to be assumed
+
+
+def test_yard_capacity_declares_the_assumption_when_the_master_is_empty(client):
+    """Audit finding Y1: the nominal 10 is still usable, but it may no longer be
+    silent — an evaluator asking "10 what, and from where?" gets an answer."""
+    client.post("/api/cargo", json=_payload())
+    client.put(f"/api/cargo/{VALID_CN}/yard-assignment", json={"yard_block": "A-01"})
+
+    body = client.get("/api/cargo/yard-optimization").json()
+    assert body["capacity_source"] == "ASSUMED"
+    assert body["assumptions"], "the assumed capacity must be declared"
+    a = body["assumptions"][0]
+    assert a["field"] == "yard_block_capacity[A]"
+    assert a["value"] == 10
+    assert "nominal" in a["reason"]
+
+
+def test_yard_optimization_recommends_moving_the_overflow(client):
+    """With a real capacity of 2 and 3 boxes in the zone, exactly the 1 over
+    capacity is recommended for a move (not "keep one, move the rest")."""
+    from gateway.routers import cargo as cargo_router
+    service = client.app.dependency_overrides[cargo_router.get_service]()
+    service._repo._yard_capacity = {"A": 2}
+
+    for idx, cn in enumerate(("MSCU7789010", "GESU5123996", "TCLU1234568")):
+        client.post("/api/cargo", json=_payload(container_number=cn))
+        client.put(f"/api/cargo/{cn}/yard-assignment", json={"yard_block": "A-0%d" % idx})
+
+    body = client.get("/api/cargo/yard-optimization").json()
+    assert len(body["recommendations"]) == 1
+    assert body["recommendations"][0]["reason"] == "over block capacity"
+    assert body["block_utilisation"]["A"] == 1.5
+
+
+def test_yard_optimization_empty_yard_is_unchanged(client):
+    body = client.get("/api/cargo/yard-optimization").json()
+    assert body["yard_congestion"] == 0.0
+    assert body["capacity_source"] == "NONE"
 
 
 def test_put_release_before_verify_is_rejected(client):

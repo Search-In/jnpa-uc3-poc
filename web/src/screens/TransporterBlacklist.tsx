@@ -6,7 +6,7 @@
 // Backed exclusively by the existing /api/transporters/* endpoints — this file is
 // a pure UI redesign (no API, schema or business-rule changes).
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -46,8 +46,8 @@ import { STATUS } from "@/lib/tokens";
 import { fmtDateTimeIST } from "@/lib/utils";
 
 const SEVERITIES = ["LOW", "MEDIUM", "HIGH", "CRITICAL"] as const;
-const LIST_LIMIT = 1000; // server hard-caps at 1000; we page/search client-side over this window
-const PAGE_SIZE = 10;
+// Page size only — totals come from the server's COUNT(*), never from the page.
+const PAGE_SIZE = 50;
 
 function severityTone(sev?: string): Tone {
   switch ((sev ?? "").toUpperCase()) {
@@ -118,14 +118,28 @@ export default function TransporterBlacklist({
     if (tid && /^\d+$/.test(tid)) setSelectedId(Number(tid));
   }, [searchParams, isBlacklistMode]);
 
-  // Filtered, server-searched list (covers the full registry; display window 1000).
+  // Server-side search + paging: the query runs across the COMPLETE registry in
+  // SQL, and only one page of rows ever reaches the browser.
   const listQ = useQuery({
-    queryKey: ["transporters-list", dq],
-    queryFn: () => api.transporters({ q: dq.trim() || undefined, limit: LIST_LIMIT }),
+    queryKey: ["transporters-list", dq, page],
+    queryFn: () =>
+      api.transporters({
+        q: dq.trim() || undefined,
+        limit: PAGE_SIZE,
+        offset: page * PAGE_SIZE,
+      }),
+    placeholderData: (prev) => prev,
   });
   const blacklistQ = useQuery({
-    queryKey: ["transporter-blacklist"],
-    queryFn: () => api.transporterBlacklist(),
+    queryKey: ["transporter-blacklist", page],
+    queryFn: () => api.transporterBlacklist({ limit: PAGE_SIZE, offset: page * PAGE_SIZE }),
+    placeholderData: (prev) => prev,
+  });
+  // Registry-wide KPI aggregates, computed by the database — independent of
+  // which page is loaded and of any search term.
+  const statsQ = useQuery({
+    queryKey: ["transporter-stats"],
+    queryFn: () => api.transporterStats(),
   });
   const detailQ = useQuery({
     queryKey: ["transporter", selectedId],
@@ -133,23 +147,15 @@ export default function TransporterBlacklist({
     enabled: selectedId != null,
   });
 
-  // Registry-wide KPI baseline: snapshot the UNFILTERED list result so the KPI
-  // cards stay stable while the user searches — reuses the same query, no extra
-  // API call is made.
-  const registryRef = useRef<{ count: number; transporters: any[] } | null>(null);
-  useEffect(() => {
-    if (!dq.trim() && listQ.data) registryRef.current = listQ.data;
-  }, [dq, listQ.data]);
-  const registry = registryRef.current ?? (!dq.trim() ? listQ.data : undefined);
-
   const invalidate = () => {
     void qc.invalidateQueries({ queryKey: ["transporters-list"] });
     void qc.invalidateQueries({ queryKey: ["transporter-blacklist"] });
+    void qc.invalidateQueries({ queryKey: ["transporter-stats"] });
     if (selectedId != null) void qc.invalidateQueries({ queryKey: ["transporter", selectedId] });
   };
 
-  const blacklist: any[] = blacklistQ.data?.blacklist ?? [];
-  const masterRows: any[] = listQ.data?.transporters ?? [];
+  const blacklist: any[] = blacklistQ.data?.items ?? [];
+  const masterRows: any[] = listQ.data?.items ?? [];
   // Blacklist tab: the list is driven ONLY by the /api/transporters/blacklist
   // endpoint (active blacklist records), search-filtered client-side over that
   // set. We never fetch all transporters and filter them down to build it.
@@ -164,23 +170,34 @@ export default function TransporterBlacklist({
   const listLoading = isBlacklistMode ? blacklistQ.isLoading : listQ.isLoading;
   const listFetching = isBlacklistMode ? blacklistQ.isFetching : listQ.isFetching;
 
-  // KPIs from the registry snapshot (+ active-blacklist count, which is registry-wide).
-  const regRows = registry?.transporters ?? [];
-  const regTotal = registry?.count ?? 0;
-  const capped = regTotal >= LIST_LIMIT;
-  const blacklistedCount = blacklistQ.data?.count ?? 0;
-  const activeCount = Math.max(0, regTotal - blacklistedCount);
-  const vehiclesAssigned = regRows.reduce((s, r) => s + (Number(r.vehicle_count) || 0), 0);
-  const plus = (n: number) => `${n.toLocaleString()}${capped ? "+" : ""}`;
+  // KPIs come from /api/transporters/stats — database COUNT(*) aggregates over
+  // the WHOLE registry, independent of page size and of any search term.
+  const totalTransporters = statsQ.data?.total ?? 0;
+  const activeCount = statsQ.data?.active ?? 0;
+  const blacklistedCount = statsQ.data?.blacklisted ?? 0;
+  const vehiclesAssigned = statsQ.data?.vehicles_assigned ?? 0;
+  // Exact numbers with comma separators — no compact notation, no "+" suffix.
+  const fmt = (n: number) => n.toLocaleString();
 
-  // Reset paging whenever the result set changes.
+  // Total for the CURRENT result set (search-aware), straight from the server.
+  const resultTotal = isBlacklistMode
+    ? dq.trim()
+      ? blacklistRows.length
+      : (blacklistQ.data?.total ?? 0)
+    : (listQ.data?.total ?? 0);
+
+  // Reset paging whenever the query changes.
   useEffect(() => {
     setPage(0);
-  }, [dq]);
-  const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  }, [dq, isBlacklistMode]);
+  const pageCount = Math.max(1, Math.ceil(resultTotal / PAGE_SIZE));
+  useEffect(() => {
+    if (page > pageCount - 1) setPage(pageCount - 1);
+  }, [page, pageCount]);
   const clampedPage = Math.min(page, pageCount - 1);
-  const pageRows = rows.slice(clampedPage * PAGE_SIZE, clampedPage * PAGE_SIZE + PAGE_SIZE);
-  const showingFrom = rows.length ? clampedPage * PAGE_SIZE + 1 : 0;
+  // The server already returned exactly one page — no client-side slicing.
+  const pageRows = rows;
+  const showingFrom = resultTotal && pageRows.length ? clampedPage * PAGE_SIZE + 1 : 0;
   const showingTo = clampedPage * PAGE_SIZE + pageRows.length;
 
   const HeaderIcon = isBlacklistMode ? ShieldAlert : Building2;
@@ -212,33 +229,33 @@ export default function TransporterBlacklist({
           <StatCard
             icon={Building2}
             label="Total Transporters"
-            value={plus(regTotal)}
+            value={fmt(totalTransporters)}
             tone="info"
-            loading={listQ.isLoading && !registry}
-            sub={capped ? "registered (window 1000)" : "registered companies"}
+            loading={statsQ.isLoading}
+            sub="registered companies"
           />
           <StatCard
             icon={ShieldCheck}
             label="Active"
-            value={plus(activeCount)}
+            value={fmt(activeCount)}
             tone="ok"
-            loading={listQ.isLoading && !registry}
+            loading={statsQ.isLoading}
             sub="cleared for gate entry"
           />
           <StatCard
             icon={ShieldAlert}
             label="Blacklisted"
-            value={blacklistedCount.toLocaleString()}
+            value={fmt(blacklistedCount)}
             tone="critical"
-            loading={blacklistQ.isLoading}
+            loading={statsQ.isLoading}
             sub="denied at the gate"
           />
           <StatCard
             icon={Truck}
             label="Vehicles Assigned"
-            value={plus(vehiclesAssigned)}
+            value={fmt(vehiclesAssigned)}
             tone="neutral"
-            loading={listQ.isLoading && !registry}
+            loading={statsQ.isLoading}
             sub="mapped to transporters"
           />
         </StatGrid>
@@ -258,7 +275,7 @@ export default function TransporterBlacklist({
                   {isBlacklistMode ? "Blacklisted transporters" : "Transporters"}
                 </h3>
                 <span className="ml-auto rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-                  {isBlacklistMode ? blacklistedCount.toLocaleString() : plus(regTotal)}
+                  {fmt(isBlacklistMode ? blacklistedCount : totalTransporters)}
                 </span>
               </div>
               <div className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20">
@@ -428,19 +445,14 @@ export default function TransporterBlacklist({
                     <span className="font-semibold text-foreground">
                       {showingFrom}–{showingTo}
                     </span>{" "}
-                    of{" "}
-                    <span className="font-semibold text-foreground">
-                      {rows.length.toLocaleString()}
-                    </span>
+                    of <span className="font-semibold text-foreground">{fmt(resultTotal)}</span>
                     {isBlacklistMode
                       ? q
                         ? " matches"
                         : " blacklisted"
-                      : rows.length >= LIST_LIMIT
-                        ? "+ (refine search to narrow)"
-                        : q
-                          ? " matches"
-                          : " transporters"}
+                      : q
+                        ? " matches"
+                        : " transporters"}
                   </span>
                   <div className="ml-auto flex items-center gap-1">
                     <button

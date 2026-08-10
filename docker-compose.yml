@@ -1122,6 +1122,12 @@ services:
       JNPA_SYNC_ENABLED: ${JNPA_SYNC_ENABLED:-true}
       JNPA_SYNC_INTERVAL_S: ${JNPA_SYNC_INTERVAL_S:-300}
       JNPA_STORE_DIR: ${JNPA_STORE_DIR:-data/jnpa_api}
+      # Largest accepted upload body, MB (gateway/upload_limits.py). Declared here
+      # or a value in .env never reaches the container — the code default would
+      # silently win. MUST stay BELOW the reverse proxy's client_max_body_size,
+      # otherwise nginx rejects the request first and the caller gets an HTML 413
+      # instead of our {"error":"file_too_large","max_bytes":…} JSON.
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-32}
       # Infra.
       POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}

@@ -22,7 +22,9 @@ import Fastag from "@/screens/Fastag";
 import GateCustoms from "@/screens/GateCustoms";
 import Intelligence from "@/screens/Intelligence";
 import Uc3Lifecycle from "@/screens/Uc3Lifecycle";
+import CargoWhatIf from "@/screens/CargoWhatIf";
 import TruckOperations from "@/screens/TruckOperations";
+import TruckVisitDetail from "@/screens/TruckVisitDetail";
 import ParkingManagement from "@/screens/ParkingManagement";
 import SystemHealth from "@/screens/SystemHealth";
 import WhatIfConsole from "@/screens/WhatIfConsole";
@@ -204,6 +206,14 @@ function DashboardShell({
             }
           />
           <Route
+            path="/truck-visit"
+            element={
+              <Guard path="/truck-visit">
+                <TruckVisitDetail />
+              </Guard>
+            }
+          />
+          <Route
             path="/uc3-lifecycle"
             element={
               <Guard path="/uc3-lifecycle">
@@ -243,6 +253,17 @@ function DashboardShell({
             element={
               <Guard path="/what-if">
                 <WhatIfConsole />
+              </Guard>
+            }
+          />
+          {/* Cargo What-If Dashboard — the JNPA Notice scenarios (read-only
+              analytics over /api/cargo/simulate/*). Distinct from /what-if
+              above, which triggers the TFC live-injection storyline. */}
+          <Route
+            path="/cargo-whatif"
+            element={
+              <Guard path="/cargo-whatif">
+                <CargoWhatIf />
               </Guard>
             }
           />

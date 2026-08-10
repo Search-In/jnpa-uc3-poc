@@ -18,10 +18,10 @@ from jnpa_shared.logging import get_logger
 
 from .repository import (
     CargoConflict,
+    CargoCustomsBlocked,
     CargoNotFound,
     CargoRepository,
     CargoTransitionError,
-    _infer_lifecycle,
 )
 
 log = get_logger("services.cargo.service")
@@ -52,6 +52,10 @@ EVENT_YARD_POSITION_ALLOCATED = "cargo.yard_position_allocated"
 EVENT_REEFER_PLANNED = "cargo.reefer_planned"
 EVENT_RAKE_ASSIGNED = "cargo.rake_assigned"
 EVENT_VERIFIED = "cargo.verified"
+# Pendency (audit Phase 5). Distinct from the notification-driven
+# ``cargo.pendency_created`` above: that one fires when a stakeholder notification
+# is raised, this one when the CONTAINER itself enters the PENDENCY state.
+EVENT_PENDENCY_RECORDED = "cargo.pendency_recorded"
 
 # Milestones that are DISTRIBUTED (Kafka + WS) in addition to being logged to
 # core.cargo_event. Deliberately a small set: the handover signals other systems
@@ -64,15 +68,22 @@ _BUS_EVENTS = frozenset({
 # --------------------------------------------------------------------- lifecycle
 # The single source of truth for the cargo lifecycle state machine (task #1).
 #
-#   CREATED -> VESSEL_DISCHARGED -> YARD_ASSIGNED
+#   CREATED -> VESSEL_DISCHARGED -> [PENDENCY] -> YARD_ASSIGNED
 #           -> [YARD_POSITION_ALLOCATED | REEFER_PLANNED | RAKE_ASSIGNED]  (optional)
 #           -> SCAN_PENDING (derived queue label) -> VERIFIED -> RELEASED
 #
 # Each state carries an ordinal RANK. Transitions are FORWARD-ONLY, and a move may
 # never skip a MANDATORY gate (discharge, yard-assign, verify, release). The
 # optional planning states between YARD_ASSIGNED and VERIFIED may be skipped.
+#
+# PENDENCY (audit Phase 5) sits between discharge and yard-assignment: a box
+# landed on the quay and awaiting evacuation. It is deliberately OPTIONAL, not a
+# mandatory gate — making it mandatory would invalidate every container already
+# recorded as VESSEL_DISCHARGED -> YARD_ASSIGNED and break the existing demo path.
+# Skipping it stays legal; recording it is now possible and audited.
 LC_CREATED = "CREATED"
 LC_VESSEL_DISCHARGED = "VESSEL_DISCHARGED"
+LC_PENDENCY = "PENDENCY"
 LC_YARD_ASSIGNED = "YARD_ASSIGNED"
 LC_YARD_POSITION_ALLOCATED = "YARD_POSITION_ALLOCATED"
 LC_REEFER_PLANNED = "REEFER_PLANNED"
@@ -81,9 +92,23 @@ LC_SCAN_PENDING = "SCAN_PENDING"
 LC_VERIFIED = "VERIFIED"
 LC_RELEASED = "RELEASED"
 
+# Customs dispositions that forbid a release, whatever the lifecycle says.
+#
+# `lifecycle_status` and `customs_status` are independent tracks, but not
+# orthogonal at this point: out-of-charge is what permits goods to leave customs
+# control, so a container customs is holding or examining cannot lawfully be
+# gate-out released. Release previously checked the lifecycle alone, which let
+# UNDER_INSPECTION + RELEASED rows exist — a state no real container can be in.
+#
+# PENDING is deliberately NOT here. It means customs has said nothing yet, which
+# is the state of most of the corpus; blocking on it would stop the whole demo
+# on missing data rather than on a customs decision.
+CUSTOMS_BLOCKS_RELEASE = frozenset({"HELD", "UNDER_INSPECTION"})
+
 _LIFECYCLE_RANK: dict[str, int] = {
     LC_CREATED: 0,
     LC_VESSEL_DISCHARGED: 10,
+    LC_PENDENCY: 15,                  # optional (awaiting evacuation)
     LC_YARD_ASSIGNED: 20,
     LC_YARD_POSITION_ALLOCATED: 21,   # optional
     LC_REEFER_PLANNED: 22,            # optional
@@ -254,8 +279,20 @@ class CargoService:
                            actor_role: Optional[str] = None) -> dict:
         """Create a cargo record. The repository writes the container's opening
         lifecycle audit row (NULL -> CREATED, action CREATE) inside the same
-        transaction, so a container never exists without an audit trail."""
+        transaction, so a container never exists without an audit trail.
+
+        A create always lands on CREATED (the column DEFAULT), so ``is_released``
+        may NOT be true here — that pair is the exact inconsistency migration 0115
+        had to backfill away (5 rows with is_released=true, lifecycle CREATED).
+        The PUT path has enforced this since 0115; the POST path did not, which is
+        audit finding W1. Rejected as an illegal CREATED -> RELEASED transition, so
+        the router renders the same 409 envelope as every other lifecycle refusal."""
         t0 = perf_counter()
+        if row.get("is_released"):
+            self._observe("create", "illegal_transition", t0,
+                          container=row.get("container_number"))
+            raise CargoTransitionError(
+                str(row.get("container_number")), LC_CREATED, LC_RELEASED)
         try:
             out = await self._repo.create(row, actor_role=actor_role)
         except CargoConflict:
@@ -326,36 +363,51 @@ class CargoService:
 
     # ------------------------------------------------------------------ update
     async def update_cargo(self, container_number: str, fields: Mapping[str, Any]) -> dict:
+        """Patch a cargo record. A PUT that flips ``is_released`` -> true IS a
+        release and faces the same VERIFY gate as POST /release.
+
+        Audit W3: that gate used to be a read-then-check-then-write with no row
+        lock, so two concurrent ``PUT {is_released:true}`` calls could both read a
+        pre-release snapshot and both pass. The release branch now routes the whole
+        patch through :meth:`_advance`, where the repository evaluates the gate
+        *under* ``SELECT … FOR UPDATE`` and writes the columns in the same
+        statement — one commit, one winner, and the loser gets a 409."""
         t0 = perf_counter()
         # Snapshot the pre-image so the diff can be turned into specific lifecycle
         # events (released / status_changed / yard_assigned / gate_movement).
         old = await self._repo.get(container_number) or {}
-        # A PUT that flips is_released -> true is a release, so it faces the same
-        # VERIFY gate as POST /release. Checked BEFORE the write: letting the flag
-        # through and then failing the lifecycle move would leave the row claiming
-        # released with a lifecycle that never reached RELEASED.
-        if fields.get("is_released") and old and not old.get("is_released"):
-            current = _infer_lifecycle(old)
-            if not can_transition(current, LC_RELEASED):
+        releasing = bool(fields.get("is_released")) and not old.get("is_released")
+        if releasing:
+            if not old:
+                self._observe("update", "not_found", t0, container=container_number)
+                raise CargoNotFound(container_number)
+            try:
+                # strict=True: the repository raises CargoTransitionError from
+                # inside the lock when the container has not passed VERIFY, and
+                # CargoNotFound if it vanished between the snapshot and the lock.
+                out = await self._advance(
+                    container_number, target=LC_RELEASED, action="RELEASE",
+                    set_fields=fields, blocked_customs=CUSTOMS_BLOCKS_RELEASE)
+            except CargoTransitionError:
                 self._observe("update", "illegal_transition", t0, container=container_number)
-                raise CargoTransitionError(container_number, current, LC_RELEASED)
-        try:
-            out = await self._repo.update(container_number, fields)
-        except CargoNotFound:
-            self._observe("update", "not_found", t0, container=container_number)
-            raise
+                raise
+            except CargoCustomsBlocked:
+                # Same customs gate as POST /release — otherwise the guard would be
+                # bypassable by patching is_released instead of calling release.
+                self._observe("update", "customs_not_cleared", t0, container=container_number)
+                raise
+        else:
+            try:
+                out = await self._repo.update(container_number, fields)
+            except CargoNotFound:
+                self._observe("update", "not_found", t0, container=container_number)
+                raise
         self._observe("update", "success", t0, container=container_number)
+        # cargo.lifecycle_changed already fired inside _advance on the release
+        # branch; these are the business-diff topics (released / status_changed /
+        # yard_assigned / gate_movement) and fire on both branches unchanged.
         for event, payload in self._derive_update_events(old, out):
             await self._emit(event, container_number, payload)
-        # The PUT release path drives the lifecycle to RELEASED as well, so the
-        # UC-III handover query (?status=RELEASED) is consistent regardless of
-        # which release path was used. The VERIFY gate was enforced above, so this
-        # uses the same strict predecessor set as POST /release rather than
-        # forcing the move. cargo.released already fired above (via the diff), so
-        # _advance only adds cargo.lifecycle_changed.
-        if not old.get("is_released") and out.get("is_released"):
-            await self._advance(container_number, target=LC_RELEASED, action="RELEASE",
-                                allowed_from=allowed_predecessors(LC_RELEASED), strict=False)
         return out
 
     # ------------------------------------------------------------------ delete
@@ -371,7 +423,9 @@ class CargoService:
     async def _advance(self, container_number: str, *, target: str, action: str,
                        allowed_from: Optional[set[str]] = None, strict: bool = True,
                        actor_role: Optional[str] = None,
-                       note: Optional[str] = None) -> Optional[dict]:
+                       note: Optional[str] = None,
+                       set_fields: Optional[Mapping[str, Any]] = None,
+                       blocked_customs: Optional[frozenset[str]] = None) -> Optional[dict]:
         """Drive one lifecycle transition through the repository (atomic + audited)
         and, when applied, emit ``cargo.lifecycle_changed``. Returns the updated
         cargo row, or ``None`` when a best-effort (``strict=False``) transition was
@@ -379,11 +433,17 @@ class CargoService:
         :class:`CargoNotFound` / :class:`CargoTransitionError`, which the router maps
         to 404 / 409. ``allowed_from`` defaults to the state machine's legal
         predecessors of ``target``; callers pass a custom set only for the lenient
-        legacy paths (yard-assign / reefer / rake / PUT-release)."""
+        legacy paths (yard-assign / reefer / rake / PUT-release).
+
+        ``set_fields`` patches business columns inside the SAME locked transaction
+        as the status change (audit W2/W3) — used by the release paths so
+        ``is_released`` and ``lifecycle_status`` commit together and the gate is
+        evaluated under the row lock."""
         af = allowed_from if allowed_from is not None else allowed_predecessors(target)
         row = await self._repo.transition_lifecycle(
             container_number, target=target, allowed_from=af, action=action,
-            actor_role=actor_role, note=note, strict=strict)
+            actor_role=actor_role, note=note, strict=strict, set_fields=set_fields,
+            blocked_customs=blocked_customs)
         if row is None:
             return None
         old = row.pop("_old_status", None)
@@ -416,6 +476,23 @@ class CargoService:
         self._observe("discharge", "success", t0, container=container_number)
         return row
 
+    async def record_pendency(self, container_number: str, *,
+                              reason: Optional[str] = None,
+                              actor_role: Optional[str] = None) -> dict:
+        """Record that a discharged container is PENDING evacuation (Phase 5).
+
+        VESSEL_DISCHARGED -> PENDENCY. Optional by design: a container may still go
+        straight to YARD_ASSIGNED, so every existing flow is unaffected. Emits
+        ``cargo.pendency_recorded``. 404 if unknown; 409 if not discharged."""
+        t0 = perf_counter()
+        row = await self._advance(container_number, target=LC_PENDENCY,
+                                  action="PENDENCY", actor_role=actor_role,
+                                  note=reason)
+        await self._emit(EVENT_PENDENCY_RECORDED, container_number,
+                         {"status": LC_PENDENCY, "reason": reason})
+        self._observe("pendency", "success", t0, container=container_number)
+        return row
+
     async def assign_yard(self, container_number: str, yard_block: str, *,
                           actor_role: Optional[str] = None) -> dict:
         """Yard-assignment write (task #3). Sets ``yard_block`` via the same
@@ -426,7 +503,7 @@ class CargoService:
         row = await self.update_cargo(container_number, {"yard_block": yard_block})
         await self._advance(container_number, target=LC_YARD_ASSIGNED,
                             action="YARD_ASSIGN", strict=False,
-                            allowed_from={LC_CREATED, LC_VESSEL_DISCHARGED},
+                            allowed_from={LC_CREATED, LC_VESSEL_DISCHARGED, LC_PENDENCY},
                             actor_role=actor_role)
         self._observe("yard_assign", "success", t0, container=container_number)
         return row
@@ -494,13 +571,18 @@ class CargoService:
         (which itself requires yard-assignment), so release-before-verification is a
         409 and a duplicate release is a 409. Flips ``is_released`` for legacy
         consumers/filters and emits the UC-III handover ``cargo.released`` event with
-        the yard location + vehicle details (task #8). 404 if unknown."""
+        the yard location + vehicle details (task #8). 404 if unknown.
+
+        Audit W2: the status change and the ``is_released`` flag used to commit in
+        two separate transactions, so a failure between them left the row RELEASED
+        to the state machine but invisible to every ``is_released`` filter. They now
+        travel as ``set_fields`` on the single locked UPDATE — one commit, or
+        neither."""
         t0 = perf_counter()
-        await self._advance(container_number, target=LC_RELEASED, action="RELEASE",
-                            actor_role=actor_role, note=note)
-        # Keep the legacy boolean + any consumers of it in sync. repo.update does not
-        # emit (the rich cargo.released below is the single release signal here).
-        row = await self._repo.update(container_number, {"is_released": True})
+        row = await self._advance(container_number, target=LC_RELEASED, action="RELEASE",
+                                  actor_role=actor_role, note=note,
+                                  set_fields={"is_released": True},
+                                  blocked_customs=CUSTOMS_BLOCKS_RELEASE)
         await self._emit(EVENT_RELEASED, container_number, {
             "status": LC_RELEASED,
             "is_released": True,
@@ -570,8 +652,17 @@ class CargoService:
     async def optimize_yard(self) -> dict:
         """Compute a yard congestion score + move recommendations from the live
         core.cargo yard occupancy. Deterministic: groups containers by block
-        letter-zone; recommends relieving the busiest zone (keep one, move the rest)."""
+        letter-zone; recommends relieving the busiest zone (keep one, move the rest).
+
+        Capacity comes from ``core.yard_block`` (migration 0130) when the master is
+        populated. Before this the denominator was a hardcoded nominal 10 with
+        nothing in the response saying so — audit finding Y1, "a figure a JNPA
+        evaluator could not trace". Every zone that falls back to the nominal value
+        is now named in ``assumptions``, so the score is either sourced or declared.
+        The response is a superset of the previous one: existing keys are unchanged."""
         rows = await self._repo.list_yarded_containers()
+        capacity_getter = getattr(self._repo, "yard_block_capacity", None)
+        capacities: dict[str, int] = await capacity_getter() if capacity_getter else {}
         zones: dict[str, list[str]] = {}
         for r in rows:
             yb = r.get("yard_block")
@@ -580,14 +671,47 @@ class CargoService:
             zone = str(yb).split("-", 1)[0]
             zones.setdefault(zone, []).append(r["container_number"])
         if not zones:
-            return {"yard_congestion": 0.0, "recommendations": [], "priority_containers": []}
+            return {"yard_congestion": 0.0, "recommendations": [],
+                    "priority_containers": [], "capacity_source": "NONE",
+                    "assumptions": []}
+
+        # Per-zone capacity: the master's own row, else the sum of the block rows
+        # that belong to the zone (block_code 'A-01' -> zone 'A'), else nominal.
+        assumptions: list[dict[str, Any]] = []
+        zone_capacity: dict[str, int] = {}
+        for zone in zones:
+            cap = capacities.get(zone)
+            if cap is None:
+                cap = sum(v for k, v in capacities.items()
+                          if str(k).split("-", 1)[0] == zone) or None
+            if cap is None:
+                cap = _YARD_BLOCK_CAPACITY
+                assumptions.append({
+                    "field": f"yard_block_capacity[{zone}]",
+                    "value": _YARD_BLOCK_CAPACITY,
+                    "reason": ("no row in core.yard_block for this zone; nominal "
+                               "per-block slot count assumed"),
+                    "source": "ASSUMED (services.cargo.service._YARD_BLOCK_CAPACITY)",
+                })
+            zone_capacity[zone] = int(cap)
+
         total = sum(len(v) for v in zones.values())
-        congestion = round(min(1.0, total / (len(zones) * _YARD_BLOCK_CAPACITY)), 2)
-        # Busiest zone (ties broken by zone name for determinism).
-        busiest_zone, busiest = max(zones.items(), key=lambda kv: (len(kv[1]), kv[0]))
-        movers = busiest[1:] if len(busiest) >= 2 else []
+        total_capacity = sum(zone_capacity.values()) or 1
+        congestion = round(min(1.0, total / total_capacity), 2)
+        # Per-zone utilisation, so the busiest zone is the most *saturated* one
+        # rather than merely the most populated — a 9/10 block matters more than a
+        # 12/500 one. Ties broken by zone name for determinism (unchanged contract).
+        utilisation = {z: len(c) / zone_capacity[z] for z, c in zones.items()}
+        busiest_zone = max(zones, key=lambda z: (utilisation[z], len(zones[z]), z))
+        busiest = zones[busiest_zone]
+        # Move only the overflow above capacity; when the zone is within capacity
+        # keep the legacy behaviour (keep one, move the rest) so the endpoint still
+        # returns a recommendation for the small demo dataset.
+        over = len(busiest) - zone_capacity[busiest_zone]
+        movers = busiest[-over:] if over > 0 else (busiest[1:] if len(busiest) >= 2 else [])
+        reason = ("over block capacity" if over > 0 else "reduce congestion")
         recommendations = [
-            {"container_number": cn, "action": "MOVE", "reason": "reduce congestion"}
+            {"container_number": cn, "action": "MOVE", "reason": reason}
             for cn in movers
         ]
         return {
@@ -595,6 +719,11 @@ class CargoService:
             "recommendations": recommendations,
             "priority_containers": movers,
             "busiest_block": busiest_zone,
+            "occupied": total,
+            "capacity": total_capacity,
+            "capacity_source": "core.yard_block" if capacities else "ASSUMED",
+            "block_utilisation": {z: round(u, 2) for z, u in utilisation.items()},
+            "assumptions": assumptions,
         }
 
     async def plan_rake(self, *, rake_id: str, containers: Any) -> dict:

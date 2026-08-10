@@ -245,7 +245,17 @@ class CustomsRepository:
             "l.bl_no, l.bl_date, l.pol AS port_of_loading, l.pod AS port_of_destination, "
             "l.importer_name, l.nature_of_cargo, l.cargo_movement, "
             "l.gross_weight, l.weight_unit AS unit_of_weight, l.goods_desc AS goods_description, "
-            "l.selected_scan, "
+            # IMDG class as declared on the manifest line. Already on core.igm_line,
+            # which is joined above — surfacing it is a projection, not a new join.
+            # Drives the hazardous-cargo edge case (WS1 EC-4).
+            #
+            # 'ZZZ' is the manifest's sentinel for "no IMDG class declared" — it is
+            # NOT a hazard class. It covers 4,058 of the 4,276 lines, so passing it
+            # through would flag every ordinary container as hazardous. Normalised
+            # to NULL here, at the single point every consumer reads, rather than in
+            # each client. The 218 remaining values are genuine classes
+            # (1.6, 2.1, 2.2, 3, 4.1–4.3, 5.1, 5.2, 6.1, 8, 9).
+            "l.selected_scan, NULLIF(l.imdg_class, 'ZZZ') AS imdg_class, "
             # RMS scanner assignment for this box, when a scanning-division list
             # selected it. LATERAL + LIMIT 1 so a container on two lists cannot
             # duplicate the manifest row.

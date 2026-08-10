@@ -5,7 +5,7 @@
 
 import { authEnabled, clearSession, getToken } from "./auth";
 import { getDataSourceMode } from "./dataSourceMode";
-import type { AvailableVehicle } from "./types";
+import type { AvailableVehicle, DqIssue, EmptyTrtResponse } from "./types";
 
 // Request budget. Without one, `fetch` waits indefinitely: the 2026-08-04 audit
 // measured /api/kpi at 81s against RDS and the panel simply hung — no spinner
@@ -535,6 +535,11 @@ export const api = {
   // --- Vehicle & Driver Intelligence (Vahan/Sarathi, RDS-backed) ---
   vehicleIntel: (plate: string) =>
     http<import("./types").VehicleIntel>(`/api/vahan/vehicle-intel/${encodeURIComponent(plate)}`),
+  // Vehicle 360: one call for the whole operator view (master + driver + licence
+  // + transporter + compliance + timeline). Wraps vehicle-intel server-side, so
+  // the profile screen needs a single round-trip instead of a lookup chain.
+  vehicle360: (plate: string) =>
+    http<import("./types").Vehicle360>(`/api/vahan/vehicle-360/${encodeURIComponent(plate)}`),
   driverIntel: (key: string) =>
     http<import("./types").DriverIntel>(`/api/vahan/driver-intel/${encodeURIComponent(key)}`),
   dlLookup: (dl: string) =>
@@ -608,15 +613,35 @@ export const api = {
     http<any>(`/api/accidents/${id}/resolve`, { method: "POST", body: JSON.stringify(body) }),
 
   // --- Transporter blacklist (Feature 2) ---
-  transporters: (params?: { q?: string; status?: string; limit?: number }) => {
+  transporters: (params?: { q?: string; status?: string; limit?: number; offset?: number }) => {
     const q = new URLSearchParams();
     Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
-    return http<{ count: number; transporters: any[] }>(
-      `/api/transporters${q.toString() ? `?${q}` : ""}`,
-    );
+    // `total` is the registry-wide COUNT(*); `count` is only this page's length.
+    return http<{
+      items: any[];
+      transporters: any[];
+      total: number;
+      limit: number;
+      offset: number;
+      count: number;
+    }>(`/api/transporters${q.toString() ? `?${q}` : ""}`);
   },
-  transporterBlacklist: () =>
-    http<{ count: number; blacklist: any[] }>("/api/transporters/blacklist"),
+  transporterBlacklist: (params?: { limit?: number; offset?: number }) => {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && q.set(k, String(v)));
+    return http<{
+      items: any[];
+      blacklist: any[];
+      total: number;
+      limit: number;
+      offset: number;
+      count: number;
+    }>(`/api/transporters/blacklist${q.toString() ? `?${q}` : ""}`);
+  },
+  transporterStats: () =>
+    http<{ total: number; active: number; blacklisted: number; vehicles_assigned: number }>(
+      "/api/transporters/stats",
+    ),
   transporter: (id: number) =>
     http<{ transporter: any; vehicles: any[]; blacklist_history: any[] }>(
       `/api/transporters/${id}`,
@@ -760,6 +785,95 @@ export const api = {
   },
   cfsEcyUploadDetail: (fileId: number) => http<any>(`/api/cfs-ecy/uploads/${fileId}`),
 
+  // --- UC3-003: empty-container gate events + the TRT KPI (real CODECO corpus) ---
+  // These read core.container_event (the imported ECY/CFS CODECO gate log), not
+  // core.cfs_ecy_movement, so the KPI is computed from the corpus feed alone.
+  cfsEcyEvents: (params?: {
+    container?: string;
+    location_type?: string;
+    event_type?: string;
+    direction?: string;
+    from?: string;
+    to?: string;
+    sort?: string;
+    order?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/cfs-ecy/events${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  /** KPI 3 "TRT for empty containers from ECD" plus the evidence behind it. */
+  emptyTrt: () => http<EmptyTrtResponse>("/api/cfs-ecy/empty-trt"),
+  emptyTrtChains: (params?: {
+    container?: string;
+    chain_status?: string;
+    anomaly_code?: string;
+    anomaly_only?: boolean;
+    sort?: string;
+    order?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: any[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/cfs-ecy/empty-trt/chains${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  emptyTrtAnomaly: (code: string, params?: { limit?: number; offset?: number }) => {
+    // Numeric-only params, so no empty-string guard (and TS rejects one).
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => v !== undefined && qs.set(k, String(v)));
+    return http<{ code: string; label: string; items: any[]; total: number }>(
+      `/api/cfs-ecy/empty-trt/anomalies/${encodeURIComponent(code)}${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  emptyTrtContainer: (containerNo: string) =>
+    http<any>(`/api/cfs-ecy/empty-trt/containers/${encodeURIComponent(containerNo)}`),
+
+  // --- Data Quality ledger (core.dq_issue) ---
+  dqIssues: (params?: {
+    source_table?: string;
+    issue_type?: string;
+    severity?: string;
+    file_id?: number;
+    q?: string;
+    sort?: string;
+    order?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{ items: DqIssue[]; total: number; limit: number; offset: number; count: number }>(
+      `/api/dq/issues${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  dqSummary: (params?: { source_table?: string; severity?: string }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{
+      total: number;
+      errors: number;
+      warnings: number;
+      info: number;
+      by_source_table: any[];
+      by_issue_type: any[];
+    }>(`/api/dq/summary${qs.toString() ? `?${qs}` : ""}`);
+  },
+
   // --- ECY→CFS repositioning chains (F-Y1 lifecycle, migration 0114) ---
   ecyCfsChains: (params?: {
     container?: string;
@@ -827,6 +941,23 @@ export const api = {
     return http<GateDocBundle>(
       `/api/gate-docs/truck/${encodeURIComponent(truckNo)}${pin ? `?source=${pin}` : ""}`,
     );
+  },
+  /** REAL parsed gate documents (core.gate_document) — the T-04 truck-visit
+   *  source. Distinct from gateDocsForTruck, which reads the upload tables. */
+  gateSourceDocs: (params: {
+    vehicle?: string;
+    container?: string;
+    driver_licence?: string;
+    category?: string;
+    terminal?: string;
+    from_date?: string;
+    to_date?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)));
+    return http<GateSourceDocPage>(`/api/gate-docs/documents${qs.toString() ? `?${qs}` : ""}`);
   },
   gateDocTat: (terminal?: string) =>
     http<GateDocTat>(
@@ -1633,7 +1764,117 @@ export const api = {
     );
   },
   shippingLinesUploadDetail: (fileId: number) => http<any>(`/api/shipping-lines/uploads/${fileId}`),
+
+  // --- UC-3 Cargo What-If simulation (JNPA Notice 05 Aug 2026) ---
+  // Read-only analytical layer: POST is used because the parameter set is a body,
+  // NOT because anything is mutated. Every response carries the Notice §1
+  // contract (method / result+figures / assumptions / queries), so the UI renders
+  // the evidence beside the answer rather than the answer alone.
+  simulateScenarios: () => http<SimScenarioCatalog>("/api/cargo/simulate/scenarios"),
+  simulate: (scenario: string, body: Record<string, unknown>) =>
+    http<SimulationResult>(`/api/cargo/simulate/${scenario}`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  gateHourlyProfile: (params: {
+    from: string;
+    to: string;
+    terminal?: string;
+    gate_id?: string;
+    group_by?: "hour" | "day";
+  }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)));
+    return http<GateHourlyProfile>(`/api/gate/hourly-profile?${qs}`);
+  },
 };
+
+// --- What-If simulation types ------------------------------------------------
+// Mirror services/cargo/simulation/base.py::SimulationResult exactly. Kept in one
+// place so a backend contract change surfaces as a TypeScript error rather than
+// as an undefined at render time.
+
+/** Where a value came from. The distinction JNPA Notice §1.c asks to be declared:
+ *  ASSUMED means "the data does not carry this, here is what we used and why". */
+export type SimAssumptionSource = "MEASURED" | "DERIVED" | "ASSUMED" | "PARAMETER";
+
+export interface SimAssumption {
+  field: string;
+  value: unknown;
+  reason: string;
+  source: SimAssumptionSource;
+}
+
+/** One query the answer rests on — Notice §1.d ("so the working can be traced").
+ *  `error` is set when the query FAILED rather than returned nothing; the two are
+ *  indistinguishable by row count and must never be conflated in the UI. */
+export interface SimQueryTrace {
+  purpose: string;
+  sql: string;
+  params: Record<string, unknown>;
+  api?: string;
+  row_count?: number;
+  error?: string;
+}
+
+export interface SimRecommendation {
+  action: string;
+  reason: string;
+  [detail: string]: unknown;
+}
+
+export interface SimulationResult {
+  scenario: string;
+  method: string;
+  result: Record<string, any>;
+  figures: Record<string, number | string | null>;
+  assumptions: SimAssumption[];
+  queries: SimQueryTrace[];
+  recommendations: SimRecommendation[];
+  /** False when a required input table was empty or a query failed. The UI must
+   *  render this as a first-class state with `notes`, never as a blank panel. */
+  data_available: boolean;
+  notes: string[];
+}
+
+export interface SimScenarioEntry {
+  scenario: string;
+  jnpa_reference: string;
+  question: string;
+  required: string[];
+  optional: string[];
+  reads: string[];
+}
+
+export interface SimScenarioCatalog {
+  count: number;
+  scenarios: SimScenarioEntry[];
+  contract: Record<string, string>;
+}
+
+export interface GateHourlyBucket {
+  bucket: string;
+  arrivals: number;
+  completed?: number;
+  unique_trucks?: number;
+  avg_tat_min?: number | null;
+}
+
+export interface GateHourlyProfile {
+  window: { from: string; to: string };
+  group_by: string;
+  /** Which table answered: 'core.eir', 'core.gate_event' or 'NONE'. */
+  source: string;
+  count: number;
+  total_arrivals: number;
+  peak_bucket: string | null;
+  peak_arrivals: number;
+  mean_per_bucket: number;
+  buckets: GateHourlyBucket[];
+  notes: string[];
+  assumptions: SimAssumption[];
+  queries: SimQueryTrace[];
+}
 
 export interface WfField {
   key: string;
@@ -1730,6 +1971,57 @@ export interface GateDocSummary {
   containerless_docs: number;
   eir_with_tat: number;
   files: number;
+}
+/** One REAL gate document as filed, from `core.gate_document` (UC3-002).
+ *  A field the source slip does not print comes back null — never inferred. */
+export interface GateSourceDoc {
+  doc_id: number;
+  doc_category: "EIR" | "FORM13" | "PIN_TICKET";
+  doc_variant: string;
+  doc_ref: string | null;
+  pin_no: string | null;
+  visit_id: string | null;
+  doc_ts: string | null;
+  container_no: string | null;
+  iso_code: string | null;
+  load_status: string | null;
+  gross_weight_kg: number | null;
+  seal1: string | null;
+  seal2: string | null;
+  vehicle_no: string | null;
+  bat_no: string | null;
+  driver_name: string | null;
+  driver_licence: string | null;
+  transporter_name: string | null;
+  truck_in_ts: string | null;
+  truck_out_ts: string | null;
+  gate_no: string | null;
+  yard_position: string | null;
+  vessel_name: string | null;
+  voyage: string | null;
+  pol: string | null;
+  pod: string | null;
+  booking_no: string | null;
+  cfs: string | null;
+  group_code: string | null;
+  /** Verbatim parsed payload, exactly as the source file supplies it. */
+  attrs: Record<string, unknown> | null;
+  terminal: string | null;
+  /** Same-origin URL of the original scan, or null when none is linked. */
+  evidence_uri: string | null;
+  image_file: string | null;
+  data_origin: string | null;
+}
+export interface GateSourceDocPage {
+  items: GateSourceDoc[];
+  total: number;
+  limit: number;
+  offset: number;
+  count: number;
+  terminals: string[];
+  terminal_count: number;
+  first_doc_ts: string | null;
+  last_doc_ts: string | null;
 }
 export interface GateDocBundle {
   container_no?: string;

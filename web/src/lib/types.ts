@@ -140,6 +140,92 @@ export interface KpiResult {
   n?: number;
 }
 
+// --- UC3-003: empty-container TRT (KPI 3) wire types -----------------------
+// Mirrors services/cfs_ecy/trt_service.py::EmptyTrtService.kpi(). Every number
+// is derived from the imported CFS/ECY CODECO gate log — none is configured in
+// the UI except the target/baseline, which come from jnpa_shared/kpi.py.
+
+export interface EmptyTrtChain {
+  container_no: string;
+  ecy_out_ts: string | null;
+  ecy_in_ts: string | null;
+  cfs_in_ts: string | null;
+  cfs_out_ts: string | null;
+  chain_status: "COMPLETE" | "PARTIAL" | "ORPHAN";
+  legs_present: number;
+  event_count: number;
+  ecy_out_events: number;
+  ecy_in_events: number;
+  cfs_in_events: number;
+  cfs_out_events: number;
+  trt_min: number | null;
+  dwell_min: number | null;
+  cycle_min: number | null;
+  anomaly_codes: string[];
+  anomaly_labels?: string[];
+}
+
+export interface DqIssue {
+  issue_id: number;
+  file_id: number | null;
+  source_path?: string | null;
+  source_table: string | null;
+  record_ref: string | null;
+  issue_type: string;
+  severity: "info" | "warn" | "error";
+  description: string;
+  detected_at: string;
+}
+
+export interface EmptyTrtResponse {
+  kpi: KpiResult;
+  definition: {
+    key: string;
+    label: string;
+    measure: string;
+    unit: string;
+    target: number;
+    baseline: number;
+    direction: "lower_is_better" | "higher_is_better";
+    eligible: string;
+  };
+  distribution: {
+    valid_containers: number;
+    avg_trt_min: number | null;
+    median_trt_min: number | null;
+    min_trt_min: number | null;
+    max_trt_min: number | null;
+    avg_dwell_min: number | null;
+    avg_cycle_min: number | null;
+    window_from: string | null;
+    window_to: string | null;
+    vs_target_min: number | null;
+    vs_baseline_min: number | null;
+  };
+  chains: { complete: number; partial: number; orphan: number; total: number };
+  source: {
+    ecy_out_events: number;
+    ecy_in_events: number;
+    cfs_in_events: number;
+    cfs_out_events: number;
+    total_events: number;
+    ecy_pairing_gap: number;
+    cfs_paired: boolean;
+    files: {
+      file_id: number;
+      path: string;
+      source_system: string;
+      file_format: string;
+      row_count: number | null;
+      loaded_at: string;
+      imported_events: number;
+    }[];
+  };
+  anomalies: { code: string; containers: number; label: string }[];
+  data_quality: DqIssue[];
+  daily: { day: string; containers: number; avg_trt_min: number | null }[];
+}
+
 // --- Appendix-C capability wire types (gateway routers) ---
 
 // Empty-container (/api/empty)
@@ -158,6 +244,10 @@ export interface CarbonRollup {
   total_kg: number;
   vehicle_count: number;
   by_class: Record<string, number>;
+  // Vehicles counted per class. Optional because an older carbon service (or a
+  // cached upstream response) predates it — the tile then shows the fleet total
+  // and says the category breakdown is unavailable rather than inventing one.
+  vehicles_by_class?: Record<string, number>;
   by_source: { moving: number; idle: number };
 }
 
@@ -438,8 +528,13 @@ export interface DriverEnrollment {
 export interface AvailableVehicle {
   vehicle_id: string;
   plate?: string | null;
+  /** Explicit alias for `plate`; both are sent so older callers keep working. */
+  vehicle_number?: string | null;
   vehicle_type?: string | null;
   state?: string | null;
+  /** Driver bound to this truck in core.driver_identity, null when unassigned. */
+  driver_id?: string | null;
+  driver_name?: string | null;
 }
 
 // Vehicle Master lifecycle status.
@@ -840,15 +935,106 @@ export interface AiEvent {
 }
 
 // --- Vehicle & Driver Intelligence (RDS-backed aggregates) ---
+/** /api/vahan/vehicle-intel/{plate}. Every field is optional on purpose: the
+ *  gateway answers 200 with `{}` when it has no DSN, and each of the six lookups
+ *  degrades independently, so a field can be absent or null on a successful
+ *  response. Callers must normalise before dereferencing. */
 export interface VehicleIntel {
-  vehicle_number: string;
-  rc: Record<string, unknown> | null;
-  tracking: { ts: string; lat: number; lon: number; speed_kmh: number }[];
-  violations: Record<string, unknown>[];
-  challans: Record<string, unknown>[];
-  alerts: Record<string, unknown>[];
-  verification_history: Record<string, unknown>[];
+  vehicle_number?: string;
+  rc?: Record<string, unknown> | null;
+  tracking?: { ts: string; lat: number; lon: number; speed_kmh: number }[] | null;
+  violations?: Record<string, unknown>[] | null;
+  challans?: Record<string, unknown>[] | null;
+  alerts?: Record<string, unknown>[] | null;
+  verification_history?: Record<string, unknown>[] | null;
 }
+/** Document expiry verdict from /api/vahan/vehicle-360 (VALID | EXPIRING |
+ *  EXPIRED | NOT_AVAILABLE). */
+export interface DocumentValidity {
+  status?: string | null;
+  valid_to?: string | null;
+  days_left?: number | null;
+}
+
+/** /api/vahan/vehicle-360/{plate} — the operator's single-screen vehicle view.
+ *  Aggregates the vehicle master, its assigned driver, that driver's licence/PDP,
+ *  the transport company, RC compliance, alerts and the lifecycle timeline.
+ *  Nullable throughout: a card whose source row is missing comes back as null
+ *  rather than as fabricated values. */
+export interface Vehicle360 {
+  plate?: string;
+  found?: boolean;
+  vehicle?: {
+    number?: string | null;
+    id?: string | null;
+    status?: string | null;
+    class?: string | null;
+    fuel?: string | null;
+    type?: string | null;
+    chassis_number?: string | null;
+    rfid_fastag_id?: string | null;
+    registered_at?: string | null;
+    assignment_status?: string | null;
+    in_master?: boolean;
+  } | null;
+  driver?: {
+    id?: string | null;
+    name?: string | null;
+    photo?: string | null;
+    mobile?: string | null;
+    dob?: string | null;
+    status?: string | null;
+    enrollment_status?: string | null;
+    enrolled_at?: string | null;
+    license?: {
+      number?: string | null;
+      type?: string | null;
+      valid_until?: string | null;
+      validity?: DocumentValidity | null;
+      pdp_number?: string | null;
+      pdp_status?: string | null;
+      pdp_valid_until?: string | null;
+      verification_status?: string | null;
+      verified_at?: string | null;
+      verification_score?: number | null;
+      in_master?: boolean;
+    } | null;
+  } | null;
+  transporter?: {
+    id?: number | string | null;
+    name?: string | null;
+    code?: string | null;
+    status?: string | null;
+    gstin?: string | null;
+    contact?: string | null;
+    blacklisted?: boolean;
+    blacklist_reason?: string | null;
+    mapped_at?: string | null;
+    source?: string | null;
+  } | null;
+  compliance?: {
+    rc?: Record<string, unknown> | null;
+    insurance?: DocumentValidity | null;
+    puc?: DocumentValidity | null;
+    fitness?: DocumentValidity | null;
+    blacklist?: { status?: string | null; source?: string | null; reason?: string | null } | null;
+    fastag?: { status?: string | null } | null;
+  } | null;
+  alerts?: Record<string, unknown>[] | null;
+  timeline?:
+    | { stage?: string; label?: string; ts?: string | null; detail?: string | null }[]
+    | null;
+  intel?: {
+    rc?: Record<string, unknown> | null;
+    tracking?: { ts: string; lat: number; lon: number; speed_kmh: number }[] | null;
+    violations?: Record<string, unknown>[] | null;
+    challans?: Record<string, unknown>[] | null;
+    verification_history?: Record<string, unknown>[] | null;
+  } | null;
+  jobs?: Record<string, unknown>[] | null;
+  gate_events?: Record<string, unknown>[] | null;
+}
+
 export interface DriverIntel {
   driver_key: string;
   driver: Record<string, unknown> | null;

@@ -31,13 +31,16 @@ from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query, Reque
 from pydantic import BaseModel
 
 from services.shipping_lines import ShippingLinesService, ShippingLinesUploadService
+from gateway.upload_limits import MAX_UPLOAD_BYTES
 
 from ..auth import CONTROL_ROOM, Role, auth_enabled
 from ..data_mode import data_mode
 
 router = APIRouter(prefix="/api/shipping-lines", tags=["shipping-lines"])
 
-_MAX_UPLOAD_BYTES = 10 * 1024 * 1024   # 10 MB, mirrors the performance upload cap
+# Shared ceiling — see gateway/upload_limits.py. Was a 10 MB literal here,
+# duplicated across five routers, which refused the corpus's 24 MB file.
+_MAX_UPLOAD_BYTES = MAX_UPLOAD_BYTES
 # Roles allowed to upload: control room + customs (+ admin ⊂ control room).
 _UPLOADER_ROLES = CONTROL_ROOM | {Role.CUSTOMS.value}
 

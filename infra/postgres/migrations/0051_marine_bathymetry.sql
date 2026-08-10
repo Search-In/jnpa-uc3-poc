@@ -3,15 +3,13 @@
 -- APPLY: psql "$DSN" -v ON_ERROR_STOP=1 -f infra/postgres/migrations/0051_marine_bathymetry.sql
 --
 -- Depth soundings extracted from the JNPA multibeam bathymetry chart PDFs, one row per
--- plotted sounding. core.bathymetry_survey (the per-chart header) ALREADY EXISTS — see
--- schema.sql §10 — but its detail table was never created, which is why the generated
--- client-data/seed_bathy_soundings.sql (189,590 rows over 11 surveys) has never been
--- loadable. This migration creates that missing table with the SAME nine columns the
--- seed file targets, in the same order, so the seed loads unchanged.
+-- plotted sounding. Earlier drafts assumed core.bathymetry_survey already existed in an
+-- external schema.sql; on a PoC DB that never received that dump the sounding CREATE
+-- (FK) failed and gateway marine schema bootstrap rolled back entirely. This migration
+-- therefore creates BOTH the survey header and the sounding detail table.
 --
--- STRICTLY ADDITIVE. Creates ONE new table in the `core` schema. Touches NOTHING in
--- core.bathymetry_survey and NOTHING in any existing core table (vessel / vessel_call /
--- pilotage / port_craft / sea_channel / …). No existing API response can change.
+-- STRICTLY ADDITIVE. Creates TWO new tables in the `core` schema. Touches NOTHING in
+-- any existing core table (vessel / vessel_call / pilotage / port_craft / sea_channel / …).
 --
 -- Column notes:
 --   sounding_id   — bigint (NOT smallint like survey_id): one chart yields ~17k rows and
@@ -34,9 +32,25 @@
 --   import_file_id— provenance soft link to core.marine_import_files (no FK, matching
 --                   core.port_craft / core.sea_channel).
 --
--- ROLLBACK: DROP TABLE core.bathymetry_sounding;
+-- ROLLBACK: DROP TABLE core.bathymetry_sounding; DROP TABLE core.bathymetry_survey;
 
 CREATE SCHEMA IF NOT EXISTS core;
+
+CREATE TABLE IF NOT EXISTS core.bathymetry_survey (
+    survey_id      smallint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    drawing_no     text NOT NULL UNIQUE,
+    section_label  text,
+    design_depth_m numeric(5,2),
+    survey_start   text,
+    survey_end     text,
+    survey_vessel  text,
+    file_path      text,
+    created_at     timestamptz NOT NULL DEFAULT now());
+
+CREATE INDEX IF NOT EXISTS idx_bathy_survey_drawing
+    ON core.bathymetry_survey (drawing_no);
+CREATE INDEX IF NOT EXISTS idx_bathy_survey_section
+    ON core.bathymetry_survey (section_label);
 
 CREATE TABLE IF NOT EXISTS core.bathymetry_sounding (
     sounding_id    bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

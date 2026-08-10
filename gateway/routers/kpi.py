@@ -174,8 +174,36 @@ def _kpi_from_buckets(key: str, rows: List[dict], value_field: str):
 
 
 async def _trt_empty_kpi(state: GatewayState):
-    """TRT-empty-from-ECD from the empty-container service's computed KPI."""
+    """TRT-empty-from-ECD (KPI 3), preferring the REAL CFS/ECY gate log.
+
+    Two sources, tried in order:
+
+      1. UC3-003 — the imported CODECO gate events in core.container_event,
+         scored by mart.v_empty_container_trt: the mean ECY-gate-out ->
+         CFS-gate-in leg over every container with a COMPLETE
+         ECY-Out -> CFS-In -> CFS-Out chain. This is measured from the
+         customer's own data, so it wins whenever any complete chain exists.
+      2. The empty-container service's optimiser estimate, which is what the
+         strip showed before UC3-003 and remains the fallback for a database
+         with no CODECO import.
+
+    Returning ``None`` from both leaves the caller to show the labelled baseline.
+    """
     from jnpa_shared import kpi as kpi_engine
+
+    # --- 1. real gate-log TRT ------------------------------------------------
+    try:
+        from services.cfs_ecy import EmptyTrtService
+        res = await EmptyTrtService(dsn=state.cfg.postgres_dsn or None).kpi()
+        if (res.get("kpi") or {}).get("source") == "live":
+            return kpi_engine.compute_kpi(
+                "trt_empty_ecd", float(res["kpi"]["value"]),
+                trend=res["kpi"].get("trend") or None, source="live",
+                n=int(res["kpi"].get("n") or 0))
+    except Exception as exc:  # noqa: BLE001 — fall through to the upstream service
+        log.debug("trt_empty_codeco_failed", error=str(exc))
+
+    # --- 2. empty-container service estimate ---------------------------------
     try:
         url = state.cfg.empty_container_url.rstrip("/") + "/kpi/trt_empty"
         resp = await state.http.get(url)
@@ -199,7 +227,9 @@ async def kpi_strip(state: GatewayState = Depends(get_state)) -> dict:
     The four Appendix-C acceptance KPIs are computed from **real event data**:
       * gate_queue_wait / gate_txn_time / tat_inside_port — aggregated from
         core.gate_event (emitted per truck gate transition) via the KPI views;
-      * trt_empty_ecd — the empty-container service's computed TRT.
+      * trt_empty_ecd — the mean ECY-gate-out -> CFS-gate-in leg of every
+        COMPLETE empty-container chain in the imported CFS/ECY CODECO gate log
+        (UC3-003), falling back to the empty-container service's estimate.
     Each KPI carries ``source: "live"`` when it came from event data or
     ``"baseline"`` when no data exists yet — so a placeholder is never mistaken
     for a measured value. Operational roll-ups still derive from their views.

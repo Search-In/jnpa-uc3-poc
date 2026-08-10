@@ -239,7 +239,20 @@ class ContainerJobRepository:
             clauses.append("container_number = :cn")
             p["cn"] = str(f["container_number"]).strip().upper()
         if f.get("vehicle_id"):
-            clauses.append("vehicle_id = :vid")
+            # BUG-2: the driver LIST must scope exactly like the driver DETAIL
+            # ownership check (driver_jobs._owns), which accepts either the
+            # internal Vehicle ID or the normalised plate. Matching vehicle_id
+            # alone made a driver paired with the registration (MH43SV7025)
+            # instead of the TRK id see an empty list forever while still being
+            # able to open the very same job by id. `vehicle_plate` is the
+            # normalised form of the same binding; when supplied, either matches.
+            if f.get("vehicle_plate"):
+                clauses.append("(vehicle_id = :vid OR "
+                               "regexp_replace(upper(coalesce(vehicle_no, '')), "
+                               "'[^A-Z0-9]', '', 'g') = :vplate)")
+                p["vplate"] = f["vehicle_plate"]
+            else:
+                clauses.append("vehicle_id = :vid")
             p["vid"] = f["vehicle_id"]
         if f.get("driver_id"):
             clauses.append("driver_id = :did")
@@ -264,6 +277,19 @@ class ContainerJobRepository:
     async def count_jobs(self, *, filters: Mapping[str, Any]) -> int:
         where, p = self._job_where(filters)
         return await self._count(f"SELECT count(*) FROM core.container_job_assignment{where}", p)
+
+    async def vehicles_with_open_jobs(self) -> set[str]:
+        """Vehicle IDs currently holding a job that is neither COMPLETED nor
+        CANCELLED — i.e. genuinely busy.
+
+        BUG-1: this is what makes a truck unavailable for a NEW assignment. It is
+        NOT the same thing as "has a driver" (core.driver_identity), which is what
+        /api/vehicles/available used to filter on and which excluded precisely the
+        driver-bound fleet the PWA can sign in as."""
+        rows = await self._rows(
+            "SELECT DISTINCT vehicle_id FROM core.container_job_assignment "
+            "WHERE status NOT IN ('COMPLETED','CANCELLED') AND vehicle_id IS NOT NULL")
+        return {r["vehicle_id"] for r in rows if r.get("vehicle_id")}
 
     async def latest_job_for_container(self, container_number: str) -> Optional[dict]:
         return await self._one(

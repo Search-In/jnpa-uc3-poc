@@ -22,6 +22,7 @@ gateway/auth.py._POLICY — the same audience as gate-data and the customs layer
 from __future__ import annotations
 
 import re
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query, Request,
@@ -37,11 +38,45 @@ from ..pii import mask_for_request
 from services.gate_documents import GateDocumentService
 from services.gate_documents.repository import FORM13_SOURCES
 from services.gate_documents.upload_parsers import DOC_TYPES, doc_type_ok
+from gateway.upload_limits import MAX_UPLOAD_BYTES
 
 router = APIRouter(prefix="/api/gate-docs", tags=["gate-documents"])
 
-_MAX_UPLOAD_BYTES = 10 * 1024 * 1024   # 10 MB — mirrors the other upload modules
+# Shared ceiling — see gateway/upload_limits.py. Was a 10 MB literal here,
+# duplicated across five routers, which refused the corpus's 24 MB file.
+_MAX_UPLOAD_BYTES = MAX_UPLOAD_BYTES
 _UPLOADER_ROLES = CONTROL_ROOM | {Role.CUSTOMS.value}
+#: Longest date window a single query may span (audit finding G1). Bounds the
+#: hourly profile at ~2200 buckets so an unbounded range cannot be requested.
+_MAX_WINDOW_DAYS = 92
+
+
+def _check_window(from_date: Optional[date], to_date: Optional[date]) -> None:
+    """Validate an optional date window. 400 on an inverted or oversized range."""
+    if from_date and to_date:
+        if to_date < from_date:
+            raise HTTPException(status_code=400,
+                                detail={"error": "invalid_window",
+                                        "message": "to_date must not precede from_date"})
+        if (to_date - from_date).days > _MAX_WINDOW_DAYS:
+            raise HTTPException(status_code=400,
+                                detail={"error": "invalid_window",
+                                        "message": f"window must not exceed "
+                                                   f"{_MAX_WINDOW_DAYS} days"})
+
+#: Gate documents are stamped in IST by the importer (the slips print local
+#: wall-clock), so a caller's date filter has to be anchored in the same zone —
+#: otherwise a "06 June" search silently misses the 05:30 either side of it.
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _as_ts(value: Optional[date], *, end: bool = False) -> Optional[datetime]:
+    """Turn an inclusive date filter into an IST half-open timestamp bound."""
+    if value is None:
+        return None
+    day = value + timedelta(days=1) if end else value
+    return datetime.combine(day, time.min, tzinfo=_IST)
+
 
 _service: Optional[GateDocumentService] = None
 
@@ -114,6 +149,19 @@ class Page(BaseModel):
     count: int
 
 
+class SourceDocPage(Page):
+    """`Page` plus the shape of the whole filtered set, for the truck-visit view.
+
+    Additive subclass used ONLY by /documents: every other endpoint keeps the
+    exact `Page` contract its consumers already parse.
+    """
+
+    terminals: List[str] = []
+    terminal_count: int = 0
+    first_doc_ts: Optional[datetime] = None
+    last_doc_ts: Optional[datetime] = None
+
+
 def _page(items: List[dict], total: int, limit: int, offset: int, response: Response) -> Page:
     response.headers["X-Total-Count"] = str(total)
     return Page(items=items, total=total, limit=limit, offset=offset, count=len(items))
@@ -155,15 +203,56 @@ async def list_eir(
     container: Optional[str] = None,
     truck: Optional[str] = None,
     terminal: Optional[str] = None,
+    from_date: Optional[date] = Query(
+        None, description="Only EIRs whose truck_in_time falls on/after this date"),
+    to_date: Optional[date] = Query(
+        None, description="Only EIRs whose truck_in_time falls on/before this date"),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     data_origin: Optional[str] = Depends(data_mode),
     svc: GateDocumentService = Depends(get_service),
 ) -> Page:
+    """List EIRs, optionally over a date window.
+
+    ``from_date`` / ``to_date`` (audit finding G1) make the real gate-arrival
+    history queryable through the API. Without them a JNPA what-if answer about
+    1-3 August could only be produced by raw SQL, which fails the Notice's
+    requirement to cite the API queries the working rests on."""
+    _check_window(from_date, to_date)
     filters = {"container_number": container,
                "truck_no": _norm_plate(truck) if truck else None, "terminal": terminal,
+               "from_date": from_date, "to_date": to_date,
                "data_origin": data_origin}
     return await _list(svc, "EIR", response, filters, limit, offset, request)
+
+
+@router.get("/eir/profile",
+            summary="EIR gate-arrival counts bucketed by hour or day")
+async def eir_profile(
+    from_date: date = Query(..., description="Window start (inclusive)"),
+    to_date: date = Query(..., description="Window end (inclusive)"),
+    terminal: Optional[str] = None,
+    truck: Optional[str] = None,
+    group_by: str = Query("hour", pattern="^(hour|day)$"),
+    data_origin: Optional[str] = Depends(data_mode),
+    svc: GateDocumentService = Depends(get_service),
+) -> Dict[str, Any]:
+    """Gate arrivals per hour (or per day) over an arbitrary historical window,
+    counted from ``core.eir.truck_in_time``.
+
+    The aggregate counterpart of GET /api/gate-docs/eir — same filters, same
+    rows, counted instead of paged. ``GET /api/gate/hourly-profile`` answers the
+    same question for the simulation layer and falls back to ``core.gate_event``;
+    this one stays strictly within the gate-document module."""
+    _check_window(from_date, to_date)
+    filters = {"terminal": terminal,
+               "truck_no": _norm_plate(truck) if truck else None,
+               "from_date": from_date, "to_date": to_date,
+               "data_origin": data_origin}
+    result = await svc.hourly_profile("EIR", filters=filters, group_by=group_by)
+    REQUESTS.labels("gate_docs", "ok").inc()
+    return {"window": {"from": from_date.isoformat(), "to": to_date.isoformat()},
+            "source": "core.eir.truck_in_time", **result}
 
 
 @router.get("/pin", response_model=Page, summary="PIN tickets (one row per move leg)")
@@ -202,6 +291,52 @@ async def list_form13(
                "truck_no": _norm_plate(vehicle) if vehicle else None, "terminal": terminal,
                "source": _check_source(source)}
     return await _list(svc, "FORM13", response, filters, limit, offset, request)
+
+
+@router.get("/documents", response_model=SourceDocPage,
+            summary="Parsed source gate documents (Form 13 / EIR / PIN, as filed)")
+async def list_source_documents(
+    request: Request,
+    response: Response,
+    category: Optional[str] = Query(None, description="FORM13 | EIR | PIN_TICKET"),
+    container: Optional[str] = None,
+    vehicle: Optional[str] = Query(None, description="Truck number; punctuation-insensitive"),
+    driver_licence: Optional[str] = Query(None, description="Driver licence number (exact)"),
+    terminal: Optional[str] = Query(None, description="Terminal code (GTI, BMCT, ...) or name"),
+    from_date: Optional[date] = Query(None, description="Document date >= (inclusive)"),
+    to_date: Optional[date] = Query(None, description="Document date <= (inclusive)"),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    svc: GateDocumentService = Depends(get_service),
+) -> SourceDocPage:
+    """The customer's own gate documents, parsed verbatim from the shared corpus.
+
+    NOT the same store as `/form13`, which reads `core.gate_capture` — that is
+    seeded (`source_mode='sim'`) simulator data. These are the REAL Form 13, EIR
+    and PIN-ticket documents (`data_origin='REAL'`) with their full as-filed
+    payload in `attrs` and the original scan at `evidence_uri`. Read-only.
+
+    Searching by `vehicle` is the truck-visit entry point: it returns that
+    tractor's documents newest-first, plus the terminals and date span they
+    cover. A field the source slip does not print stays null — never inferred.
+    """
+    _check_window(from_date, to_date)
+    res = await svc.list_source_documents(
+        category=category, container=container,
+        vehicle=_norm_plate(vehicle) if vehicle else None,
+        driver_licence=driver_licence, terminal=terminal,
+        from_ts=_as_ts(from_date), to_ts=_as_ts(to_date, end=True),
+        limit=limit, offset=offset)
+    response.headers["X-Total-Count"] = str(res["total"])
+    REQUESTS.labels("gate_docs", "ok").inc()
+    # driver_licence is PII; mask it for principals not cleared to see it, the
+    # same way the /truck and /container views already do.
+    masked = mask_for_request(request, {"items": res["items"]},
+                              surface="gate_docs.documents")["items"]
+    return SourceDocPage(items=masked, total=res["total"], limit=limit, offset=offset,
+                         count=len(masked), terminals=res["terminals"],
+                         terminal_count=res["terminal_count"],
+                         first_doc_ts=res["first_doc_ts"], last_doc_ts=res["last_doc_ts"])
 
 
 # ------------------------------------------------------------ cross-doc views

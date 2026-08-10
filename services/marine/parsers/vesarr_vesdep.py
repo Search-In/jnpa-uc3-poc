@@ -2,17 +2,23 @@
 
 These are the marine-side ACTUALS. Each present timestamp becomes one
 ``_target='vessel_call_event'`` record, tagged with the call-resolution keys
-(``vcn`` / ``via_no`` / ``rotation_no``) — resolving those to a concrete
+(``vcn`` / ``via_no`` / ``voyage_no`` / ``imo_no``) — resolving those to a concrete
 ``call_id`` is a DB concern handled downstream, not here. The parser deliberately
 emits a row per milestone so REPEATED event types (e.g. a re-anchoring) are never
-collapsed. Pure — returns records, never touches the DB.
+collapsed.
+
+VESARR also emits a ``vessel_call`` upsert when a VCN is present so actuals can
+attach even when BERALT has not yet landed — ``eta`` is deliberately omitted so a
+prior CALINF EDTA is never overwritten (UC1-019: declared ETA stays CALINF's).
+
+Pure — returns records, never touches the DB.
 """
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 from typing import Any, Optional
 
-from .pcs_common import ft, parse_pcs_dt
+from .pcs_common import ft, parse_pcs_dt, via_from_vcn
 
 # (event_type, source tag) per message. Order = chronological lifecycle order.
 _EVENT_MAP: dict[str, tuple[tuple[str, str], ...]] = {
@@ -32,7 +38,11 @@ _EVENT_MAP: dict[str, tuple[tuple[str, str], ...]] = {
 
 def _parse_movement(root: ET.Element, *, message: str, source_file: Optional[str]) -> list[dict[str, Any]]:
     vcn = ft(root, "VCN")
-    via_no = ft(root, "VoyageNumber")
+    # VoyageNumber is the voyage key (e.g. '2626'); short VIA lives in the VCN tail
+    # (e.g. INNSA1NF0S0776 → S0776). Older builds stuffed VoyageNumber into via_no,
+    # which broke VIA lookup and conflated the imo+voyage resolution tier.
+    voyage_no = ft(root, "VoyageNumber")
+    via_no = via_from_vcn(vcn) or None
     rotation_no = ft(root, "RotationNumber")
     # IMO is what the SECOND call-resolution tier matches on (VCN -> imo+voyage -> VIA in
     # VesselCallRepository._resolve_call_id). Omitting it left that tier permanently dead,
@@ -44,6 +54,38 @@ def _parse_movement(root: ET.Element, *, message: str, source_file: Optional[str
     common_ref = ft(root, "CommonRefNumber")
 
     records: list[dict[str, Any]] = []
+
+    # Call spine upsert FIRST so events in the same file resolve (VCN → …).
+    # No eta: CALINF owns declared ETA; VESARR must not COALESCE-overwrite it.
+    if message == "VESARR" and vcn:
+        records.append({
+            "_target": "vessel_call",
+            "_message": message,
+            "_source_file": source_file,
+            "vcn": vcn,
+            "via_no": via_no,
+            "imo_no": imo_no,
+            "vessel_name": vessel_name,
+            "voyage_no": voyage_no,
+            "rotation_no": rotation_no,
+            "berth_code": berth_code,
+            "status": None,
+            "eta": None,
+            # Do not overwrite CALINF's CommonRefNumber — VESARR is actuals, not the
+            # declared-ETA provenance citation (UC1-019).
+            "source_note": None,
+        })
+
+        # Minimal hull so the resolve-or-NULL imo_no lookup on vessel_call succeeds.
+        if imo_no:
+            records.append({
+                "_target": "vessel",
+                "_message": message,
+                "_source_file": source_file,
+                "imo_no": imo_no,
+                "vessel_name": vessel_name,
+            })
+
     for event_type, tag in _EVENT_MAP[message]:
         ts = parse_pcs_dt(ft(root, tag))
         if ts is None:
@@ -55,6 +97,7 @@ def _parse_movement(root: ET.Element, *, message: str, source_file: Optional[str
             # Call-resolution keys — resolved to call_id downstream (not here).
             "vcn": vcn,
             "via_no": via_no,
+            "voyage_no": voyage_no,
             "imo_no": imo_no,
             "rotation_no": rotation_no,
             "vessel_name": vessel_name,

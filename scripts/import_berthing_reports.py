@@ -44,44 +44,91 @@ sys.path.insert(0, str(_ROOT / "shared"))
 
 from services.berthing import pdf_parsers as PP  # noqa: E402
 
-DEFAULT_DATA_DIR = "/Users/pandurangdhage/Downloads/Digital Twin/Data/7-Berthing Reports"
+DEFAULT_DATA_DIR = (
+    Path(__file__).resolve().parents[2]
+    / "jnpa_poc_1"
+    / "data"
+    / "7 Berthing Report"
+)
+# Fall back to the historic Downloads path when the sibling PoC corpus is absent.
+if not DEFAULT_DATA_DIR.is_dir():
+    DEFAULT_DATA_DIR = Path(
+        "/Users/pandurangdhage/Downloads/Digital Twin/Data/7-Berthing Reports"
+    )
+DEFAULT_DATA_DIR = str(DEFAULT_DATA_DIR)
 # Application database = AWS RDS (jnpa_schema_v3). No local-postgres fallback:
 # set POSTGRES_DSN (or pass --dsn) or the script refuses to run.
 DEFAULT_DSN = os.environ.get("POSTGRES_DSN", "")
 
 
 def collect(data_dir: str) -> List[Dict[str, Any]]:
-    """One entry per PDF: {folder, terminal, kind, path, filename, content, records}."""
+    """One entry per PDF: {folder, terminal, kind, path, filename, content, records}.
+
+    Supports both corpus layouts:
+      * Classic — ``APM Terminals/``, ``BMCT_PSA/``, … (TERMINALS map)
+      * Week    — ``2026-07-20_Mon/APMT_2026-07-20.pdf`` (filename prefix)
+    """
+    root = Path(data_dir)
     out: List[Dict[str, Any]] = []
-    for folder, (terminal, kind) in PP.TERMINALS.items():
-        d = Path(data_dir) / folder
-        if not d.is_dir():
-            print(f"  WARN: terminal folder missing: {d}")
-            continue
-        for fn in sorted(os.listdir(d)):
-            if not fn.lower().endswith(".pdf"):
+    classic = any((root / folder).is_dir() for folder in PP.TERMINALS)
+
+    if classic:
+        for folder, (terminal, kind) in PP.TERMINALS.items():
+            d = root / folder
+            if not d.is_dir():
+                print(f"  WARN: terminal folder missing: {d}")
                 continue
-            path = d / fn
-            content = path.read_bytes()
-            try:
+            for fn in sorted(os.listdir(d)):
+                if not fn.lower().endswith(".pdf"):
+                    continue
+                path = d / fn
+                content = path.read_bytes()
+                try:
+                    records = PP.parse_pdf_bytes(content, terminal, kind, filename=fn)
+                except ValueError as exc:
+                    print(f"  WARN: could not parse {fn}: {exc}")
+                    records = []
+                out.append({"folder": folder, "terminal": terminal, "kind": kind,
+                            "path": str(path), "filename": fn, "content": content,
+                            "records": records})
+        return out
+
+    # Week layout (date folders with APMT_/NSICT_/… filenames)
+    for path in sorted(root.rglob("*.pdf")):
+        fn = path.name
+        content = path.read_bytes()
+        det = PP.terminal_from_filename(fn)
+        try:
+            if det is not None:
+                terminal, kind = det
                 records = PP.parse_pdf_bytes(content, terminal, kind, filename=fn)
-            except ValueError as exc:
-                print(f"  WARN: could not parse {fn}: {exc}")
-                records = []
-            out.append({"folder": folder, "terminal": terminal, "kind": kind,
-                        "path": str(path), "filename": fn, "content": content,
-                        "records": records})
+            else:
+                records, terminal = PP.parse_pdf_bytes_auto(content, filename=fn)
+                kind = PP._KIND_FOR_TERMINAL[terminal]
+        except ValueError as exc:
+            print(f"  WARN: skip {path.relative_to(root)}: {exc}")
+            continue
+        out.append({"folder": path.parent.name, "terminal": terminal, "kind": kind,
+                    "path": str(path), "filename": fn, "content": content,
+                    "records": records})
+    if not out:
+        print(f"  WARN: no berthing PDFs under {root}")
     return out
 
 
 async def run_import(files: List[Dict[str, Any]], dsn: str, ensure: bool) -> Dict[str, Any]:
     from services.berthing import BerthingRepository
+    from services.berthing.document_repository import BerthingDocumentRepository
+    from services.berthing.full_extractor import extract_tables
+    from services.berthing.pdf_store import store_pdf
 
     if ensure:
         from gateway.berthing_ext import ensure_berthing_schema
         await ensure_berthing_schema(dsn)
     repo = BerthingRepository(dsn)
+    docs = BerthingDocumentRepository(dsn)
     inserted = updated = skipped_files = 0
+    docs_imported = docs_skipped = 0
     per_terminal: Counter = Counter()
     for f in files:
         sha = hashlib.sha256(f["content"]).hexdigest()
@@ -93,7 +140,21 @@ async def run_import(files: List[Dict[str, Any]], dsn: str, ensure: bool) -> Dic
         inserted += res.get("inserted", 0)
         updated += res.get("updated", 0)
         per_terminal[f["terminal"]] += res.get("inserted", 0) + res.get("updated", 0)
+
+        # Verbatim tables + original PDF bytes for evidence / source viewer
+        try:
+            store_pdf(sha, f["content"])
+            tables = extract_tables(f["content"], f["filename"])
+            doc_res = await docs.persist(tables, pdf_hash=sha, uploaded_by="importer")
+            if doc_res.get("status") == "SKIPPED_DUPLICATE":
+                docs_skipped += 1
+            else:
+                docs_imported += 1
+        except Exception as exc:  # noqa: BLE001
+            print(f"  WARN: full-extract failed for {f['filename']}: {exc}")
+
     return {"inserted": inserted, "updated": updated, "skipped_files": skipped_files,
+            "docs_imported": docs_imported, "docs_skipped": docs_skipped,
             "per_terminal": dict(per_terminal)}
 
 
@@ -151,6 +212,8 @@ def main() -> int:
         print(f"  new vessel calls (inserted): {live['inserted']}")
         print(f"  updated vessel calls       : {live['updated']}")
         print(f"  duplicate files skipped    : {live['skipped_files']}")
+        print(f"  verbatim docs imported     : {live.get('docs_imported', 0)}")
+        print(f"  verbatim docs skipped      : {live.get('docs_skipped', 0)}")
         print(f"  per-terminal upserts       : {live['per_terminal']}")
     print("=" * 70 + "\n")
     return 0

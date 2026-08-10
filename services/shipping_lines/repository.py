@@ -45,9 +45,12 @@ def _data_origin(uploaded_by: Optional[str]) -> str:
 
 # Canonical container columns (parser dict keys that map 1:1 to table columns).
 
-# Legacy-shaped relations over the v3 core model. Every read goes through these
-# projections so response payloads stay byte-identical with the jnpa era.
-_ADV_REL = """(
+# Two advance-list projections coexist:
+#   * v3 (schema.sql / RDS) — direction/load_status/line_code/terminal_id/al_id
+#   * flat (gateway/shipping_lines_ext + migration 0032) — list_type/terminal/
+#     shipping_line_code/bill_of_lading already denormalised
+# Runtime DDL creates the flat shape; RDS may already be on v3. Detect once.
+_ADV_REL_V3 = """(
     SELECT a.id, a.import_file_id,
            CASE a.direction WHEN 'E' THEN 'EAL' ELSE 'IAL' END AS list_type,
            t.code AS terminal, a.container_no, a.iso_code, a.container_valid_iso,
@@ -65,49 +68,37 @@ _ADV_REL = """(
     LEFT JOIN core.advance_list_dg dg ON dg.al_id = a.al_id AND dg.slot = 1
 ) adv"""
 
-# Delivery orders over the CANONICAL v3 model (schema.sql is the source of truth).
-#
-# The legacy `jnpa.sl_delivery_orders` table was ONE flat row per container carrying
-# the AGDORD header, the line detail and the CODECO gate event together. v3 normalises
-# that into three tables, so this projection reassembles the legacy row shape from
-# them and the response contract is preserved key-for-key:
-#
-#   core.delivery_order       parent  — AGDORD header, keyed by do_number
-#   core.delivery_order_line  child   — container detail, PK (do_number, line_no)
-#   core.codeco_movement      event   — terminal gate in/out (gate pass, vehicle,
-#                                       equipment status, arrival/receipt)
-#
-# Every column below exists in schema.sql. In particular this projection does NOT
-# depend on the columns added by infra/postgres/v3/0102_arch_extensions.sql, so it
-# works against a database built from schema.sql alone.
-#
-# The CODECO join is a soft by-value join (container_no + vcn), consistent with the
-# rest of this schema, and is collapsed with DISTINCT ON to the LATEST movement per
-# container. Without that collapse a container with several gate movements would
-# multiply its delivery-order line into several rows and inflate `total`.
-_DO_REL = """(
+_ADV_REL_FLAT = """(
+    SELECT a.id, a.import_file_id,
+           a.list_type, a.terminal, a.container_no, a.iso_code, a.container_valid_iso,
+           a.freight_kind, a.category, a.gross_weight_kg, a.weight_source_uom,
+           a.pol, a.pod, a.destination, a.shipping_line_code, a.vessel_visit,
+           a.voyage, a.bill_of_lading, a.seal_no,
+           a.reefer_status, a.reefer_temp, a.imdg_code AS imdg_code,
+           a.un_number, a.group_code, a.client_code,
+           a.departure_mode, a.nominated_cfs, a.iec_code,
+           a.gst_no, a.commodity_code,
+           -- Runtime flat DDL may lack data_origin (0121 ran before the table existed).
+           -- Tag every row MANUAL so DEMO X-Data-Mode still resolves.
+           'MANUAL'::text AS data_origin, a.created_at
+    FROM core.advance_list_container a
+) adv"""
+
+# Default until the first probe — flat matches shipping_lines_ext (local PoC).
+_ADV_REL = _ADV_REL_FLAT
+
+# Delivery orders: v3 normalises header/line/codeco; flat shipping_lines_ext keeps
+# one denormalised row per container in core.delivery_order_line.
+_DO_REL_V3 = """(
     SELECT
-        -- The canonical line table has a COMPOSITE primary key (do_number, line_no)
-        -- and no surrogate integer. `id` is therefore a positional row number, kept
-        -- because the response contract has always carried it and clients use it as a
-        -- list key. Ordered oldest-first so the existing `ORDER BY id DESC` still
-        -- yields newest-first. Nothing looks a row up by this value — no by-id
-        -- delivery-order endpoint exists. `do_number` and `line_no` are exposed
-        -- alongside it as the real, stable identity.
         row_number() OVER (ORDER BY hdr.do_date NULLS FIRST, hdr.do_number, ln.line_no) AS id,
         hdr.do_number,
         ln.line_no,
-        -- The importer stores the CODECO common reference in the header's payload
-        -- jsonb (there is no canonical column); fall back to the DO number itself.
         coalesce(hdr.payload->>'common_ref_number', hdr.do_number) AS common_ref_number,
         ln.container_no,
         ln.iso_code,
-        -- No canonical column: the legacy boolean was the parser's ISO-checksum
-        -- verdict, which v3 does not persist. NULL rather than a guess derived from
-        -- the ISO code being non-empty, which would assert a validation never run.
         NULL::boolean AS container_valid_iso,
         cdc.equipment_status,
-        -- The importer writes the agent code into the header's agency_name.
         hdr.agency_name AS shipping_agent_code,
         hdr.vcn,
         hdr.imo_no AS imo_number,
@@ -121,8 +112,6 @@ _DO_REL = """(
         cdc.gate_pass_ts,
         cdc.vehicle_no,
         cdc.gate_no AS gate_number,
-        -- v3 keeps only a DATE for the AGDORD issue; the legacy shape had a
-        -- timestamp. Widened back to timestamptz so the JSON type is unchanged.
         hdr.do_date::timestamptz AS issued_ts,
         hdr.do_date::timestamptz AS created_at
     FROM core.delivery_order hdr
@@ -139,6 +128,11 @@ _DO_REL = """(
       ON cdc.container_no = ln.container_no
      AND coalesce(cdc.vcn, '') = coalesce(hdr.vcn, '')
 ) sdo"""
+
+# Flat table already carries the legacy response columns.
+_DO_REL_FLAT = "core.delivery_order_line"
+
+_DO_REL = _DO_REL_FLAT
 
 _CONTAINER_COLS: tuple[str, ...] = (
     "list_type", "terminal", "container_no", "iso_code", "container_valid_iso",
@@ -164,6 +158,37 @@ class ShippingLinesRepository:
 
     def __init__(self, dsn: Optional[str] = None) -> None:
         self._dsn = dsn
+        self._shape: Optional[str] = None  # 'v3' | 'flat'
+
+    async def _ensure_shape(self) -> str:
+        """Probe once: v3 has terminal_id on advance_list_container; flat does not."""
+        if self._shape is not None:
+            return self._shape
+        async with get_engine(self._dsn).connect() as conn:
+            has_tid = (await conn.execute(text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_schema='core' AND table_name='advance_list_container' "
+                "AND column_name='terminal_id'"))).scalar()
+            has_parent = (await conn.execute(text(
+                "SELECT to_regclass('core.delivery_order')"))).scalar()
+            has_name = (await conn.execute(text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_schema='core' AND table_name='ref_shipping_line' "
+                "AND column_name='name'"))).scalar()
+        self._shape = "v3" if has_tid else "flat"
+        # Stash companion flags on the instance for callers that need them.
+        self._has_do_parent = bool(has_parent)
+        self._line_name_col = "name" if has_name else "line_name"
+        return self._shape
+
+    async def _adv_rel(self) -> str:
+        return _ADV_REL_V3 if (await self._ensure_shape()) == "v3" else _ADV_REL_FLAT
+
+    async def _do_rel(self) -> str:
+        await self._ensure_shape()
+        if self._shape == "v3" and getattr(self, "_has_do_parent", False):
+            return _DO_REL_V3
+        return _DO_REL_FLAT
 
     # ---------------------------------------------------------------- helpers
     @staticmethod
@@ -526,22 +551,25 @@ class ShippingLinesRepository:
 
     # -------------------------------------------------------------------- reads
     async def summary(self) -> dict:
+        adv = await self._adv_rel()
+        await self._ensure_shape()
+        bl_col = "bl_no" if self._shape == "v3" else "bill_of_lading"
         files = await self._rows(
             "SELECT list_type, terminal, import_status, count(*) AS n, "
             "sum(imported_count) AS imported FROM core.sl_import_file "
             "GROUP BY list_type, terminal, import_status ORDER BY list_type, terminal", {})
         by_list = await self._rows(
             f"SELECT list_type, count(*) AS containers, count(DISTINCT container_no) AS distinct_containers "
-            f"FROM {_ADV_REL} GROUP BY list_type ORDER BY list_type", {})
+            f"FROM {adv} GROUP BY list_type ORDER BY list_type", {})
         by_terminal = await self._rows(
-            f"SELECT terminal, list_type, count(*) AS containers FROM {_ADV_REL} "
+            f"SELECT terminal, list_type, count(*) AS containers FROM {adv} "
             f"GROUP BY terminal, list_type ORDER BY terminal, list_type", {})
         by_category = await self._rows(
-            f"SELECT category, count(*) AS n FROM {_ADV_REL} "
+            f"SELECT category, count(*) AS n FROM {adv} "
             f"GROUP BY category ORDER BY n DESC", {})
         top_lines = await self._rows(
             f"SELECT shipping_line_code AS line_code, count(*) AS containers "
-            f"FROM {_ADV_REL} WHERE shipping_line_code IS NOT NULL "
+            f"FROM {adv} WHERE shipping_line_code IS NOT NULL "
             f"GROUP BY shipping_line_code ORDER BY containers DESC LIMIT 15", {})
         totals = await self._one(
             "SELECT (SELECT count(*) FROM core.sl_import_file) AS files, "
@@ -549,7 +577,7 @@ class ShippingLinesRepository:
             "(SELECT count(DISTINCT container_no) FROM core.advance_list_container) AS distinct_containers, "
             "(SELECT count(*) FROM core.delivery_order_line) AS delivery_orders, "
             "(SELECT count(*) FROM core.ref_shipping_line) AS shipping_lines, "
-            "(SELECT count(*) FROM core.advance_list_container WHERE bl_no IS NOT NULL) AS with_bl, "
+            f"(SELECT count(*) FROM core.advance_list_container WHERE {bl_col} IS NOT NULL) AS with_bl, "
             "(SELECT count(*) FROM core.sl_import_file WHERE import_status = 'FAILED') AS failed_files", {})
         return {"totals": totals or {}, "files": files, "by_list_type": by_list,
                 "by_terminal": by_terminal, "by_category": by_category, "top_lines": top_lines}
@@ -581,52 +609,62 @@ class ShippingLinesRepository:
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         return where, params
 
-    _ADV_SELECT = f"SELECT * FROM {_ADV_REL}"
-
     async def list_containers(self, *, filters: Mapping[str, Any], limit: int, offset: int) -> list[dict]:
         where, params = self._adv_where(filters)
         params.update(limit=limit, offset=offset)
+        adv = await self._adv_rel()
         return await self._rows(
-            f"{self._ADV_SELECT}{where} ORDER BY id DESC LIMIT :limit OFFSET :offset", params)
+            f"SELECT * FROM {adv}{where} ORDER BY id DESC LIMIT :limit OFFSET :offset", params)
 
     async def count_containers(self, *, filters: Mapping[str, Any]) -> int:
         where, params = self._adv_where(filters)
-        return await self._count(f"SELECT count(*) FROM {_ADV_REL}{where}", params)
+        adv = await self._adv_rel()
+        return await self._count(f"SELECT count(*) FROM {adv}{where}", params)
 
     async def container_view(self, container_no: str) -> dict:
+        adv = await self._adv_rel()
+        do = await self._do_rel()
         summary = await self._one(
             "SELECT * FROM mart.v_shipping_line_container WHERE container_no = :cn",
             {"cn": container_no})
         advance = await self._rows(
-            f"{self._ADV_SELECT} WHERE container_no = :cn ORDER BY id DESC", {"cn": container_no})
+            f"SELECT * FROM {adv} WHERE container_no = :cn ORDER BY id DESC", {"cn": container_no})
         delivery = await self._rows(
-            f"SELECT * FROM {_DO_REL} "
+            f"SELECT * FROM {do} "
             "WHERE container_no = :cn ORDER BY id DESC", {"cn": container_no})
         return {"container_no": container_no, "summary": summary,
                 "advance_lists": advance, "delivery_orders": delivery}
 
     async def list_by_bl(self, bill_of_lading: str, *, limit: int, offset: int) -> list[dict]:
+        adv = await self._adv_rel()
         return await self._rows(
-            f"{self._ADV_SELECT} WHERE bill_of_lading = :bl ORDER BY id DESC "
+            f"SELECT * FROM {adv} WHERE bill_of_lading = :bl ORDER BY id DESC "
             "LIMIT :limit OFFSET :offset",
             {"bl": bill_of_lading, "limit": limit, "offset": offset})
 
     async def count_by_bl(self, bill_of_lading: str) -> int:
+        adv = await self._adv_rel()
         return await self._count(
-            f"SELECT count(*) FROM {_ADV_REL} WHERE bill_of_lading = :bl",
+            f"SELECT count(*) FROM {adv} WHERE bill_of_lading = :bl",
             {"bl": bill_of_lading})
 
     async def get_line(self, line_code: str) -> Optional[dict]:
+        await self._ensure_shape()
+        name_col = getattr(self, "_line_name_col", "line_name")
+        line_fk = "line_code" if self._shape == "v3" else "shipping_line_code"
         return await self._one(
-            "SELECT line_code, name AS line_name, source, first_seen, last_seen, "
-            "(SELECT count(*) FROM core.advance_list_container a WHERE a.line_code = s.line_code) "
+            f"SELECT line_code, {name_col} AS line_name, source, first_seen, last_seen, "
+            f"(SELECT count(*) FROM core.advance_list_container a WHERE a.{line_fk} = s.line_code) "
             "AS container_count FROM core.ref_shipping_line s WHERE s.line_code = :lc",
             {"lc": line_code})
 
     async def list_lines(self, *, limit: int, offset: int) -> list[dict]:
+        await self._ensure_shape()
+        name_col = getattr(self, "_line_name_col", "line_name")
+        line_fk = "line_code" if self._shape == "v3" else "shipping_line_code"
         return await self._rows(
-            "SELECT s.line_code, s.name AS line_name, s.source, s.first_seen, s.last_seen, "
-            "(SELECT count(*) FROM core.advance_list_container a WHERE a.line_code = s.line_code) "
+            f"SELECT s.line_code, s.{name_col} AS line_name, s.source, s.first_seen, s.last_seen, "
+            f"(SELECT count(*) FROM core.advance_list_container a WHERE a.{line_fk} = s.line_code) "
             "AS container_count FROM core.ref_shipping_line s "
             "ORDER BY container_count DESC, s.line_code LIMIT :limit OFFSET :offset",
             {"limit": limit, "offset": offset})
@@ -643,8 +681,9 @@ class ShippingLinesRepository:
             clauses.append("vehicle_no = :vehicle")
             params["vehicle"] = filters["vehicle"]
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        do = await self._do_rel()
         return await self._rows(
-            f"SELECT * FROM {_DO_REL}{where} "
+            f"SELECT * FROM {do}{where} "
             "ORDER BY id DESC LIMIT :limit OFFSET :offset", params)
 
     async def count_delivery_orders(self, *, filters: Mapping[str, Any]) -> int:
@@ -656,7 +695,8 @@ class ShippingLinesRepository:
             clauses.append("vehicle_no = :vehicle")
             params["vehicle"] = filters["vehicle"]
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-        return await self._count(f"SELECT count(*) FROM {_DO_REL}{where}", params)
+        do = await self._do_rel()
+        return await self._count(f"SELECT count(*) FROM {do}{where}", params)
 
     # ----------------------------------------------------------------- ledger reads
     @staticmethod

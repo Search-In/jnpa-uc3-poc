@@ -205,6 +205,23 @@ export default function BerthingReportDetails({ docId }: { docId?: number | null
             <span className="font-mono">{view.file_name}</span> — {view.tables.length} sections
             <button
               type="button"
+              className={BTN}
+              disabled={view.pdf_available === false}
+              title={
+                view.pdf_available === false
+                  ? "Original PDF was not stored for this document — re-import to enable"
+                  : "Open the original berthing-report PDF"
+              }
+              onClick={() => {
+                void api
+                  .berthingOpenSourcePdf(view.document_id, view.file_name)
+                  .catch((err: Error) => window.alert(err.message));
+              }}
+            >
+              <FileText size={13} /> Open source PDF
+            </button>
+            <button
+              type="button"
               className={`${BTN} ml-auto`}
               onClick={() => {
                 const prefix = `${view.terminal}_${view.report_date ?? view.document_id}`;

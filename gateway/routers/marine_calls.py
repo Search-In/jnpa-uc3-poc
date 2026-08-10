@@ -11,6 +11,7 @@ actuals, and the turnaround / pre-berthing-delay aggregates.
     GET /api/marine/calls/by-via/{via_no}    -> resolve a short VIA (MAY be several)
     GET /api/marine/calls/{call_id}          -> one vessel call
     GET /api/marine/calls/{call_id}/timeline -> one call + its ordered actuals
+    GET /api/marine/calls/{call_id}/arrival-times -> six arrival-time definitions (UI-025)
     GET /api/marine/calls/{call_id}/events   -> the actuals alone, paginated
 
 Reads ONLY core.vessel_call / core.vessel_call_event. It never touches the jnpa
@@ -168,6 +169,40 @@ class EventListResponse(BaseModel):
     limit: int
     offset: int
     count: int
+
+
+class ArrivalTimeRowOut(BaseModel):
+    """One of the six UI-025 arrival-time definitions."""
+    model_config = ConfigDict(extra="ignore")
+    key: str
+    label: str
+    value: Optional[datetime] = None
+    source: Optional[str] = None
+    derived: bool = False
+    note: Optional[str] = None
+
+
+class ArrivalAnomalyOut(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    code: str
+    days: Optional[float] = None
+    message: str
+
+
+class ArrivalTimesOut(BaseModel):
+    """Six separately-stored arrival times + named sources (UC1-019 / UI-025)."""
+    model_config = ConfigDict(extra="ignore")
+    call_id: Optional[int] = None
+    vcn: Optional[str] = None
+    via_no: Optional[str] = None
+    vessel_name: Optional[str] = None
+    voyage_no: Optional[str] = None
+    imo_no: Optional[str] = None
+    arrival_times: List[ArrivalTimeRowOut] = []
+    actuals: Dict[str, Optional[datetime]] = {}
+    anomalies: List[ArrivalAnomalyOut] = []
+    data_mode: Optional[str] = None
+    source: Optional[str] = None
 
 
 class TimelineOut(CallOut):
@@ -338,6 +373,18 @@ async def get_timeline(call_id: int,
         raise _not_found("vessel_call_not_found", call_id=call_id)
     REQUESTS.labels(_API, "ok").inc()
     return TimelineOut(**res)
+
+
+@router.get("/{call_id}/arrival-times", response_model=ArrivalTimesOut,
+            summary="Six arrival-time definitions with named sources (UI-025)")
+async def get_arrival_times(call_id: int,
+                            mode: Optional[str] = Depends(data_mode),
+                            service: VesselCallService = Depends(get_service)) -> ArrivalTimesOut:
+    res = await service.arrival_times(call_id, data_origin=mode)
+    if res is None:
+        raise _not_found("vessel_call_not_found", call_id=call_id)
+    REQUESTS.labels(_API, "ok").inc()
+    return ArrivalTimesOut(**res, data_mode=mode, source="core.vessel_call+events")
 
 
 @router.get("/{call_id}/events", response_model=EventListResponse,

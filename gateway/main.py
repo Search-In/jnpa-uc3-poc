@@ -105,6 +105,7 @@ from .routers import (
     ldb,
     logistics,
     marine_calls,
+    marine_dashboard,
     marine_live_vessels,
     marine_imports,
     marine_manual_craft,
@@ -765,6 +766,7 @@ app.include_router(export_lifecycle.router)  # export leg: booking -> Form13 -> 
 app.include_router(shipping_lines.router)     # Shipping Lines (module 4: IAL/EAL/EDO, read-only + import)
 app.include_router(berthing.router)          # Berthing Reports (module 7: per-terminal vessel calls + upload)
 app.include_router(marine_calls.router)         # UC-I Marine vessel-call spine (module: marine, read-only)
+app.include_router(marine_dashboard.router)     # UC-I Marine dashboard boards (5-day plan, UI-028)
 app.include_router(marine_live_vessels.router)  # Live AIS vessel positions (MarineTraffic proxy, no DB write)
 app.include_router(marine_imports.router)    # UC-I Marine Data-Upload sub-module (CSV: validate/upload/history)
 app.include_router(marine_pilotage.router)   # UC-I Marine pilotage movements (read-only; XLSX via marine_imports)

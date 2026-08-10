@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query, Request,
                      Response, UploadFile, status)
+from fastapi.responses import Response as PdfResponse
 from pydantic import BaseModel, ConfigDict
 
 from ..auth import CONTROL_ROOM, Role, auth_enabled
@@ -36,6 +37,7 @@ from ..metrics import REQUESTS
 from services.berthing import BerthingService, BerthingUploadService
 from services.berthing import upload_parsers as P
 from services.berthing import full_extractor as FX
+from services.berthing import pdf_store as PDF_STORE
 from services.berthing.document_repository import BerthingDocumentRepository
 from gateway.upload_limits import MAX_UPLOAD_BYTES
 
@@ -334,12 +336,15 @@ async def full_extract_import(request: Request, file: UploadFile = File(...),
     content = await _read_upload(file)
     res = _extract_or_400(content, file.filename or "upload.pdf")
     pdf_hash = hashlib.sha256(content).hexdigest()
+    # Keep the exact PDF so the source viewer can reopen it.
+    PDF_STORE.store_pdf(pdf_hash, content)
     outcome = await repo.persist(res, pdf_hash=pdf_hash, uploaded_by=uploader)
     REQUESTS.labels("berthing", "ok").inc()
     return {**outcome, "file_name": res["file_name"], "terminal": res["terminal"],
             "report_date": res.get("report_date"), "tables": res["tables"],
             "missing_sections": res.get("missing_sections", []),
-            "uncaptured_lines": res.get("uncaptured_lines", 0)}
+            "uncaptured_lines": res.get("uncaptured_lines", 0),
+            "pdf_stored": True}
 
 
 @router.get("/documents", response_model=Page, summary="Full-extract document history")
@@ -383,6 +388,7 @@ async def document_full_view(document_id: int, request: Request,
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "document_not_found", "id": document_id})
     tabs = await repo.get_tables(document_id)
+    pdf_hash = doc.get("pdf_hash")
     return {
         "document_id": doc["id"],
         "file_name": doc["file_name"],
@@ -391,6 +397,8 @@ async def document_full_view(document_id: int, request: Request,
         "page_count": doc["page_count"],
         "table_count": doc["table_count"],
         "row_count": doc["row_count"],
+        "pdf_hash": pdf_hash,
+        "pdf_available": bool(pdf_hash and PDF_STORE.load_pdf(pdf_hash)),
         "tables": [{
             "table_name": t["table_name"],
             "columns": t["original_columns"],          # verbatim header labels
@@ -399,6 +407,37 @@ async def document_full_view(document_id: int, request: Request,
             "extraction_note": t["extraction_note"],
         } for t in tabs],
     }
+
+
+@router.get("/documents/{document_id}/pdf",
+            summary="Original berthing-report PDF")
+async def document_pdf(document_id: int, request: Request,
+                       data_origin: Optional[str] = Depends(data_mode),
+                       repo: BerthingDocumentRepository = Depends(get_doc_repo)) -> PdfResponse:
+    """Stream the exact PDF bytes that produced the verbatim tables / normalised rows."""
+    require_uploader(request)
+    doc = await repo.get_document(document_id, data_origin=data_origin)
+    if doc is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail={"error": "document_not_found", "id": document_id})
+    pdf_hash = doc.get("pdf_hash")
+    content = PDF_STORE.load_pdf(pdf_hash) if pdf_hash else None
+    if content is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": "pdf_not_stored",
+                "id": document_id,
+                "pdf_hash": pdf_hash,
+                "hint": "Re-import via POST /api/berthing/extract/import (stores under BERTHING_PDF_DIR).",
+            },
+        )
+    filename = doc.get("file_name") or f"berthing-{document_id}.pdf"
+    return PdfResponse(
+        content=content,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
 
 
 # ------------------------------------------------------------------- one call (declared last so

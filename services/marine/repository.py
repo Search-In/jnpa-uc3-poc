@@ -40,9 +40,19 @@ from .state_engine import (EVENT_ARRIVED, EVENT_DEPARTED, in_port_sql, status_or
 log = get_logger("services.marine.repository")
 
 
-def _data_origin(uploaded_by: Optional[str]) -> str:
-    """Provenance tag for an import: 'API' when delivered by the JNPA API sync
-    (uploaded_by == 'jnpa-api'), else 'MANUAL'. Mirrors migration 0120's rule."""
+def _data_origin(uploaded_by: Optional[str],
+                 data_origin: Optional[str] = None) -> str:
+    """Provenance tag for an import: ``API`` (LIVE) or ``MANUAL`` (DEMO).
+
+    Preference order:
+      1. Explicit ``data_origin`` from the request (``X-Data-Mode`` → LIVE/DEMO),
+         so a SPA upload while the board is on LIVE lands in the LIVE corpus and
+         is visible under that toggle.
+      2. ``uploaded_by == 'jnpa-api'`` → ``API`` (JNPA sync path, unchanged).
+      3. Else ``MANUAL`` (default for anonymous / unscoped uploads).
+    """
+    if data_origin in ("API", "MANUAL"):
+        return data_origin
     return "API" if (uploaded_by or "").strip().lower() == "jnpa-api" else "MANUAL"
 
 
@@ -399,7 +409,9 @@ class VesselCallRepository:
             row = (await conn.execute(text(_RESOLVE_BY_VCN), {"vcn": vcn})).first()
             if row:
                 return int(row[0])
-        imo, voyage = e.get("imo_no"), e.get("via_no")
+        # voyage_no is the voyage key (CALINF/VESARR VoyageNumber). via_no is the short
+        # VIA from the VCN tail — they must not be conflated (UC1-019 / TSS AMBER).
+        imo, voyage = e.get("imo_no"), e.get("voyage_no")
         if imo and voyage:
             row = (await conn.execute(text(_RESOLVE_BY_IMO_VOYAGE),
                                       {"imo_no": imo, "voyage_no": voyage})).first()
@@ -418,7 +430,8 @@ class VesselCallRepository:
                       parse_errors: Optional[Sequence[Mapping[str, Any]]] = None,
                       parse_invalid: int = 0, parse_duplicate: int = 0,
                       file_size: Optional[int] = None, uploaded_by: Optional[str] = None,
-                      source: str = "UPLOAD", override: bool = False) -> dict:
+                      source: str = "UPLOAD", override: bool = False,
+                      data_origin: Optional[str] = None) -> dict:
         """Persist normalized parser records across core.vessel / core.vessel_call /
         core.vessel_call_event in ONE transaction (multi-target router).
 
@@ -441,7 +454,8 @@ class VesselCallRepository:
         # Provenance for this import (LIVE=API vs DEMO=MANUAL). Dedup is PER-ORIGIN, so
         # the same bytes from the API and from a manual dump each land once — and an
         # override reopens THIS origin's ledger row, never the other corpus's.
-        origin = _data_origin(uploaded_by)
+        # ``data_origin`` (from X-Data-Mode) wins when the SPA pins LIVE/DEMO.
+        origin = _data_origin(uploaded_by, data_origin)
         existing = await self.find_file_by_hash(file_hash, origin)
         if existing is not None and not override:
             return {"file_id": existing["id"], "status": "SKIPPED_DUPLICATE",
@@ -712,11 +726,12 @@ class VesselCallRepository:
     async def record_rejected_upload(self, *, physical_format: str, filename: str,
                                      file_hash: str, uploaded_by: Optional[str],
                                      detail: str, errors: Sequence[Mapping[str, Any]],
-                                     document_type: Optional[str] = None) -> Optional[int]:
+                                     document_type: Optional[str] = None,
+                                     data_origin: Optional[str] = None) -> Optional[int]:
         """Record a structurally-rejected upload (bad template / unreadable / no valid
         rows) as a FAILED ledger row so it appears in history, with its errors. Writes
         NO vessel_call rows. De-dupes on file_hash (per-origin)."""
-        origin = _data_origin(uploaded_by)
+        origin = _data_origin(uploaded_by, data_origin)
         existing = await self.find_file_by_hash(file_hash, origin)
         if existing is not None:
             return existing["id"]
@@ -763,7 +778,7 @@ class VesselCallRepository:
     @staticmethod
     def _file_where(filters: Mapping[str, Any]) -> tuple[str, dict]:
         clauses, params = [], {}
-        for col in ("status", "source"):
+        for col in ("status", "source", "data_origin"):
             if filters.get(col) is not None:
                 clauses.append(f"{col} = :{col}")
                 params[col] = filters[col]
@@ -1131,7 +1146,10 @@ INSERT INTO core.bathymetry_survey
 VALUES
     (:drawing_no, :file_path, :data_origin)
 ON CONFLICT (drawing_no) DO UPDATE SET
-    file_path = COALESCE(EXCLUDED.file_path, core.bathymetry_survey.file_path)
+    file_path = COALESCE(EXCLUDED.file_path, core.bathymetry_survey.file_path),
+    -- LIVE/DEMO upload retags the survey so Overview under that toggle can see it
+    -- (sounding hashes stay global; the header is what the list filter reads).
+    data_origin = EXCLUDED.data_origin
 RETURNING survey_id
 """
 

@@ -24,6 +24,7 @@ import {
   RotateCcw,
   LayoutList,
   UploadCloud,
+  Gauge,
 } from "lucide-react";
 
 import {
@@ -42,12 +43,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { api } from "@/lib/api";
 import { authEnabled, getRole } from "@/lib/auth";
 import CfsEcyUploadPanel from "@/screens/cfs/UploadPanel";
+import EmptyTrtPanel from "@/screens/cfs/EmptyTrtPanel";
 
 // Data Upload is a WRITE surface — show it only to control-room / customs / admin
 // (the gateway enforces the same policy on /api/cfs-ecy).
 const UPLOAD_ROLES = ["JNPA_TRAFFIC", "DTCCC_ADMIN", "TERMINAL_OPS", "CUSTOMS"];
 const CAN_UPLOAD = !authEnabled() || UPLOAD_ROLES.includes(getRole() ?? "");
-type TopTab = "browse" | "upload";
+type TopTab = "browse" | "emptyTrt" | "upload";
 
 type Facility = "all" | "CFS" | "ECY";
 
@@ -189,7 +191,7 @@ export default function CfsEcyMovements() {
       <PageHeader
         icon={Boxes}
         title="CFS / ECY Movements"
-        subtitle="Off-dock container gate-in / gate-out (CODECO) — CFS & Empty Container Yard"
+        subtitle="Off-dock container gate-in / gate-out (CODECO) — CFS & Empty Container Yard · KPI 3 TRT from ECD"
         updatedAt={statsQ.dataUpdatedAt}
         isFetching={statsQ.isFetching || listQ.isFetching}
         onRefresh={() => {
@@ -203,6 +205,9 @@ export default function CfsEcyMovements() {
         <SegmentedTabs<TopTab>
           tabs={[
             { key: "browse", label: "Browse", icon: LayoutList },
+            // UC3-003 — KPI 3 over the imported CODECO gate log. Read-only, so it
+            // is visible to every authenticated role (unlike Data Upload).
+            { key: "emptyTrt", label: "Empty TRT (KPI 3)", icon: Gauge },
             ...(CAN_UPLOAD
               ? [{ key: "upload" as TopTab, label: "Data Upload", icon: UploadCloud }]
               : []),
@@ -211,6 +216,12 @@ export default function CfsEcyMovements() {
           onChange={setTopTab}
         />
       </div>
+
+      {topTab === "emptyTrt" && (
+        <div className="p-4">
+          <EmptyTrtPanel />
+        </div>
+      )}
 
       {topTab === "upload" && CAN_UPLOAD && (
         <div className="p-4">

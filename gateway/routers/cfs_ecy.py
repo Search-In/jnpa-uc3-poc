@@ -13,6 +13,15 @@ driver / transporter are all untouched.
     GET /api/cfs-ecy/dwell                         -> CFS dwell report
     GET /api/cfs-ecy/containers/{container_number} -> CODECO timeline + dwell + cargo status
 
+UC3-003 adds a second, read-only group over core.container_event (the imported
+CFS/ECY CODECO gate log) for KPI 3, "TRT for empty containers from ECD":
+
+    GET /api/cfs-ecy/events                        -> raw gate events (filterable)
+    GET /api/cfs-ecy/empty-trt                     -> the KPI + its provenance/anomalies
+    GET /api/cfs-ecy/empty-trt/chains              -> per-container lifecycles
+    GET /api/cfs-ecy/empty-trt/anomalies/{code}    -> containers behind one finding
+    GET /api/cfs-ecy/empty-trt/containers/{cn}     -> one container end to end
+
 RBAC: /api/cfs-ecy is not in gateway/auth.py._POLICY, so it inherits the default
 "any authenticated role" rule (read-only). No auth change is required or made.
 """
@@ -28,7 +37,9 @@ from pydantic import BaseModel, ConfigDict
 from ..auth import CONTROL_ROOM, Role, auth_enabled
 from ..data_mode import data_mode
 from ..metrics import REQUESTS
-from services.cfs_ecy import CfsEcyService, CfsEcyUploadService, EcyCfsChainService
+from services.cfs_ecy import (CfsEcyService, CfsEcyUploadService, EcyCfsChainService,
+                              EmptyTrtService)
+from services.cfs_ecy.trt_repository import CODECO_EVENT_TYPES as _CODECO_EVENT_TYPES
 
 router = APIRouter(prefix="/api/cfs-ecy", tags=["cfs-ecy"])
 
@@ -391,4 +402,147 @@ async def upload_detail(file_id: int, request: Request,
     if res is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "upload_not_found", "file_id": file_id})
+    return res
+
+
+# ================================================== UC3-003 — empty-container TRT
+# KPI 3, "TRT for empty containers from ECD", over the REAL CFS/ECY CODECO gate
+# logs held in core.container_event (loaded by scripts/import_uc3_003_cfs_ecy.py,
+# scored by mart.v_empty_container_trt from migration 0133).
+#
+# These endpoints are a SEPARATE read path from /movements and /chains above:
+# those serve core.cfs_ecy_movement, which also carries the uploaded CODECO
+# batches, whereas KPI 3 must be computed from the corpus gate log alone. Both
+# are read-only and neither touches the other's table.
+#
+#   GET /api/cfs-ecy/events                        -> the raw gate events
+#   GET /api/cfs-ecy/empty-trt                     -> the KPI + its provenance
+#   GET /api/cfs-ecy/empty-trt/chains              -> per-container lifecycles
+#   GET /api/cfs-ecy/empty-trt/anomalies/{code}    -> containers behind a finding
+#   GET /api/cfs-ecy/empty-trt/containers/{cn}     -> one container end to end
+_trt_service: Optional[EmptyTrtService] = None
+
+
+def get_trt_service(request: Request) -> EmptyTrtService:
+    global _trt_service
+    if _trt_service is None:
+        cfg = getattr(getattr(request.app.state, "gw", None), "cfg", None)
+        _trt_service = EmptyTrtService(dsn=getattr(cfg, "postgres_dsn", None) or None)
+    return _trt_service
+
+
+def _location_type(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    v = value.strip().upper()
+    if v not in ("CFS", "ECY"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail={"error": "invalid_location_type",
+                                    "location_type": value,
+                                    "allowed": ["CFS", "ECY"]})
+    return v
+
+
+def _event_type(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    v = value.strip().upper()
+    if v not in _CODECO_EVENT_TYPES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail={"error": "invalid_event_type", "event_type": value,
+                                    "allowed": list(_CODECO_EVENT_TYPES)})
+    return v
+
+
+@router.get("/events", response_model=Page,
+            summary="CFS/ECY CODECO gate events (core.container_event)")
+async def list_gate_events(
+    response: Response,
+    container: Optional[str] = Query(default=None, description="container number contains"),
+    location_type: Optional[str] = Query(default=None, description="CFS | ECY"),
+    event_type: Optional[str] = Query(default=None,
+                                      description="ECY_OUT | ECY_IN | CFS_IN | CFS_OUT"),
+    direction: Optional[str] = Query(default=None, description="I | O"),
+    date_from: Optional[datetime] = Query(default=None, alias="from"),
+    date_to: Optional[datetime] = Query(default=None, alias="to"),
+    sort: str = Query(default="event_ts"),
+    order: str = Query(default="desc"),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    svc: EmptyTrtService = Depends(get_trt_service),
+) -> Page:
+    filters = {"container": container,
+               "location_type": _location_type(location_type),
+               "event_type": _event_type(event_type),
+               "direction": direction,
+               "ts_from": date_from, "ts_to": date_to}
+    res = await svc.list_events(filters, sort=sort, direction=order,
+                                limit=limit, offset=offset)
+    REQUESTS.labels("cfs_ecy", "ok").inc()
+    return _page(res["items"], res["total"], limit, offset, response)
+
+
+@router.get("/empty-trt",
+            summary="KPI 3 — TRT for empty containers from ECD (real CODECO data)")
+async def empty_trt(svc: EmptyTrtService = Depends(get_trt_service)) -> Dict[str, Any]:
+    """The KPI result plus the evidence behind it.
+
+    ``kpi`` is the standard KpiResult envelope (value / target 45 min / baseline
+    72 min / deltaPct / onTarget / source / n). ``source`` reports the imported
+    event inventory the ECY 529-OUT-vs-432-IN gap is read off, ``anomalies`` and
+    ``data_quality`` report what was excluded and why.
+    """
+    res = await svc.kpi()
+    REQUESTS.labels("cfs_ecy", "ok").inc()
+    return res
+
+
+@router.get("/empty-trt/chains", response_model=Page,
+            summary="Per-container empty lifecycles (ECY-Out → CFS-In → CFS-Out)")
+async def empty_trt_chains(
+    response: Response,
+    container: Optional[str] = Query(default=None),
+    chain_status: Optional[str] = Query(default=None,
+                                        description="COMPLETE | PARTIAL | ORPHAN"),
+    anomaly_code: Optional[str] = Query(default=None),
+    anomaly_only: bool = Query(default=False),
+    sort: str = Query(default="ecy_out_ts"),
+    order: str = Query(default="asc"),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    svc: EmptyTrtService = Depends(get_trt_service),
+) -> Page:
+    if chain_status and chain_status.strip().upper() not in ("COMPLETE", "PARTIAL", "ORPHAN"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail={"error": "invalid_chain_status",
+                                    "chain_status": chain_status})
+    filters = {"container": container, "chain_status": chain_status,
+               "anomaly_code": anomaly_code, "anomaly_only": anomaly_only}
+    res = await svc.list_chains(filters, sort=sort, direction=order,
+                                limit=limit, offset=offset)
+    REQUESTS.labels("cfs_ecy", "ok").inc()
+    return _page(res["items"], res["total"], limit, offset, response)
+
+
+@router.get("/empty-trt/anomalies/{code}",
+            summary="The containers behind one anomaly code (detected, not patched)")
+async def empty_trt_anomaly(code: str,
+                            limit: int = Query(default=100, ge=1, le=1000),
+                            offset: int = Query(default=0, ge=0),
+                            svc: EmptyTrtService = Depends(get_trt_service)) -> Dict[str, Any]:
+    res = await svc.anomaly_containers(code, limit=limit, offset=offset)
+    REQUESTS.labels("cfs_ecy", "ok").inc()
+    return res
+
+
+@router.get("/empty-trt/containers/{container_no}",
+            summary="One container's empty lifecycle: legs, durations, raw events")
+async def empty_trt_container(container_no: str,
+                              svc: EmptyTrtService = Depends(get_trt_service)) -> Dict[str, Any]:
+    res = await svc.container(container_no)
+    if res is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail={"error": "container_not_found",
+                                    "container_no": container_no.strip().upper()})
+    REQUESTS.labels("cfs_ecy", "ok").inc()
     return res

@@ -140,6 +140,92 @@ export interface KpiResult {
   n?: number;
 }
 
+// --- UC3-003: empty-container TRT (KPI 3) wire types -----------------------
+// Mirrors services/cfs_ecy/trt_service.py::EmptyTrtService.kpi(). Every number
+// is derived from the imported CFS/ECY CODECO gate log — none is configured in
+// the UI except the target/baseline, which come from jnpa_shared/kpi.py.
+
+export interface EmptyTrtChain {
+  container_no: string;
+  ecy_out_ts: string | null;
+  ecy_in_ts: string | null;
+  cfs_in_ts: string | null;
+  cfs_out_ts: string | null;
+  chain_status: "COMPLETE" | "PARTIAL" | "ORPHAN";
+  legs_present: number;
+  event_count: number;
+  ecy_out_events: number;
+  ecy_in_events: number;
+  cfs_in_events: number;
+  cfs_out_events: number;
+  trt_min: number | null;
+  dwell_min: number | null;
+  cycle_min: number | null;
+  anomaly_codes: string[];
+  anomaly_labels?: string[];
+}
+
+export interface DqIssue {
+  issue_id: number;
+  file_id: number | null;
+  source_path?: string | null;
+  source_table: string | null;
+  record_ref: string | null;
+  issue_type: string;
+  severity: "info" | "warn" | "error";
+  description: string;
+  detected_at: string;
+}
+
+export interface EmptyTrtResponse {
+  kpi: KpiResult;
+  definition: {
+    key: string;
+    label: string;
+    measure: string;
+    unit: string;
+    target: number;
+    baseline: number;
+    direction: "lower_is_better" | "higher_is_better";
+    eligible: string;
+  };
+  distribution: {
+    valid_containers: number;
+    avg_trt_min: number | null;
+    median_trt_min: number | null;
+    min_trt_min: number | null;
+    max_trt_min: number | null;
+    avg_dwell_min: number | null;
+    avg_cycle_min: number | null;
+    window_from: string | null;
+    window_to: string | null;
+    vs_target_min: number | null;
+    vs_baseline_min: number | null;
+  };
+  chains: { complete: number; partial: number; orphan: number; total: number };
+  source: {
+    ecy_out_events: number;
+    ecy_in_events: number;
+    cfs_in_events: number;
+    cfs_out_events: number;
+    total_events: number;
+    ecy_pairing_gap: number;
+    cfs_paired: boolean;
+    files: {
+      file_id: number;
+      path: string;
+      source_system: string;
+      file_format: string;
+      row_count: number | null;
+      loaded_at: string;
+      imported_events: number;
+    }[];
+  };
+  anomalies: { code: string; containers: number; label: string }[];
+  data_quality: DqIssue[];
+  daily: { day: string; containers: number; avg_trt_min: number | null }[];
+}
+
 // --- Appendix-C capability wire types (gateway routers) ---
 
 // Empty-container (/api/empty)

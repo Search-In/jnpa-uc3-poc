@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch: {} # manual re-trigger when push events are delayed/dropped
 
 jobs:
   # Gate: run the full CI workflow first. Deploy only proceeds if every CI job
@@ -13,7 +14,7 @@ jobs:
 
   deploy:
     needs: ci
-    runs-on: [self-hosted, linux, x64, jnpa-ec2]
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -34,9 +35,21 @@ jobs:
         run: pnpm install --frozen-lockfile=false
 
       - name: Build Workspace (dashboard compiles to LIVE)
-        run: pnpm -r build
+        # Sequential builds: pnpm -r --workspace-concurrency=1 runs packages one at a time
+        # so peak memory usage stays small. Without this, parallel `pnpm -r build` allows
+        # web + mobile-pwa vite processes to both peak simultaneously, exhausting RAM and
+        # triggering the OS OOM killer (exit 137: SIGKILL).
+        # 
+        # NODE_OPTIONS heap size tuning:
+        # - 2048 MB was way too low; Vite + TypeScript bundling often exceed this.
+        # - 8192 MB (8 GB) is safe on GitHub's ubuntu-latest (16 GB runner):
+        #   gives Node max 8GB heap + 2GB for system/other processes = 10GB used,
+        #   leaves 6GB buffer for kernel caches and unexpected spikes.
+        # - --max-semi-space-size=512 tells V8 to do more frequent, smaller GC cycles
+        #   instead of rare, huge collections — reduces peak memory footprint.
+        run: pnpm -r --workspace-concurrency=1 build
         env:
-          NODE_OPTIONS: "--max-old-space-size=4096"
+          NODE_OPTIONS: "--max-old-space-size=8192 --max-semi-space-size=512"
           # Production builds default to live anyway; set explicitly for clarity
           # and to make the verification step below meaningful.
           VITE_DATA_MODE: live
@@ -53,6 +66,15 @@ jobs:
           # device-token returns 401 and the PWA cannot authenticate (no dev-token
           # seam exists in prod) — every /api call and the WebSocket then fail auth.
           VITE_PWA_PAIRING_SECRET: ${{ secrets.PWA_PAIRING_SECRET }}
+
+      - name: Check memory after build
+        if: always()  # Run even if build fails, for diagnostics
+        run: |
+          echo "=== Memory after build ==="
+          free -m
+          echo ""
+          echo "Note: Sequential builds (--workspace-concurrency=1) ensure only one"
+          echo "Vite process runs at a time, so peak memory is bounded."
 
       - name: Verify dashboard bundle is LIVE (no mock shipped)
         run: bash scripts/verify_web_live_build.sh web/dist
@@ -128,6 +150,15 @@ jobs:
           # Ship source + the prebuilt web/mobile dist (the web image COPYies dist;
           # it does NOT build the frontend), but exclude everything the host never
           # needs — these are what filled the disk (rsync ignores .dockerignore).
+          #
+          # ⚠ `--delete` removes anything on the host that is not in the source, so
+          # every HOST-WRITTEN directory that lives under this path must be excluded
+          # or the deploy destroys it. `data/jnpa_api` is the JNPA Port-Data
+          # raw-bytes store (bind-mounted into the gateway, see docker-compose.yml):
+          # without this exclude each deploy wiped all downloaded originals, leaving
+          # core.api_record pointing at files that no longer existed — which is what
+          # made `/api/jnpa/files/{sha}` 404 for all 4,757 records and left
+          # `POST /api/integrations/jnpa/replay` with nothing to replay.
           rsync -avz --delete \
             --exclude '.git' \
             --exclude '.github' \
@@ -151,6 +182,7 @@ jobs:
             --exclude 'data/clips/*.mp4' \
             --exclude 'data/clips/*.mov' \
             --exclude 'evidence/screenshots' \
+            --exclude 'data/jnpa_api' \
             -e "ssh -i ~/.ssh/id_rsa" \
             ./ ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}:/home/ec2-user/jnpa-uc3-poc/
 

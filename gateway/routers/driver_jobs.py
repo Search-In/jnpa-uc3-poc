@@ -103,8 +103,32 @@ async def _own_job(request: Request, svc: ContainerJobService, job_id: int) -> D
 
 
 def _actor(request: Request) -> tuple[Optional[str], Optional[str]]:
+    """Who is performing this job action, for core.container_job_event.actor.
+
+    BUG-6: every driver-side transition used to land with ``actor = NULL`` on the
+    demo profile, because the actor came only from a JWT principal and
+    ``AUTH_ENABLED=false`` leaves none — an unattributable audit trail on exactly
+    the events that need attribution most.
+
+    A verified token always wins. Failing that we fall back to the SAME device
+    binding ``_scope()`` already trusts to narrow the query, stamped
+    ``device:<vehicle-id>`` so the row is honest about its provenance. With auth
+    ON an unattributable action is refused outright rather than written NULL.
+    """
     p = _principal(request)
-    return (getattr(p, "sub", None), getattr(p, "role", None))
+    sub = getattr(p, "sub", None)
+    role = getattr(p, "role", None)
+    if not sub:
+        device = (request.headers.get("X-Device-Id")
+                  or request.query_params.get("device_id") or "").strip()
+        if device:
+            sub, role = f"device:{device}", role or Role.DRIVER.value
+    if auth_enabled() and not sub:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail={"error": "actor_unresolved",
+                                    "detail": "job actions must be attributable; "
+                                              "no principal or device binding on the request"})
+    return sub, role
 
 
 def _conflict(exc: JobConflict) -> HTTPException:
@@ -124,6 +148,12 @@ async def my_jobs(request: Request,
     filters: Dict[str, Any] = {"open_only": not include_closed}
     if scope.get("vehicle_id"):
         filters["vehicle_id"] = scope["vehicle_id"]
+        # BUG-2: mirror _owns() exactly — it accepts the internal Vehicle ID OR
+        # the normalised plate, so the list must too. Without this a driver who
+        # paired with the registration instead of the TRK id got an empty list
+        # while _own_job() still let them open the job by id.
+        if scope.get("vehicle_plate"):
+            filters["vehicle_plate"] = scope["vehicle_plate"]
     else:  # support roles / dev
         if vehicle_id:
             filters["vehicle_id"] = vehicle_id

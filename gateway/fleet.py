@@ -438,35 +438,71 @@ async def list_vehicles(dsn: str, *, q: Optional[str] = None,
 
 
 async def list_available(dsn: str, assigned: set, *, q: Optional[str] = None,
-                         limit: int = 50) -> List[dict]:
-    """ACTIVE master vehicles NOT already assigned to a driver / open enrollment.
+                         limit: int = 50,
+                         driver_map: Optional[Mapping[str, Mapping[str, Any]]] = None) -> List[dict]:
+    """ACTIVE master vehicles that are free to take a NEW container job.
 
-    ``assigned`` is the set of normalised Vehicle IDs taken (from
-    :func:`enrollment.assigned_vehicles`). This is the source for the
-    ``GET /api/vehicles/available`` dropdown."""
+    ``assigned`` is the set of Vehicle IDs to exclude. As of the BUG-1 fix the
+    caller passes the vehicles holding an OPEN JOB
+    (``status NOT IN ('COMPLETED','CANCELLED')``) — NOT the vehicles that have a
+    driver enrollment. Filtering on driver enrollment deadlocked the demo: the
+    only trucks a driver can sign into the PWA with are exactly the driver-bound
+    ones, and those were the ones being hidden from the dropdown.
+
+    ``driver_map`` (normalised Vehicle ID -> {driver_id, name}, from
+    :func:`enrollment.active_driver_vehicle_map`) enriches each row with its bound
+    driver so the Control Room can auto-select the correct driver instead of
+    leaving ``driver_id`` NULL (BUG-4). Vehicles WITHOUT a driver are still
+    returned — the driver requirement is enforced at assignment validation, not by
+    hiding trucks — but they carry ``driver_id: None`` so the UI can flag them."""
     rows = await list_vehicles(dsn, q=q, status=ACTIVE, limit=max(limit * 4, 200))
+    dm = dict(driver_map or {})
     out: List[dict] = []
     for v in rows:
         vid = v.get("vehicle_id")
         if not vid or vid in assigned:
             continue
+        holder = dm.get(vid) or {}
         out.append({"vehicle_id": vid, "plate": v.get("vehicle_number"),
-                    "vehicle_type": v.get("vehicle_type"), "state": None})
+                    # vehicle_number is the explicit alias; `plate` is kept for
+                    # backward compatibility with the existing dropdown clients.
+                    "vehicle_number": v.get("vehicle_number"),
+                    "vehicle_type": v.get("vehicle_type"), "state": None,
+                    "driver_id": holder.get("driver_id"),
+                    "driver_name": holder.get("name")})
         if len(out) >= limit:
             break
     return out
 
 
-async def stats(dsn: str, assigned: set) -> dict:
-    """Dashboard counts: total / active / assigned / available."""
+async def stats(dsn: str, assigned: set,
+                open_job_vehicles: Optional[set] = None) -> dict:
+    """Dashboard counts.
+
+    BUG-5: "assigned" used to mean "a driver holds this truck" while operators
+    read it as "this truck is on a job" — two different numbers under one label.
+    Both are now reported explicitly and the ambiguous keys are kept so no
+    existing client breaks:
+
+        driver_assigned_count  vehicles with an ACTIVE driver binding
+        open_job_count         vehicles currently on a non-terminal job
+        assigned               == driver_assigned_count  (legacy alias)
+        available              == active - open_job_count
+
+    ``available`` counts what the /available dropdown actually returns, so the
+    KPI tile and the dropdown can no longer disagree (they did before: 8 assigned
+    vs 0 open jobs)."""
     rows = await list_vehicles(dsn, limit=100000)
     total = len(rows)
     active = sum(1 for v in rows if v.get("status") == ACTIVE)
-    # "assigned" = ACTIVE master vehicles that a driver/enrollment holds.
     active_ids = {v.get("vehicle_id") for v in rows if v.get("status") == ACTIVE}
-    assigned_n = len(active_ids & set(assigned))
-    return {"total": total, "active": active, "assigned": assigned_n,
-            "available": max(active - assigned_n, 0)}
+    driver_assigned_n = len(active_ids & set(assigned))
+    open_job_n = len(active_ids & set(open_job_vehicles or set()))
+    return {"total": total, "active": active,
+            "driver_assigned_count": driver_assigned_n,
+            "open_job_count": open_job_n,
+            "assigned": driver_assigned_n,          # legacy alias — do not remove
+            "available": max(active - open_job_n, 0)}
 
 
 __all__ = [

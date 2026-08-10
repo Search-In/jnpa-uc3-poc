@@ -22,10 +22,13 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import (
+    APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile, status,
+)
 from pydantic import BaseModel
 
 from gateway.data_mode import data_mode
+from gateway.upload_limits import MAX_UPLOAD_BYTES
 from services.customs import CustomsService
 
 router = APIRouter(prefix="/api/customs", tags=["customs"])
@@ -337,3 +340,59 @@ async def materialize(
     """
     return await svc.materialize_cargo(igm_no=igm_no, limit=limit,
                                        reconcile=reconcile_after)
+
+
+# --------------------------------------------------------------------- upload
+# UC2-036: the customs corpus had no browser upload path at all.
+#
+# `POST /api/customs/import` re-scans a server-side directory ($CUSTOMS_DATA_DIR),
+# so it is an admin action — it cannot ingest a file an operator is holding. That
+# left the one document family the demo leads with (IGM / OOC / SMTP) as the only
+# module with no way to show a file reaching the screen.
+#
+# This reuses `CustomsService.import_bytes` verbatim — the SAME path the JNPA
+# Port-Data sync uses — so sha256 dedup, the import ledger and event emission
+# behave identically to an API-delivered file. The only difference is provenance:
+# `uploaded_by` is NOT 'jnpa-api' here, so rows are tagged `data_origin='MANUAL'`
+# (DEMO) and a browser upload can never masquerade as the live feed.
+
+@router.post("/upload", summary="Import one customs file (IGM/OOC/SMTP/RMS/LEO/SB)")
+async def customs_upload(request: Request,
+                         file: UploadFile = File(...),
+                         service: CustomsService = Depends(get_service)) -> Dict[str, Any]:
+    """Ingest a single customs document.
+
+    Idempotent by content hash: re-uploading the same bytes is recognised by the
+    import ledger and does not duplicate rows, so a nervous double-click during a
+    demo is harmless.
+
+    ⚠ There is no dry-run. Every other ingest module offers `/validate` first,
+    but the customs service has no parse-without-persist path, and faking one by
+    importing then deleting would leave ledger and event rows behind. Rather than
+    present a preview this endpoint cannot honour, it imports directly and says
+    so — `dry_run_supported: false` is in the response for callers that branch
+    on it.
+    """
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail={"error": "empty_file"})
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                            detail={"error": "file_too_large",
+                                    "max_bytes": MAX_UPLOAD_BYTES})
+
+    filename = file.filename or "upload.xml"
+    # Customs format detection routes on the FILENAME (CHPOI03/10/13 prefixes,
+    # .TXT, .XLSX header probe), so an unnamed upload cannot be classified.
+    result = await service.import_bytes(content, filename, uploaded_by=_uploader(request))
+    return {"filename": filename, "bytes": len(content),
+            "dry_run_supported": False, **(result or {})}
+
+
+def _uploader(request: Request) -> str:
+    """Who to attribute the upload to — anything but 'jnpa-api', which is the
+    reserved token that tags rows as LIVE."""
+    principal = getattr(getattr(request, "state", None), "principal", None)
+    who = getattr(principal, "sub", None) or "operator"
+    return "operator" if who.lower() == "jnpa-api" else who

@@ -6,11 +6,16 @@
 //
 // Two deliberate behaviours:
 //
-//   * Driver is OPTIONAL. The backend only runs the PDP-permit chain when a
-//     driver is supplied (services/container_job/service.py), so a truck can be
-//     dispatched while a driver's permit is being renewed. Drivers whose permit
-//     cannot clear are still listed, flagged, and selectable — the operator sees
-//     the reason from Validate rather than an empty dropdown.
+//   * Driver is DERIVED FROM THE TRUCK, and REQUIRED for the move types in
+//     DRIVER_REQUIRED_MOVE_TYPES (BUG-4). Selecting a vehicle auto-selects the
+//     driver bound to it in core.driver_identity, which /api/vehicles/available
+//     now returns alongside each row — previously the driver was a free-standing
+//     optional dropdown and every job was created with driver_id = NULL, leaving
+//     the driver PWA with nobody to notify. The operator may still override the
+//     selection; for the remaining move types the driver stays optional so a
+//     truck can be dispatched while a permit is being renewed. Drivers whose
+//     permit cannot clear are still listed, flagged, and selectable — the
+//     operator sees the reason from Validate rather than an empty dropdown.
 //   * The two master lists sit under a STRICTER RBAC policy than /api/jobs
 //     itself (CUSTOMS + DTCCC_ADMIN vs CONTROL_ROOM + CUSTOMS), so a 403 on a
 //     dropdown is a permission fact, not an outage, and is reported as such.
@@ -19,7 +24,7 @@
 // StatusChip / LoadingState / ErrorState / EmptyState) with semantic theme
 // tokens — no design system of its own, matching Uc3Lifecycle.tsx.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, ShieldAlert, Truck, UserCheck, XCircle } from "lucide-react";
 
@@ -41,6 +46,12 @@ const MOVE_TYPES = [
 ] as const;
 
 const NONE = "";
+
+// Mirrors services/container_job/service.py DRIVER_REQUIRED_MOVE_TYPES. A laden
+// box leaving the terminal must be attributable to a person, so the backend
+// rejects these move types with `driver_required` when driver_id is absent;
+// gating the button here turns that 400 into an inline hint instead.
+const DRIVER_REQUIRED_MOVE_TYPES = new Set<string>(["IMPORT_PICK"]);
 
 /** A check row rendered from either a success payload or a rejection. */
 type CheckRow = { key: string; ok: boolean; label: string; detail: string };
@@ -79,10 +90,10 @@ export default function JobAssignPanel({
     queryKey: ["uc3-active-drivers"],
     queryFn: () => api.activeDrivers(),
   });
-  // /api/vehicles/available excludes trucks held by a driver enrollment, but NOT
-  // trucks already holding an open job — the backend rejects those with
-  // `vehicle_already_assigned`. Cross-filter here so a guaranteed-to-fail truck
-  // is never offered in the first place.
+  // /api/vehicles/available now excludes trucks holding an open job server-side
+  // (BUG-1). This stays as a belt-and-braces cross-filter: the two queries are
+  // fetched independently, so a job assigned between them would otherwise offer a
+  // truck the backend is about to reject with `vehicle_already_assigned`.
   const openJobsQ = useQuery({
     queryKey: ["uc3-jobs", "open-for-assign"],
     queryFn: () => api.jobs({ open_only: true, limit: 200 }),
@@ -103,8 +114,25 @@ export default function JobAssignPanel({
   const busyCount = allVehicles.length - vehicles.length;
   const drivers = useMemo(() => driversQ.data?.drivers ?? [], [driversQ.data]);
 
+  const selectedVehicle = useMemo(
+    () => vehicles.find((v) => v.vehicle_id === vehicleId),
+    [vehicles, vehicleId],
+  );
+
+  // BUG-4: the driver follows the truck. /api/vehicles/available carries the
+  // driver bound to each vehicle in core.driver_identity, so picking a truck
+  // fills the driver in rather than leaving the operator to match them by hand
+  // (which nobody did — every existing job has driver_id = NULL). Clearing the
+  // truck clears the driver; the operator can still override the selection
+  // afterwards, and this does not fight them because it only re-runs when the
+  // selected VEHICLE changes.
+  useEffect(() => {
+    setDriverId(selectedVehicle?.driver_id ?? NONE);
+  }, [vehicleId, selectedVehicle?.driver_id]);
+
   const cn = container.trim().toUpperCase();
-  const ready = cn.length > 0 && vehicleId !== NONE;
+  const driverRequired = DRIVER_REQUIRED_MOVE_TYPES.has(moveType);
+  const ready = cn.length > 0 && vehicleId !== NONE && (!driverRequired || driverId !== NONE);
 
   const payload = (): JobAssignInput => ({
     container_number: cn,
@@ -173,18 +201,32 @@ export default function JobAssignPanel({
     [vehicles],
   );
 
-  const driverOptions = useMemo(
-    () => [
-      { value: NONE, label: "No driver (optional)" },
+  const driverOptions = useMemo(() => {
+    const opts = [
+      {
+        value: NONE,
+        label: driverRequired ? "Select a driver…" : "No driver (optional)",
+      },
       ...drivers.map((d) => ({
         value: d.driver_id,
         // A driver with no licence on file cannot clear the PDP chain; say so in
         // the option rather than letting Validate be the first hint.
         label: `${d.name ?? d.driver_id}${d.license_no ? ` — ${d.license_no}` : " — no licence on file"}`,
       })),
-    ],
-    [drivers],
-  );
+    ];
+    // The driver bound to the selected truck must always be selectable, even if
+    // the enrollment master (/api/identity/drivers) has not listed them — without
+    // this the auto-selected value would have no matching option and the select
+    // would silently render blank.
+    const bound = selectedVehicle?.driver_id;
+    if (bound && !opts.some((o) => o.value === bound)) {
+      opts.splice(1, 0, {
+        value: bound,
+        label: `${selectedVehicle?.driver_name ?? bound} — assigned to this truck`,
+      });
+    }
+    return opts;
+  }, [drivers, driverRequired, selectedVehicle?.driver_id, selectedVehicle?.driver_name]);
 
   // A 403 here means the signed-in role may raise jobs but not read the masters.
   const mastersForbidden =
@@ -258,7 +300,9 @@ export default function JobAssignPanel({
 
           {/* --------------------------------------------------------- driver */}
           <label className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-muted-foreground">Driver (optional)</span>
+            <span className="text-xs font-medium text-muted-foreground">
+              {driverRequired ? "Driver (required)" : "Driver (optional)"}
+            </span>
             {driversQ.isLoading ? (
               <LoadingState label="Loading drivers…" />
             ) : driversQ.isError && !mastersForbidden ? (
@@ -274,6 +318,18 @@ export default function JobAssignPanel({
                 options={driverOptions}
               />
             )}
+            {/* Say WHY the driver is filled in / missing, so an operator never has
+                to guess whether the truck has a driver on file. */}
+            {vehicleId !== NONE && selectedVehicle?.driver_id ? (
+              <span className="text-xs text-muted-foreground">
+                Auto-selected from {vehicleLabel(selectedVehicle)}
+              </span>
+            ) : vehicleId !== NONE && driverRequired ? (
+              <span className="text-xs text-amber-600 dark:text-amber-500">
+                No driver is assigned to this truck — pick one, or assign a driver to the vehicle in
+                Driver Management first.
+              </span>
+            ) : null}
           </label>
 
           {/* ------------------------------------------------------ move type */}

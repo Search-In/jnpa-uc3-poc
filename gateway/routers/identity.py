@@ -487,9 +487,20 @@ async def _vehicle_exists(state: GatewayState, vehicle_id: str) -> bool:
 async def available_vehicles(q: Optional[str] = Query(default=None),
                              limit: int = Query(default=50, ge=1, le=500),
                              state: GatewayState = Depends(get_state)) -> dict:
-    """Legacy alias of ``GET /api/vehicles/available`` — kept so existing callers
-    keep working. Sources ACTIVE Vehicle Master entries not already assigned to an
-    active driver / open enrollment (no longer reads the truck-sim directly)."""
+    """Vehicles a DRIVER may be enrolled on: ACTIVE Vehicle Master entries not
+    already held by another active driver / open enrollment.
+
+    NOT an alias of ``GET /api/vehicles/available`` any more, despite the shared
+    helper — the two answer different questions and deliberately diverge:
+
+        this route            "which truck can I give this driver?"  -> exclude
+                              trucks that already have a driver
+        /api/vehicles/available "which truck can take this job?"     -> exclude
+                              trucks holding an OPEN JOB (BUG-1)
+
+    Excluding driver-held trucks from the JOB dropdown was the deadlock BUG-1
+    fixed; excluding them here is still right, because a vehicle may not carry two
+    drivers. Do not "re-align" these two — see gateway/routers/vehicles.py."""
     dsn = state.cfg.postgres_dsn
     taken = await enrollment.assigned_vehicles(dsn)
     out = await fleet.list_available(dsn, taken, q=q, limit=limit)

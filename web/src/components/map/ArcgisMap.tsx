@@ -757,9 +757,10 @@ export function ArcgisMap({
     }
   }
 
-  // Snap the corridor waypoints to the road network (render-time only, GIS-1).
-  // Re-runs whenever the corridor changes; aborts the in-flight request on
-  // change/unmount. On failure roadIndex stays null → straight-line fallback.
+  // Index the corridor against the stored road centreline (render-time only,
+  // GIS-1). Synchronous — no routing round-trip — so the drawn path is
+  // deterministic. This index is ALSO handed to <Scene3D> below, so 2D and 3D
+  // render the corridor and the trucks from one source of truth.
   useEffect(() => {
     if (!corridor?.polyline?.length) {
       setRoadIndex(null);

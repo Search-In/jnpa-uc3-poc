@@ -36,6 +36,7 @@ from starlette.testclient import TestClient  # noqa: E402
 from jnpa_shared.iso6346 import is_valid_container_no, with_check_digit  # noqa: E402
 from services.cargo import (  # noqa: E402
     CargoConflict,
+    CargoCustomsBlocked,
     CargoNotFound,
     CargoService,
     CargoTransitionError,
@@ -277,7 +278,7 @@ class FakeCargoRepo:
 
     async def transition_lifecycle(self, container_number, *, target, allowed_from,
                                    action, actor_role=None, note=None, strict=True,
-                                   set_fields=None):
+                                   set_fields=None, blocked_customs=None):
         # `model_row_lock` makes the fake behave like SELECT … FOR UPDATE: the
         # read-check-write runs under a lock, with a yield inside it so concurrent
         # callers genuinely interleave. Off by default — the lock is only needed by
@@ -292,14 +293,15 @@ class FakeCargoRepo:
                 return await self._transition_unlocked(
                     container_number, target=target, allowed_from=allowed_from,
                     action=action, actor_role=actor_role, note=note, strict=strict,
-                    set_fields=set_fields)
+                    set_fields=set_fields, blocked_customs=blocked_customs)
         return await self._transition_unlocked(
             container_number, target=target, allowed_from=allowed_from, action=action,
-            actor_role=actor_role, note=note, strict=strict, set_fields=set_fields)
+            actor_role=actor_role, note=note, strict=strict, set_fields=set_fields,
+            blocked_customs=blocked_customs)
 
     async def _transition_unlocked(self, container_number, *, target, allowed_from,
                                    action, actor_role=None, note=None, strict=True,
-                                   set_fields=None):
+                                   set_fields=None, blocked_customs=None):
         rec = self._rows.get(container_number)
         if rec is None:
             if strict:
@@ -310,6 +312,14 @@ class FakeCargoRepo:
             if strict:
                 raise CargoTransitionError(container_number, current, target)
             return None
+        # Customs gate, on the EFFECTIVE status — same rule as the real repository.
+        if blocked_customs:
+            patch_cs = _enum_val(dict(set_fields or {}).get("customs_status"))
+            cs = str(patch_cs or rec.get("customs_status") or "").upper()
+            if cs in blocked_customs:
+                if strict:
+                    raise CargoCustomsBlocked(container_number, cs, target)
+                return None
         rec["lifecycle_status"] = target
         # Mirrors the real repository: writable business columns are patched in the
         # SAME operation as the status change (audit W2/W3 — one commit, or none).
@@ -1001,6 +1011,77 @@ def test_release_before_verify_409(client):
     r = client.post(f"/api/cargo/{VALID_CN}/release")
     assert r.status_code == 409
     assert r.json()["detail"]["current_status"] == "YARD_ASSIGNED"
+
+
+def _verified(client, cn: str = VALID_CN) -> None:
+    """Drive a container to VERIFIED — the last state before release."""
+    client.post("/api/cargo", json=_lc_payload())
+    client.post(f"/api/cargo/{cn}/discharge", json={})
+    client.put(f"/api/cargo/{cn}/yard-assignment", json={"yard_block": "A-01"})
+    client.post(f"/api/cargo/{cn}/verify", json={"verified": True})
+
+
+def test_release_blocked_while_customs_holds_the_goods(client):
+    """Customs, not the lifecycle, forbids this release.
+
+    The lifecycle gate passes — the container IS verified — so this used to
+    succeed and produce a HELD + RELEASED row: a state no real container can be
+    in, because out-of-charge is what permits goods to leave customs control.
+    """
+    _verified(client)
+    client.put(f"/api/cargo/{VALID_CN}", json={"customs_status": "HELD"})
+
+    r = client.post(f"/api/cargo/{VALID_CN}/release")
+
+    assert r.status_code == 409
+    # NOT illegal_transition: the transition is legal, customs is the blocker, and
+    # naming the wrong track sends the operator to fix the wrong thing.
+    assert r.json()["detail"]["error"] == "customs_not_cleared"
+    assert r.json()["detail"]["customs_status"] == "HELD"
+    assert client.get(f"/api/cargo/{VALID_CN}").json()["lifecycle_status"] == "VERIFIED"
+
+
+def test_release_blocked_while_under_inspection(client):
+    _verified(client)
+    client.put(f"/api/cargo/{VALID_CN}", json={"customs_status": "UNDER_INSPECTION"})
+
+    r = client.post(f"/api/cargo/{VALID_CN}/release")
+
+    assert r.status_code == 409
+    assert r.json()["detail"]["error"] == "customs_not_cleared"
+
+
+def test_put_is_released_faces_the_same_customs_gate(client):
+    """Otherwise the guard is bypassable by patching the column instead."""
+    _verified(client)
+    client.put(f"/api/cargo/{VALID_CN}", json={"customs_status": "HELD"})
+
+    r = client.put(f"/api/cargo/{VALID_CN}", json={"is_released": True})
+
+    assert r.status_code == 409
+    assert r.json()["detail"]["error"] == "customs_not_cleared"
+    assert client.get(f"/api/cargo/{VALID_CN}").json()["is_released"] is False
+
+
+def test_clearing_customs_in_the_same_patch_allows_the_release(client):
+    """The gate reads the EFFECTIVE status, so clearing-and-releasing in one call
+    is a legitimate single act rather than a false positive."""
+    _verified(client)
+    client.put(f"/api/cargo/{VALID_CN}", json={"customs_status": "HELD"})
+
+    r = client.put(f"/api/cargo/{VALID_CN}",
+                   json={"customs_status": "CLEARED", "is_released": True})
+
+    assert r.status_code == 200
+    assert r.json()["lifecycle_status"] == "RELEASED"
+
+
+def test_pending_customs_does_not_block_release(client):
+    """PENDING means customs has said nothing — the state of most of the corpus.
+    Blocking on it would stop the demo on missing data, not on a customs decision."""
+    _verified(client)
+
+    assert client.post(f"/api/cargo/{VALID_CN}/release").status_code == 200
 
 
 def test_duplicate_release_409(client):

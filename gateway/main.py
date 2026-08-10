@@ -95,6 +95,7 @@ from .routers import (
     container_job,
     document_ocr,
     double_trip,
+    dq,
     driver_jobs,
     edi_vessel,
     export_lifecycle,
@@ -752,6 +753,7 @@ app.include_router(document_ocr.router)      # document OCR
 app.include_router(nvr.router)               # NVR device/stream integration
 app.include_router(trt.router)               # ECY TRT KPI
 app.include_router(cfs_ecy.router)           # CFS-ECY CODECO gate movements (module 13, read-only)
+app.include_router(dq.router)                # Data Quality ledger over core.dq_issue (read-only)
 app.include_router(customs.router)           # Customs docs (module 5: IGM/OOC/SMTP/RMS/LEO/SB)
 app.include_router(gate_documents.router)    # UC-III gate documents (EIR / PIN ticket / Form-13 + TAT)
 app.include_router(container_job.router)     # UC-III job spine: assignment + gate/yard/scan events

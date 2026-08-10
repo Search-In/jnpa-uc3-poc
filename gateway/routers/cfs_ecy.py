@@ -40,6 +40,7 @@ from ..metrics import REQUESTS
 from services.cfs_ecy import (CfsEcyService, CfsEcyUploadService, EcyCfsChainService,
                               EmptyTrtService)
 from services.cfs_ecy.trt_repository import CODECO_EVENT_TYPES as _CODECO_EVENT_TYPES
+from gateway.upload_limits import MAX_UPLOAD_BYTES
 
 router = APIRouter(prefix="/api/cfs-ecy", tags=["cfs-ecy"])
 

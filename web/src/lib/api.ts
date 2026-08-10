@@ -1231,8 +1231,7 @@ export const api = {
       }[];
     }>(`/api/berthing/documents/${documentId}/full-view`),
   /** Original source PDF for a verbatim berthing document (opens inline). */
-  berthingDocumentPdfUrl: (documentId: number) =>
-    `/api/berthing/documents/${documentId}/pdf`,
+  berthingDocumentPdfUrl: (documentId: number) => `/api/berthing/documents/${documentId}/pdf`,
   berthingOpenSourcePdf: async (documentId: number, filename?: string) => {
     const token = getToken();
     const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
@@ -1242,7 +1241,11 @@ export const api = {
     });
     if (!res.ok) {
       let detail: any;
-      try { detail = await res.json(); } catch { /* ignore */ }
+      try {
+        detail = await res.json();
+      } catch {
+        /* ignore */
+      }
       throw new Error(
         `${res.status} ${res.statusText}${detail ? ` — ${JSON.stringify(detail)}` : ""}`,
       );

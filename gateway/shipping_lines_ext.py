@@ -113,6 +113,11 @@ _DDL: list[str] = [
         raw                 jsonb NOT NULL DEFAULT '{}'::jsonb,
         row_sha256          text NOT NULL DEFAULT '',
         created_at          timestamptz NOT NULL DEFAULT now())""",
+    # Provenance (0121 may have run before this table existed on cold-start).
+    "ALTER TABLE core.advance_list_container ADD COLUMN IF NOT EXISTS data_origin "
+    "text NOT NULL DEFAULT 'MANUAL'",
+    "ALTER TABLE core.delivery_order_line ADD COLUMN IF NOT EXISTS data_origin "
+    "text NOT NULL DEFAULT 'MANUAL'",
     # Content-hash uniqueness: byte-identical rows collapse (idempotent), but any row
     # that differs in ANY source field persists — normalization never drops a distinct
     # source row (e.g. one container under two operator codes in the same list).

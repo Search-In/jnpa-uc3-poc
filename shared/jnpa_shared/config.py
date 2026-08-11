@@ -69,7 +69,6 @@ class Settings(BaseSettings):
     here_api_key: str = ""
     tomtom_api_key: str = ""
     openweather_api_key: str = ""
-    surepass_api_token: str = ""
     ulip_api_key: str = ""
     bhuvan_api_key: str = ""
 

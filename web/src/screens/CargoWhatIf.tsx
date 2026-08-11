@@ -37,6 +37,7 @@ import { BeforeAfterChart } from "@/components/whatif/BeforeAfterChart";
 import { AssumptionsPanel } from "@/components/whatif/AssumptionsPanel";
 import { QueryTracePanel } from "@/components/whatif/QueryTracePanel";
 import { RecommendationList } from "@/components/whatif/RecommendationList";
+import WhatIfAnswer from "@/components/whatif/WhatIfAnswer";
 
 function ts(v: unknown): string {
   if (!v) return "—";
@@ -460,6 +461,44 @@ export default function CargoWhatIf() {
               disabled={run.isPending}
             />
 
+            {/* The four-beat answer: verdict, then one picture, then what to do,
+                then the working. The existing panels are unchanged — they move
+                inside the collapsed evidence rather than being replaced, so the
+                reading ORDER improves without losing anything an evaluator
+                already relies on. */}
+            {result && (
+              <WhatIfAnswer
+                result={result}
+                title={active ? `${active}` : undefined}
+                chart={result.data_available ? (
+                  <div className="flex flex-col gap-3">
+                    <BeforeAfterChart result={result} />
+                    <ScenarioDetail result={result} />
+                  </div>
+                ) : undefined}
+                evidence={
+                  <div className="flex flex-col gap-3">
+                    <AssumptionsPanel assumptions={result.assumptions} />
+                    <QueryTracePanel queries={result.queries} />
+                    <RecommendationList recommendations={result.recommendations} />
+                  </div>
+                }
+                classNames={{
+                  root: "flex flex-col gap-3",
+                  verdict: "rounded-lg border border-slate-200 bg-white p-4",
+                  headline: "text-lg font-semibold leading-snug text-slate-900",
+                  detail: "mt-1 text-sm text-slate-600",
+                  banner: "rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900",
+                  section: "flex flex-col gap-2",
+                  actions: "flex flex-col gap-2 rounded-lg border border-slate-200 bg-white p-4 text-sm",
+                  action: "leading-snug text-slate-700",
+                  evidence: "rounded-lg border border-slate-200 bg-white p-4",
+                  summary: "cursor-pointer text-sm font-medium text-slate-700",
+                  chip: "ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600",
+                }}
+              />
+            )}
+
             <div className="grid gap-3 lg:grid-cols-[320px_minmax(0,1fr)]">
               <div className="flex flex-col gap-3">
                 {active && (
@@ -491,6 +530,11 @@ export default function CargoWhatIf() {
                   </Card>
                 )}
 
+                {/* The verdict leads. The Method card below repeats what the
+                    collapsed working already carries, but it is left in place:
+                    it is a surface an evaluator has been shown before, and
+                    removing it to tidy the layout would take away something
+                    they may be looking for. */}
                 {result && (
                   <>
                     <Card className="flex items-start gap-2 p-3">
@@ -508,15 +552,6 @@ export default function CargoWhatIf() {
               </div>
             </div>
 
-            {result && (
-              <div className="flex flex-col gap-3">
-                {result.data_available && <BeforeAfterChart result={result} />}
-                {result.data_available && <ScenarioDetail result={result} />}
-                <AssumptionsPanel assumptions={result.assumptions} />
-                <QueryTracePanel queries={result.queries} />
-                <RecommendationList recommendations={result.recommendations} />
-              </div>
-            )}
           </>
         )}
       </div>

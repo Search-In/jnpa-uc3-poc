@@ -43,6 +43,11 @@ from .base import (SOURCE_ASSUMED, SOURCE_DERIVED, SOURCE_MEASURED,
                    SOURCE_PARAMETER, SimulationResult, pct)
 
 SCENARIO = "driver-shortage"
+
+#: Minimum observed trips before core.eir is trusted to describe the vehicle
+#: population. Below this the scenario falls through to gate telemetry for
+#: throughput and declares transporter attribution unavailable.
+MIN_TRIPS_FOR_POPULATION = 30
 DEFAULT_REDUCTION = 1.0 / 3.0
 TOP_N = 10
 
@@ -92,11 +97,43 @@ async def run(repo: Any, params: dict) -> SimulationResult:
 
     rows, trace = await repo.vehicle_trips(from_ts=from_ts, to_ts=to_ts)
     res.trace(trace)
+
+    # core.eir is the only table that attributes a trip to a transporter, so it
+    # is preferred — but only when there is enough of it to describe the window.
+    # On JNPA's database it holds five trips against 482,966 gate events across
+    # 8,581 vehicles, and "every vehicle does a third fewer trips" cannot be
+    # answered from five. Fall through to telemetry for the THROUGHPUT half and
+    # declare the transporter half unattributable rather than rank two rows.
+    eir_trips = sum(int(r.get("trips") or 0) for r in rows)
+    unattributed = False
+    if eir_trips < MIN_TRIPS_FOR_POPULATION and hasattr(
+            repo, "vehicle_trips_from_events"):
+        event_rows, event_trace = await repo.vehicle_trips_from_events(
+            from_ts=from_ts, to_ts=to_ts)
+        res.trace(event_trace)
+        if sum(int(r.get("trips") or 0) for r in event_rows) > eir_trips:
+            rows, unattributed = event_rows, True
+            res.assume(
+                "trip_source", "core.gate_event",
+                f"core.eir carries only {eir_trips} trip(s) in this window — below "
+                f"the {MIN_TRIPS_FOR_POPULATION} needed to describe the vehicle "
+                "population — so gate telemetry is used for throughput instead",
+                SOURCE_DERIVED)
+            res.assume(
+                "transporter_attribution", "not available",
+                "core.gate_event carries no transporter column, and only ~41 of "
+                "its 8,581 plates appear in core.vehicle, so trips cannot be "
+                "attributed to a transporter at any useful coverage. The "
+                "throughput figures below are real; the transporter ranking is "
+                "NOT and is reported as unattributed. A plate-to-transporter "
+                "register (FASTag / fleet tracking / PDP) is what closes this.",
+                SOURCE_ASSUMED)
+
     if not rows:
         return res.note(
-            f"core.eir records no gate trips between {from_date} and {to_date} — "
-            "baseline throughput cannot be established and none is invented.",
-            blocks_answer=True)
+            f"neither core.eir nor core.gate_event records gate trips between "
+            f"{from_date} and {to_date} — baseline throughput cannot be "
+            "established and none is invented.", blocks_answer=True)
 
     # ---- per vehicle-day -----------------------------------------------------
     by_transporter: dict[str, dict] = {}
@@ -190,9 +227,15 @@ async def run(repo: Any, params: dict) -> SimulationResult:
             "pending_by_mode": pending_by_mode,
             "projected_total_awaiting_evacuation": pending_total + backlog,
         },
+        # Suppressed when the trips came from telemetry: ranking a single
+        # 'UNATTRIBUTED' bucket would look like an answer and is not one. The
+        # assumptions say why, and `attribution_available` lets a UI show the
+        # gap rather than an empty table.
         "exposed_transporters": {
-            "by_absolute_loss": by_absolute[:TOP_N],
-            "by_structural_dependence": by_structural[:TOP_N],
+            "attribution_available": not unattributed,
+            "by_absolute_loss": [] if unattributed else by_absolute[:TOP_N],
+            "by_structural_dependence": ([] if unattributed
+                                         else by_structural[:TOP_N]),
         },
         "exposed_cargo_flows": flow_exposure[:TOP_N],
     }

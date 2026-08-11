@@ -1,6 +1,7 @@
 """/api/vahan — orchestrated Vahan / Sarathi / FastTag with the 4-rung chain.
 
-    LIVE_PRIMARY  -> vahan-live   (only if SUREPASS_API_TOKEN is set)
+    LIVE_PRIMARY  -> ULIP         (only if ULIP_LIVE_ENABLED=1)
+                     VAHAN/04 -> VAHAN/01 for RC, SARATHI/02 for DL
     LIVE_FALLBACK -> vahan-sim
     CACHED        -> last good response from Redis (TTL 12 h)
     PROVISIONAL   -> admit vehicle with provisional=true + 24 h cure window,
@@ -12,6 +13,7 @@ so the demo can show which path served each request (``/api/debug/decisions``).
 """
 from __future__ import annotations
 
+import re
 import time
 from typing import Any, Optional
 
@@ -34,6 +36,10 @@ from ..state import GatewayState, get_state
 
 log = get_logger("gateway.vahan")
 
+# SARATHI/01's documented date-of-birth pattern, checked here so a bad value
+# never silently downgrades the request to SARATHI/02.
+_RE_DOB = re.compile(r"^\d{4}-(0[1-9]|1[012])-(0[1-9]|[12][0-9]|3[01])$")
+
 router = APIRouter(prefix="/api/vahan", tags=["vahan"])
 
 
@@ -42,7 +48,7 @@ async def _try_upstream(
 ) -> Optional[dict]:
     """GET base_url+path; return JSON on 200, None on any miss/error.
 
-    A 503 (vahan-live disabled), connection error, timeout, or non-200 all map
+    A 503 (upstream disabled), connection error, timeout, or non-200 all map
     to None so the orchestrator simply drops to the next rung. A 422 (invalid
     input) is surfaced as an exception by the caller path instead.
     """
@@ -52,6 +58,15 @@ async def _try_upstream(
         resp = await state.http.get(url)
     except httpx.HTTPError as exc:
         log.warning("vahan_upstream_unreachable", url=url, error=str(exc))
+        return None
+    except Exception as exc:  # noqa: BLE001
+        # Anything the transport stack raises that is NOT an httpx error still
+        # means "this rung did not answer" — e.g. a proxy speaking a broken
+        # SOCKS handshake raises socksio.ProtocolError, which sailed past the
+        # clause above and turned a routine miss into a 500. A rung failing is
+        # the ladder working; it must never be able to fail the request.
+        log.warning("vahan_upstream_transport_error", url=url,
+                    error=f"{type(exc).__name__}: {exc}")
         return None
     finally:
         UPSTREAM_LATENCY.labels("vahan", target).observe(time.perf_counter() - t0)
@@ -75,6 +90,130 @@ def _safe_detail(resp: httpx.Response) -> Any:
         return {"error": "upstream_error", "status": resp.status_code}
 
 
+# --------------------------------------------------------------- ULIP (LIVE_PRIMARY)
+_ulip_client: Optional["UlipClient"] = None
+
+
+def _ulip(cfg: Any) -> "UlipClient":
+    """The shared ULIP client, built once per process."""
+    global _ulip_client
+    if _ulip_client is None:
+        from integrations.ulip import UlipClient
+
+        _ulip_client = UlipClient(
+            api_url=getattr(cfg, "ulip_api_url", "") or None,
+            api_key=getattr(cfg, "ulip_api_key", None),
+            client_id=getattr(cfg, "ulip_client_id", None),
+            client_secret=getattr(cfg, "ulip_client_secret", None),
+        )
+    return _ulip_client
+
+
+async def _ulip_rc(state: GatewayState, plate: str) -> Optional[dict]:
+    """VAHAN/04 -> a VahanRecord payload, or None on any miss.
+
+    VAHAN/01 is tried when /04 comes back empty: the two are fed by different
+    upstream calls, so one can answer where the other misses. Both are mapped
+    to the same record shape, so the rung below cannot tell which replied.
+
+    Never raises: every ULIP failure is a miss that drops to the next rung,
+    exactly like an unreachable upstream. A vehicle must not be refused at the
+    gate because a national gateway had a bad minute.
+    """
+    from integrations.ulip import UlipError
+    from integrations.ulip.records import rc_payload, rc_to_record
+    from integrations.ulip.schemas import normalize_rc, normalize_vahan_xml
+
+    client = _ulip(state.cfg)
+    t0 = time.perf_counter()
+    try:
+        envelope = await client.fetch_vehicle_by_rc(plate)
+        fields = _matching_rc(normalize_rc(envelope), plate, "VAHAN/04")
+        if not fields:
+            envelope = await client.fetch_vehicle_by_rc_xml(plate)
+            fields = _matching_rc(normalize_vahan_xml(envelope), plate, "VAHAN/01")
+    except UlipError as exc:
+        log.warning("vahan_ulip_miss", plate=plate, error=type(exc).__name__)
+        return None
+    finally:
+        UPSTREAM_LATENCY.labels("vahan", "ulip").observe(time.perf_counter() - t0)
+    record = rc_to_record(fields or {})
+    return rc_payload(record) if record else None
+
+
+def _matching_rc(fields: Optional[dict], plate: str,
+                 api: str) -> Optional[dict]:
+    """Drop an RC that is not for the plate we asked about.
+
+    VAHAN/01 on staging answers a *different* registration for the same input
+    on roughly half of all calls — asking for ``UP32KH0320`` returns
+    ``RJ11GC0346`` (a different make, class and owner) about as often as it
+    returns the right vehicle. VAHAN/04 is stable. Whatever the cause, binding
+    a stranger's registration to a plate at the gate is the worst failure this
+    module can produce: it would clear a truck on someone else's fitness and
+    blacklist status. So the answer is checked against the question, and a
+    mismatch is treated as a miss and dropped to the next rung.
+    """
+    if not fields:
+        return None
+    returned = normalize_plate(str(fields.get("rc_number") or ""))
+    if returned and returned != normalize_plate(plate):
+        log.warning("vahan_ulip_plate_mismatch", api=api,
+                    requested=plate, returned=returned)
+        return None
+    return fields
+
+
+async def _ulip_dl(state: GatewayState, dl: str,
+                   dob: Optional[str] = None) -> Optional[dict]:
+    """SARATHI/02 -> a SarathiRecord payload, or None on any miss.
+
+    When the caller supplies the holder's date of birth, **SARATHI/01** is
+    tried first and SARATHI/02 is the fallback. /01 needs the extra identifier
+    but answers with strictly more: the licence issue date, the issuing state
+    and RTO, and — uniquely among the granted APIs — the holder's name
+    unmasked plus a photograph. That is the difference between a licence check
+    and enough identity to issue a port pass, so it is worth the extra field
+    whenever enrolment has it. The gate itself never does, which is why /02
+    remains the default path.
+    """
+    from integrations.ulip import UlipError
+    from integrations.ulip.records import dl_to_record
+    from integrations.ulip.schemas import normalize_dl
+
+    client = _ulip(state.cfg)
+    t0 = time.perf_counter()
+    try:
+        # SARATHI/01 is spacing-sensitive and SARATHI/02 is not, so both
+        # spellings are attempted before concluding the licence is unknown.
+        spellings = [dl] if " " not in dl else [dl, dl.replace(" ", "")]
+        fields = None
+        if dob:
+            for spelling in spellings:
+                try:
+                    fields = normalize_dl(
+                        await client.fetch_dl_with_dob(spelling, dob))
+                except UlipError as exc:
+                    # A bad DOB, or a licence /01 does not hold, must not cost
+                    # the caller the ordinary /02 answer.
+                    log.info("sarathi01_miss", error=type(exc).__name__)
+                    continue
+                if fields:
+                    break
+        if not fields:
+            for spelling in spellings:
+                fields = normalize_dl(await client.fetch_dl(spelling))
+                if fields:
+                    break
+    except UlipError as exc:
+        log.warning("sarathi_ulip_miss", dl=dl, error=type(exc).__name__)
+        return None
+    finally:
+        UPSTREAM_LATENCY.labels("vahan", "ulip").observe(time.perf_counter() - t0)
+    record = dl_to_record(dl, fields or {})
+    return record.model_dump(mode="json") if record else None
+
+
 async def _orchestrate_rc(state: GatewayState, plate: str) -> dict:
     """Run the 4-rung Vahan RC chain for a normalised, validated plate."""
     cfg = state.cfg
@@ -90,15 +229,17 @@ async def _orchestrate_rc(state: GatewayState, plate: str) -> dict:
     skip_live = forced in (VahanPath.CACHED.value, VahanPath.PROVISIONAL.value)
     skip_primary = forced == VahanPath.LIVE_FALLBACK.value
 
-    # --- Rung 1: LIVE_PRIMARY (vahan-live) — only when a token is configured ---
-    if cfg.surepass_enabled and not skip_live and not skip_primary:
+    # --- Rung 1: LIVE_PRIMARY (ULIP VAHAN/04 -> /01) — only when enabled ---
+    # This is UC3's first real RC source: the previous Surepass rung was never
+    # exercised because SUREPASS_API_TOKEN was empty in every environment.
+    if cfg.ulip_live_enabled and not skip_live and not skip_primary:
         t0 = time.perf_counter()
-        data = await _try_upstream(state, cfg.vahan_live_url, path, "vahan-live")
+        data = await _ulip_rc(state, plate)
         if data is not None:
             await cache.put("vahan", plate, data, ttl=cfg.cache_ttl_vahan_s)
             await state.record_decision(
                 api="vahan", key=plate, decision_path=VahanPath.LIVE_PRIMARY.value,
-                latency_ms=(time.perf_counter() - t0) * 1000, source="vahan-live",
+                latency_ms=(time.perf_counter() - t0) * 1000, source="ulip",
                 source_state=SourceState.LIVE,
             )
             return _envelope(data, VahanPath.LIVE_PRIMARY.value, plate)
@@ -111,7 +252,7 @@ async def _orchestrate_rc(state: GatewayState, plate: str) -> dict:
         await state.record_decision(
             api="vahan", key=plate, decision_path=VahanPath.LIVE_FALLBACK.value,
             latency_ms=(time.perf_counter() - t0) * 1000, source="vahan-sim",
-            source_state=SourceState.DEGRADED if cfg.surepass_enabled else SourceState.LIVE,
+            source_state=SourceState.DEGRADED if cfg.ulip_live_enabled else SourceState.LIVE,
         )
         return _envelope(data, VahanPath.LIVE_FALLBACK.value, plate)
 
@@ -226,26 +367,56 @@ def _persist_dl(state: GatewayState, dl: str, record: Optional[dict], source: st
 
 
 @router.get("/dl/{dl_number}")
-async def sarathi_dl(dl_number: str, state: GatewayState = Depends(get_state)) -> dict:
+async def sarathi_dl(
+    dl_number: str,
+    dob: Optional[str] = Query(
+        None, description="Holder's date of birth as YYYY-MM-DD. When given, "
+                          "SARATHI/01 is tried first (richer record, unmasked "
+                          "name, photograph); SARATHI/02 remains the fallback."),
+    state: GatewayState = Depends(get_state),
+) -> dict:
     """Sarathi DL lookup — LIVE_PRIMARY -> LIVE_FALLBACK -> CACHED.
 
     DLs have no provisional rung (a licence cannot be "admitted on trust"); a
     full miss returns 404.
     """
     cfg = state.cfg
-    dl = dl_number.strip().upper().replace(" ", "")
+    # Two forms of the same licence, and the difference is load-bearing.
+    # SARATHI/01 matches on the RTO's own spacing: "GJ04 20120005008" resolves
+    # and "GJ0420120005008" answers errorcd -1. Stripping the space — which is
+    # what we used to do before calling upstream — made /01 unable to resolve
+    # ANY licence written in the standard format. The space-free form stays the
+    # canonical key for the cache and the history tables so one licence cannot
+    # occupy two rows.
+    dl_as_given = " ".join(dl_number.strip().upper().split())
+    dl = dl_as_given.replace(" ", "")
+    if dob and not _RE_DOB.match(dob.strip()):
+        # Falling back to SARATHI/02 on a malformed date would answer 200 with
+        # a thinner record than the caller asked for, and they would have no
+        # way to tell. A bad argument is the caller's to fix.
+        raise HTTPException(status_code=422, detail={
+            "error": "invalid_dob",
+            "expected": "YYYY-MM-DD (SARATHI/01 field pattern)",
+            "received": dob})
     path = f"/sarathi/dl/{dl}"
+    # The DOB selects a different upstream API with a richer record, so a
+    # cached /02 answer must not be served for a /01 request or vice versa.
+    cache_key = f"{dl}|{dob}" if dob else dl
 
-    for kind, base_url, target, primary in (
-        ("LIVE_PRIMARY", cfg.vahan_live_url, "vahan-live", cfg.surepass_enabled),
-        ("LIVE_FALLBACK", cfg.vahan_sim_url, "vahan-sim", True),
+    # LIVE_PRIMARY is ULIP SARATHI/02 (a direct client call, not an HTTP
+    # upstream); LIVE_FALLBACK is still the vahan-sim service.
+    for kind, target, enabled, fetch in (
+        ("LIVE_PRIMARY", "ulip", cfg.ulip_live_enabled,
+         lambda: _ulip_dl(state, dl_as_given, dob)),
+        ("LIVE_FALLBACK", "vahan-sim", True,
+         lambda: _try_upstream(state, cfg.vahan_sim_url, path, "vahan-sim")),
     ):
-        if not primary:
+        if not enabled:
             continue
         t0 = time.perf_counter()
-        data = await _try_upstream(state, base_url, path, target)
+        data = await fetch()
         if data is not None:
-            await cache.put("sarathi", dl, data, ttl=cfg.cache_ttl_vahan_s)
+            await cache.put("sarathi", cache_key, data, ttl=cfg.cache_ttl_vahan_s)
             await state.record_decision(
                 api="vahan", key=dl, decision_path=kind,
                 latency_ms=(time.perf_counter() - t0) * 1000, source=target,
@@ -255,7 +426,7 @@ async def sarathi_dl(dl_number: str, state: GatewayState = Depends(get_state)) -
             return {"dl": dl, "decision_path": kind, "record": data,
                     "status": vehicle_intel.dl_status(data)}
 
-    cached = await cache.get("sarathi", dl)
+    cached = await cache.get("sarathi", cache_key)
     if cached is not None:
         await state.record_decision(api="vahan", key=dl, decision_path="CACHED",
                                     source="sarathi", source_state=SourceState.DEGRADED, ok=False)
@@ -269,9 +440,91 @@ async def sarathi_dl(dl_number: str, state: GatewayState = Depends(get_state)) -
     raise HTTPException(status_code=404, detail={"error": "not_found", "dl": dl})
 
 
+@router.get("/chassis/{chassis_number}",
+            summary="RC particulars by chassis number (ULIP VAHAN/02)")
+async def vahan_by_chassis(chassis_number: str,
+                           state: GatewayState = Depends(get_state)) -> dict:
+    """Look up a vehicle by chassis number.
+
+    No simulator rung: vahan-sim is keyed by plate only, so this is ULIP or
+    nothing. A miss is a 404 rather than a fallback — silently answering from
+    a different vehicle would be far worse than no answer.
+    """
+    return await _by_alternate_key(state, "chassis", chassis_number)
+
+
+@router.get("/engine/{engine_number}",
+            summary="RC particulars by engine number (ULIP VAHAN/03)")
+async def vahan_by_engine(engine_number: str,
+                          state: GatewayState = Depends(get_state)) -> dict:
+    """Look up a vehicle by engine number. Same posture as ``/chassis``."""
+    return await _by_alternate_key(state, "engine", engine_number)
+
+
+async def _by_alternate_key(state: GatewayState, kind: str, value: str) -> dict:
+    """Shared body for the chassis/engine lookups (ULIP VAHAN/02 and /03)."""
+    from integrations.ulip import UlipError, UlipInvalidRequest
+    from integrations.ulip.records import rc_payload, rc_to_record
+    from integrations.ulip.schemas import normalize_vahan_xml
+
+    cfg = state.cfg
+    key = value.strip().upper()
+    if not cfg.ulip_live_enabled:
+        REQUESTS.labels("vahan", "not_found").inc()
+        raise HTTPException(status_code=503, detail={
+            "error": "ulip_disabled",
+            "detail": f"{kind} lookup is served only by ULIP; set ULIP_LIVE_ENABLED=1",
+        })
+    client = _ulip(cfg)
+    fetch = (client.fetch_vehicle_by_chassis if kind == "chassis"
+             else client.fetch_vehicle_by_engine)
+    t0 = time.perf_counter()
+    try:
+        envelope = await fetch(key)
+    except UlipInvalidRequest as exc:
+        REQUESTS.labels("vahan", "invalid").inc()
+        raise HTTPException(status_code=422,
+                            detail={"error": f"invalid_{kind}", "detail": str(exc)})
+    except UlipError as exc:
+        REQUESTS.labels("vahan", "error").inc()
+        log.warning("vahan_alt_key_upstream_failed", kind=kind,
+                    error=type(exc).__name__)
+        raise HTTPException(status_code=502,
+                            detail={"error": "upstream_error",
+                                    "detail": type(exc).__name__})
+    finally:
+        UPSTREAM_LATENCY.labels("vahan", "ulip").observe(time.perf_counter() - t0)
+    # VAHAN/02 and /03 answer XML-in-JSON, never the native-JSON shape.
+    record = rc_to_record(normalize_vahan_xml(envelope) or {})
+    if record is None:
+        REQUESTS.labels("vahan", "not_found").inc()
+        raise HTTPException(status_code=404,
+                            detail={"error": "not_found", kind: key})
+    data = rc_payload(record)
+    await state.record_decision(
+        api="vahan", key=key, decision_path=VahanPath.LIVE_PRIMARY.value,
+        latency_ms=(time.perf_counter() - t0) * 1000, source="ulip",
+        source_state=SourceState.LIVE,
+    )
+    audit.spawn(vehicle_intel.record_vehicle_verification(
+        vehicle_number=data.get("rc_number"), request={kind: key},
+        response=data, status="FOUND", source="ULIP", dsn=cfg.postgres_dsn))
+    REQUESTS.labels("vahan", "ok").inc()
+    return {kind: key, "decision_path": VahanPath.LIVE_PRIMARY.value,
+            "record": data}
+
+
 @router.get("/fastag/{plate}")
 async def fastag_balance(plate: str, state: GatewayState = Depends(get_state)) -> dict:
-    """FastTag balance — LIVE_PRIMARY -> LIVE_FALLBACK -> CACHED (no provisional)."""
+    """FastTag balance — LIVE_FALLBACK -> CACHED (no provisional).
+
+    There is NO live rung here and there cannot be one: ULIP grants no
+    wallet-balance API (FASTAG/01 is toll crossings, FASTAG/02 is the tag
+    registry), and the Surepass path that used to sit here was never
+    configured. The simulator is therefore the only source, which is exactly
+    what ``decision_path: LIVE_FALLBACK`` reports — see /api/fastag/balance for
+    the durable-snapshot surface.
+    """
     cfg = state.cfg
     norm = normalize_plate(plate)
     if not is_valid_plate(norm):
@@ -280,7 +533,6 @@ async def fastag_balance(plate: str, state: GatewayState = Depends(get_state)) -
     path = f"/fastag/balance/{norm}"
 
     for kind, base_url, target, primary in (
-        ("LIVE_PRIMARY", cfg.vahan_live_url, "vahan-live", cfg.surepass_enabled),
         ("LIVE_FALLBACK", cfg.vahan_sim_url, "vahan-sim", True),
     ):
         if not primary:

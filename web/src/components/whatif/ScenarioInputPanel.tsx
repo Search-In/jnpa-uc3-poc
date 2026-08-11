@@ -27,6 +27,10 @@ const NOTICE = {
   stateOn: "2026-08-04", // III-B "show state on 4th August 2026"
   gateFrom: "2026-08-03T00:00", // III-A a full day inside the briefed window
   gateTo: "2026-08-04T00:00",
+  bunchingDay: "2026-08-06T00:00", // I-A  "On 6 August 2026…"
+  // N-1: mid-morning, so a 12-hour closure spans a full working day rather than
+  // straddling the quiet overnight window and understating the berth-lock risk.
+  closureStart: "2026-08-06T06:00",
 };
 
 export type FieldKind = "text" | "number" | "percent" | "date" | "datetime";
@@ -174,6 +178,128 @@ function fieldsFor(scenario: string): FieldSpec[] {
           min: 1,
           max: 99,
           hint: "One third, per the scenario",
+        },
+      ];
+    case "vessel-bunching":
+      return [
+        {
+          name: "as_of",
+          label: "Study day",
+          kind: "datetime",
+          value: NOTICE.bunchingDay,
+          hint: "The Notice names 6 August, which is beyond the data — the answer says so and projects",
+        },
+        {
+          name: "horizon_hours",
+          label: "Horizon (hours)",
+          kind: "number",
+          value: "24",
+          step: "1",
+          min: 1,
+          max: 336,
+        },
+        {
+          name: "terminal",
+          label: "Terminal",
+          kind: "text",
+          value: "",
+          hint: "Blank = the whole port",
+        },
+      ];
+
+    // ------------------------------------------------ bidder-proposed (N-1..3)
+    case "channel-closure":
+      return [
+        {
+          name: "as_of",
+          label: "Channel closes at",
+          kind: "datetime",
+          value: NOTICE.closureStart,
+        },
+        {
+          name: "closure_hours",
+          label: "Closure length (hours)",
+          kind: "number",
+          value: "12",
+          step: "0.5",
+          min: 1,
+          max: 168,
+        },
+        {
+          name: "transit_hours",
+          label: "Channel transit (hours)",
+          kind: "number",
+          value: "1.5",
+          step: "0.5",
+          min: 0.5,
+          max: 24,
+          hint: "One way. Declared — the data carries no pilotage timing",
+        },
+        { name: "terminal", label: "Terminal", kind: "text", value: "" },
+      ];
+    case "yard-feedback":
+      return [
+        { name: "from_date", label: "From date", kind: "date", value: NOTICE.windowFrom },
+        { name: "to_date", label: "To date", kind: "date", value: "2026-08-05" },
+        {
+          name: "evacuation_drop_pct",
+          label: "Evacuation shortfall (%)",
+          kind: "percent",
+          value: "50",
+          step: "1",
+          min: 1,
+          max: 99,
+        },
+        {
+          name: "yard_capacity_teu",
+          label: "Yard capacity (TEU)",
+          kind: "number",
+          value: "",
+          step: "100",
+          min: 1,
+          hint: "Blank = scaled from observed volume, and declared. Supplying the real figure moves the tipping day",
+        },
+        {
+          name: "horizon_days",
+          label: "Horizon (days)",
+          kind: "number",
+          value: "14",
+          step: "1",
+          min: 1,
+          max: 120,
+        },
+      ];
+    case "degraded-gate":
+      return [
+        { name: "from_ts", label: "Window from", kind: "datetime", value: NOTICE.gateFrom },
+        { name: "to_ts", label: "Window to", kind: "datetime", value: NOTICE.gateTo },
+        {
+          name: "outage_hours",
+          label: "Outage length (hours)",
+          kind: "number",
+          value: "4",
+          step: "0.5",
+          min: 0.5,
+          max: 168,
+        },
+        {
+          name: "degraded_fraction",
+          label: "Manual rate (% of normal)",
+          kind: "percent",
+          value: "40",
+          step: "1",
+          min: 1,
+          max: 99,
+          hint: "Declared — nothing in the data records a manual gate's throughput",
+        },
+        {
+          name: "sustained_rate",
+          label: "Gate sustained rate (/h)",
+          kind: "number",
+          value: "",
+          step: "1",
+          min: 1,
+          hint: "Blank = derived, same definition III-A and II-A use",
         },
       ];
     default:

@@ -26,6 +26,7 @@ import type {
   EmptyAllocation,
   FastagBalance,
   FastagHealth,
+  FastagTagStatus,
   FastagTransactions,
   FaultControlResult,
   FaultState,
@@ -311,6 +312,9 @@ export interface DataAdapter {
   // --- FASTag (ULIP) — /api/fastag/* ---
   fastagBalance(rcNumber: string): Promise<FastagBalance>;
   fastagTransactions(rcNumber: string): Promise<FastagTransactions>;
+  // FASTAG/02 — the NETC tag registry. One row per tag ever issued against the
+  // reference, so a re-issued vehicle legitimately returns several.
+  fastagTagStatus(ref: { rc_number?: string; tag_id?: string }): Promise<FastagTagStatus>;
   tollEnroute(body: TollEnrouteInput): Promise<TollEnroute>;
   fastagHealth(): Promise<FastagHealth>;
 

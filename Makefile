@@ -115,7 +115,7 @@ venv: ## Create .venv and install shared + vahan + rfid services (host-side, for
 
 install-shared: ## pip install -e the shared + vahan + rfid + trucking packages into the active interpreter
 	$(PY) -m pip install -e "shared[dev]"
-	$(PY) -m pip install -e "ingest/vahan_sim[dev]" -e "ingest/vahan_live[dev]"
+	$(PY) -m pip install -e "ingest/vahan_sim[dev]"
 	$(PY) -m pip install -e "ingest/rfid[dev]"
 	$(PY) -m pip install -e "ingest/trucking_app[dev]"
 	$(PY) -m pip install -e "ai/anpr[dev]"

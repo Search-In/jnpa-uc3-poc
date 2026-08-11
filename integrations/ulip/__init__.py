@@ -21,18 +21,24 @@ Consumed by :mod:`services.logistics.LogisticsService` — a ULIP outage
 degrades the /api/logistics/* surfaces through their fallback chain, never
 breaks them.
 
-NOTE: distinct from the two pre-existing ULIP touchpoints, which are left
-untouched: gateway/routers/ulip.py (the trucking-app SECONDARY GPS relay
-proxy) and services/fastag (the /api/fastag/* FASTag vertical with its own
-FASTAG_ULIP_* configuration).
+This is the single client for every ULIP API the account is granted — FASTAG,
+LDB, VAHAN, SARATHI and GATISHAKTI — so the login token, retry budget,
+redaction rules and audit shape are shared rather than reimplemented per
+vertical. :mod:`services.fastag` and ``gateway/routers/ldb.py`` consume it too.
+
+NOTE: distinct from gateway/routers/ulip.py, which is left untouched — that is
+the trucking-app SECONDARY GPS relay proxy and has nothing to do with these
+APIs despite the shared name.
 """
 from __future__ import annotations
 
-from .client import UlipClient
+from .client import DEFAULT_API_PATHS, STAGING_API_URL, UlipClient
 from .exceptions import (
+    UlipAccessDenied,
     UlipAuthError,
     UlipError,
     UlipHTTPError,
+    UlipInvalidRequest,
     UlipInvalidResponse,
     UlipNotConfigured,
     UlipTimeout,
@@ -45,21 +51,37 @@ from .schemas import (
     REF_TYPE_VEHICLE,
     UlipEnvelope,
     normalize_container_events,
+    normalize_dl,
+    normalize_rc,
+    normalize_road_network,
+    normalize_tag_status,
+    normalize_toll_plazas,
+    normalize_vahan_xml,
     normalize_vehicle_events,
 )
 
 __all__ = [
     "UlipClient",
+    "DEFAULT_API_PATHS",
+    "STAGING_API_URL",
     "UlipError",
     "UlipNotConfigured",
     "UlipTimeout",
     "UlipUnavailable",
     "UlipAuthError",
+    "UlipAccessDenied",
     "UlipHTTPError",
+    "UlipInvalidRequest",
     "UlipInvalidResponse",
     "UlipEnvelope",
     "normalize_vehicle_events",
     "normalize_container_events",
+    "normalize_rc",
+    "normalize_vahan_xml",
+    "normalize_dl",
+    "normalize_tag_status",
+    "normalize_toll_plazas",
+    "normalize_road_network",
     "REF_TYPE_VEHICLE",
     "REF_TYPE_CONTAINER",
     "EVENT_TOLL_CROSSING",

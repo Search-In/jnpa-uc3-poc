@@ -1,0 +1,23 @@
+# Delivery packaging.
+#
+# `export-ignore` omits a path from `git archive`, which is how the delivery
+# tarball is produced. The files stay in the repository for the team; they simply
+# do not travel to JNPA.
+#
+# Nothing here is deleted. To see what a delivery would actually contain:
+#     git archive --format=tar HEAD | tar -t | less
+
+# Prompt scaffolding — working material, not a deliverable.
+docs/JNPA_UC3_ClaudeCode_Prompts.md   export-ignore
+
+# Internal audit and planning notes kept alongside the code.
+FIX_PLAN.md                           export-ignore
+GAP_REPORT.md                         export-ignore
+WORKFLOW_AUDIT_REPORT.md              export-ignore
+WORKFLOW_FIX_REPORT.md                export-ignore
+WORKFLOW_TEST_RESULTS.md              export-ignore
+WORKFLOW_TEST_RESULTS_FINAL.md        export-ignore
+
+# Never ship credentials or key material, whatever else happens.
+jnpa3.pem                             export-ignore
+secrets/                              export-ignore

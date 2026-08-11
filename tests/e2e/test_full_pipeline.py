@@ -129,7 +129,7 @@ def check_anpr_throughput(window_s: float = 6.0) -> Tuple[bool, str]:
 def check_vahan_live_fallback() -> Tuple[bool, str]:
     """(b) The Vahan chain serves a known plate via LIVE_FALLBACK.
 
-    With no SUREPASS_API_TOKEN the orchestrator skips LIVE_PRIMARY and serves the
+    With ULIP_LIVE_ENABLED off the orchestrator skips LIVE_PRIMARY and serves the
     sim as LIVE_FALLBACK. (CACHED is acceptable on a re-run — the first lookup of
     a fresh plate is the fallback; a warm cache is also a valid served path.)
     """

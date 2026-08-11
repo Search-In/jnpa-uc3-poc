@@ -15,20 +15,22 @@ connection. Contrast ``scenarios/`` (tfc1/tfc2/tfc3/monsoon_friday), which is a
 live-injection demo harness: it closes gates and injects trucks and needs a
 ``reset()``. The two are different things and must not be confused.
 
-Scenario coverage (JNPA Notice, 05 August 2026):
+Scenario coverage (JNPA Notice, 05 August 2026) — all six:
 
+    vessel-bunching     I-A   berthing order vs a stated objective, alternatives costed
     berth-cascade       I-B   extended berth window -> 48h queue displacement
     crane-productivity  II-B  gross moves/hour, -25%, turnaround + queue impact
     modal-shift         II-A  20% rail -> road, hourly gate profile before/after
     gate-slotting       III-A arrival pattern, saturated hours, slotting proposal
     driver-shortage     III-B trips/vehicle cut by a third -> throughput + exposure
 
-Scenario I-A (vessel bunching) is deliberately NOT registered: it asks for a
-berthing ORDER optimised against a stated objective, and the objective the Notice
-leaves to the bidder ("waiting time, total moves handled, line priority, or
-another basis") cannot be chosen by the backend. ``berth-cascade`` supplies the
-costing function an I-A answer needs — what an alternative order costs against the
-same objective — and the objective itself belongs in the submission.
+Scenario I-A was previously left unregistered on the grounds that the Notice
+leaves the objective to the bidder, so the backend could not choose it. That
+reasoning was right about the objective and wrong about the conclusion: the fix
+is to make the objective an explicit **request parameter**, name it in the
+response, and score every candidate ordering against it — which is exactly the
+like-for-like comparison the Notice asks for ("show what an alternative order
+would cost against the same objective"). See :mod:`.vessel_bunching`.
 """
 from __future__ import annotations
 
@@ -37,8 +39,9 @@ from typing import Any, Optional
 
 from jnpa_shared.logging import get_logger
 
-from . import (berth_cascade, crane_productivity, driver_shortage, gate_slotting,
-               modal_shift)
+from . import (berth_cascade, channel_closure, crane_productivity, degraded_gate,
+               driver_shortage, gate_slotting, modal_shift, vessel_bunching,
+               yard_feedback)
 from .base import (Assumption, QueryTrace, SimulationError, SimulationResult,
                    hours_between, pct)
 from .repository import SimulationRepository, SimulationWriteAttempt
@@ -48,16 +51,37 @@ log = get_logger("services.cargo.simulation")
 #: scenario name -> module exposing ``async run(repo, params) -> SimulationResult``.
 #: The in-package equivalent of the ``scenarios/`` REGISTRY, kept import-light.
 REGISTRY: dict[str, Any] = {
+    vessel_bunching.SCENARIO: vessel_bunching,
     berth_cascade.SCENARIO: berth_cascade,
     crane_productivity.SCENARIO: crane_productivity,
     modal_shift.SCENARIO: modal_shift,
     gate_slotting.SCENARIO: gate_slotting,
     driver_shortage.SCENARIO: driver_shortage,
+    # Bidder-proposed (N-1..N-3) — not requested by JNPA. Each demonstrates a
+    # capability class absent from all 21 requested obligations: a shared-resource
+    # valve, a closed feedback loop, and a resilience/recovery mode.
+    channel_closure.SCENARIO: channel_closure,
+    yard_feedback.SCENARIO: yard_feedback,
+    degraded_gate.SCENARIO: degraded_gate,
 }
 
 #: Human-facing catalog for GET /api/cargo/simulate/scenarios. Kept beside the
 #: registry so a new scenario cannot be added without describing itself.
 CATALOG: list[dict] = [
+    {
+        "scenario": vessel_bunching.SCENARIO,
+        "jnpa_reference": "I-A — Vessel Bunching",
+        "question": ("A large number of vessels are alongside, unevenly distributed "
+                     "between terminals. What berthing order should be run, against "
+                     "which stated objective, and what would an alternative order "
+                     "cost against that same objective?"),
+        "required": ["as_of"],
+        "optional": ["terminal", "horizon_hours (default 24)",
+                     "objective (waiting_time | moves_handled | line_priority)"],
+        "reads": ["core.berthing_record", "core.vessel_call_moves (migration 0129)"],
+        "note": ("6 Aug 2026 lies beyond the corpus; the state is carried forward "
+                 "from the last measured day and declared as assumption A-07."),
+    },
     {
         "scenario": berth_cascade.SCENARIO,
         "jnpa_reference": "I-B — Extended Berth Window",
@@ -114,6 +138,55 @@ CATALOG: list[dict] = [
         "optional": ["state_date (default to_date + 1)",
                      "reduction_pct (default 0.3333)"],
         "reads": ["core.eir", "core.cargo"],
+    },
+    {
+        "scenario": channel_closure.SCENARIO,
+        "jnpa_reference": "N-1 — Channel Closure (bidder-proposed)",
+        "question": ("The approach channel is lost for N hours, so arrivals and "
+                     "sailings stop together. At what hour is the port "
+                     "berth-locked, and in what order should held vessels sail on "
+                     "reopening?"),
+        "required": ["as_of"],
+        "optional": ["closure_hours (default 12)", "transit_hours (default 1.5)",
+                     "terminal", "horizon_hours"],
+        "reads": ["core.berthing_record"],
+        "proposed_by": "bidder",
+        "note": ("Not requested by JNPA. The only scenario in which one shared "
+                 "asset throttles both directions at once."),
+    },
+    {
+        "scenario": yard_feedback.SCENARIO,
+        "jnpa_reference": "N-2 — Yard Saturation Feedback (bidder-proposed)",
+        "question": ("Evacuation drops while discharge continues. Above a "
+                     "utilisation threshold, re-handles degrade berth "
+                     "productivity, which feeds back into the yard. Where does it "
+                     "settle and when does it tip?"),
+        "required": ["from_date", "to_date"],
+        "optional": ["evacuation_drop_pct (default 0.5)", "yard_capacity_teu",
+                     "threshold (default 0.85)", "slope (default 0.40)",
+                     "horizon_days (default 14)", "terminal"],
+        "reads": ["core.perf_daily_traffic"],
+        "proposed_by": "bidder",
+        "note": ("Not requested by JNPA. The only closed LOOP in the catalogue — "
+                 "UC-2 yard state degrading UC-1 berth productivity. The "
+                 "occupancy-to-productivity curve is a declared assumption."),
+    },
+    {
+        "scenario": degraded_gate.SCENARIO,
+        "jnpa_reference": "N-3 — Degraded-Mode Gate Outage (bidder-proposed)",
+        "question": ("Gate automation is unavailable for N hours and the gate "
+                     "reverts to manual. How far does the queue back up, and how "
+                     "long does it take to clear once systems return?"),
+        "required": ["from_ts", "to_ts"],
+        "optional": ["outage_start", "outage_hours (default 4)",
+                     "degraded_fraction (default 0.4)", "terminal", "gate_id",
+                     "sustained_rate"],
+        "reads": ["core.eir", "core.gate_event", "core.tas_appointment"],
+        "proposed_by": "bidder",
+        "note": ("Not requested by JNPA. Every requested scenario is a physical "
+                 "disruption; this is the only digital one, and the only one that "
+                 "measures RECOVERY. Exercises briefing evaluation criteria 07 "
+                 "(Cybersecurity) and 09 (Failover & Exceptions)."),
     },
 ]
 

@@ -84,3 +84,14 @@ package-lock.json
 # Local Digital Twin corpus drop (UC1-007); keep README only
 client-data/**
 !client-data/README.md
+
+Access Granted :
+GATISHAKTI_04,FASTAG_01,FASTAG_02,VAHAN_04,VAHAN_03,VAHAN_02,GATISHAKTI_01,VAHAN_01,GATISHAKTI_03,LDB_01,GATISHAKTI_02,SARATHI_02,SARATHI_01
+
+Please find below URL to access the API's for staging Environment.
+curl --location --request POST 'https://www.ulipstaging.dpiit.gov.in/ulip/v1.0.0/user/login' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+"username": "rtoj_searchin_usr",
+"password": "98@wJwMVpo"
+}'

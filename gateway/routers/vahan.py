@@ -184,16 +184,27 @@ async def _ulip_dl(state: GatewayState, dl: str,
     client = _ulip(state.cfg)
     t0 = time.perf_counter()
     try:
+        # SARATHI/01 is spacing-sensitive and SARATHI/02 is not, so both
+        # spellings are attempted before concluding the licence is unknown.
+        spellings = [dl] if " " not in dl else [dl, dl.replace(" ", "")]
         fields = None
         if dob:
-            try:
-                fields = normalize_dl(await client.fetch_dl_with_dob(dl, dob))
-            except UlipError as exc:
-                # A bad DOB or a licence /01 does not hold must not cost the
-                # caller the ordinary /02 answer.
-                log.info("sarathi01_miss", dl=dl, error=type(exc).__name__)
+            for spelling in spellings:
+                try:
+                    fields = normalize_dl(
+                        await client.fetch_dl_with_dob(spelling, dob))
+                except UlipError as exc:
+                    # A bad DOB, or a licence /01 does not hold, must not cost
+                    # the caller the ordinary /02 answer.
+                    log.info("sarathi01_miss", error=type(exc).__name__)
+                    continue
+                if fields:
+                    break
         if not fields:
-            fields = normalize_dl(await client.fetch_dl(dl))
+            for spelling in spellings:
+                fields = normalize_dl(await client.fetch_dl(spelling))
+                if fields:
+                    break
     except UlipError as exc:
         log.warning("sarathi_ulip_miss", dl=dl, error=type(exc).__name__)
         return None
@@ -370,7 +381,15 @@ async def sarathi_dl(
     full miss returns 404.
     """
     cfg = state.cfg
-    dl = dl_number.strip().upper().replace(" ", "")
+    # Two forms of the same licence, and the difference is load-bearing.
+    # SARATHI/01 matches on the RTO's own spacing: "GJ04 20120005008" resolves
+    # and "GJ0420120005008" answers errorcd -1. Stripping the space — which is
+    # what we used to do before calling upstream — made /01 unable to resolve
+    # ANY licence written in the standard format. The space-free form stays the
+    # canonical key for the cache and the history tables so one licence cannot
+    # occupy two rows.
+    dl_as_given = " ".join(dl_number.strip().upper().split())
+    dl = dl_as_given.replace(" ", "")
     if dob and not _RE_DOB.match(dob.strip()):
         # Falling back to SARATHI/02 on a malformed date would answer 200 with
         # a thinner record than the caller asked for, and they would have no
@@ -388,7 +407,7 @@ async def sarathi_dl(
     # upstream); LIVE_FALLBACK is still the vahan-sim service.
     for kind, target, enabled, fetch in (
         ("LIVE_PRIMARY", "ulip", cfg.ulip_live_enabled,
-         lambda: _ulip_dl(state, dl, dob)),
+         lambda: _ulip_dl(state, dl_as_given, dob)),
         ("LIVE_FALLBACK", "vahan-sim", True,
          lambda: _try_upstream(state, cfg.vahan_sim_url, path, "vahan-sim")),
     ):

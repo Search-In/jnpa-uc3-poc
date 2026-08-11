@@ -15,20 +15,22 @@ connection. Contrast ``scenarios/`` (tfc1/tfc2/tfc3/monsoon_friday), which is a
 live-injection demo harness: it closes gates and injects trucks and needs a
 ``reset()``. The two are different things and must not be confused.
 
-Scenario coverage (JNPA Notice, 05 August 2026):
+Scenario coverage (JNPA Notice, 05 August 2026) — all six:
 
+    vessel-bunching     I-A   berthing order vs a stated objective, alternatives costed
     berth-cascade       I-B   extended berth window -> 48h queue displacement
     crane-productivity  II-B  gross moves/hour, -25%, turnaround + queue impact
     modal-shift         II-A  20% rail -> road, hourly gate profile before/after
     gate-slotting       III-A arrival pattern, saturated hours, slotting proposal
     driver-shortage     III-B trips/vehicle cut by a third -> throughput + exposure
 
-Scenario I-A (vessel bunching) is deliberately NOT registered: it asks for a
-berthing ORDER optimised against a stated objective, and the objective the Notice
-leaves to the bidder ("waiting time, total moves handled, line priority, or
-another basis") cannot be chosen by the backend. ``berth-cascade`` supplies the
-costing function an I-A answer needs — what an alternative order costs against the
-same objective — and the objective itself belongs in the submission.
+Scenario I-A was previously left unregistered on the grounds that the Notice
+leaves the objective to the bidder, so the backend could not choose it. That
+reasoning was right about the objective and wrong about the conclusion: the fix
+is to make the objective an explicit **request parameter**, name it in the
+response, and score every candidate ordering against it — which is exactly the
+like-for-like comparison the Notice asks for ("show what an alternative order
+would cost against the same objective"). See :mod:`.vessel_bunching`.
 """
 from __future__ import annotations
 
@@ -38,7 +40,7 @@ from typing import Any, Optional
 from jnpa_shared.logging import get_logger
 
 from . import (berth_cascade, crane_productivity, driver_shortage, gate_slotting,
-               modal_shift)
+               modal_shift, vessel_bunching)
 from .base import (Assumption, QueryTrace, SimulationError, SimulationResult,
                    hours_between, pct)
 from .repository import SimulationRepository, SimulationWriteAttempt
@@ -48,6 +50,7 @@ log = get_logger("services.cargo.simulation")
 #: scenario name -> module exposing ``async run(repo, params) -> SimulationResult``.
 #: The in-package equivalent of the ``scenarios/`` REGISTRY, kept import-light.
 REGISTRY: dict[str, Any] = {
+    vessel_bunching.SCENARIO: vessel_bunching,
     berth_cascade.SCENARIO: berth_cascade,
     crane_productivity.SCENARIO: crane_productivity,
     modal_shift.SCENARIO: modal_shift,
@@ -58,6 +61,20 @@ REGISTRY: dict[str, Any] = {
 #: Human-facing catalog for GET /api/cargo/simulate/scenarios. Kept beside the
 #: registry so a new scenario cannot be added without describing itself.
 CATALOG: list[dict] = [
+    {
+        "scenario": vessel_bunching.SCENARIO,
+        "jnpa_reference": "I-A — Vessel Bunching",
+        "question": ("A large number of vessels are alongside, unevenly distributed "
+                     "between terminals. What berthing order should be run, against "
+                     "which stated objective, and what would an alternative order "
+                     "cost against that same objective?"),
+        "required": ["as_of"],
+        "optional": ["terminal", "horizon_hours (default 24)",
+                     "objective (waiting_time | moves_handled | line_priority)"],
+        "reads": ["core.berthing_record", "core.vessel_call_moves (migration 0129)"],
+        "note": ("6 Aug 2026 lies beyond the corpus; the state is carried forward "
+                 "from the last measured day and declared as assumption A-07."),
+    },
     {
         "scenario": berth_cascade.SCENARIO,
         "jnpa_reference": "I-B — Extended Berth Window",

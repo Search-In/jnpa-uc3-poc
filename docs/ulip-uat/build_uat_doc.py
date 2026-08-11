@@ -47,9 +47,6 @@ SHOT_KIND_LABEL = {"response": "Request and response", "ui": "Application screen
 # Slots whose evidence cannot be produced, and why — stated so a reviewer sees
 # a reason rather than an apparent omission.
 BLOCKED: dict[str, str] = {
-    "SS-18": "The ULIP LDB upstream was unavailable throughout testing "
-             '("LDB_01 - 3rd party service is down!"), so no container trail '
-             "could be rendered.",
     "SS-43": "The staging licence returns an empty TransportValidityTodate, so "
              "the transport-over-non-transport preference cannot be shown on "
              "live data. Covered by an automated contract test.",
@@ -57,8 +54,6 @@ BLOCKED: dict[str, str] = {
              "recognise; no such record exists on staging.",
     "SS-46": "No licence with a non-active status was available on staging. "
              "Covered by an automated contract test.",
-    "SS-49": 'SARATHI/01 returns "Details not available" for every DL and '
-             "date-of-birth pair available to us.",
 }
 
 
@@ -276,17 +271,23 @@ def traceability(idx: int, shots: Shots) -> str:
      most recent call returned.</p>
   {posture_shots}
 
-  <h3>Items raised with NLDSL</h3>
-  <p>A small number of observations from testing are being sent separately as a
-     covering note, so that this document remains an evidence pack. In summary:
-     the LDB upstream was unavailable on staging; VAHAN/01 returned a different
-     registration for the same request on roughly half of all calls, and the
-     application discards any answer whose registration number does not match
-     the number queried; GATISHAKTI/02 and /03 return datasets other than the
-     road network the integration document describes; and we have requested
-     working test values for SARATHI/01, VAHAN/02 and VAHAN/03, whose lookup
-     keys ULIP masks. None of these blocks our integration, which is complete
-     and covers all thirteen APIs.</p>
+  <h3>Queries raised with NLDSL, and their resolution</h3>
+  <p>Every query we raised during testing has been answered by NLDSL and the
+     answers are reflected above. LDB/01 was confirmed working and, with the
+     container NLDSL supplied, now returns a full thirteen-leg trail. SARATHI/01
+     resolves with the test data provided. The response structures of
+     GATISHAKTI/01, /02 and /03 were confirmed as the intended datasets and the
+     application maps them as returned. VAHAN/01's varying answer and FASTAG/02's
+     empty tag list were explained as staging holding static test data, which
+     need not reflect production. The masked chassis and engine numbers behind
+     VAHAN/02 and VAHAN/03 were confirmed to fall under the PII clause; those two
+     cases therefore remain unevidenced, which is a data-access matter and not a
+     defect in the integration.</p>
+  <p>Two items are being taken forward separately with
+     <code>bd@nldsl.in</code> as new requirements, per NLDSL's guidance: road
+     network and corridor data carrying geometry or coordinates, and access to
+     unmasked chassis and engine numbers for gate-side vehicle identification.
+     Neither blocks this submission.</p>
 
   <h3>Request</h3>
   <p>On the strength of the evidence in this document we request

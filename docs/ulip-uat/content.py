@@ -361,12 +361,15 @@ Content-Type: application/json
              ]},
         ],
         "notes": (
-            "The integration document gives two different patterns for "
-            "<code>vehiclenumber</code> on this API — the field table states "
-            "<code>^[A-Z0-9]{5,11}$|^[A-Z0-9]{17,20}$</code> while the 400 sample "
-            "shows <code>[A-Z]{2}[0-9]{2}[A-Z]{0,5}[0-9]{4}$</code>. The "
-            "application validates against the looser of the two pending "
-            "confirmation from NLDSL."),
+            "<b>Confirmed by NLDSL, 12 August 2026:</b> staging holds static test data, so "
+            "whether tag details exist against a given vehicle number depends on "
+            "what is configured there — which is why the vehicle-number lookup "
+            "returned no tags while the tag-id lookup succeeded.<br><br>"
+            "Separately, the integration document gives two different patterns "
+            "for <code>vehiclenumber</code> on this API — the field table states "
+            "<code>^[A-Z0-9]{5,11}$|^[A-Z0-9]{17,20}$</code> while the 400 "
+            "sample shows <code>[A-Z]{2}[0-9]{2}[A-Z]{0,5}[0-9]{4}$</code>. The "
+            "application validates against the looser of the two."),
     },
     # ------------------------------------------------------------------ LDB/01
     {
@@ -472,11 +475,16 @@ Authorization: Bearer <application JWT>""",
              ]},
         ],
         "notes": (
-            "LDB returns its <code>trackLog</code> field names in lower case "
-            "(<code>eventname</code>, <code>currentlocation</code>, "
-            "<code>timestamptimezone</code>). The application's normaliser matches "
-            "these exactly; a regression test pins the behaviour so that a tracked "
-            "container can never silently report zero movements."),
+            "<b>Confirmed working by NLDSL on 12 August 2026</b> with container "
+            "<code>TCLU8538808</code>, which returns a thirteen-leg trail across "
+            "vessel, rail and road.<br><br>Two behaviours are recorded for "
+            "completeness. LDB returns its <code>trackLog</code> field names in "
+            "lower case (<code>eventname</code>, <code>currentlocation</code>, "
+            "<code>timestamptimezone</code>), which the application matches "
+            "exactly. And on staging the same static trail is returned whatever "
+            "container number is asked for — so the application checks the trail "
+            "against the container requested and rejects a contradiction, rather "
+            "than attributing one box's port milestones to another."),
     },
     # ------------------------------------------------------------------ VAHAN/04
     {
@@ -737,9 +745,14 @@ Authorization: Bearer <application JWT>""",
              ]},
         ],
         "notes": (
-            "The ULIP request field is spelled <code>chasisnumber</code> (single "
-            "'s') in the integration document; the application sends it exactly as "
-            "documented."),
+            "The ULIP request field is spelled <code>chasisnumber</code> (single 's') in "
+            "the integration document; the application sends it exactly as "
+            "documented. <b>NLDSL confirmed on 12 August 2026</b> that the "
+            "chassis number masked in the VAHAN/04 response falls under the PII "
+            "clause and cannot be unmasked under the current grant, so a "
+            "successful lookup cannot be evidenced from a VAHAN/04-derived key. "
+            "Access to unmasked identifiers is being taken forward separately "
+            "as a new requirement."),
     },
     # ------------------------------------------------------------------ VAHAN/03
     {
@@ -812,11 +825,11 @@ Authorization: Bearer <application JWT>""",
              ]},
         ],
         "notes": (
-            "<b>Observed on staging, 11 August 2026.</b> The API answered HTTP 200. The "
-            "engine numbers returned by VAHAN/04 are masked "
-            "(<code>JF50E760*****</code>), so a masked value cannot be fed back "
-            "in as a lookup key; testing this API end to end requires an "
-            "unmasked engine number."),
+            "<b>Confirmed by NLDSL, 12 August 2026.</b> The engine number returned by "
+            "VAHAN/04 is masked (<code>JF50E760*****</code>) and masked fields "
+            "fall under the PII clause, so a masked value cannot be fed back in "
+            "as a lookup key. The endpoint responds correctly; only a successful "
+            "resolution is unevidenced."),
     },
     # ------------------------------------------------------------------ SARATHI/02
     {
@@ -1025,26 +1038,21 @@ Authorization: Bearer <application JWT>""",
              ]},
         ],
         "notes": (
-            "<b>Schema received 11 August 2026 and mapped.</b> SARATHI/01 shares "
-            "no field names with SARATHI/02: the licence is in "
-            "<code>dldetobj[].dlobj</code> (<code>dlLicno</code>, "
-            "<code>dlStatus</code>, <code>dlTrValdtoDt</code>, "
-            "<code>dlNtValdtoDt</code>), the classes of vehicle in "
-            "<code>dlcovs[].covdesc</code>, and the holder in a "
-            "<code>bio</code> block; dates are ISO here and DD-MM-YYYY on /02. "
-            "Both are now normalised to one shape so /01 can stand in for /02. "
-            "<br><br>SARATHI/01 also returns three things /02 does not: the "
-            "licence issue date, the issuing state and RTO, and — uniquely "
-            "among the granted APIs — the holder's name <b>unmasked</b> in "
-            "<code>bioNatName</code> together with a photograph in "
-            "<code>biPhoto</code>. Both are directly useful for issuing a port "
-            "driver pass.<br><br><b>Request to NLDSL:</b> a live hit has not yet "
-            "been obtained. The DL/DOB pairs available to us — the SARATHI/02 "
-            "sample licence and the licence in the schema document itself — both "
-            "return <code>errorcd: -1, erormsg: \"Details not available\"</code> "
-            "on staging, which is the correct miss path but does not exercise "
-            "the mapping end to end. Please share a DL number and date of birth "
-            "that resolve on the staging environment."),
+            "<b>Working end to end with the test data NLDSL supplied on 12 August 2026.</b> "
+            "SARATHI/01 shares no field names with SARATHI/02 — the licence is "
+            "in <code>dldetobj[].dlobj</code>, the classes of vehicle in "
+            "<code>dlcovs[].covdesc</code> and the holder in a <code>bio</code> "
+            "block — and both are normalised to one shape so /01 can stand in "
+            "for /02. /01 additionally carries the licence issue date, the "
+            "issuing state and RTO, and a photograph.<br><br>"
+            "<b>The DL number's internal space is significant:</b> "
+            "<code>GJ04 20120005008</code> resolves on SARATHI/01 while "
+            "<code>GJ0420120005008</code> returns <code>errorcd -1</code>. The "
+            "application preserves the spacing the caller supplies for the "
+            "upstream call and uses the space-free form only as its own "
+            "storage key. Note also that staging masks <code>bioNatName</code> "
+            "as well as <code>bioFullName</code>, so no unmasked holder name is "
+            "available."),
     },
     # ------------------------------------------------------------------ GATISHAKTI/04
     {
@@ -1217,15 +1225,13 @@ Authorization: Bearer <application JWT>""",
              ]},
         ],
         "notes": (
-            "<b>Observed on staging, 11 August 2026.</b> The API answered HTTP 200 with "
-            "33 rows for <code>NH-5</code>, carrying <code>road_name</code>, "
-            "<code>gis_length</code>, <code>road_type</code>, "
-            "<code>lane_statu</code> and <code>state_ut</code> — segment "
-            "attributes, but <b>no latitude or longitude</b>. The application "
-            "stores the attributes and leaves the coordinates null rather than "
-            "inventing geometry. <b>Query to NLDSL:</b> is a road-network layer "
-            "with geometry available (GATISHAKTI/05 is described in the document "
-            "but was not granted)?"),
+            "<b>Confirmed by NLDSL, 12 August 2026.</b> The response structure for this "
+            "API is <code>road_name</code>, <code>gis_length</code>, "
+            "<code>road_type</code>, <code>lane_statu</code> and "
+            "<code>state_ut</code> — road attributes without coordinates. The "
+            "application stores those attributes and leaves geometry null "
+            "rather than inventing it. Road-network data carrying geometry is "
+            "being taken forward separately with NLDSL as a new requirement."),
     },
     # ------------------------------------------------------------------ GATISHAKTI/02
     {
@@ -1302,14 +1308,12 @@ Authorization: Bearer <application JWT>""",
              ]},
         ],
         "notes": (
-            "<b>Observed on staging, 11 August 2026.</b> The API answered HTTP 200 with "
-            "13 rows for state id 27, but the payload is <b>food-storage depot "
-            "infrastructure</b> — <code>infrastr_n</code>, "
-            "<code>infrastr_a</code>, <code>storage_ca</code>, "
-            "<code>type_infra</code> — not a state road network as the "
-            "integration document describes, and it carries no coordinates. "
-            "<b>Query to NLDSL:</b> please confirm whether this is the intended "
-            "dataset for GATISHAKTI/02."),
+            "<b>Confirmed by NLDSL, 12 August 2026.</b> This API returns infrastructure "
+            "data — <code>infrastr_s</code> (state), <code>infrastr_a</code> "
+            "(address), <code>infrastr_n</code> (name), <code>type_owner</code>, "
+            "<code>storage_ca</code> (capacity), <code>type_infra</code> and "
+            "<code>infrastr_v</code> (village) — and this is the intended "
+            "dataset. The application maps the fields as returned."),
     },
     # ------------------------------------------------------------------ GATISHAKTI/03
     {
@@ -1389,13 +1393,13 @@ Authorization: Bearer <application JWT>""",
              ]},
         ],
         "notes": (
-            "<b>Observed on staging, 11 August 2026.</b> The API answered HTTP 200 with "
-            "994 rows for state id 27 — a substantial and usable dataset — but "
-            "the rows are <b>industrial parks and estates</b> "
-            "(<code>park_name</code>, <code>dist_name</code>, "
-            "<code>land_cat</code>, <code>park_type</code>) with coordinates, "
-            "not named road points. <b>Query to NLDSL:</b> please confirm the "
-            "intended dataset for GATISHAKTI/03."),
+            "<b>Confirmed by NLDSL, 12 August 2026.</b> This API returns industrial land "
+            "and park data — <code>st_name</code>, <code>dist_name</code>, "
+            "<code>sub_dist</code>, <code>vname</code>, <code>park_name</code>, "
+            "<code>land_cat</code>, <code>land_avail</code>, "
+            "<code>park_type</code>, <code>lat</code> and <code>lon</code> — and "
+            "this is the intended dataset. 994 rows were returned for "
+            "Maharashtra and persisted with their coordinates."),
     },
 ]
 
@@ -1547,9 +1551,10 @@ EXECUTION = {
          "59 toll plazas for Maharashtra"),
     ],
     "outcome": (
-        "<b>12 of 13 APIs answered successfully.</b> The single failure, LDB/01, "
-        "is an upstream outage reported by ULIP itself and is raised with NLDSL "
-        "below rather than treated as a test defect. Maharashtra "
+        "<b>All 13 granted APIs answered successfully.</b> LDB/01 was "
+        "unavailable during the first run and was confirmed working by NLDSL on "
+        "12 August 2026; with the container they supplied it returns a full "
+        "thirteen-leg trail. Maharashtra "
         "(<code>stateid 27</code>) returned data on every GatiShakti API, "
         "confirming the account is <b>not</b> geographically scoped away from "
         "the JNPA corridor."),

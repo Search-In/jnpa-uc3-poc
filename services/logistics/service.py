@@ -389,7 +389,11 @@ class LogisticsService:
             "ref_type": ref_type,
             "tracking_status": _tracking_status(
                 newest["event_ts"] if newest else None, len(events)),
-            "last_event": newest["event_type"] if newest else None,
+            # Prefer LDB's own milestone name over the canonical bucket —
+            # "PORT OUT" tells an operator something; "CONTAINER_MOVEMENT" does
+            # not.
+            "last_event": (newest.get("event_label") or newest["event_type"]
+                           if newest else None),
             "last_location": newest["location"] if newest else None,
             "last_event_ts": newest["event_ts"] if newest else None,
             "event_count": len(events),
@@ -493,6 +497,24 @@ def _iso_or_none(value: Any) -> Optional[str]:
     return value if isinstance(value, str) else None
 
 
+def _detail_label(event: Dict[str, Any]) -> Optional[str]:
+    """LDB's own milestone name out of the preserved raw row."""
+    detail = event.get("detail")
+    if isinstance(detail, str):
+        try:
+            import json as _json
+            detail = _json.loads(detail)
+        except ValueError:
+            return None
+    if not isinstance(detail, dict):
+        return None
+    for key in ("eventname", "eventName", "event", "activity"):
+        value = detail.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def _public_event(event: Dict[str, Any]) -> Dict[str, Any]:
     """The client-facing event shape (raw upstream detail stays server-side
     in the DB/audit tables — the API returns only the normalised fields)."""
@@ -500,6 +522,11 @@ def _public_event(event: Dict[str, Any]) -> Dict[str, Any]:
         "ref_type": event.get("ref_type"),
         "ref_id": event.get("ref_id"),
         "event_type": event.get("event_type"),
+        # The DATABASE rung has no event_label column, but the raw upstream row
+        # is kept in ``detail``, and LDB's milestone name is in there — so a
+        # replayed trail keeps its PORT IN / GATE OUT labels instead of
+        # degrading to thirteen identical CONTAINER_MOVEMENT rows.
+        "event_label": event.get("event_label") or _detail_label(event),
         "event_ts": _iso_or_none(event.get("event_ts")),
         "location": event.get("location"),
         "latitude": _float_or_none(event.get("latitude")),

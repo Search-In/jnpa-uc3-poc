@@ -632,3 +632,27 @@ def test_gatishakti_queries_never_bind_an_untyped_null_comparison():
            / "services" / "gatishakti" / "repository.py").read_text()
     bare = re.findall(r":(\w+)\s+IS\s+NULL", src)
     assert not bare, f"uncast NULL-compared bind parameters: {bare}"
+
+
+def test_ldb_trail_for_another_container_is_rejected():
+    """LDB staging answers with the SAME static trail whatever container is
+    asked for — TCLU8538808 came back for CXRU1145597, for NSST1234570 and for
+    the container NLDSL themselves supplied as a test value. Filing another
+    box's port milestones under the one an operator asked about would place a
+    container somewhere it has never been, so a contradicting trail yields
+    nothing at all."""
+    events = normalize_container_events(env(LDB_HIT), "CXRU1145597")
+    assert events == []
+    # The container the trail is actually about still resolves normally.
+    assert len(normalize_container_events(env(LDB_HIT), "NSST1234570")) == 2
+
+
+def test_ldb_milestone_label_survives_normalisation():
+    """``event_type`` is the canonical bucket every consumer switches on, so it
+    stays CONTAINER_MOVEMENT for every leg. Without carrying LDB's own
+    ``eventname`` alongside it, a thirteen-leg trail renders as thirteen
+    identical rows and the port milestones — the point of tracking a box —
+    are lost."""
+    events = normalize_container_events(env(LDB_HIT), "NSST1234570")
+    assert {e["event_type"] for e in events} == {"CONTAINER_MOVEMENT"}
+    assert {e["event_label"] for e in events} == {"PORT IN", "PORT OUT"}

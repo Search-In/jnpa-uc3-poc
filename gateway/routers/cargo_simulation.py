@@ -39,7 +39,7 @@ and the response is the service's already-JSON-safe dict.
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -84,6 +84,25 @@ def _day_start(value: date) -> datetime:
 
 
 # ---------------------------------------------------------------------- request DTOs
+class VesselBunchingIn(BaseModel):
+    """Scenario I-A.
+
+    ``objective`` is required by the Notice to be *stated*, so it is an explicit
+    input rather than a backend default with an opinion baked into it. Every
+    candidate ordering is then scored against whichever objective was chosen, so
+    the alternatives are comparable by construction."""
+    as_of: datetime = Field(..., description="The study day (ISO-8601)")
+    terminal: Optional[str] = Field(default=None, max_length=64)
+    horizon_hours: int = Field(default=24, ge=1, le=336)
+    objective: Literal["waiting_time", "moves_handled", "line_priority"] = Field(
+        default="waiting_time",
+        description="The basis the proposed order optimises for")
+
+    model_config = ConfigDict(json_schema_extra={"example": {
+        "as_of": "2026-08-06T00:00:00Z", "objective": "waiting_time",
+        "horizon_hours": 24}})
+
+
 class BerthCascadeIn(BaseModel):
     """Scenario I-B. ``as_of`` opens the horizon; the overrun is applied to the
     named call, or to the first call in the window when none is named."""
@@ -215,6 +234,17 @@ async def list_scenarios(service: SimulationService = Depends(get_service)) -> d
                 "data_available": ("false when a required input table was empty — "
                                    "the scenario reports that rather than "
                                    "inventing a figure")}}
+
+
+@router.post("/api/cargo/simulate/vessel-bunching",
+             summary="I-A — vessel bunching: berthing order against a stated objective")
+async def simulate_vessel_bunching(
+    body: VesselBunchingIn,
+    service: SimulationService = Depends(get_service),
+) -> dict:
+    params = body.model_dump()
+    params["as_of"] = _utc(body.as_of)
+    return await _run(service, "vessel-bunching", params)
 
 
 @router.post("/api/cargo/simulate/berth-cascade",

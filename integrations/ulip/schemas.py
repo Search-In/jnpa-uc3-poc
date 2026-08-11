@@ -152,11 +152,17 @@ def _walk_dicts(node: Any) -> Iterable[Dict[str, Any]]:
 def _event(*, ref_type: str, ref_id: str, event_type: str, event_ts: Optional[str],
            location: Optional[str], latitude: Optional[float],
            longitude: Optional[float], source_api: str,
-           detail: Dict[str, Any]) -> Dict[str, Any]:
+           detail: Dict[str, Any], label: Optional[str] = None) -> Dict[str, Any]:
     return {
         "ref_type": ref_type,
         "ref_id": ref_id,
         "event_type": event_type,
+        # LDB's own milestone name — PORT IN / PORT OUT / GATE OUT / RAIL OUT.
+        # ``event_type`` is the canonical bucket every consumer switches on, so
+        # it stays CONTAINER_MOVEMENT; without carrying the label alongside it,
+        # a thirteen-leg trail renders as thirteen identical rows and the port
+        # milestones — the whole point of tracking a box — are lost.
+        "event_label": label,
         "event_ts": event_ts,
         "location": location,
         "latitude": latitude,
@@ -206,6 +212,19 @@ def normalize_vehicle_events(envelope: UlipEnvelope,
 
 
 # ------------------------------------------------------ LDB (container) API
+def _trail_is_about(envelope: UlipEnvelope, wanted: str) -> bool:
+    """True unless the trail names a container other than the one requested.
+
+    An answer that names no container at all is accepted — some LDB payloads
+    omit it — so this only rejects a positive contradiction, never silence.
+    """
+    for item in _walk_dicts(envelope.response_items()):
+        found = _first(item, "cntrno", "containernumber", "containerNumber")
+        if found and str(found).strip().upper() != wanted:
+            return False
+    return True
+
+
 def normalize_container_events(envelope: UlipEnvelope,
                                container_number: str) -> List[Dict[str, Any]]:
     """Flatten a ULIP LDB answer into CONTAINER_MOVEMENT logistics events.
@@ -215,6 +234,18 @@ def normalize_container_events(envelope: UlipEnvelope,
     """
     events: List[Dict[str, Any]] = []
     seen: set = set()
+    wanted = str(container_number).strip().upper()
+    # LDB staging answers with the SAME static trail whatever container is
+    # asked for — TCLU8538808 comes back for CXRU1145597, for NSST1234570 and
+    # for NLDSL's own documented sample. Filing another box's port milestones
+    # under the one an operator asked about is worse than answering "no data":
+    # it would place a container somewhere it has never been. The trail names
+    # its own subject in ``cntrDetail.cntrno``, so that is checked once for the
+    # whole answer — a per-row check is not enough, because the vessel and
+    # expectation blocks carry no container number of their own and would slip
+    # through while the movement rows were dropped.
+    if not _trail_is_about(envelope, wanted):
+        return []
     for item in _walk_dicts(envelope.response_items()):
         # The alias lists must include LDB's own all-lowercase spellings
         # (``eventname``, ``currentlocation``, ``timestamptimezone`` …) — they
@@ -242,6 +273,7 @@ def normalize_container_events(envelope: UlipEnvelope,
             ref_type=REF_TYPE_CONTAINER,
             ref_id=container_number,
             event_type=EVENT_CONTAINER_MOVEMENT,
+            label=str(label) if label is not None else None,
             event_ts=parse_ts(ts_raw),
             location=str(location) if location is not None else None,
             latitude=_as_coord(_first(item, "latitude", "lat")),
@@ -371,10 +403,17 @@ def _normalize_dl_detail(envelope: "UlipEnvelope") -> Optional[Dict[str, Any]]:
     Normalising both to one shape is what lets /01 stand in for /02 wherever
     the caller only needs identity and validity.
 
-    Two fields /02 does not carry are worth having for driver enrolment at the
-    port: ``bioNatName`` is the holder's name **unmasked** (``bioFullName`` is
-    the masked spelling), and ``biPhoto`` is a base64 JPEG usable for a port
-    pass. Dates here are ISO ``YYYY-MM-DD``; /02 sends ``DD-MM-YYYY``, and
+    /01 also carries fields /02 does not — the licence issue date, the issuing
+    state and RTO, and ``biPhoto``, a base64 JPEG usable for a port pass.
+
+    On the holder's name, note what the live API actually does: the response
+    schema NLDSL supplied shows ``bioNatName`` unmasked next to a masked
+    ``bioFullName``, but staging masks **both** (``M*H*S*K*M*R* *O*I*``), so
+    neither yields a real name. ``bioNatName`` is still preferred, and
+    ``_already_masked`` keeps the value as received — masking an
+    already-masked string again would destroy the little signal left.
+
+    Dates here are ISO ``YYYY-MM-DD``; /02 sends ``DD-MM-YYYY``, and
     ``parse_date`` accepts both.
     """
     for item in _walk_dicts(envelope.response_items()):

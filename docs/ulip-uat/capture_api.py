@@ -56,11 +56,12 @@ CALLS: dict[str, tuple] = {
               "response"),
     # --- LDB/01 ----------------------------------------------------------
     "SS-16": ("Container tracking — input", "GET",
-              "/api/logistics/tracking/NSST1234570", None, "request"),
+              "/api/logistics/tracking/TCLU8538808", None, "request"),
     "SS-17": ("Container tracking — response", "GET",
-              "/api/logistics/tracking/NSST1234570", None, "response"),
-    "SS-19": ("Container tracking — unknown container", "GET",
-              "/api/logistics/tracking/MSKU0000000", None, "response"),
+              "/api/logistics/tracking/TCLU8538808", None, "response"),
+    "SS-19": ("Container tracking — a trail naming a different container is "
+              "rejected", "GET",
+              "/api/logistics/tracking/CXRU1145597", None, "response"),
     "SS-21": ("Container tracking — malformed container number", "GET",
               "/api/logistics/tracking/ABC123", None, "response"),
     # --- VAHAN/04 --------------------------------------------------------
@@ -99,11 +100,11 @@ CALLS: dict[str, tuple] = {
               "/api/vahan/dl/XX00000000000000", None, "response"),
     # --- SARATHI/01 ------------------------------------------------------
     "SS-47": ("Enrolment lookup with DL + date of birth — input", "GET",
-              "/api/vahan/dl/AP01620210000019?dob=1987-05-26", None, "request"),
+              "/api/vahan/dl/GJ04%2020120005008?dob=1987-05-26", None, "request"),
     "SS-48": ("Enrolment lookup with DL + date of birth — response", "GET",
-              "/api/vahan/dl/AP01620210000019?dob=1987-05-26", None, "response"),
+              "/api/vahan/dl/GJ04%2020120005008?dob=1987-05-26", None, "response"),
     "SS-50": ("Malformed date of birth rejected before the call", "GET",
-              "/api/vahan/dl/AP01620210000019?dob=26-05-1987", None, "response"),
+              "/api/vahan/dl/GJ04%2020120005008?dob=26-05-1987", None, "response"),
     # --- persistence -----------------------------------------------------
     "SS-27": ("Verification history — ULIP-sourced verifications persisted",
               "GET", "/api/vahan/verification-history?limit=6", None, "response"),

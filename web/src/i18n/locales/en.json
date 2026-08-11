@@ -55,7 +55,10 @@
     "doubleTrip": "Double Trip",
     "uc3Lifecycle": "Container Operations",
     "truckOps": "Truck Operations",
-    "truckVisit": "Truck Visit Detail"
+    "truckVisit": "Truck Visit Detail",
+    "vehicleRegistry": "Vehicle Registry",
+    "corridorSim": "Corridor Simulation",
+    "gateLaneBoard": "Gate & Lane Board"
   },
   "followBox": {
     "title": "Follow the Box",
@@ -136,7 +139,8 @@
     "shippingLine": "Shipping Line / Container",
     "fastag": "FASTag",
     "alert": "Alert",
-    "case": "Case ID"
+    "case": "Case ID",
+    "gateDoc": "Form 13 / EIR / e-seal no"
   },
   "commandCenter": {
     "title": "Command Center",

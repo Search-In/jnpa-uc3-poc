@@ -12,7 +12,6 @@ import {
   PackageCheck,
   Scale,
   FileText,
-  Container,
   Flag,
   ClipboardCheck,
   Camera,
@@ -34,8 +33,9 @@ import {
 } from "@/components/ui/dtccc";
 import CameraAI from "@/screens/CameraAI";
 import CustomsDetailsDrawer from "@/components/panels/CustomsDetailsDrawer";
+import AutoLeoJoinPanel from "@/components/panels/AutoLeoJoinPanel";
 import { fmtDateTimeIST } from "@/lib/utils";
-import type { CustomsAlert, GateCapture, LeoReconciliation } from "@/lib/types";
+import type { CustomsAlert, GateCapture } from "@/lib/types";
 
 type TabKey = "captures" | "leo" | "customs" | "camera";
 
@@ -70,10 +70,6 @@ export default function GateCustoms() {
     queryKey: ["gate-captures", captureType],
     queryFn: () => api.gateCaptures(captureType, undefined, 200),
   });
-  const leoQ = useQuery({
-    queryKey: ["leo-recon"],
-    queryFn: () => api.gateReconciliations(undefined, 200),
-  });
   const customsQ = useQuery({
     queryKey: ["customs-history"],
     queryFn: () => api.customsHistory(200),
@@ -81,22 +77,14 @@ export default function GateCustoms() {
 
   const sources = providersQ.data?.sources ?? {};
   const captures = capturesQ.data?.captures ?? [];
-  const recon = leoQ.data?.reconciliations ?? [];
   const customs = customsQ.data?.alerts ?? [];
 
-  const leoReady = recon.filter((r) => r.leo_ready).length;
-  const leoBlocked = recon.length - leoReady;
-
-  const updatedAt = Math.max(
-    capturesQ.dataUpdatedAt || 0,
-    leoQ.dataUpdatedAt || 0,
-    customsQ.dataUpdatedAt || 0,
-  );
-  const anyFetching = capturesQ.isFetching || leoQ.isFetching || customsQ.isFetching;
+  const updatedAt = Math.max(capturesQ.dataUpdatedAt || 0, customsQ.dataUpdatedAt || 0);
+  const anyFetching = capturesQ.isFetching || customsQ.isFetching;
 
   function refreshAll() {
     void qc.invalidateQueries({ queryKey: ["gate-captures"] });
-    void qc.invalidateQueries({ queryKey: ["leo-recon"] });
+    void qc.invalidateQueries({ queryKey: ["auto-leo-board"] });
     void qc.invalidateQueries({ queryKey: ["customs-history"] });
     void qc.invalidateQueries({ queryKey: ["gate-providers"] });
   }
@@ -137,20 +125,6 @@ export default function GateCustoms() {
             loading={capturesQ.isLoading}
           />
           <StatCard
-            icon={ShieldCheck}
-            label="LEO Ready"
-            value={leoReady}
-            tone="ok"
-            loading={leoQ.isLoading}
-          />
-          <StatCard
-            icon={Container}
-            label="LEO Blocked"
-            value={leoBlocked}
-            tone={leoBlocked > 0 ? "warn" : "ok"}
-            loading={leoQ.isLoading}
-          />
-          <StatCard
             icon={Flag}
             label="Customs Flags"
             value={customs.length}
@@ -168,7 +142,7 @@ export default function GateCustoms() {
           className="mb-3"
           tabs={[
             { key: "captures", label: "Gate Captures", icon: ClipboardCheck },
-            { key: "leo", label: "Auto-LEO", icon: ShieldCheck, count: recon.length },
+            { key: "leo", label: "Auto-LEO", icon: ShieldCheck },
             { key: "customs", label: "Customs Flags", icon: Flag, count: customs.length },
             { key: "camera", label: "Camera AI", icon: Camera },
           ]}
@@ -194,9 +168,12 @@ export default function GateCustoms() {
           </Card>
         )}
         {tab === "leo" && (
-          <Card className="overflow-hidden">
-            <LeoTable rows={recon} status={leoQ} onRetry={() => leoQ.refetch()} />
-          </Card>
+          // UC3-040. The four-way join replaces the flags-only reconciliation
+          // list this tab used to show: that list reported WHICH flags fired but
+          // not WHICH of the four evidence streams caused them, so a missing
+          // weighbridge and a disagreeing one looked identical. The panel keeps
+          // the same tab, the same audience and the same route.
+          <AutoLeoJoinPanel />
         )}
         {tab === "customs" && (
           <Card className="overflow-hidden">
@@ -283,78 +260,6 @@ function CapturesTable({
       }
       searchPlaceholder="Search container / vehicle…"
       initialSearch={initialSearch}
-      pageSize={10}
-    />
-  );
-}
-
-function LeoTable({
-  rows,
-  status,
-  onRetry,
-}: {
-  rows: LeoReconciliation[];
-  status: any;
-  onRetry: () => void;
-}) {
-  const columns: Column<LeoReconciliation>[] = [
-    {
-      key: "container",
-      header: "Container",
-      className: "font-mono",
-      render: (r) => r.container_no ?? "—",
-    },
-    {
-      key: "vehicle",
-      header: "Vehicle",
-      className: "font-mono",
-      render: (r) => r.vehicle_plate ?? "—",
-    },
-    {
-      key: "leo",
-      header: "LEO",
-      render: (r) => (
-        <StatusChip
-          label={r.leo_ready ? "READY" : "BLOCKED"}
-          tone={r.leo_ready ? "ok" : "critical"}
-        />
-      ),
-    },
-    {
-      key: "flags",
-      header: "Customs Flags",
-      render: (r) =>
-        r.customs_flags.length ? (
-          <div className="flex flex-wrap gap-1">
-            {r.customs_flags.map((f) => (
-              <StatusChip key={f} label={f} tone="warn" />
-            ))}
-          </div>
-        ) : (
-          <span className="text-muted-foreground">—</span>
-        ),
-    },
-    {
-      key: "reconciled",
-      header: "Reconciled",
-      className: "text-muted-foreground",
-      render: (r) => fmtDateTimeIST(r.reconciled_at),
-    },
-  ];
-  return (
-    <DataTable
-      columns={columns}
-      rows={rows}
-      rowKey={(r) => String(r.id)}
-      status={status}
-      onRetry={onRetry}
-      emptyLabel="No reconciliations in RDS yet."
-      search={(r, q) =>
-        `${r.container_no ?? ""} ${r.vehicle_plate ?? ""} ${r.customs_flags.join(" ")}`
-          .toLowerCase()
-          .includes(q)
-      }
-      searchPlaceholder="Search container / vehicle…"
       pageSize={10}
     />
   );

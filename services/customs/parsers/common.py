@@ -51,6 +51,17 @@ def clean(value: Optional[str]) -> Optional[str]:
     return s or None
 
 
+def yn(value: Optional[str]) -> Optional[bool]:
+    """'Y'/'N' (and yes/no/true/false/1/0) to bool; None/empty stays None.
+
+    Boolean columns (e.g. igm_line_container.soc_flag) must receive real
+    booleans — asyncpg refuses a 'N' string where psql would coerce."""
+    s = clean(value)
+    if s is None:
+        return None
+    return s.upper() in ("Y", "YES", "TRUE", "1")
+
+
 # ------------------------------------------------------------------------- numbers
 def to_int(value: Optional[str]) -> Optional[int]:
     s = clean(value)

@@ -418,7 +418,10 @@ class ShippingLinesRepository:
         importer leaves them at their defaults (NULL / 'DIRECTORY')."""
         data_origin = _data_origin(uploaded_by)
         existing = await self.find_file_by_sha(source_sha256, data_origin)
-        if existing is not None:
+        if existing is not None and existing["import_status"] != "FAILED":
+            # A FAILED ledger row records the *attempt*, not the content — a
+            # retry (replay) must import, not dedup against its own failure.
+            # The ledger INSERTs upsert on (source_sha256, data_origin).
             return {"file_id": existing["id"], "list_type": existing["list_type"],
                     "terminal": existing["terminal"], "import_status": "SKIPPED_DUPLICATE",
                     "record_count": existing["record_count"],
@@ -809,6 +812,13 @@ VALUES
     (:list_type, :terminal, :physical_format, :source_file, :source_sha256, :file_size_bytes,
      :vessel_visit, :voyage, :line_code, :direction, :record_count, 'PENDING',
      :uploaded_by, :source, :data_origin)
+ON CONFLICT (source_sha256, data_origin) DO UPDATE SET
+    list_type = EXCLUDED.list_type, terminal = EXCLUDED.terminal,
+    physical_format = EXCLUDED.physical_format, source_file = EXCLUDED.source_file,
+    vessel_visit = EXCLUDED.vessel_visit, voyage = EXCLUDED.voyage,
+    line_code = EXCLUDED.line_code, direction = EXCLUDED.direction,
+    record_count = EXCLUDED.record_count, import_status = 'PENDING',
+    error_detail = NULL, updated_at = now()
 RETURNING id
 """
 
@@ -821,6 +831,9 @@ VALUES
     (:list_type, :terminal, :physical_format, :source_file, :source_sha256, :file_size_bytes,
      :vessel_visit, :voyage, :line_code, :direction, :record_count, 'FAILED', :error_detail,
      :uploaded_by, :source, :data_origin)
+ON CONFLICT (source_sha256, data_origin) DO UPDATE SET
+    import_status = 'FAILED', error_detail = EXCLUDED.error_detail,
+    updated_at = now()
 RETURNING id
 """
 

@@ -30,7 +30,8 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from .logging import get_logger
 # The base fine schedule is the single source of truth, reused untouched.
-from .routers.reports import _CHALLAN
+from .routers.reports import (CHALLAN_AUTHORITY_NOTE, CHALLAN_DISCLOSURE,
+                              _CHALLAN)
 
 log = get_logger("gateway.enforcement")
 
@@ -59,6 +60,42 @@ def can_transition(frm: str, to: str) -> bool:
 
 class InvalidTransition(ValueError):
     """Raised when a requested case transition is not permitted."""
+
+
+# --- e-Challan issuance disclosure (UC3-030) --------------------------------
+# EC-5: "e-Challan workflow (badge: SIMULATED in PoC)". Assumption A5: the
+# authority to issue a challan rests with JNPA/RTO, and the integration happens
+# only if JNPA confirms that authority. Every challan this system produces is
+# therefore a workflow demonstration, not a legal instrument.
+#
+# The badge is attached HERE, at the system of record, rather than in each UI.
+# A disclosure added per-screen is one screen away from being forgotten — and the
+# ticket's bar is that NO screen and NO PDF anywhere shows a challan without it.
+# Attaching it to the record means a caller has to strip it deliberately.
+CHALLAN_ISSUANCE_MODE = "SIMULATED"
+CHALLAN_BADGE = "SIMULATED"
+# CHALLAN_AUTHORITY_NOTE / CHALLAN_DISCLOSURE are defined in routers/reports.py
+# (which this module already imports for the fine schedule) and re-exported here,
+# so the on-screen badge and the exported PDF ribbon are literally the same text.
+
+
+def challan_disclosure() -> dict:
+    """The badge block every challan payload carries, on screen and in exports."""
+    return {
+        "issuance_mode": CHALLAN_ISSUANCE_MODE,
+        "badge": CHALLAN_BADGE,
+        "is_legal_instrument": False,
+        "authority_note": CHALLAN_AUTHORITY_NOTE,
+        "assumption_ref": "A5",
+        "disclosure": CHALLAN_DISCLOSURE,
+    }
+
+
+def badge_challan(challan: Optional[Mapping[str, Any]]) -> Optional[dict]:
+    """Attach the disclosure to a challan row (None stays None)."""
+    if not challan:
+        return None
+    return {**dict(challan), **challan_disclosure()}
 
 
 # --- schema (idempotent; lazily applied) ------------------------------------
@@ -97,7 +134,13 @@ CREATE TABLE IF NOT EXISTS core.challan (
     payment_ref     text,
     pdf_url         text,
     evidence_sha256 text,
-    created_by      text
+    created_by      text,
+    -- UC3-030 / assumption A5: enforcement authority rests with JNPA/RTO, so no
+    -- challan this system mints is legally issued. CHECK-pinned to SIMULATED so a
+    -- challan cannot exist without its own disclosure attached (mirrors migration
+    -- 0136 for databases that already had the table).
+    issuance_mode   text NOT NULL DEFAULT 'SIMULATED'
+                    CHECK (issuance_mode = 'SIMULATED')
 );
 CREATE INDEX IF NOT EXISTS idx_challans_case ON core.challan (case_id);
 CREATE TABLE IF NOT EXISTS core.case_audit (
@@ -456,7 +499,7 @@ async def issue_challan(
         {"c": case_id}, dsn=dsn,
     )
     if existing:
-        return dict(existing)
+        return badge_challan(existing)
 
     challan_id = str(_uuid.uuid4())
     await execute(
@@ -557,7 +600,7 @@ async def get_case_bundle(dsn: str, case_id: str) -> dict:
     return {
         "case": _iso(dict(case)),
         "violations": [_iso(dict(v)) for v in violations],
-        "challan": _iso(dict(challan)) if challan else None,
+        "challan": badge_challan(_iso(dict(challan))) if challan else None,
         "audit": [_iso(dict(a)) for a in audit],
     }
 

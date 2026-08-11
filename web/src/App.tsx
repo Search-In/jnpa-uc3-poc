@@ -25,6 +25,9 @@ import Uc3Lifecycle from "@/screens/Uc3Lifecycle";
 import CargoWhatIf from "@/screens/CargoWhatIf";
 import TruckOperations from "@/screens/TruckOperations";
 import TruckVisitDetail from "@/screens/TruckVisitDetail";
+import VehicleRegistry from "@/screens/VehicleRegistry";
+import GateLaneBoard from "@/screens/GateLaneBoard";
+import CorridorSimulation from "@/screens/CorridorSimulation";
 import ParkingManagement from "@/screens/ParkingManagement";
 import SystemHealth from "@/screens/SystemHealth";
 import WhatIfConsole from "@/screens/WhatIfConsole";
@@ -210,6 +213,30 @@ function DashboardShell({
             element={
               <Guard path="/truck-visit">
                 <TruckVisitDetail />
+              </Guard>
+            }
+          />
+          <Route
+            path="/gate-lane-board"
+            element={
+              <Guard path="/gate-lane-board">
+                <GateLaneBoard />
+              </Guard>
+            }
+          />
+          <Route
+            path="/vehicle-registry"
+            element={
+              <Guard path="/vehicle-registry">
+                <VehicleRegistry />
+              </Guard>
+            }
+          />
+          <Route
+            path="/corridor-simulation"
+            element={
+              <Guard path="/corridor-simulation">
+                <CorridorSimulation />
               </Guard>
             }
           />

@@ -2040,7 +2040,9 @@ export interface SimulationResult {
   scenario: string;
   method: string;
   result: Record<string, any>;
-  figures: Record<string, number | string | null>;
+  // Booleans are part of this contract: channel-closure reports
+  // `berth_lock_reached` and modal-shift `gate_absorbs_load` as figures.
+  figures: Record<string, number | string | boolean | null>;
   assumptions: SimAssumption[];
   queries: SimQueryTrace[];
   recommendations: SimRecommendation[];

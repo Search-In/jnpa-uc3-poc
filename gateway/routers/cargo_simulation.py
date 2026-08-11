@@ -299,6 +299,94 @@ async def simulate_driver_shortage(
     return await _run(service, "driver-shortage", body.model_dump())
 
 
+# ------------------------------------------------- bidder-proposed (N-1..N-3)
+# Not requested by JNPA. Each covers a capability class none of the requested
+# twenty-one does: a shared-resource valve, a closed feedback loop, and a
+# resilience/recovery mode. Same envelope, same read-only guarantees.
+class ChannelClosureIn(BaseModel):
+    """Scenario N-1."""
+    as_of: datetime = Field(..., description="When the channel closes (ISO-8601)")
+    closure_hours: float = Field(default=12.0, gt=0, le=168)
+    transit_hours: float = Field(default=1.5, gt=0, le=24,
+                                 description="One-way channel transit; declared, "
+                                             "not measured")
+    terminal: Optional[str] = Field(default=None, max_length=64)
+    horizon_hours: Optional[int] = Field(default=None, ge=1, le=336)
+
+    model_config = ConfigDict(json_schema_extra={"example": {
+        "as_of": "2026-08-06T06:00:00Z", "closure_hours": 12}})
+
+
+class YardFeedbackIn(BaseModel):
+    """Scenario N-2."""
+    from_date: date = Field(..., description="Start of the observed window")
+    to_date: date = Field(..., description="End of the observed window")
+    evacuation_drop_pct: float = Field(default=0.5, gt=0, lt=1)
+    yard_capacity_teu: Optional[float] = Field(default=None, gt=0)
+    threshold: float = Field(default=0.85, gt=0, lt=1)
+    slope: float = Field(default=0.40, gt=0, lt=1)
+    horizon_days: int = Field(default=14, ge=1, le=120)
+    terminal: Optional[str] = Field(default=None, max_length=64)
+
+    model_config = ConfigDict(json_schema_extra={"example": {
+        "from_date": "2026-08-01", "to_date": "2026-08-05",
+        "evacuation_drop_pct": 0.5}})
+
+
+class DegradedGateIn(BaseModel):
+    """Scenario N-3."""
+    from_ts: datetime = Field(..., description="Start of the window under study")
+    to_ts: datetime = Field(..., description="End of the window under study")
+    outage_start: Optional[datetime] = Field(
+        default=None, description="Defaults to the first hour of the window")
+    outage_hours: float = Field(default=4.0, gt=0, le=168)
+    degraded_fraction: float = Field(
+        default=0.4, gt=0, lt=1,
+        description="Manual service rate as a fraction of automated; declared")
+    terminal: Optional[str] = Field(default=None, max_length=64)
+    gate_id: Optional[str] = Field(default=None, max_length=64)
+    sustained_rate: Optional[float] = Field(default=None, gt=0)
+
+    model_config = ConfigDict(json_schema_extra={"example": {
+        "from_ts": "2026-08-03T00:00:00Z", "to_ts": "2026-08-04T00:00:00Z",
+        "outage_hours": 4, "degraded_fraction": 0.4}})
+
+
+@router.post("/api/cargo/simulate/channel-closure",
+             summary="N-1 — channel closure: berth-lock horizon and convoy order")
+async def simulate_channel_closure(
+    body: ChannelClosureIn,
+    service: SimulationService = Depends(get_service),
+) -> dict:
+    params = body.model_dump()
+    params["as_of"] = _utc(body.as_of)
+    if params.get("horizon_hours") is None:
+        params.pop("horizon_hours", None)
+    return await _run(service, "channel-closure", params)
+
+
+@router.post("/api/cargo/simulate/yard-feedback",
+             summary="N-2 — yard saturation feedback: tipping day and fixed point")
+async def simulate_yard_feedback(
+    body: YardFeedbackIn,
+    service: SimulationService = Depends(get_service),
+) -> dict:
+    return await _run(service, "yard-feedback", body.model_dump())
+
+
+@router.post("/api/cargo/simulate/degraded-gate",
+             summary="N-3 — degraded-mode gate outage: backlog and recovery time")
+async def simulate_degraded_gate(
+    body: DegradedGateIn,
+    service: SimulationService = Depends(get_service),
+) -> dict:
+    params = body.model_dump()
+    params["from_ts"] = _utc(body.from_ts)
+    params["to_ts"] = _utc(body.to_ts)
+    params["outage_start"] = _utc(body.outage_start) if body.outage_start else None
+    return await _run(service, "degraded-gate", params)
+
+
 @router.get("/api/gate/hourly-profile",
             summary="Hourly truck arrivals at the gate over any window")
 async def gate_hourly_profile(

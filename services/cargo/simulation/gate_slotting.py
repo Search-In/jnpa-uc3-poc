@@ -34,12 +34,19 @@ from typing import Any, Optional
 
 from .base import (SOURCE_DERIVED, SOURCE_MEASURED, SOURCE_PARAMETER,
                    Assumption, QueryTrace, SimulationResult, pct)
+from .plausibility import (GATE_TRUCKS_PER_HOUR, declared_beats_observed,
+                           in_band)
 
 SCENARIO = "gate-slotting"
 #: Which percentile of the observed distribution is treated as "sustained".
 #: p90 rather than the max: the single busiest hour of a window is an outlier, not
 #: a rate the gate holds. Declared in every response that uses it.
 SUSTAINED_PERCENTILE = 0.90
+
+#: Minimum arrivals in the window before `core.eir` is trusted to describe it.
+#: A day characterised from a handful of gate documents is not a characterisation;
+#: see the note in `load_profile`.
+MIN_ARRIVALS_FOR_PROFILE = 50
 
 
 def percentile(values: list[float], q: float) -> Optional[float]:
@@ -72,26 +79,39 @@ async def load_profile(repo: Any, *, from_ts: datetime, to_ts: datetime,
     traces: list[QueryTrace] = []
     assumptions: list[Assumption] = []
 
-    rows, trace = await repo.gate_hourly_profile(from_ts=from_ts, to_ts=to_ts,
-                                                 terminal=terminal)
+    eir_rows, trace = await repo.gate_hourly_profile(from_ts=from_ts, to_ts=to_ts,
+                                                     terminal=terminal)
     traces.append(trace)
-    if rows:
+    eir_arrivals = sum(int(r["arrivals"] or 0) for r in eir_rows)
+
+    # `core.eir` is preferred because it is real gate paperwork — but only when
+    # there is enough of it to describe a day. On JNPA's database it holds FIVE
+    # rows against 482,966 in core.gate_event, and preferring five silently
+    # produced "50 TEU per truck trip" in II-A and a five-trip driver-shortage
+    # population in III-B. A better source that is too thin to characterise the
+    # window is not the better source.
+    if eir_rows and eir_arrivals >= MIN_ARRIVALS_FOR_PROFILE:
         profile = [{"bucket": r["bucket"], "arrivals": int(r["arrivals"] or 0),
                     "completed": int(r.get("completed") or 0),
                     "unique_trucks": int(r.get("unique_trucks") or 0),
                     "avg_tat_min": r.get("avg_tat_min")}
-                   for r in rows]
+                   for r in eir_rows]
         return profile, traces, assumptions, "core.eir"
 
     rows, trace = await repo.gate_event_hourly(from_ts=from_ts, to_ts=to_ts,
                                                gate_id=gate_id)
     traces.append(trace)
     if rows:
+        thin = bool(eir_rows) and eir_arrivals < MIN_ARRIVALS_FOR_PROFILE
         assumptions.append(Assumption(
             "arrival_source", "core.gate_event",
-            "core.eir has no gate documents in this window, so telemetry gate "
-            "events are used instead; GATE_ARRIVAL is the arrival signal and "
-            "GATE_IN the completion",
+            (f"core.eir carries only {eir_arrivals} arrival(s) in this window — "
+             f"below the {MIN_ARRIVALS_FOR_PROFILE} needed to characterise a "
+             "day — so telemetry gate events are used instead"
+             if thin else
+             "core.eir has no gate documents in this window, so telemetry gate "
+             "events are used instead")
+            + "; GATE_ARRIVAL is the arrival signal and GATE_IN the completion",
             SOURCE_DERIVED))
         profile = [{"bucket": r["bucket"],
                     # A window with no GATE_ARRIVAL rows but with GATE_IN rows
@@ -123,42 +143,87 @@ async def derive_sustained_rate(repo: Any, profile: list[dict], *,
             "supplied in the request; the observed data was not used to infer it",
             SOURCE_PARAMETER)
 
+    observed_peak = max((float(h.get("arrivals") or 0) for h in profile),
+                        default=0.0)
+
     rows, trace = await repo.tas_hourly_capacity(from_ts=from_ts, to_ts=to_ts,
                                                  gate_id=gate_id)
     caps = [float(r["slot_capacity"]) for r in rows if r.get("slot_capacity")]
     if caps:
         rate = round(sum(caps) / len(caps), 1)
-        return rate, trace, Assumption(
-            "gate_sustained_rate", rate,
-            f"mean declared TAS slot capacity across {len(caps)} provisioned hours "
-            "(core.tas_appointment) — a policy figure, not an inference",
-            SOURCE_MEASURED)
+        # A declared capacity is normally the best source — it is what the port
+        # committed to provide. But a declaration BELOW what the gate was observed
+        # to achieve in the same window is not policy, it is an unreplaced stub,
+        # and taking it as MEASURED produces a confidently absurd answer: JNPA's
+        # 16-row core.tas_appointment stub declares 10/h against an observed peak
+        # of 284/h, which reports 21 of 24 hours saturated and 92% of trucks
+        # unplaceable. Observed throughput is a floor on capacity, so fall through
+        # to the derivation rather than assert the declaration.
+        verdict = declared_beats_observed(rate, observed_peak)
+        if verdict:
+            return rate, trace, Assumption(
+                "gate_sustained_rate", rate,
+                f"mean declared TAS slot capacity across {len(caps)} provisioned "
+                "hours (core.tas_appointment) — a policy figure, not an inference",
+                SOURCE_MEASURED)
+        rejected_declaration = (rate, verdict.reason)
+    else:
+        rejected_declaration = None
+
+    #: Appended to the derivation's reason when a declaration was set aside, so
+    #: the response says which figure was rejected and why rather than silently
+    #: presenting the fallback as if nothing else was available.
+    override_note = ""
+    if rejected_declaration:
+        declared, why = rejected_declaration
+        override_note = (f" A declared TAS capacity of {declared:g}/h was found "
+                         f"and NOT used: {why}.")
 
     completions = [float(h["completed"]) for h in profile if h.get("completed")]
     if completions:
         rate = round(percentile(completions, SUSTAINED_PERCENTILE) or 0.0, 1)
-        return rate, trace, Assumption(
-            "gate_sustained_rate", rate,
-            f"p{int(SUSTAINED_PERCENTILE * 100)} of observed hourly gate "
-            f"COMPLETIONS across {len(completions)} active hours; the busiest "
-            "single hour is treated as an outlier rather than a sustainable rate",
-            SOURCE_DERIVED)
+        # Bound the replacement as well as the thing it replaced. Rejecting an
+        # implausibly LOW declaration only to accept an implausibly HIGH
+        # derivation swaps one confidently wrong answer for another: on JNPA's
+        # RDS the completion series yields p90 = 4,010/h against an arrival peak
+        # of 284/h, which reports the gate as never saturating.
+        band = in_band("gate_sustained_rate", rate, GATE_TRUCKS_PER_HOUR)
+        if band:
+            return rate, trace, Assumption(
+                "gate_sustained_rate", rate,
+                f"p{int(SUSTAINED_PERCENTILE * 100)} of observed hourly gate "
+                f"COMPLETIONS across {len(completions)} active hours; the busiest "
+                "single hour is treated as an outlier rather than a sustainable "
+                "rate." + override_note,
+                SOURCE_DERIVED)
+        override_note += (
+            f" The completion series was also set aside: {band.reason} — "
+            "core.gate_event records more completion events than arrivals in this "
+            "window, so completions do not measure gate throughput here.")
 
     arrivals = [float(h["arrivals"]) for h in profile if h.get("arrivals")]
     if arrivals:
         rate = round(percentile(arrivals, SUSTAINED_PERCENTILE) or 0.0, 1)
+        band = in_band("gate_sustained_rate", rate, GATE_TRUCKS_PER_HOUR)
+        if not band:
+            return None, trace, Assumption(
+                "gate_sustained_rate", None,
+                "no usable basis for the rate the gate sustains: every candidate "
+                f"was implausible. {band.reason}." + override_note,
+                SOURCE_DERIVED)
         return rate, trace, Assumption(
             "gate_sustained_rate", rate,
             f"p{int(SUSTAINED_PERCENTILE * 100)} of observed hourly ARRIVALS — "
             "nothing in the window records what the gate actually cleared, so "
             "demand is used as a proxy for throughput. This is the weakest of the "
             "available bases and will understate capacity if the gate was never "
-            "saturated in this window",
+            "saturated in this window." + override_note,
             SOURCE_DERIVED)
 
     return None, trace, Assumption(
         "gate_sustained_rate", None,
-        "no arrivals, no completions and no declared slot capacity in the window",
+        "no arrivals, no completions and no usable declared slot capacity in the "
+        "window" + override_note,
         SOURCE_DERIVED)
 
 

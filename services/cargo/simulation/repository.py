@@ -313,6 +313,49 @@ class SimulationRepository:
             self._VEHICLE_TRIPS_SQL, {"from_ts": from_ts, "to_ts": to_ts},
             api="GET /api/gate-docs/eir?from_date=…&to_date=…")
 
+    async def vehicle_trips_from_events(self, *, from_ts: datetime, to_ts: datetime
+                                        ) -> tuple[list[dict], QueryTrace]:
+        """Trips per vehicle per day from gate telemetry, UNATTRIBUTED.
+
+        The fallback for :meth:`vehicle_trips` when core.eir is too thin to
+        describe the window. Same row shape, so the scenario arithmetic is
+        unchanged; every row carries transporter 'UNATTRIBUTED' because
+        core.gate_event has no company column."""
+        return await self._read(
+            "trips per vehicle per day from gate telemetry (core.gate_event)",
+            self._VEHICLE_TRIPS_EVENT_SQL, {"from_ts": from_ts, "to_ts": to_ts},
+            api="GET /api/gate/hourly-profile?from=…&to=…")
+
+    #: Same shape as _VEHICLE_TRIPS_SQL, from telemetry instead of paperwork.
+    #:
+    #: core.eir is the better source — it is the only table carrying `company`,
+    #: so it is the only one that can attribute a trip to a TRANSPORTER. But on
+    #: JNPA's database it holds five rows against 482,966 gate events covering
+    #: 8,581 distinct vehicles, and a five-trip population cannot answer "what
+    #: happens if every vehicle does a third fewer trips".
+    #:
+    #: So this recovers the THROUGHPUT half of III-B at real scale and leaves the
+    #: transporter half explicitly unattributed. core.gate_event has no company
+    #: column and only ~41 of its 8,581 plates appear in core.vehicle, so
+    #: attribution is not available at any useful coverage and is declared
+    #: missing rather than guessed from a 0.5% sample.
+    _VEHICLE_TRIPS_EVENT_SQL = """
+        SELECT 'UNATTRIBUTED'                            AS transporter,
+               g.plate                                   AS truck_no,
+               g.ts::date                                AS trip_date,
+               count(*)                                  AS trips,
+               count(DISTINCT g.container_number) FILTER (
+                   WHERE g.container_number IS NOT NULL)  AS containers,
+               NULL::numeric                             AS avg_tat_min
+          FROM core.gate_event g
+         WHERE g.ts >= :from_ts
+           AND g.ts <  :to_ts
+           AND g.plate IS NOT NULL
+           AND g.event_type IN ('GATE_ARRIVAL', 'GATE_IN')
+         GROUP BY 1, 2, 3
+         ORDER BY 1, 2, 3
+    """
+
     _CARGO_FLOW_SQL = """
         SELECT COALESCE(NULLIF(btrim(e.eir_type), ''), 'UNSPECIFIED')  AS flow,
                COALESCE(NULLIF(btrim(e.cfs_to), ''),

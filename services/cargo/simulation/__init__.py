@@ -39,8 +39,9 @@ from typing import Any, Optional
 
 from jnpa_shared.logging import get_logger
 
-from . import (berth_cascade, crane_productivity, driver_shortage, gate_slotting,
-               modal_shift, vessel_bunching)
+from . import (berth_cascade, channel_closure, crane_productivity, degraded_gate,
+               driver_shortage, gate_slotting, modal_shift, vessel_bunching,
+               yard_feedback)
 from .base import (Assumption, QueryTrace, SimulationError, SimulationResult,
                    hours_between, pct)
 from .repository import SimulationRepository, SimulationWriteAttempt
@@ -56,6 +57,12 @@ REGISTRY: dict[str, Any] = {
     modal_shift.SCENARIO: modal_shift,
     gate_slotting.SCENARIO: gate_slotting,
     driver_shortage.SCENARIO: driver_shortage,
+    # Bidder-proposed (N-1..N-3) — not requested by JNPA. Each demonstrates a
+    # capability class absent from all 21 requested obligations: a shared-resource
+    # valve, a closed feedback loop, and a resilience/recovery mode.
+    channel_closure.SCENARIO: channel_closure,
+    yard_feedback.SCENARIO: yard_feedback,
+    degraded_gate.SCENARIO: degraded_gate,
 }
 
 #: Human-facing catalog for GET /api/cargo/simulate/scenarios. Kept beside the
@@ -131,6 +138,55 @@ CATALOG: list[dict] = [
         "optional": ["state_date (default to_date + 1)",
                      "reduction_pct (default 0.3333)"],
         "reads": ["core.eir", "core.cargo"],
+    },
+    {
+        "scenario": channel_closure.SCENARIO,
+        "jnpa_reference": "N-1 — Channel Closure (bidder-proposed)",
+        "question": ("The approach channel is lost for N hours, so arrivals and "
+                     "sailings stop together. At what hour is the port "
+                     "berth-locked, and in what order should held vessels sail on "
+                     "reopening?"),
+        "required": ["as_of"],
+        "optional": ["closure_hours (default 12)", "transit_hours (default 1.5)",
+                     "terminal", "horizon_hours"],
+        "reads": ["core.berthing_record"],
+        "proposed_by": "bidder",
+        "note": ("Not requested by JNPA. The only scenario in which one shared "
+                 "asset throttles both directions at once."),
+    },
+    {
+        "scenario": yard_feedback.SCENARIO,
+        "jnpa_reference": "N-2 — Yard Saturation Feedback (bidder-proposed)",
+        "question": ("Evacuation drops while discharge continues. Above a "
+                     "utilisation threshold, re-handles degrade berth "
+                     "productivity, which feeds back into the yard. Where does it "
+                     "settle and when does it tip?"),
+        "required": ["from_date", "to_date"],
+        "optional": ["evacuation_drop_pct (default 0.5)", "yard_capacity_teu",
+                     "threshold (default 0.85)", "slope (default 0.40)",
+                     "horizon_days (default 14)", "terminal"],
+        "reads": ["core.perf_daily_traffic"],
+        "proposed_by": "bidder",
+        "note": ("Not requested by JNPA. The only closed LOOP in the catalogue — "
+                 "UC-2 yard state degrading UC-1 berth productivity. The "
+                 "occupancy-to-productivity curve is a declared assumption."),
+    },
+    {
+        "scenario": degraded_gate.SCENARIO,
+        "jnpa_reference": "N-3 — Degraded-Mode Gate Outage (bidder-proposed)",
+        "question": ("Gate automation is unavailable for N hours and the gate "
+                     "reverts to manual. How far does the queue back up, and how "
+                     "long does it take to clear once systems return?"),
+        "required": ["from_ts", "to_ts"],
+        "optional": ["outage_start", "outage_hours (default 4)",
+                     "degraded_fraction (default 0.4)", "terminal", "gate_id",
+                     "sustained_rate"],
+        "reads": ["core.eir", "core.gate_event", "core.tas_appointment"],
+        "proposed_by": "bidder",
+        "note": ("Not requested by JNPA. Every requested scenario is a physical "
+                 "disruption; this is the only digital one, and the only one that "
+                 "measures RECOVERY. Exercises briefing evaluation criteria 07 "
+                 "(Cybersecurity) and 09 (Failover & Exceptions)."),
     },
 ]
 

@@ -38,6 +38,7 @@ import CfsEcyMovements from "@/screens/CfsEcyMovements";
 import ShippingLines from "@/screens/ShippingLines";
 import Berthing from "@/screens/berthing/Berthing";
 import PerformanceReports from "@/screens/PerformanceReports";
+import VideoAnalytics from "@/screens/VideoAnalytics";
 import WorkflowComposer from "@/screens/WorkflowComposer";
 import SimulatorPage from "@/sim/SimulatorPage";
 import Launcher from "@/screens/Launcher";
@@ -364,6 +365,17 @@ function DashboardShell({
             element={
               <Guard path="/performance">
                 <PerformanceReports />
+              </Guard>
+            }
+          />
+          {/* SecureVision clip-analysis workbench. The only NEW screen the
+              SecureVision integration adds — every other vendor capability was
+              folded into the screen that already owned the subject. */}
+          <Route
+            path="/video-analytics"
+            element={
+              <Guard path="/video-analytics">
+                <VideoAnalytics />
               </Guard>
             }
           />

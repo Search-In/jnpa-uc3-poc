@@ -63,6 +63,22 @@ import type {
   VehicleStats,
 } from "@/lib/types";
 import type {
+  SvAnalysis,
+  SvAnalysisList,
+  SvCamera,
+  SvCombinedReport,
+  SvEnrollInput,
+  SvFaceEvent,
+  SvFaceModelStatus,
+  SvHealth,
+  SvIncident,
+  SvPerson,
+  SvPersonDetection,
+  SvPersonResult,
+  SvPersonStatus,
+  SvStreamTicket,
+} from "@/lib/securevision";
+import type {
   CarbonEmissionRecord,
   CongestionMetrics,
   ContainerJourney,
@@ -2300,4 +2316,292 @@ export class MockAdapter implements DataAdapter {
       tables: { fastag_balance: true, fastag_transactions: true, toll_enroute: true },
     });
   }
+
+  // --- SecureVision (demo fixtures) ----------------------------------------
+  // Deterministic stand-ins so the mock build stays runnable with no vendor
+  // credential. Every id and narrative is prefixed DEMO so a screenshot can
+  // never be mistaken for a real detection; this whole class is tree-shaken out
+  // of production bundles (see data/index.ts — the mode is a build constant).
+  svHealth(): Promise<SvHealth> {
+    return Promise.resolve({
+      integration: "securevision",
+      configured: false,
+      status: "NOT_CONFIGURED",
+      reachable: false,
+      camera_map_configured: false,
+      camera_map_entries: 0,
+      persistence: "NONE",
+      analyses_in_session: 1,
+      stream_tickets_outstanding: 0,
+      mode: "UPLOAD_CLIP_ANALYTICS",
+      face_model: null,
+    });
+  }
+
+  svAnalyses(): Promise<SvAnalysisList> {
+    return Promise.resolve({
+      analyses: [MOCK_SV_ANALYSIS],
+      count: 1,
+      persisted: false,
+      note: "DEMO fixtures — no SecureVision call was made.",
+    });
+  }
+
+  svUploadVideo(_file: File, cameraCode: string): Promise<SvAnalysis> {
+    return Promise.resolve({ ...MOCK_SV_ANALYSIS, securevision_camera_code: cameraCode });
+  }
+
+  svIncident(analysisId: string, code: "i01" | "i02" | "i09" | "i12"): Promise<SvIncident> {
+    const base = mockSvIncidentBase(analysisId, code);
+    if (code === "i01") {
+      return Promise.resolve({
+        ...base,
+        plate: {
+          plate: "MH46BM3672",
+          plate_valid: true,
+          vehicle_type: "truck",
+          vehicle_color: "white",
+          validation: "PASSED",
+          ocr_confidence: 0.93,
+        },
+      });
+    }
+    if (code === "i02") {
+      return Promise.resolve({
+        ...base,
+        counts: [
+          { vehicle_class: "car", count: 2 },
+          { vehicle_class: "truck", count: 1 },
+        ],
+        total_count: 3,
+      });
+    }
+    if (code === "i09") {
+      return Promise.resolve({
+        ...base,
+        container: {
+          number: "CSQU3054383",
+          vendor_valid: true,
+          jnpa_valid: true,
+          agreement: "MATCH",
+          container_detected: true,
+          validation: "PASSED",
+          plate: "MH46BM3672",
+          plate_detected: true,
+        },
+      });
+    }
+    return Promise.resolve({
+      ...base,
+      tamper: { tamper_state: "BLACK_FRAME", analytic_confidence_pct: 96.5 },
+    });
+  }
+
+  svIncidentPersons(analysisId: string): Promise<SvPersonResult> {
+    const person = (
+      overrides: Partial<SvPersonDetection> & { person_status: SvPersonStatus },
+    ): SvPersonDetection => ({
+      source: "SECUREVISION",
+      analysis_id: analysisId,
+      incident_code: "i07",
+      incident_type: "I-07",
+      title: "Person in Restricted/Machinery Zone",
+      status: "SUCCESS",
+      validation_status: "PASSED",
+      confidence: 0.81,
+      confidence_pct: 81,
+      track_id: 5,
+      camera: MOCK_SV_CAMERA,
+      image_url: null,
+      authorized: null,
+      person_name: null,
+      person_id: null,
+      face_similarity: null,
+      dwell_seconds: 4.2,
+      zone: "DEMO Machinery Zone 1",
+      zone_source: "SECUREVISION",
+      description: "[DEMO] Person detected in a restricted zone.",
+      detected_at: null,
+      facts: {},
+      ...overrides,
+    });
+    return Promise.resolve({
+      source: "SECUREVISION",
+      analysis_id: analysisId,
+      incident_code: "i07",
+      incident_type: "I-07",
+      fired: true,
+      count: 3,
+      camera: MOCK_SV_CAMERA,
+      // All three verdicts, so the demo exercises the UNVERIFIED path too.
+      persons: [
+        person({
+          person_status: "AUTHORIZED",
+          authorized: true,
+          person_name: "DEMO Rahul Sharma",
+          person_id: "DEMO-EMP-1042",
+          face_similarity: 0.71,
+          dwell_seconds: 8.4,
+        }),
+        person({ person_status: "UNAUTHORIZED", authorized: false, face_similarity: 0.22 }),
+        person({ person_status: "UNVERIFIED", track_id: 7, validation_status: null }),
+      ],
+    });
+  }
+
+  svIncidentAll(analysisId: string): Promise<SvCombinedReport> {
+    return Promise.resolve({
+      source: "SECUREVISION",
+      analysis_id: analysisId,
+      camera: MOCK_SV_CAMERA,
+      incidents: [mockSvIncidentBase(analysisId, "i01")],
+      combined_description:
+        "[DEMO] A white truck was captured at the gate carrying a validated container.",
+      ai_generated: true,
+      narrative_provenance: "AI_GENERATED",
+    });
+  }
+
+  svDeleteAnalysis(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  svStreamTicket(analysisId: string): Promise<SvStreamTicket> {
+    return Promise.resolve({
+      ticket: "DEMO-TICKET",
+      analysis_id: analysisId,
+      expires_in: 120,
+      stream_url: `/api/sv/analytics/video/${analysisId}/stream?ticket=DEMO-TICKET`,
+    });
+  }
+
+  svFaces(): Promise<SvPerson[]> {
+    return Promise.resolve([
+      {
+        source: "SECUREVISION",
+        id: 12,
+        person_id: "DEMO-EMP-1042",
+        name: "DEMO Rahul Sharma",
+        role: "Technician",
+        department: "Maintenance",
+        is_active: true,
+        created_at: "2026-08-10T11:00:00Z",
+        photo_url: null,
+      },
+    ]);
+  }
+
+  svFaceEvents(): Promise<SvFaceEvent[]> {
+    return Promise.resolve([
+      {
+        source: "SECUREVISION",
+        id: 501,
+        camera: MOCK_SV_CAMERA,
+        person_id: "DEMO-EMP-1042",
+        name: "DEMO Rahul Sharma",
+        authorized: true,
+        person_status: "AUTHORIZED",
+        confidence: 0.71,
+        confidence_pct: 71,
+        incident_id: null,
+        latitude: 18.9498,
+        longitude: 72.9512,
+        created_at: "2026-08-10T11:15:22Z",
+        snapshot_available: false,
+      },
+    ]);
+  }
+
+  svFaceStatus(): Promise<SvFaceModelStatus> {
+    return Promise.resolve({
+      configured: false,
+      status: "NOT_CONFIGURED",
+      model_ready: false,
+      source: "SECUREVISION",
+    });
+  }
+
+  svEnrollFace(input: SvEnrollInput): Promise<SvPerson> {
+    return Promise.resolve({
+      source: "SECUREVISION",
+      id: 99,
+      person_id: input.person_id,
+      name: input.name,
+      role: input.role ?? null,
+      department: input.department ?? null,
+      is_active: true,
+      created_at: new Date().toISOString(),
+      photo_url: null,
+    });
+  }
+
+  async svUpdateFace(
+    personPk: number,
+    patch: { name?: string; role?: string; department?: string; is_active?: boolean },
+  ): Promise<SvPerson> {
+    const [first] = await this.svFaces();
+    return { ...first, id: personPk, ...patch };
+  }
+
+  svDeleteFace(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
+// --- SecureVision demo fixtures ---------------------------------------------
+// Kept at module scope (not inside the class) so the shapes are declared once
+// and every DEMO marker is visible in one place.
+
+const MOCK_SV_CAMERA: SvCamera = {
+  securevision_code: "DEMO-CAM-01",
+  jnpa_camera_id: null,
+  // No mapping in the demo build: the UI must show "Camera mapping unavailable"
+  // rather than invent a JNPA camera — that is the behaviour worth demoing.
+  mapped: false,
+  map_configured: false,
+};
+
+const MOCK_SV_ANALYSIS: SvAnalysis = {
+  analysis_id: "DEMO-ANALYSIS-0001",
+  securevision_camera_code: "DEMO-CAM-01",
+  jnpa_camera_id: null,
+  camera_mapped: false,
+  filename: "demo_gate_clip.mp4",
+  frames_sampled: 30,
+  detection_pass_count: 1,
+  zones_loaded: 0,
+  uploaded_by: "DEMO",
+  uploaded_at: "2026-08-10T09:00:00Z",
+  persisted: false,
+  camera: MOCK_SV_CAMERA,
+  zone_warning: true,
+  source: "SECUREVISION",
+};
+
+function mockSvIncidentBase(analysisId: string, code: "i01" | "i02" | "i09" | "i12"): SvIncident {
+  return {
+    source: "SECUREVISION",
+    analysis_id: analysisId,
+    incident_code: code,
+    incident_type: `I-${code.slice(1)}`,
+    title: null,
+    fired: true,
+    status: "SUCCESS",
+    validation_status: "PASSED",
+    confidence: 0.93,
+    confidence_pct: 93,
+    ocr_confidence: 0.93,
+    ocr_confidence_pct: 93,
+    track_id: 3,
+    clip_offset_s: 4.2,
+    detected_at: "2026-08-10T09:00:04.200Z",
+    camera: MOCK_SV_CAMERA,
+    image_url: null,
+    evidence: [],
+    description: "[DEMO] SecureVision detection fixture.",
+    ai_generated: true,
+    vision_provider: "demo",
+    processing_time_ms: 812.4,
+    facts: {},
+  };
 }

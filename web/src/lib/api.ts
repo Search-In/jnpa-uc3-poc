@@ -2074,6 +2074,83 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+
+  // --- SecureVision (proxied vendor: /api/sv/*) ----------------------------
+  // The browser NEVER talks to svapidev.phylon.in and never holds a vendor
+  // token: SecureVision authenticates at /api/auth/login — the same relative
+  // path this app's own sign-in uses — so the gateway owns that exchange and
+  // exposes everything under /api/sv/* behind the EXISTING JNPA bearer.
+  svHealth: () => http<import("./securevision").SvHealth>("/api/sv/health"),
+  svCameraMap: () =>
+    http<{
+      configured: boolean;
+      count: number;
+      cameras: import("./securevision").SvCameraMapping[];
+    }>("/api/sv/cameras"),
+  svAnalyses: (limit = 50) =>
+    http<import("./securevision").SvAnalysisList>(`/api/sv/analyses?limit=${limit}`),
+  svUploadVideo: (file: File, cameraCode: string) => {
+    const f = new FormData();
+    f.append("file", file);
+    f.append("camera_code", cameraCode);
+    return postForm<import("./securevision").SvAnalysis>("/api/sv/analytics/video/upload", f);
+  },
+  /** One single-envelope analyzer: i01 | i02 | i09 | i12. */
+  svIncident: (analysisId: string, code: "i01" | "i02" | "i09" | "i12", strong = false) =>
+    http<import("./securevision").SvIncident>(
+      `/api/sv/analytics/incident/${code}?analysis_id=${encodeURIComponent(analysisId)}&strong=${strong}`,
+    ),
+  /** I-07 answers one verdict per person, so it has its own shape. */
+  svIncidentPersons: (analysisId: string) =>
+    http<import("./securevision").SvPersonResult>(
+      `/api/sv/analytics/incident/i07?analysis_id=${encodeURIComponent(analysisId)}`,
+    ),
+  svIncidentAll: (analysisId: string, strong = false) =>
+    http<import("./securevision").SvCombinedReport>(
+      `/api/sv/analytics/incident/all?analysis_id=${encodeURIComponent(analysisId)}&strong=${strong}`,
+    ),
+  svDeleteAnalysis: (analysisId: string) =>
+    http<void>(`/api/sv/analytics/video/${encodeURIComponent(analysisId)}`, { method: "DELETE" }),
+  /** Mints the short-lived credential the MJPEG <img> carries in its URL — an
+   *  <img> cannot send an Authorization header (same reason /api/ws takes a
+   *  ?token=). The vendor's own token never leaves the gateway. */
+  svStreamTicket: (analysisId: string) =>
+    http<import("./securevision").SvStreamTicket>(
+      `/api/sv/analytics/video/${encodeURIComponent(analysisId)}/stream-ticket`,
+      { method: "POST" },
+    ),
+  svFaces: () =>
+    http<{ persons: import("./securevision").SvPerson[]; count: number }>("/api/sv/faces"),
+  svFaceEvents: (params?: { limit?: number; authorized?: boolean }) => {
+    const q = new URLSearchParams();
+    if (params?.limit != null) q.set("limit", String(params.limit));
+    if (params?.authorized != null) q.set("authorized", String(params.authorized));
+    const qs = q.toString();
+    return http<{ events: import("./securevision").SvFaceEvent[]; count: number }>(
+      `/api/sv/faces/events${qs ? `?${qs}` : ""}`,
+    );
+  },
+  svFaceStatus: () => http<import("./securevision").SvFaceModelStatus>("/api/sv/faces/status"),
+  svEnrollFace: (input: import("./securevision").SvEnrollInput) => {
+    const f = new FormData();
+    f.append("person_id", input.person_id);
+    f.append("name", input.name);
+    if (input.role) f.append("role", input.role);
+    if (input.department) f.append("department", input.department);
+    // Repeated "files" parts: SecureVision averages several photos into one
+    // more robust embedding.
+    input.photos.forEach((photo, i) => f.append("files", photo, `face_${i + 1}.jpg`));
+    return postForm<import("./securevision").SvPerson>("/api/sv/faces", f);
+  },
+  svUpdateFace: (
+    personPk: number,
+    patch: { name?: string; role?: string; department?: string; is_active?: boolean },
+  ) =>
+    http<import("./securevision").SvPerson>(`/api/sv/faces/${personPk}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  svDeleteFace: (personPk: number) => http<void>(`/api/sv/faces/${personPk}`, { method: "DELETE" }),
 };
 
 // --- What-If simulation types ------------------------------------------------

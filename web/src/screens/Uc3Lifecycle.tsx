@@ -51,7 +51,7 @@ import { Button } from "@/components/ui/button";
 import { EmptyState, ErrorState, LoadingState } from "@/components/ui/misc";
 
 import { api } from "../lib/api";
-import type { ContainerJob, EcyCfsChain, JobEvent, JobStatus } from "../lib/api";
+import type { ContainerJob, EcyCfsChain, JobEvent, JobStatus, JobListItem } from "../lib/api";
 import JobAssignPanel from "@/components/uc3/JobAssignPanel";
 import GateDocUploadPanel from "./gatedocs/UploadPanel";
 import DocumentOCR from "@/screens/DocumentOCR";
@@ -292,8 +292,8 @@ export default function Uc3Lifecycle() {
   const items = jobsQ.data?.items ?? [];
   // Handover-queue entries are NOT jobs: they are released containers waiting for
   // one, so they are counted (and rendered) separately from dispatched work.
-  const pending = items.filter((j) => j.pending_handover);
-  const jobs = items.filter((j) => !j.pending_handover);
+  const pending = items.filter((j) => j.pending_handover === true);
+  const jobs = items.filter((j): j is ContainerJob => j.pending_handover !== true);
   const openJobs = jobs.filter((j) => j.status !== "COMPLETED" && j.status !== "CANCELLED").length;
 
   const TABS: { key: Tab; label: string; icon: typeof Workflow; count?: number }[] = [
@@ -395,23 +395,42 @@ export default function Uc3Lifecycle() {
                   </EmptyState>
                 ) : (
                   <ul className="max-h-[26rem] divide-y divide-border overflow-y-auto lg:max-h-[32rem]">
-                    {items.map((j: ContainerJob) => {
-                      const isPending = Boolean(j.pending_handover);
-                      const active = !isPending && selectedJob === j.id;
-                      return (
-                        <li key={isPending ? `pending:${j.container_number}` : `job:${j.id}`}>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              // A queue entry has no job to open: it feeds the
-                              // assignment panel above, which is where the job
-                              // record is created (POST /api/jobs).
-                              if (isPending) {
+                    {items.map((j: JobListItem) => {
+                      // A queue entry has no job behind it: it feeds the
+                      // assignment panel above, which is where the job record is
+                      // created (POST /api/jobs) — never the stepper.
+                      if (j.pending_handover) {
+                        return (
+                          <li key={`pending:${j.container_number}`}>
+                            <button
+                              type="button"
+                              onClick={() => {
                                 setSelectedJob(null);
                                 setOpenStep(null);
                                 setTerm(j.container_number ?? "");
-                                return;
-                              }
+                              }}
+                              className="flex w-full flex-col gap-1 px-3 py-2.5 text-left transition-colors hover:bg-muted/40"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="truncate font-mono text-[13px] font-medium text-foreground">
+                                  {j.container_number}
+                                </span>
+                                <StatusChip label="RELEASED · NEEDS TRUCK" tone="warn" />
+                              </div>
+                              <span className="truncate text-[11px] text-muted-foreground">
+                                {j.yard_block ?? "yard —"} · {j.vehicle_no ?? "no truck"} · assign to
+                                start
+                              </span>
+                            </button>
+                          </li>
+                        );
+                      }
+                      const active = selectedJob === j.id;
+                      return (
+                        <li key={`job:${j.id}`}>
+                          <button
+                            type="button"
+                            onClick={() => {
                               setSelectedJob(j.id);
                               setOpenStep(null);
                             }}
@@ -425,15 +444,10 @@ export default function Uc3Lifecycle() {
                               <span className="truncate font-mono text-[13px] font-medium text-foreground">
                                 {j.container_number || j.group_code || `Job #${j.id}`}
                               </span>
-                              <StatusChip
-                                label={isPending ? "RELEASED · NEEDS TRUCK" : j.status}
-                                tone={statusTone(j.status)}
-                              />
+                              <StatusChip label={j.status} tone={statusTone(j.status)} />
                             </div>
                             <span className="truncate text-[11px] text-muted-foreground">
-                              {isPending
-                                ? `${j.yard_block ?? "yard —"} · ${j.vehicle_no ?? "no truck"} · assign to start`
-                                : `${j.vehicle_no || j.vehicle_id} · ${j.move_type.replace("_", " ")}`}
+                              {j.vehicle_no || j.vehicle_id} · {j.move_type.replace("_", " ")}
                             </span>
                           </button>
                         </li>

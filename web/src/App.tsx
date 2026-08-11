@@ -34,6 +34,7 @@ import WhatIfConsole from "@/screens/WhatIfConsole";
 import DemoConsole from "@/screens/DemoConsole";
 import DriverEnrollments from "@/screens/DriverEnrollments";
 import VehicleManagement from "@/screens/VehicleManagement";
+import EmailProcessing from "@/screens/EmailProcessing";
 import CfsEcyMovements from "@/screens/CfsEcyMovements";
 import ShippingLines from "@/screens/ShippingLines";
 import Berthing from "@/screens/berthing/Berthing";
@@ -332,6 +333,14 @@ function DashboardShell({
             element={
               <Guard path="/vehicles">
                 <VehicleManagement />
+              </Guard>
+            }
+          />
+          <Route
+            path="/email-processing"
+            element={
+              <Guard path="/email-processing">
+                <EmailProcessing />
               </Guard>
             }
           />

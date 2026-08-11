@@ -1772,3 +1772,271 @@ export interface OcrHealth {
   }>;
   failed_extraction_source: string;
 }
+
+// --- UC3-028 violation queue / UC3-029 hash-chained audit -------------------
+export interface ViolationCaseRow {
+  case_id: string;
+  vehicle_number: string | null;
+  driver_id: string | null;
+  status: string;
+  total_fine: number;
+  first_detected_at: string;
+  last_updated_at: string;
+  gate_id: string | null;
+  confidence: number | null;
+  evidence_url: string | null;
+  /** Evidence is written once and referenced by this SHA-256 (UI-113). */
+  evidence_sha256: string | null;
+  challan_no: string | null;
+  challan_status: string | null;
+  kinds: string[];
+  severity: string;
+}
+
+export interface ViolationQueueResponse {
+  cases: ViolationCaseRow[];
+  count: number;
+  by_status: Record<string, number>;
+  lifecycle: string[];
+  violation_types: string[];
+  evidence_policy: { hash: string; note: string };
+}
+
+/** One append-only, hash-chained audit entry (hash = sha256(prev_hash + body)). */
+export interface CaseAuditEntry {
+  event: string;
+  from_status: string | null;
+  to_status: string | null;
+  actor: string | null;
+  ts: string;
+  hash: string;
+}
+
+export interface ViolationCaseBundle {
+  case: ViolationCaseRow;
+  violations: Array<{
+    id: string;
+    kind: string;
+    severity: string;
+    ts: string;
+    fine_inr: number;
+    section: string | null;
+  }>;
+  challan: (Record<string, unknown> & ChallanDisclosure) | null;
+  audit: CaseAuditEntry[];
+}
+
+export interface ChainVerification {
+  case_id: string;
+  valid: boolean;
+  length: number;
+  broken_at?: unknown;
+}
+
+// --- UC3-035 dual turnaround definitions -----------------------------------
+/** One turnaround definition. Never rendered without its sibling (UI-122). */
+export interface DualTatArm {
+  key: string;
+  label: string;
+  unit: string;
+  definition: string;
+  method: string;
+  target: number | null;
+  baseline: number | null;
+  baseline_source: string;
+}
+
+export interface DualTatResponse {
+  /** Both arms in one payload — there is no way to request a single definition. */
+  pair: { terminal: DualTatArm; driver: DualTatArm };
+  render_rule: { ref: string; must_render_together: boolean; note: string };
+  ground_truth_markers: Array<{
+    source_document: string;
+    vehicle_no: string | null;
+    container_no: string | null;
+    terminal_code: string | null;
+    tat_minutes: number;
+    definition: string;
+    provenance: string;
+    note: string;
+  }>;
+  ground_truth_note: string;
+}
+
+// --- UC3-035 KPI distribution (daily average, P90, peak-hour ratio) --------
+export interface KpiDistributionEntry {
+  key: string;
+  label: string;
+  unit: string;
+  target: number | null;
+  baseline: number | null;
+  window_hours: number;
+  daily_average: number | null;
+  median: number | null;
+  p90: number | null;
+  peak_hour_ratio: number | null;
+  peak_hour_utc: string | null;
+  peak_hour_mean: number | null;
+  samples: number;
+  source: "live" | "baseline";
+  /** Set when the mean exceeds P90 — outliers dominate; median is representative. */
+  skew_warning: string | null;
+  method: Record<string, string>;
+}
+
+export interface KpiDistributionResponse {
+  distribution: Record<string, KpiDistributionEntry>;
+  window_hours: number;
+  note: string;
+}
+
+// --- UC3-028 escalation ladder + per-channel delivery ----------------------
+export interface EscalationRung {
+  escalation_id: number;
+  rung: number;
+  rung_label: string;
+  n_minutes: number;
+  due_after_min: number;
+  zone_id: string | null;
+  fired_at: string;
+}
+
+/** One channel to one recipient. UNAVAILABLE is a real outcome, not an error. */
+export interface NotificationDelivery {
+  delivery_id: number;
+  escalation_id: number | null;
+  rung: number | null;
+  channel: "SMS" | "EMAIL" | "WHATSAPP";
+  recipient_role: "OWNER" | "TRANSPORTER" | "TRAFFIC_POLICE" | "DRIVER";
+  recipient: string | null;
+  recipient_name: string | null;
+  recipient_source: string | null;
+  status: "QUEUED" | "SENT" | "DELIVERED" | "FAILED" | "UNAVAILABLE";
+  provider: string | null;
+  detail: string | null;
+  created_at: string;
+}
+
+export interface FieldVerificationTask {
+  task_id: number;
+  case_id: string;
+  reason: string;
+  assigned_to: string;
+  evidence_url: string | null;
+  evidence_sha256: string | null;
+  zone_id: string | null;
+  status: string;
+  resolved_plate: string | null;
+  created_at: string;
+  resolved_at: string | null;
+}
+
+export interface CaseNotifications {
+  case_id: string;
+  escalations: EscalationRung[];
+  deliveries: NotificationDelivery[];
+  by_status: Record<string, number>;
+  channels: string[];
+  ladder: Array<{ rung: number; label: string; multiplier: string }>;
+  field_verification_task: FieldVerificationTask | null;
+}
+
+export interface EscalateResult {
+  case_id: string;
+  n_minutes: number;
+  dwell_minutes: number;
+  schedule: Array<{ rung: number; label: string; due_after_min: number }>;
+  rungs_due: number[];
+  rungs_fired: number[];
+  rungs_already_fired: number[];
+  deliveries: NotificationDelivery[];
+  /** Measured server-side against the F-08 10-second budget. */
+  elapsed_ms: number;
+  latency_budget_ms: number;
+  within_budget: boolean;
+}
+
+// --- UC3-023 camera degraded mode (EC-6) -----------------------------------
+export interface CameraDegradedMode {
+  camera_id: string;
+  decision_path: string;
+  frame_age_s: number | null;
+  fault_injected: boolean;
+  rung: "LIVE" | "DEGRADED" | "NO_FEED";
+  no_feed: boolean;
+  confirmation_mode: "ANPR_RFID_JOIN" | "RFID_ONLY";
+  confidence: number;
+  confidence_basis: string;
+  manual_verify_lane: boolean;
+  service_rate_factor: number;
+  source_card: "LIVE" | "DEGRADED" | "DOWN";
+  /** Replayed frames are labelled REPLAY — never LIVE. */
+  feed_label: "LIVE" | "REPLAY" | "NO FEED";
+}
+
+export interface DegradedModeResponse {
+  cameras: CameraDegradedMode[];
+  count: number;
+  degraded_count: number;
+  no_feed_count: number;
+  overall_rung: "LIVE" | "DEGRADED" | "NO_FEED";
+  service_rate_factor: number;
+  nominal_service_vph: number;
+  effective_service_vph: number;
+  timing_contract: {
+    no_feed_detect_seconds: number;
+    card_down_visible_seconds: number;
+    note: string;
+  };
+  fault_injection: { endpoint: string; note: string };
+  reconciliation: { note: string };
+}
+
+// --- UC3-020 corridor congestion heatmap -----------------------------------
+export interface HeatmapSegment {
+  segment_code: string;
+  lat: number;
+  lon: number;
+  start: [number, number];
+  end: [number, number];
+  length_km: number;
+  flow_vph: number | null;
+  speed_kph: number | null;
+  congestion_index: number | null;
+  band: "FREE" | "BUSY" | "HEAVY" | "SEVERE" | null;
+  jam_probability: number | null;
+  reroute_recommended: boolean;
+  reroute_reason?: string | null;
+  observation: "COUNTED" | "EXTRAPOLATED" | "NO_DATA";
+  data_mode: "OBSERVED" | "DERIVED";
+}
+
+export interface CorridorHeatmapResponse {
+  at: string;
+  now: string;
+  offset_minutes: number;
+  offset_requested: number;
+  clamped: boolean;
+  /** OBSERVED at or before now; DERIVED strictly after — the flip is exact. */
+  data_mode: "OBSERVED" | "DERIVED";
+  confidence: number;
+  segments: HeatmapSegment[];
+  segment_count: number;
+  measured_count: number;
+  window: {
+    past_hours: number;
+    forecast_hours: number;
+    bucket_minutes: number;
+    min_offset_minutes: number;
+    max_offset_minutes: number;
+  };
+  bands: { free: number; busy: number; heavy: number };
+  reroute: {
+    threshold: number;
+    triggered: boolean;
+    segments: string[];
+    action: string | null;
+  };
+  method: Record<string, string | number>;
+  provenance: { mode: string; note: string; resolution_disclaimer: string };
+}

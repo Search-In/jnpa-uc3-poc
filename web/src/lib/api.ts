@@ -1900,6 +1900,31 @@ export const api = {
       { method: "POST" },
     ),
 
+  // --- UC3-020 corridor congestion heatmap ---------------------------------
+  // offset_minutes is the slider: -360 … 0 … +120. The server clamps it and says
+  // so, so a caller cannot get a 12-hour forecast dressed as a 15-minute one.
+  corridorHeatmap: (offsetMinutes = 0) =>
+    http<import("./types").CorridorHeatmapResponse>(
+      `/api/corridor-heatmap?offset_minutes=${offsetMinutes}`,
+    ),
+
+  // --- UC3-023 camera degraded mode (EC-6) ---------------------------------
+  // Reads each camera's ACTUAL cascade rung, including a rung forced through
+  // /api/control/fault — never a UI-only status.
+  gateDegradedMode: () =>
+    http<import("./types").DegradedModeResponse>("/api/gate-board/degraded-mode"),
+  /** The project's existing fault console; the drill uses it, not a new mechanism. */
+  injectFault: (domain: string, rung: string) =>
+    http<Record<string, unknown>>(`/api/control/fault/${domain}`, {
+      method: "POST",
+      body: JSON.stringify({ rung }),
+    }),
+  clearFault: (domain: string) =>
+    http<{ cleared: string; reconciliation?: Record<string, unknown> }>(
+      `/api/control/fault/${domain}`,
+      { method: "DELETE" },
+    ),
+
   // --- UC3-027 CPP metered release (flow F-06) -----------------------------
   cppBoard: () => http<import("./types").CppBoardResponse>("/api/cpp/board"),
   /** METERED throttles only the congested terminal; UNIFORM is the do-nothing arm. */
@@ -1946,6 +1971,67 @@ export const api = {
     http<import("./types").TripSearchResponse>(`/api/trip/search?q=${encodeURIComponent(q)}`),
   trip: (tripId: string) =>
     http<import("./types").TripDetail>(`/api/trip/${encodeURIComponent(tripId)}`),
+
+  // --- UC3-035 dual turnaround definitions ---------------------------------
+  // Returns BOTH arms; there is deliberately no parameter to ask for one
+  // (UI-122: neither may be displayed alone anywhere in the product).
+  kpiDualTat: () => http<import("./types").DualTatResponse>("/api/kpi/dual-tat"),
+  /** Daily average, median, P90 and peak-hour ratio, all computed in the DB. */
+  kpiDistribution: (windowHours = 24) =>
+    http<import("./types").KpiDistributionResponse>(
+      `/api/kpi/distribution?window_hours=${windowHours}`,
+    ),
+
+  // --- UC3-028 violation queue / UC3-029 hash-chained audit ----------------
+  // Filtering is server-side: a queue that only filters what it already
+  // downloaded stops being correct past the first page.
+  violationQueue: (opts: { status?: string; kind?: string; plate?: string } = {}) => {
+    const q = new URLSearchParams();
+    if (opts.status) q.set("status", opts.status);
+    if (opts.kind) q.set("kind", opts.kind);
+    if (opts.plate) q.set("plate", opts.plate);
+    const qs = q.toString();
+    return http<import("./types").ViolationQueueResponse>(
+      `/api/violations/cases${qs ? `?${qs}` : ""}`,
+    );
+  },
+  /** Fires every rung the dwell has earned (N/2N/3N). Idempotent per rung. */
+  violationEscalate: (
+    caseId: string,
+    body: {
+      dwell_minutes: number;
+      zone_id?: string;
+      n_minutes?: number;
+    },
+  ) =>
+    http<import("./types").EscalateResult>(
+      `/api/violations/cases/${encodeURIComponent(caseId)}/escalate`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  violationNotifications: (caseId: string) =>
+    http<import("./types").CaseNotifications>(
+      `/api/violations/cases/${encodeURIComponent(caseId)}/notifications`,
+    ),
+  violationFieldVerification: (caseId: string, zoneId?: string) =>
+    http<{ task: import("./types").FieldVerificationTask; note: string }>(
+      `/api/violations/cases/${encodeURIComponent(caseId)}/field-verification`,
+      { method: "POST", body: JSON.stringify({ zone_id: zoneId }) },
+    ),
+  violationCase: (caseId: string) =>
+    http<import("./types").ViolationCaseBundle>(
+      `/api/violations/cases/${encodeURIComponent(caseId)}`,
+    ),
+  /** Recomputes the append-only chain server-side; reports the first broken link. */
+  violationVerifyChain: (caseId: string) =>
+    http<import("./types").ChainVerification>(
+      `/api/violations/cases/${encodeURIComponent(caseId)}/verify-chain`,
+    ),
+  /** Illegal hops are rejected by the server with 409 — the error is surfaced. */
+  violationTransition: (caseId: string, toStatus: string, paymentRef?: string) =>
+    http<Record<string, unknown>>(
+      `/api/violations/cases/${encodeURIComponent(caseId)}/transition`,
+      { method: "POST", body: JSON.stringify({ to_status: toStatus, payment_ref: paymentRef }) },
+    ),
 
   // --- UC3-036 carbon method + idle delta ----------------------------------
   carbonMethod: () => http<import("./types").CarbonMethodResponse>("/api/carbon/method"),

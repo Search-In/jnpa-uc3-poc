@@ -47,8 +47,7 @@ export interface Verdict {
 
 /* ------------------------------------------------------------------ helpers */
 
-const num = (v: unknown): number | null =>
-  typeof v === "number" && Number.isFinite(v) ? v : null;
+const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 
 /** Round for reading, not for maths: 5.666 -> "5.7", 120.0 -> "120". */
 const n = (v: unknown, dp = 1): string => {
@@ -110,9 +109,10 @@ function vesselBunching(f: VerdictInput["figures"], r: VerdictInput["result"]): 
   const total = num(contending) ?? 0;
   // Only worth saying when one terminal is actually carrying a disproportionate
   // share — otherwise it is noise dressed up as insight.
-  const detail = busiest && share && total > 0 && share / total >= 0.4
-    ? `${busiest} is carrying ${n(share, 0)} of the ${n(total, 0)} contending calls — resequencing inside one terminal will not fix an uneven spread across terminals.`
-    : undefined;
+  const detail =
+    busiest && share && total > 0 && share / total >= 0.4
+      ? `${busiest} is carrying ${n(share, 0)} of the ${n(total, 0)} contending calls — resequencing inside one terminal will not fix an uneven spread across terminals.`
+      : undefined;
 
   if (!ordering || ordering === "FCFS" || gain <= 0) {
     return {
@@ -187,7 +187,10 @@ function gateSlotting(f: VerdictInput["figures"], r: VerdictInput["result"]): Ve
   if (saturated === 0) {
     return {
       headline: `Arrivals stay within capacity all day. The busiest hour reaches ${n(peak, 0)} trucks against ${n(rate, 0)} the gate sustains.`,
-      detail: shape === "peaked" ? "The day is peaked, so the headroom is uneven even though no hour overflows." : undefined,
+      detail:
+        shape === "peaked"
+          ? "The day is peaked, so the headroom is uneven even though no hour overflows."
+          : undefined,
       tone: "ok",
     };
   }
@@ -195,9 +198,10 @@ function gateSlotting(f: VerdictInput["figures"], r: VerdictInput["result"]): Ve
     headline: `Arrivals outrun the gate in ${plural(saturated, "hour")}, peaking at ${n(peak, 0)} trucks against ${n(rate, 0)} sustained. Booking arrivals into slots cuts the peak by ${n(cut, 0)}%.`,
     // Suppressed at zero: "0 arrivals cannot be placed" is a true sentence that
     // reads as a problem, and there isn't one.
-    detail: (num(f.arrivals_not_placeable_in_window) ?? 0) > 0
-      ? `${plural(f.arrivals_not_placeable_in_window, "arrival")} cannot be placed inside the day at all — those need a longer window or more capacity, not resequencing.`
-      : "Every arrival still fits inside the day; the peak just moves.",
+    detail:
+      (num(f.arrivals_not_placeable_in_window) ?? 0) > 0
+        ? `${plural(f.arrivals_not_placeable_in_window, "arrival")} cannot be placed inside the day at all — those need a longer window or more capacity, not resequencing.`
+        : "Every arrival still fits inside the day; the peak just moves.",
     tone: saturated > 4 ? "critical" : "warning",
   };
 }
@@ -209,10 +213,15 @@ function driverShortage(f: VerdictInput["figures"], r: VerdictInput["result"]): 
   const flow = r?.cargo_flow_exposure?.[0];
   return {
     headline: `Cutting each vehicle's daily trips by a third removes ${plural(lost, "trip")} and ${n(loss)}% of evacuation throughput.`,
-    detail: [
-      top?.company ? `${top.company} is the most exposed transporter` : null,
-      flow?.flow ? `${String(flow.flow).replace(/_/g, " ").toLowerCase()} is the most exposed cargo flow` : null,
-    ].filter(Boolean).join("; ") || undefined,
+    detail:
+      [
+        top?.company ? `${top.company} is the most exposed transporter` : null,
+        flow?.flow
+          ? `${String(flow.flow).replace(/_/g, " ").toLowerCase()} is the most exposed cargo flow`
+          : null,
+      ]
+        .filter(Boolean)
+        .join("; ") || undefined,
     tone: (num(loss) ?? 0) > 25 ? "critical" : "warning",
   };
 }
@@ -248,7 +257,8 @@ function yardFeedback(f: VerdictInput["figures"]): Verdict {
   }
   return {
     headline: `The yard settles at ${n(util)}% full${tipping ? `, crossing the comfortable ceiling on day ${n(tipping, 0)}` : ""} — but it settles by slowing the berth.`,
-    detail: "Self-limiting is not the same as safe: the cost shows up as vessel turnaround, not as a yard alarm.",
+    detail:
+      "Self-limiting is not the same as safe: the cost shows up as vessel turnaround, not as a yard alarm.",
     tone: "warning",
   };
 }
@@ -264,7 +274,10 @@ function degradedGate(f: VerdictInput["figures"]): Verdict {
   };
 }
 
-const BY_SCENARIO: Record<string, (f: VerdictInput["figures"], r: VerdictInput["result"]) => Verdict> = {
+const BY_SCENARIO: Record<
+  string,
+  (f: VerdictInput["figures"], r: VerdictInput["result"]) => Verdict
+> = {
   "vessel-bunching": vesselBunching,
   "berth-cascade": (f) => berthCascade(f),
   "modal-shift": modalShift,

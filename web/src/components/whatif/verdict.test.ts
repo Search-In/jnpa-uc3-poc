@@ -78,7 +78,8 @@ describe("verdictFor over live gateway responses", () => {
     // Targeted at the head nouns this file actually uses, so a legitimate
     // "6 hours to clear" is not flagged.
     expect(text).not.toMatch(
-      /\b\d+(\.\d+)? hours (outage|overrun|closure|window|shortage|delay)\b/);
+      /\b\d+(\.\d+)? hours (outage|overrun|closure|window|shortage|delay)\b/,
+    );
   });
 
   it.each(SCENARIOS)("%s does not report a zero as if it were a problem", (name) => {
@@ -119,8 +120,11 @@ describe("specific verdicts say the right thing", () => {
 
 describe("unanswerable results", () => {
   const base: VerdictInput = {
-    scenario: "modal-shift", figures: {}, result: {},
-    data_available: false, notes: [],
+    scenario: "modal-shift",
+    figures: {},
+    result: {},
+    data_available: false,
+    notes: [],
   };
 
   it("an empty table and a failed query are not the same verdict", () => {

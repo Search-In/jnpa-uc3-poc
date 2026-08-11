@@ -37,8 +37,8 @@ KPI_TARGETS: Dict[str, KpiTarget] = {
     # Appendix C acceptance KPIs
     "gate_queue_wait": KpiTarget("Gate Queue Wait Time", "min", "lower_is_better", 8.0, 14.5),
     "gate_txn_time": KpiTarget("Avg Gate Transaction Time", "min", "lower_is_better", 3.0, 5.2),
-    "trt_empty_ecd": KpiTarget("TRT empty from ECD", "min", "lower_is_better", 45.0, 72.0),
-    "tat_inside_port": KpiTarget("TAT inside port", "min", "lower_is_better", 90.0, 135.0),
+    "trt_empty_ecd": KpiTarget("TRT for empty containers from ECD", "min", "lower_is_better", 45.0, 72.0),
+    "tat_inside_port": KpiTarget("Turn Around Time Inside Port", "min", "lower_is_better", 90.0, 135.0),
     # Bid §8.5.4 operational roll-ups
     "queue_length": KpiTarget("Queue Length", "vehicles", "lower_is_better", 25.0, 41.0),
     "avg_dwell": KpiTarget("Avg Vehicle Dwell", "min", "lower_is_better", 12.0, 19.0),

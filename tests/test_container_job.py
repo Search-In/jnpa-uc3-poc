@@ -79,6 +79,8 @@ class FakeRepo:
         self.movements: list[dict] = []
         self.scans: list[dict] = []
         self.cargo_status_writes: list[tuple[str, str]] = []
+        # Stand-in for core.cargo_scan_verification.remarks (verified=false).
+        self.customs_notes: dict[str, str] = {}
         self.scanners = [
             {"machine_code": "D-INNSA1RSDT01", "machine_class": "DRIVE_THROUGH",
              "machine_type": "D", "location_code": "INNSA1RSDT01", "active": True},
@@ -126,6 +128,16 @@ class FakeRepo:
         self.documents[cn] = {"form13": 1, "pin": 0, "eir": 0}
 
     async def cargo_exists(self, cn): return self.cargo.get(cn)
+
+    async def customs_note(self, cn):
+        """Newest non-blank remark from a SCAN_HOLD / failed verification, else None
+        (mirrors the UNION query in the real repository)."""
+        holds = [x for x in self.scans
+                 if x.get("container_number") == cn and x.get("result") == "SCAN_HOLD"
+                 and (x.get("remarks") or "").strip()]
+        if holds:
+            return str(holds[-1]["remarks"]).strip()
+        return self.customs_notes.get(cn)
 
     async def document_counts(self, cn):
         counts = dict(self.documents.get(cn) or {"form13": 0, "pin": 0, "eir": 0})
@@ -199,6 +211,29 @@ class FakeRepo:
 
     async def count_jobs(self, *, filters):
         return len(await self.list_jobs(filters=filters, limit=10_000, offset=0))
+
+    # --- UC-II -> UC-III handover queue (mirrors the real SQL in repository.py:
+    # released cargo with no open job, container filter only).
+    async def list_pending_handover(self, *, filters, limit, offset):
+        rows = [
+            {"container_number": c["container_number"],
+             "lifecycle_status": c.get("lifecycle_status"),
+             "customs_status": c.get("customs_status"),
+             "yard_block": c.get("yard_block"), "vehicle_number": c.get("vehicle_number"),
+             "vessel_name": c.get("vessel_name"), "updated_at": c.get("updated_at")}
+            for c in self.cargo.values()
+            if (c.get("lifecycle_status") == "RELEASED" or c.get("is_released"))
+            and not any(j["container_number"] == c["container_number"]
+                        and j["status"] not in ("COMPLETED", "CANCELLED")
+                        for j in self.jobs.values())
+        ]
+        if filters.get("container_number"):
+            rows = [r for r in rows if r["container_number"] == filters["container_number"]]
+        rows.sort(key=lambda r: r["container_number"])
+        return rows[offset:offset + limit]
+
+    async def count_pending_handover(self, *, filters):
+        return len(await self.list_pending_handover(filters=filters, limit=10_000, offset=0))
 
     async def latest_job_for_container(self, cn):
         rows = [j for j in self.jobs.values() if j["container_number"] == cn]
@@ -761,3 +796,213 @@ async def test_vehicles_with_open_jobs_tracks_only_live_work(svc):
 
     await svc.cancel(job["id"], reason="test")
     assert await svc.vehicles_with_open_jobs() == set()
+
+
+# ==================================================== UC-II -> UC-III handover
+# The gap this closes: UC-II releases a container (core.cargo.lifecycle_status =
+# RELEASED) but a job row cannot exist until a truck+driver+document clear the
+# assignment gate, so the released box was invisible on every UC-III read
+# surface. It is now listed as a PENDING_ASSIGNMENT queue entry — derived from
+# core.cargo, never written to core.container_job_assignment.
+@pytest.fixture()
+def released(repo) -> str:
+    cn = "MSCU1234566"
+    repo.cargo[cn] = {"container_number": cn, "lifecycle_status": "RELEASED",
+                      "customs_status": "CLEARED", "is_released": True,
+                      "yard_block": "C-01", "vehicle_number": "MH05CD4567"}
+    # A Form-13 on record, so the assignment gate's paperwork check can clear and
+    # the queue-exit path is exercisable.
+    repo.documents[cn] = {"form13": 1, "pin": 0, "eir": 0}
+    return cn
+
+
+def test_released_container_is_invisible_without_include_pending(client, released):
+    """Default /api/jobs semantics are unchanged: dispatched jobs only."""
+    r = client.get("/api/jobs", params={"container": released})
+    assert r.status_code == 200
+    assert r.json()["items"] == []
+
+
+def test_released_container_surfaces_in_uc3_jobs_list(client, released):
+    r = client.get("/api/jobs", params={"container": released, "include_pending": True})
+    assert r.status_code == 200
+    items = r.json()["items"]
+    assert [i["container_number"] for i in items] == [released]
+    entry = items[0]
+    # It is explicitly NOT a job: no id, no vehicle, and a status the job table's
+    # CHECK constraint would reject — the consumer must route it into POST /api/jobs.
+    assert entry["id"] is None
+    assert entry["vehicle_id"] is None
+    assert entry["pending_handover"] is True
+    assert entry["status"] == "PENDING_ASSIGNMENT"
+    assert entry["lifecycle_status"] == "RELEASED"
+    assert entry["yard_block"] == "C-01"
+
+
+def test_pending_handover_endpoint_lists_the_queue(client, released):
+    r = client.get("/api/jobs/pending-handover")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 1
+    assert body["items"][0]["container_number"] == released
+    assert r.headers["X-Total-Count"] == "1"
+
+
+def test_assigning_removes_the_box_from_the_queue_no_duplicate(client, released):
+    """Idempotence: a container is EITHER queued for dispatch OR holds an open
+    job — never both, so no duplicate row can appear in the list."""
+    repo_docs_ok = client.post("/api/jobs", json={
+        "container_number": released, "vehicle_id": "TRK-000001", "driver_id": "DRV-1",
+        "driver_licence": "UP6420140008203", "move_type": "IMPORT_PICK"})
+    assert repo_docs_ok.status_code == 201, repo_docs_ok.text
+    items = client.get("/api/jobs",
+                       params={"container": released, "include_pending": True}).json()["items"]
+    assert len(items) == 1
+    assert items[0]["status"] == "ASSIGNED"
+    assert not items[0].get("pending_handover")
+    assert client.get("/api/jobs/pending-handover").json()["total"] == 0
+
+
+def test_cancelled_job_returns_the_box_to_the_queue(client, released):
+    job_id = client.post("/api/jobs", json={
+        "container_number": released, "vehicle_id": "TRK-000001", "driver_id": "DRV-1",
+        "driver_licence": "UP6420140008203", "move_type": "IMPORT_PICK"}).json()["job"]["id"]
+    client.post(f"/api/jobs/{job_id}/cancel", json={"reason": "truck breakdown"})
+    items = client.get("/api/jobs",
+                       params={"container": released, "include_pending": True}).json()["items"]
+    # The queue entry is back, and the cancelled job is preserved as history.
+    assert [i["status"] for i in items] == ["PENDING_ASSIGNMENT", "CANCELLED"]
+
+
+@pytest.mark.parametrize("params", [
+    {"open_only": True}, {"status": "ASSIGNED"}, {"vehicle_id": "TRK-000001"},
+    {"driver_id": "DRV-1"},
+])
+def test_dispatch_scoped_queries_never_return_queue_entries(client, released, params):
+    """A query scoped to a truck / driver / job status is asking about dispatched
+    work; an un-dispatched box must not answer it."""
+    r = client.get("/api/jobs", params={**params, "include_pending": True})
+    assert r.status_code == 200
+    assert all(not i.get("pending_handover") for i in r.json()["items"])
+
+
+def test_combined_pagination_is_contiguous(client, repo, released):
+    """The queue is a prefix of the same page: paging must neither repeat nor
+    skip a row across the queue/job boundary."""
+    for n in ("MAEU7654320", "TEMU7001236"):
+        repo.cargo[n] = {"container_number": n, "lifecycle_status": "RELEASED",
+                         "customs_status": "CLEARED", "is_released": True}
+    client.post("/api/jobs", json={"container_number": "MRKU5014206",
+                                   "vehicle_id": "TRK-000001", "driver_id": "DRV-1",
+                                   "driver_licence": "UP6420140008203",
+                                   "move_type": "IMPORT_PICK"})
+    total = client.get("/api/jobs", params={"include_pending": True}).json()["total"]
+    assert total == 4  # 3 queued + 1 assigned job
+
+    seen = []
+    for offset in range(0, total, 2):
+        page = client.get("/api/jobs",
+                          params={"include_pending": True, "limit": 2, "offset": offset}).json()
+        seen += [(i["container_number"], bool(i.get("pending_handover"))) for i in page["items"]]
+    assert len(seen) == total == len(set(seen))
+    assert [p for _, p in seen] == [True, True, True, False]
+
+
+# ============================================ customs gate on job assignment
+# core.cargo.customs_status is CHECKed to PENDING / CLEARED / HELD /
+# UNDER_INSPECTION — there is no FLAGGED value in the schema. "Flagged by
+# customs" is the operator wording for the dispositions the cargo module already
+# defines as blocking (CUSTOMS_BLOCKS_RELEASE = HELD | UNDER_INSPECTION), which
+# this gate imports rather than restating. PENDING means customs has said
+# nothing yet and must NOT block a dispatch.
+from services.container_job.service import (  # noqa: E402
+    CUSTOMS_FLAGGED,
+    CUSTOMS_FLAGGED_MESSAGE,
+)
+
+_ASSIGN = {"container_number": "MRKU5014206", "vehicle_id": "TRK-000001",
+           "driver_id": "DRV-1", "driver_licence": "UP6420140008203",
+           "move_type": "IMPORT_PICK"}
+
+
+def _set_customs(repo: FakeRepo, status: str) -> None:
+    repo.cargo["MRKU5014206"]["customs_status"] = status
+
+
+def test_flagged_set_is_the_cargo_modules_definition_not_a_new_status():
+    from services.cargo.service import CUSTOMS_BLOCKS_RELEASE
+
+    assert CUSTOMS_FLAGGED is CUSTOMS_BLOCKS_RELEASE == {"HELD", "UNDER_INSPECTION"}
+    assert "PENDING" not in CUSTOMS_FLAGGED and "CLEARED" not in CUSTOMS_FLAGGED
+
+
+@pytest.mark.parametrize("status", ["PENDING", "CLEARED"])
+def test_customs_pending_or_cleared_allows_assignment(client, repo, status):
+    _set_customs(repo, status)
+    r = client.post("/api/jobs", json=_ASSIGN)
+    assert r.status_code == 201, r.text
+    checks = {c["check"]: c for c in r.json()["checks"]}
+    assert checks["customs"]["ok"] is True
+    assert checks["customs"]["customs_status"] == status
+    # every pre-existing gate still ran
+    assert {"container", "gate_document", "vehicle", "vehicle_availability"} <= set(checks)
+
+
+@pytest.mark.parametrize("status", sorted(CUSTOMS_FLAGGED))
+def test_customs_flagged_blocks_assignment_and_creates_no_job(client, repo, status):
+    _set_customs(repo, status)
+    r = client.post("/api/jobs", json=_ASSIGN)
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert detail["error"] == "customs_flagged"
+    assert CUSTOMS_FLAGGED_MESSAGE in detail["detail"]
+    assert detail["customs_status"] == status
+    assert repo.jobs == {}  # nothing was written
+
+
+def test_flagged_with_a_note_returns_the_recorded_remark(client, repo):
+    _set_customs(repo, "UNDER_INSPECTION")
+    repo.scans.append({"container_number": "MRKU5014206", "result": "SCAN_HOLD",
+                       "remarks": "Density anomaly in upper tier"})
+    detail = client.post("/api/jobs", json=_ASSIGN).json()["detail"]
+    assert detail["customs_note"] == "Density anomaly in upper tier"
+    assert detail["detail"] == f"{CUSTOMS_FLAGGED_MESSAGE}: Density anomaly in upper tier"
+
+
+def test_flagged_without_a_note_says_only_flagged_by_customs(client, repo):
+    _set_customs(repo, "HELD")
+    detail = client.post("/api/jobs", json=_ASSIGN).json()["detail"]
+    assert detail["customs_note"] is None
+    assert detail["detail"] == CUSTOMS_FLAGGED_MESSAGE  # nothing invented
+
+
+def test_validate_reports_the_same_customs_refusal_as_assign(client, repo):
+    """The dry-run and the write must agree, so the UI can block before submit."""
+    _set_customs(repo, "HELD")
+    r = client.post("/api/jobs/validate", json=_ASSIGN)
+    assert r.status_code == 400
+    assert r.json()["detail"]["error"] == "customs_flagged"
+
+
+def test_customs_gate_does_not_displace_the_existing_validations(client, repo):
+    """Regression: the pre-existing refusals must still fire with their own codes."""
+    _set_customs(repo, "PENDING")
+    # 1. gate document
+    repo.documents["MRKU5014206"] = {"form13": 0, "pin": 0, "eir": 0}
+    assert client.post("/api/jobs", json=_ASSIGN).json()["detail"]["error"] == "no_gate_document"
+    repo.documents["MRKU5014206"] = {"form13": 1, "pin": 0, "eir": 0}
+    # 2. driver / PDP
+    # EMPTY_PICK: not in DRIVER_REQUIRED_MOVE_TYPES, so the PDP rule is what
+    # answers rather than the earlier driver_required input rule.
+    bad = {**_ASSIGN, "move_type": "EMPTY_PICK", "driver_id": None,
+           "driver_licence": "RJ1920060721778"}
+    assert client.post("/api/jobs", json=bad).json()["detail"]["error"] == "pdp_inactive"
+    # 3. vehicle already occupied
+    assert client.post("/api/jobs", json=_ASSIGN).status_code == 201
+    second = {**_ASSIGN, "container_number": "MSCU1234566"}
+    repo.cargo["MSCU1234566"] = {"container_number": "MSCU1234566",
+                                 "lifecycle_status": "RELEASED",
+                                 "customs_status": "CLEARED", "is_released": True}
+    repo.documents["MSCU1234566"] = {"form13": 1, "pin": 0, "eir": 0}
+    assert client.post("/api/jobs", json=second).json()["detail"]["error"] \
+        == "vehicle_already_assigned"

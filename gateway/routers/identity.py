@@ -375,6 +375,21 @@ async def gallery(request: Request, state: GatewayState = Depends(get_state)) ->
         surface="identity.gallery")
 
 
+async def _vehicle_conflict_409(state: "GatewayState", vehicle_no: str) -> HTTPException:
+    """The 409 a double vehicle claim answers with, naming the current holder.
+
+    Used by both the read-then-write pre-check and the loser of a concurrent
+    write (uq_driver_enrol_vehicle_open), so the operator sees the same
+    actionable message either way rather than a 500 on the race."""
+    holder = await enrollment.vehicle_assignment_conflict(state.cfg.postgres_dsn, vehicle_no)
+    who = (holder or {}).get("name") or (holder or {}).get("driver_id") or "another driver"
+    kind = str((holder or {}).get("kind") or "enrollment")
+    return HTTPException(status_code=409, detail={
+        "error": "vehicle_already_assigned", "vehicle_no": vehicle_no,
+        "held_by": holder,
+        "message": f"Vehicle {vehicle_no} is already assigned to {who} ({kind})."})
+
+
 # --------------------------------------------------------------------------- enrollment workflow
 # Driver PWA submits a profile + consented reference frames -> PENDING; an admin
 # (DTCCC_ADMIN / CUSTOMS) reviews and approves -> the identity template is minted
@@ -397,19 +412,25 @@ async def enrol_request(request: Request, body: Dict[str, Any] = Body(...),
     if not images:
         raise HTTPException(status_code=400, detail="at least one reference image is required")
 
-    rec = await enrollment.submit(
-        state.cfg.postgres_dsn,
-        driver_id=driver_id,
-        name=str(body.get("name") or "").strip() or driver_id,
-        license_no=str(body.get("license_no") or "").strip(),
-        mobile=str(body.get("mobile") or "").strip(),
-        vehicle_no=str(body.get("vehicle_no") or "").strip(),
-        aadhaar_masked=str(body.get("aadhaar") or body.get("aadhaar_masked") or "").strip(),
-        emergency_contact=str(body.get("emergency_contact") or "").strip(),
-        consent=True,
-        face_images=images,
-        documents=body.get("documents") or [],
-    )
+    vehicle_no = str(body.get("vehicle_no") or "").strip()
+    try:
+        rec = await enrollment.submit(
+            state.cfg.postgres_dsn,
+            driver_id=driver_id,
+            name=str(body.get("name") or "").strip() or driver_id,
+            license_no=str(body.get("license_no") or "").strip(),
+            mobile=str(body.get("mobile") or "").strip(),
+            vehicle_no=vehicle_no,
+            aadhaar_masked=str(body.get("aadhaar") or body.get("aadhaar_masked") or "").strip(),
+            emergency_contact=str(body.get("emergency_contact") or "").strip(),
+            consent=True,
+            face_images=images,
+            documents=body.get("documents") or [],
+        )
+    except enrollment.VehicleAlreadyEnrolled:
+        # A driver may not self-enrol onto a truck another open enrollment or an
+        # ACTIVE driver already holds — same rule, same answer, as the admin path.
+        raise await _vehicle_conflict_409(state, vehicle_no)
     REQUESTS.labels("identity", "ok").inc()
     audit_identity_access(actor=_actor(request), driver_id=driver_id, purpose=purpose,
                           is_synthetic=is_synthetic, decision="ENROL_REQUESTED")
@@ -529,26 +550,25 @@ async def create_driver_profile(request: Request, body: CreateDriverBody,
             status_code=404,
             detail=f"vehicle {vehicle_no} is not a registered ACTIVE vehicle in the "
                    f"Vehicle Master")
-    conflict = await enrollment.vehicle_assignment_conflict(state.cfg.postgres_dsn, vehicle_no)
-    if conflict:
-        raise HTTPException(status_code=409, detail={
-            "error": "vehicle_already_assigned", "vehicle_no": vehicle_no,
-            "held_by": conflict,
-            "message": f"Vehicle {vehicle_no} is already assigned to "
-                       f"{conflict.get('name') or conflict.get('driver_id')} "
-                       f"({str(conflict.get('kind'))})."})
+    if await enrollment.vehicle_assignment_conflict(state.cfg.postgres_dsn, vehicle_no):
+        raise await _vehicle_conflict_409(state, vehicle_no)
     driver_id = (body.driver_id or "").strip() or f"DRV-{uuid.uuid4().hex[:8].upper()}"
     if await enrollment.get(state.cfg.postgres_dsn, driver_id, include_faces=False):
         raise HTTPException(status_code=409, detail=f"driver_id {driver_id} already exists")
 
-    rec = await enrollment.submit(
-        state.cfg.postgres_dsn, driver_id=driver_id, name=name,
-        license_no=(body.license_no or "").strip(),
-        mobile=(body.mobile or "").strip(),
-        vehicle_no=vehicle_no,
-        emergency_contact=(body.emergency_contact or "").strip(),
-        consent=False, face_images=[], documents=[],
-        source=enrollment.SOURCE_ADMIN, created_by=actor)
+    try:
+        rec = await enrollment.submit(
+            state.cfg.postgres_dsn, driver_id=driver_id, name=name,
+            license_no=(body.license_no or "").strip(),
+            mobile=(body.mobile or "").strip(),
+            vehicle_no=vehicle_no,
+            emergency_contact=(body.emergency_contact or "").strip(),
+            consent=False, face_images=[], documents=[],
+            source=enrollment.SOURCE_ADMIN, created_by=actor)
+    except enrollment.VehicleAlreadyEnrolled:
+        # Lost the race against a concurrent admin/PWA claim between the check
+        # above and this insert — the DB index is the authority, not the check.
+        raise await _vehicle_conflict_409(state, vehicle_no)
     REQUESTS.labels("identity", "ok").inc()
     audit_identity_access(actor=actor, driver_id=driver_id, purpose="ENROLMENT",
                           is_synthetic=True, decision="ADMIN_CREATED")

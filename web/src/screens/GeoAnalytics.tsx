@@ -11,9 +11,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Shapes, MapPinned, LogIn, TriangleAlert, Cpu, Flame, Gauge } from "lucide-react";
+import { Shapes, MapPinned, LogIn, TriangleAlert, Cpu, Flame, Route, Gauge } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api } from "@/lib/api";
+import CorridorHeatmapPanel from "@/components/panels/CorridorHeatmapPanel";
 import { getAdapter } from "@/data";
 import { Card } from "@/components/ui/card";
 import { ArcgisMap } from "@/components/map/ArcgisMap";
@@ -36,7 +37,15 @@ import { STATUS } from "@/lib/tokens";
 import { fmtDateTimeIST } from "@/lib/utils";
 import type { AiEvent, GeofenceEvent, GeoVehicleInZone } from "@/lib/types";
 
-type TabKey = "zones" | "inside" | "events" | "violations" | "ai" | "heatmap" | "bottlenecks";
+type TabKey =
+  | "zones"
+  | "inside"
+  | "events"
+  | "violations"
+  | "ai"
+  | "heatmap"
+  | "corridor"
+  | "bottlenecks";
 
 const TAB_KEYS: TabKey[] = [
   "zones",
@@ -168,6 +177,9 @@ export default function GeoAnalytics({ defaultTab = "zones" }: { defaultTab?: Ta
             },
             { key: "ai", label: "AI Events", icon: Cpu, count: aiQ.data?.events?.length },
             { key: "heatmap", label: "Heatmap", icon: Flame },
+            // UC3-020 T-01: corridor congestion sits beside the violation
+            // heatmap on the screen that already owns the map and its layers.
+            { key: "corridor", label: "Corridor Congestion", icon: Route },
             { key: "bottlenecks", label: "Bottlenecks", icon: Gauge },
           ]}
         />
@@ -210,6 +222,7 @@ export default function GeoAnalytics({ defaultTab = "zones" }: { defaultTab?: Ta
             <AiTable rows={aiQ.data?.events ?? []} status={aiQ} onRetry={() => aiQ.refetch()} />
           </Card>
         )}
+        {tab === "corridor" && <CorridorHeatmapPanel />}
         {tab === "heatmap" && (
           <HeatmapTab
             violations={violQ.data?.violations ?? []}

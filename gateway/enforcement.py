@@ -265,8 +265,12 @@ async def _audit(
         # Serialize audits per case (row may not exist yet for the very first
         # OPEN audit — that insert races nothing, the case insert precedes it).
         await conn.execute(
-            text("SELECT id FROM core.violation_case "
-                 "WHERE id = CAST(:c AS uuid) FOR UPDATE"),
+            # core.violation_case's primary key is case_id, not id. Locking on a
+            # column that does not exist raised UndefinedColumnError inside the
+            # audit writer, which every commit goes through — so no case could
+            # ever be filed and core.violation_case stayed empty.
+            text("SELECT case_id FROM core.violation_case "
+                 "WHERE case_id = CAST(:c AS uuid) FOR UPDATE"),
             {"c": case_id},
         )
         prev = (await conn.execute(
@@ -565,6 +569,76 @@ async def transition_case(
     await _audit(dsn, case_id, "TRANSITION", from_status=cur, to_status=to_status,
                  actor=actor, detail={"payment_ref": payment_ref} if payment_ref else None)
     return await get_case_bundle(dsn, case_id)
+
+
+async def list_cases(
+    dsn: str, *, status: Optional[str] = None, kind: Optional[str] = None,
+    plate: Optional[str] = None, limit: int = 100,
+) -> List[dict]:
+    """The enforcement QUEUE: one row per case, newest first (UC3-028).
+
+    Each row carries the violation kinds on the case and its evidence hash, so
+    the queue can be filtered by type and an operator can see that evidence
+    exists before opening the case. Filtering happens in SQL rather than in the
+    client, because a queue that only filters what it already downloaded is not
+    a queue once the case count outgrows one page.
+    """
+    from jnpa_shared.db import fetch_all
+
+    conds, params = [], {"limit": limit}
+    if status:
+        conds.append("c.status = :status")
+        params["status"] = status
+    if plate:
+        conds.append("upper(c.vehicle_number) = upper(:plate)")
+        params["plate"] = plate
+    # Violation kinds live on the alert rows attached to the case, so a kind
+    # filter is an EXISTS over those rather than a column on the case.
+    if kind:
+        conds.append(
+            "EXISTS (SELECT 1 FROM core.alert a "
+            " WHERE a.payload->>'case_id' = c.case_id::text "
+            "   AND a.payload->>'source' = 'violation-console' AND a.kind = :kind)"
+        )
+        params["kind"] = kind
+    where = (" WHERE " + " AND ".join(conds)) if conds else ""
+
+    return await fetch_all(
+        f"""
+        SELECT c.case_id::text AS case_id,
+               c.vehicle_number,
+               c.driver_id,
+               c.status,
+               c.total_fine,
+               c.first_detected_at,
+               c.last_updated_at,
+               c.gate_id,
+               c.confidence,
+               c.evidence_url,
+               c.evidence_sha256,
+               ch.challan_no,
+               ch.status AS challan_status,
+               COALESCE(
+                 (SELECT array_agg(DISTINCT a.kind)
+                    FROM core.alert a
+                   WHERE a.payload->>'case_id' = c.case_id::text
+                     AND a.payload->>'source' = 'violation-console'),
+                 ARRAY[]::text[]
+               ) AS kinds,
+               COALESCE(
+                 (SELECT max(a.severity) FROM core.alert a
+                   WHERE a.payload->>'case_id' = c.case_id::text
+                     AND a.payload->>'source' = 'violation-console'),
+                 'info'
+               ) AS severity
+          FROM core.violation_case c
+          LEFT JOIN core.challan ch ON ch.case_id = c.case_id
+          {where}
+         ORDER BY c.last_updated_at DESC
+         LIMIT :limit
+        """,
+        params, dsn=dsn,
+    )
 
 
 async def get_case_bundle(dsn: str, case_id: str) -> dict:

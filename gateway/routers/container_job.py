@@ -178,13 +178,39 @@ async def list_jobs(
     driver_id: Optional[str] = None,
     status_: Optional[str] = Query(default=None, alias="status"),
     open_only: bool = False,
+    include_pending: bool = Query(
+        default=False,
+        description="Also list containers UC-II has RELEASED that no truck has been "
+                    "dispatched against yet (status PENDING_ASSIGNMENT, id null, "
+                    "pending_handover true). Off by default: existing consumers keep "
+                    "seeing dispatched jobs only."),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     svc: ContainerJobService = Depends(get_service),
 ) -> Page:
     filters = {"container_number": container, "vehicle_id": vehicle_id,
                "driver_id": driver_id, "status": status_, "open_only": open_only}
-    res = await svc.list_jobs(filters=filters, limit=limit, offset=offset)
+    res = await svc.list_jobs(filters=filters, limit=limit, offset=offset,
+                              include_pending=include_pending)
+    response.headers["X-Total-Count"] = str(res["total"])
+    return Page(**res)
+
+
+# Declared BEFORE /api/jobs/{job_id}: that path param is typed int, so FastAPI
+# would match this literal against it first and answer 422.
+@router.get("/api/jobs/pending-handover", response_model=Page,
+            summary="Containers released by UC-II that still need a truck assigned")
+async def list_pending_handover(
+    response: Response,
+    container: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    svc: ContainerJobService = Depends(get_service),
+) -> Page:
+    """The UC-II -> UC-III handover queue, read from core.cargo (the release's
+    single source of truth). Each entry is the input to POST /api/jobs — the
+    existing, and only, way a job record is created."""
+    res = await svc.pending_handover(container_number=container, limit=limit, offset=offset)
     response.headers["X-Total-Count"] = str(res["total"])
     return Page(**res)
 

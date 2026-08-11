@@ -18,7 +18,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from services.marine.manual_pilot import ManualPilotAssignment, ManualPilotService
+from services.marine.manual_pilot import (IllegalMovement, ManualPilotAssignment,
+                                          ManualPilotService)
 
 router = APIRouter(prefix="/api/marine", tags=["marine"])
 
@@ -37,6 +38,10 @@ class ManualPilotAssignmentOut(BaseModel):
     imo_no: Optional[str] = None
     vessel_name: Optional[str] = None
     pilot_name: Optional[str] = None
+    #: INWARD | OUTWARD | SHIFTING. None on assignments made before migration 0054.
+    movement_type: Optional[str] = None
+    #: Destination berth declared at assignment. None for OUTWARD and pre-0055 rows.
+    berth_id: Optional[int] = None
     assigned_at: Optional[datetime] = None
     boarded_at: Optional[datetime] = None
     released_at: Optional[datetime] = None
@@ -59,6 +64,16 @@ class ManualPilotAssignmentIn(BaseModel):
     vessel_name: Optional[str] = None
     pilot_name: Optional[str] = None
     created_by: Optional[str] = None
+    movement_type: Optional[str] = Field(
+        default=None,
+        description=("Leg this pilot runs: INWARD | OUTWARD | SHIFTING. Decides which "
+                     "visit milestone release records — INWARD/SHIFTING berth the vessel, "
+                     "OUTWARD sails her. Omit to record no milestone (pre-0054 behaviour)."))
+    berth_id: Optional[int] = Field(
+        default=None,
+        description=("Destination berth (core.ref_berth.berth_id). Required in practice "
+                     "for SHIFTING — a shift is defined by where she goes. Ignored for "
+                     "OUTWARD, which frees the berth rather than taking one."))
 
 
 class ManualPilotPage(BaseModel):
@@ -72,6 +87,7 @@ def _out(a: ManualPilotAssignment) -> dict[str, Any]:
         "id": a.id, "call_id": a.call_id, "pilot_code": a.pilot_code, "status": a.status,
         "vcn": a.vcn, "via_no": a.via_no, "imo_no": a.imo_no,
         "vessel_name": a.vessel_name, "pilot_name": a.pilot_name,
+        "movement_type": a.movement_type, "berth_id": a.berth_id,
         "assigned_at": a.assigned_at, "boarded_at": a.boarded_at,
         "released_at": a.released_at, "created_by": a.created_by,
         "created_at": a.created_at, "updated_at": a.updated_at,
@@ -140,6 +156,13 @@ async def _assignment_body(request: Request) -> ManualPilotAssignmentIn:
 @router.post("/manual-pilot-assignment", response_model=ManualPilotAssignmentOut,
              status_code=status.HTTP_201_CREATED,
              summary="Assign a pilot to a call that has no imported pilotage",
+             responses={
+                 409: {"description": "Imported pilotage or a live manual assignment "
+                                      "already covers this call"},
+                 422: {"description": "The declared movement is impossible from the "
+                                      "vessel's current position; `allowed` lists the "
+                                      "legs that are"},
+             },
              # Declared explicitly because the body arrives through a dependency; without
              # this the OpenAPI schema would lose the request-body documentation.
              # Declared inline rather than by $ref: the model is no longer a body
@@ -150,10 +173,20 @@ async def _assignment_body(request: Request) -> ManualPilotAssignmentIn:
                  "content": {"application/json": {
                      "schema": ManualPilotAssignmentIn.model_json_schema()}}}})
 async def assign(body: ManualPilotAssignmentIn = Depends(_assignment_body)) -> dict[str, Any]:
-    a = await _service.assign(
-        call_id=body.call_id, pilot_code=body.pilot_code, vcn=body.vcn,
-        via_no=body.via_no, imo_no=body.imo_no, vessel_name=body.vessel_name,
-        pilot_name=body.pilot_name, created_by=body.created_by)
+    try:
+        a = await _service.assign(
+            call_id=body.call_id, pilot_code=body.pilot_code, vcn=body.vcn,
+            via_no=body.via_no, imo_no=body.imo_no, vessel_name=body.vessel_name,
+            pilot_name=body.pilot_name, created_by=body.created_by,
+            movement_type=body.movement_type, berth_id=body.berth_id)
+    except IllegalMovement as exc:
+        # 422, NOT 409. A conflict means someone else owns this call; this means the
+        # vessel cannot make that movement from where she is — a different correction, so
+        # `allowed` is returned and the client can offer the legs that ARE possible.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"error": str(exc), "movement_type": exc.movement,
+                    "allowed": list(exc.allowed)})
     if a is None:
         # Either imported pilotage exists (the INSERT's WHERE NOT EXISTS refused) or a
         # live assignment already covers this call (the partial unique index refused).
@@ -176,7 +209,7 @@ async def board(assignment_id: int) -> dict[str, Any]:
 
 @router.patch("/manual-pilot-assignment/{assignment_id}/release",
               response_model=ManualPilotAssignmentOut,
-              summary="Release the pilot from this movement")
+              summary="Release the pilot, completing the declared movement")
 async def release(assignment_id: int) -> dict[str, Any]:
     a = await _service.release(assignment_id)
     if a is None:

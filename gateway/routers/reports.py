@@ -36,7 +36,16 @@ log = get_logger("gateway.reports")
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
 # The kinds traffic police act on (the others are operational only).
-POLICE_KINDS = ("WRONG_WAY", "ILLEGAL_PARKING", "OVERSPEEDING", "ROUTE_DEVIATION")
+# UC3-028 configures FIVE violation types. ABANDONED_VEHICLE is the fifth: a
+# vehicle left standing in a no-park zone long past the challan step, which is an
+# obstruction/removal case rather than another parking fine.
+POLICE_KINDS = (
+    "WRONG_WAY",
+    "ILLEGAL_PARKING",
+    "OVERSPEEDING",
+    "ROUTE_DEVIATION",
+    "ABANDONED_VEHICLE",
+)
 
 # Recommended action + e-Challan section per kind (Motor Vehicles Act references
 # are indicative PoC values for the pre-filled challan payload).
@@ -60,6 +69,11 @@ _CHALLAN: Dict[str, Dict[str, Any]] = {
         "action": "Flag for inspection — deviation from the assigned corridor route",
         "section": "JNPA corridor SOP / MVA s.177",
         "fine_inr": 500,
+    },
+    "ABANDONED_VEHICLE": {
+        "action": "Notify owner and raise removal — vehicle abandoned in a no-parking zone",
+        "section": "MVA s.201 (obstruction) / JNPA removal SOP",
+        "fine_inr": 3000,
     },
 }
 

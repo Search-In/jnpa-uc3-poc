@@ -60,8 +60,17 @@ async def inject_fault(
             detail={"error": "invalid_rung", "domain": domain, "rung": body.rung,
                     "valid": list(FAULT_RUNGS[domain])},
         )
+    previous = state.faults.forced(domain)
     state.faults.force(domain, body.rung)
     log.info("fault_injected", domain=domain, rung=body.rung)
+    # UC3-023 / EC-6: the rung change is written to the decision log, so the
+    # outage is auditable after the fact rather than only visible while it is
+    # happening. Without this the drill leaves no trace an evaluator can query.
+    await state.record_decision(
+        api="control.fault", decision_path=body.rung, key=domain,
+        source=domain, detail={"fault_event": "FAULT_INJECTED", "domain": domain,
+                               "from_rung": previous, "to_rung": body.rung},
+    )
     banner = await state.broadcast_operator_banner()
     return {"forced": {domain: body.rung}, "banner": banner}
 
@@ -70,10 +79,24 @@ async def inject_fault(
 async def clear_fault(domain: str, state: GatewayState = Depends(get_state)) -> dict:
     """Release ``domain`` back to the real health cascade."""
     _validate_domain(domain)
+    previous = state.faults.forced(domain)
     state.faults.clear(domain)
     log.info("fault_cleared", domain=domain)
+    # The RESTORE half of the ladder. On clearing the fault the chain walks back
+    # to whatever the real cascade reports, and that reconciliation is recorded
+    # with the rung it came from — so "it recovered" is a queryable fact.
+    reconciliation = await state.record_decision(
+        api="control.fault", decision_path="RESTORED", key=domain,
+        source=domain, detail={"fault_event": "FAULT_CLEARED", "domain": domain,
+                               "from_rung": previous,
+                               "note": ("forced rung released; the chain now reports "
+                                        "the real cascade state")},
+    )
     banner = await state.broadcast_operator_banner()
-    return {"cleared": domain, "banner": banner}
+    return {"cleared": domain, "banner": banner,
+            "reconciliation": {"recorded": True, "decision_path": "RESTORED",
+                               "from_rung": previous,
+                               "ts": getattr(reconciliation, "ts", None)}}
 
 
 @router.delete("/fault")

@@ -136,6 +136,12 @@ async def available_vehicles(request: Request,
     """ACTIVE master vehicles free to take a NEW container job — the Control-Room
     'assign vehicle' dropdown source.
 
+    "Free" is computed IN THE DATABASE (fleet.list_assignable: ACTIVE master
+    vehicle with NOT EXISTS an open core.container_job_assignment row), never by
+    subtracting a set in Python and never by the client — so the LIMIT applies to
+    genuinely assignable trucks and a job opened by anyone, anywhere, is
+    reflected immediately. COMPLETED / CANCELLED jobs do not occupy a vehicle.
+
     BUG-1: "free" means *no open job*, not *no driver*. Excluding driver-bound
     trucks deadlocked the flow — the PWA can only sign in as a driver-bound
     vehicle, so the console could never assign work to any truck a driver could
@@ -146,12 +152,18 @@ async def available_vehicles(request: Request,
     core.driver_identity server-side, never from client input."""
     await _ensure_seeded(state)
     dsn = state.cfg.postgres_dsn
-    open_jobs = await _open_job_vehicles(dsn)
     driver_map = await enrollment.active_driver_vehicle_map(dsn)
-    vehicles = await fleet.list_available(dsn, open_jobs, q=q, limit=limit,
-                                          driver_map=driver_map)
+    # `occupied` is the in-memory backend's substitute for the SQL join (it has
+    # no job table); the Postgres path ignores it and asks the database.
+    occupied = await _open_job_vehicles(dsn)
+    vehicles = await fleet.list_assignable(dsn, q=q, limit=limit,
+                                           driver_map=driver_map, occupied=occupied)
+    total = await fleet.count_assignable(dsn, q=q, occupied=occupied)
     REQUESTS.labels("vehicles", "ok").inc()
-    return {"vehicles": vehicles, "count": len(vehicles)}
+    # `count` stays "rows in this page" for existing clients; `available_total`
+    # is the number of assignable vehicles in the fleet, which is what the
+    # "Vehicle (N available)" label must show — len(page) is capped by `limit`.
+    return {"vehicles": vehicles, "count": len(vehicles), "available_total": total}
 
 
 @router.post("")

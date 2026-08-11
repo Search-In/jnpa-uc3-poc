@@ -437,6 +437,104 @@ async def list_vehicles(dsn: str, *, q: Optional[str] = None,
     return [dict(v) for v in items[:limit]]
 
 
+# --------------------------------------------------------------- assignability
+# "Free to take a NEW container job" is a DATABASE fact: it depends on
+# core.container_job_assignment, not on anything the caller can compute or the
+# client can filter. The predicate below is the single definition of it, built
+# from the job module's own status vocabulary (services.container_job.service
+# TERMINAL) so a new status can never silently make a busy truck look free.
+def _open_job_predicate() -> tuple[str, dict]:
+    """``NOT EXISTS (open job for this vehicle)`` + its bound parameters."""
+    from services.container_job.service import TERMINAL
+
+    names = sorted(TERMINAL)
+    keys = [f"term{i}" for i in range(len(names))]
+    placeholders = ", ".join(f":{k}" for k in keys)
+    sql = ("NOT EXISTS (SELECT 1 FROM core.container_job_assignment j "
+           "WHERE j.vehicle_id = core.vehicle.vehicle_id "
+           f"AND j.status NOT IN ({placeholders}))")
+    return sql, dict(zip(keys, names))
+
+
+def _assignable_where(q: Optional[str]) -> tuple[str, dict]:
+    pred, params = _open_job_predicate()
+    clauses = ["status = :st", "vehicle_id IS NOT NULL", pred]
+    params["st"] = ACTIVE
+    needle = (q or "").strip().upper()
+    if needle:
+        clauses.append("(UPPER(vehicle_id) LIKE :needle OR "
+                       "UPPER(COALESCE(vehicle_no, '')) LIKE :needle)")
+        params["needle"] = f"%{needle}%"
+    return "WHERE " + " AND ".join(clauses), params
+
+
+def _mem_assignable(occupied: set, q: Optional[str]) -> List[dict]:
+    needle = (q or "").strip().upper()
+    out = []
+    for v in _MEM.values():
+        vid = v.get("vehicle_id")
+        if not vid or v.get("status") != ACTIVE or vid in (occupied or set()):
+            continue
+        if needle and needle not in vid.upper() \
+                and needle not in (v.get("vehicle_number") or "").upper():
+            continue
+        out.append(dict(v))
+    out.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+    return out
+
+
+async def list_assignable(dsn: str, *, q: Optional[str] = None, limit: int = 50,
+                          driver_map: Optional[Mapping[str, Mapping[str, Any]]] = None,
+                          occupied: Optional[set] = None) -> List[dict]:
+    """ACTIVE master vehicles with NO open container job — the Assign-Job dropdown.
+
+    The exclusion is a JOIN, not a second round-trip subtracted in Python: the
+    LIMIT therefore applies to vehicles that are genuinely assignable, so the
+    page can never be padded with busy trucks nor truncated by them. There is no
+    "if the job spine is unreachable, assume everything is free" path — an error
+    propagates rather than fabricating availability.
+
+    ``occupied`` is used ONLY by the in-memory (demo/test) backend, which has no
+    job table to join against.
+
+    ``driver_map`` (normalised Vehicle ID -> {driver_id, name}) enriches each row
+    with its bound driver so the console can auto-select it (BUG-4). A vehicle
+    with no driver is still listed — the driver requirement is enforced by
+    assignment validation, not by hiding trucks (see list_available)."""
+    dm = dict(driver_map or {})
+    if await _backend(dsn) == "db":
+        from jnpa_shared.db import fetch_all
+
+        where, params = _assignable_where(q)
+        params["lim"] = limit
+        rows = [_row(r) for r in await fetch_all(
+            f"SELECT {_COLS} FROM core.vehicle {where} "
+            f"ORDER BY created_at DESC LIMIT :lim", params, dsn=dsn)]
+    else:
+        rows = _mem_assignable(occupied or set(), q)[:limit]
+    return [{"vehicle_id": v["vehicle_id"], "plate": v.get("vehicle_number"),
+             "vehicle_number": v.get("vehicle_number"),
+             "vehicle_type": v.get("vehicle_type"), "state": None,
+             "driver_id": (dm.get(v["vehicle_id"]) or {}).get("driver_id"),
+             "driver_name": (dm.get(v["vehicle_id"]) or {}).get("name")}
+            for v in rows]
+
+
+async def count_assignable(dsn: str, *, q: Optional[str] = None,
+                           occupied: Optional[set] = None) -> int:
+    """How many vehicles are actually assignable right now — the number the
+    "Vehicle (N available)" label must show. Counted in the database so it is not
+    capped by the page ``limit`` the dropdown happens to request."""
+    if await _backend(dsn) == "db":
+        from jnpa_shared.db import fetch_one
+
+        where, params = _assignable_where(q)
+        row = await fetch_one(f"SELECT count(*) AS n FROM core.vehicle {where}",
+                              params, dsn=dsn)
+        return int((row or {}).get("n") or 0)
+    return len(_mem_assignable(occupied or set(), q))
+
+
 async def list_available(dsn: str, assigned: set, *, q: Optional[str] = None,
                          limit: int = 50,
                          driver_map: Optional[Mapping[str, Mapping[str, Any]]] = None) -> List[dict]:

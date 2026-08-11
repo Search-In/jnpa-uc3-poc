@@ -254,6 +254,13 @@ _METHOD_POLICY: tuple[tuple[str, frozenset[str], frozenset[str]], ...] = (
     ("/api/bottlenecks", _WRITE, CONTROL_ROOM),
     ("/api/double-trip", _WRITE, CONTROL_ROOM),
     ("/api/transporters", _WRITE, CONTROL_ROOM | {Role.CUSTOMS.value}),
+    # UC3-021: proposing/applying a lane reassignment and acknowledging the task
+    # are gate-operations decisions. Reads stay open to any authenticated role so
+    # a driver-facing client can still show gate congestion.
+    ("/api/gate-board", _WRITE, CONTROL_ROOM),
+    # UC3-027: recomputing the plaza release rate throttles real trucks. Only the
+    # control room may trigger it; GET /api/cpp/advice stays readable by drivers.
+    ("/api/cpp/release", _WRITE, CONTROL_ROOM),
 )
 
 

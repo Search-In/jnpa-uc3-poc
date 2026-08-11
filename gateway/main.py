@@ -95,15 +95,20 @@ from .routers import (
     container_job,
     document_ocr,
     double_trip,
+    corridor_sim,
     dq,
     driver_jobs,
     edi_vessel,
     export_lifecycle,
+    auto_leo,
+    trip_search,
+    gate_board,
     gate_documents,
     jnpa_api,
     ldb,
     logistics,
     marine_calls,
+    marine_dashboard,
     marine_live_vessels,
     marine_imports,
     marine_manual_craft,
@@ -123,6 +128,7 @@ from .routers import (
     rms_tas,
     shipping_lines,
     transporters,
+    vehicle_registry,
     transporters_drivers_upload,
     trt,
     weather,
@@ -753,6 +759,11 @@ app.include_router(nvr.router)               # NVR device/stream integration
 app.include_router(trt.router)               # ECY TRT KPI
 app.include_router(cfs_ecy.router)           # CFS-ECY CODECO gate movements (module 13, read-only)
 app.include_router(dq.router)                # Data Quality ledger over core.dq_issue (read-only)
+app.include_router(vehicle_registry.router)   # UC3-004 vehicle->transporter registry (MIXED provenance)
+app.include_router(corridor_sim.router)      # UC3-005 frozen NH-348 20k simulation (SIMULATED only)
+app.include_router(gate_board.router)        # UC3-021 gate & lane board + UC3-027 CPP metered release
+app.include_router(auto_leo.router)          # UC3-040 Auto-LEO four-way join board
+app.include_router(trip_search.router)       # UC3-024 trip resolver + UC3-025 visit timeline
 app.include_router(customs.router)           # Customs docs (module 5: IGM/OOC/SMTP/RMS/LEO/SB)
 app.include_router(gate_documents.router)    # UC-III gate documents (EIR / PIN ticket / Form-13 + TAT)
 app.include_router(container_job.router)     # UC-III job spine: assignment + gate/yard/scan events
@@ -761,6 +772,7 @@ app.include_router(export_lifecycle.router)  # export leg: booking -> Form13 -> 
 app.include_router(shipping_lines.router)     # Shipping Lines (module 4: IAL/EAL/EDO, read-only + import)
 app.include_router(berthing.router)          # Berthing Reports (module 7: per-terminal vessel calls + upload)
 app.include_router(marine_calls.router)         # UC-I Marine vessel-call spine (module: marine, read-only)
+app.include_router(marine_dashboard.router)     # UC-I Marine dashboard boards (5-day plan, UI-028)
 app.include_router(marine_live_vessels.router)  # Live AIS vessel positions (MarineTraffic proxy, no DB write)
 app.include_router(marine_imports.router)    # UC-I Marine Data-Upload sub-module (CSV: validate/upload/history)
 app.include_router(marine_pilotage.router)   # UC-I Marine pilotage movements (read-only; XLSX via marine_imports)

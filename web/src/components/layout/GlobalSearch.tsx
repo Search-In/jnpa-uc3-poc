@@ -34,6 +34,10 @@ const TARGETS: Target[] = [
   { entity: "vehicle", route: "/intelligence", icon: Truck, labelKey: "search.vehicle" },
   { entity: "driver", route: "/intelligence", icon: IdCard, labelKey: "search.driver" },
   { entity: "container", route: "/gate-customs", icon: Container, labelKey: "search.container" },
+  // UC3-024: plate / container / e-seal / Form 13 all resolve to one visit on
+  // T-04, so a gate-document key routes to the screen that owns that resolution
+  // rather than to a screen that would have to guess what the number is.
+  { entity: "gateDoc", route: "/truck-visit", icon: FileText, labelKey: "search.gateDoc" },
   { entity: "shippingLine", route: "/shipping-lines", icon: Ship, labelKey: "search.shippingLine" },
   { entity: "fastag", route: "/fastag", icon: CreditCard, labelKey: "search.fastag" },
   { entity: "alert", route: "/alerts", icon: BellRing, labelKey: "search.alert" },

@@ -116,47 +116,106 @@ def journal_header_index(rows: list[list[str]]) -> int:
     return -1
 
 
-def _journal_documents(text: str) -> list[str]:
-    """Every PCS document carried by a journal's REQUEST column, in file order.
+def _cell(row: list[str], idx: Optional[int]) -> str:
+    if idx is None or idx < 0 or idx >= len(row):
+        return ""
+    return (row[idx] or "").strip()
 
-    Handles BOTH corpus shapes without guessing: the outbound report wraps the message in
-    a pseudo-JSON envelope (``ReqBody.XML``) that is NOT valid JSON — it uses semicolons
-    as separators — so the embedded payload is taken with the same regex the .log path
-    uses rather than by ``json.loads``. The inbound report carries the XML raw.
+
+def _request_to_xml(cell: str) -> Optional[str]:
+    """Turn a journal REQUEST cell into a PCS XML string, or None if unusable."""
+    if not cell:
+        return None
+    m = _LOG_XML_RE.search(cell)
+    if m:
+        try:
+            xml = json.loads(f'"{m.group(1)}"')
+        except json.JSONDecodeError:
+            xml = (m.group(1).replace('\\"', '"').replace("\\/", "/")
+                   .replace("\\n", "").replace("\\\\", "\\"))
+    else:
+        xml = cell  # inbound report: the message sits in the cell verbatim
+    xml = _strip_decl(xml)
+    return xml if xml.startswith("<") else None
+
+
+def iter_journal_rows(text: str) -> list[dict]:
+    """Every data row of a PCS journal, including failed / empty REQUEST cells.
+
+    Each item is::
+
+        {
+          "row_number": int,          # 1-based spreadsheet row (header = hi+1)
+          "message_type": str,        # MESSAGE_TYPE column (may be "")
+          "common_ref_no": str,       # COMMON_REF_NO as printed in the CSV
+          "xml": str | None,          # extracted PCS XML, or None when quarantined
+          "skip_reason": str | None,  # None | "empty_request" | "no_xml"
+        }
+
+    Empty / non-XML REQUEST cells are returned with ``xml=None`` and a skip_reason so
+    callers can quarantine them (UC1-007: planted failed transmissions must never be
+    silently dropped). Successful cells keep the same XML extraction rules as before.
     """
     import csv as _csv
 
-    _csv.field_size_limit(1 << 30)  # a REQUEST cell holds a whole PCS document
+    _csv.field_size_limit(1 << 30)
     rows = list(_csv.reader(io.StringIO(text)))
     hi = journal_header_index(rows)
     if hi < 0:
         return []
     header = [c.strip().upper() for c in rows[hi]]
     try:
-        req = header.index("REQUEST")
-    except ValueError:  # pragma: no cover — guarded by journal_header_index
+        req_i = header.index("REQUEST")
+    except ValueError:  # pragma: no cover
         return []
+    msg_i = header.index("MESSAGE_TYPE") if "MESSAGE_TYPE" in header else None
+    ref_i = header.index("COMMON_REF_NO") if "COMMON_REF_NO" in header else None
 
-    docs: list[str] = []
-    for row in rows[hi + 1:]:
-        if len(row) <= req:
-            continue
-        cell = (row[req] or "").strip()
+    out: list[dict] = []
+    for offset, row in enumerate(rows[hi + 1:], start=1):
+        row_number = hi + 1 + offset  # 1-based file row of this data line
+        if not any((c or "").strip() for c in row):
+            continue  # trailing blank lines — not transmissions
+        cell = _cell(row, req_i)
+        msg = _cell(row, msg_i)
+        ref = _cell(row, ref_i)
         if not cell:
+            out.append({
+                "row_number": row_number,
+                "message_type": msg,
+                "common_ref_no": ref,
+                "xml": None,
+                "skip_reason": "empty_request",
+            })
             continue
-        m = _LOG_XML_RE.search(cell)
-        if m:
-            try:
-                xml = json.loads(f'"{m.group(1)}"')
-            except json.JSONDecodeError:
-                xml = (m.group(1).replace('\\"', '"').replace("\\/", "/")
-                       .replace("\\n", "").replace("\\\\", "\\"))
-        else:
-            xml = cell  # inbound report: the message sits in the cell verbatim
-        xml = _strip_decl(xml)
-        if xml.startswith("<"):
-            docs.append(xml)
-    return docs
+        xml = _request_to_xml(cell)
+        if xml is None:
+            out.append({
+                "row_number": row_number,
+                "message_type": msg,
+                "common_ref_no": ref,
+                "xml": None,
+                "skip_reason": "no_xml",
+            })
+            continue
+        out.append({
+            "row_number": row_number,
+            "message_type": msg,
+            "common_ref_no": ref,
+            "xml": xml,
+            "skip_reason": None,
+        })
+    return out
+
+
+def _journal_documents(text: str) -> list[str]:
+    """Successful PCS XML payloads from a journal's REQUEST column (legacy helper).
+
+    Prefer :func:`iter_journal_rows` when quarantine visibility matters — this returns
+    only the extractable documents, matching the pre-UC1-007 behaviour of
+    :func:`extract_xml_documents`.
+    """
+    return [r["xml"] for r in iter_journal_rows(text) if r.get("xml")]
 
 
 def extract_xml_documents(fmt: Format, content: bytes) -> list[str]:

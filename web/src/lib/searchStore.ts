@@ -10,6 +10,11 @@ export type SearchEntity =
   | "vehicle"
   | "driver"
   | "container"
+  // UC3-024: a gate document is searchable by its e-seal id and by its Form 13
+  // e-gate / EIR number. Both are printed on the same slip as the plate and the
+  // container, so all four resolve to one visit — but the omnibox could not
+  // recognise either, and a bare number fell through to "vehicle".
+  | "gateDoc"
   | "shippingLine"
   | "fastag"
   | "alert"
@@ -54,6 +59,11 @@ export function detectEntity(raw: string): SearchEntity {
   if (/CASE|CHLN|CHALLAN/.test(q)) return "case";
   if (/^ALERT|^AL-/.test(q)) return "alert";
   if (/^[A-Z]{2}\d{1,2}[A-Z]{0,3}\d{3,4}$/.test(q.replace(/[\s-]/g, ""))) return "vehicle"; // plate
+  // An all-digit key is a gate-document number: a Form 13 e-gate no (16497850),
+  // an EIR no (4339869), a customs e-seal (5826371) or a PIN code. It used to
+  // fall through to "vehicle" and land the operator on a screen that could not
+  // search it.
+  if (/^\d{5,12}$/.test(q.replace(/[\s-]/g, ""))) return "gateDoc";
   return "vehicle";
 }
 

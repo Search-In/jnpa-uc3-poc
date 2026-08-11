@@ -78,11 +78,13 @@ class TestActualsParse:
 
     def test_documented_tss_amber_chain_reproduces(self):
         """Doc 01 §1.5: anchored 29-07 05:18 -> pilot 19:30 -> berthed 21:24."""
-        by = {e["event_type"]: e["event_ts"]
-              for e in _events("VESARR") if e["vcn"] == "INNSA1NF0S0776"}
+        amber = [e for e in _events("VESARR") if e["vcn"] == "INNSA1NF0S0776"]
+        by = {e["event_type"]: e["event_ts"] for e in amber}
         assert by["ANCHORED"].strftime("%d-%m %H:%M") == "29-07 05:18"
         assert by["PILOT_BOARDED"].strftime("%H:%M") == "19:30"
         assert by["BERTHED"].strftime("%H:%M") == "21:24"
+        assert all(e.get("via_no") == "S0776" for e in amber)
+        assert all(e.get("voyage_no") == "2626" for e in amber)
 
 
 # ---------------------------------------------------------------- Tier 2 — projection

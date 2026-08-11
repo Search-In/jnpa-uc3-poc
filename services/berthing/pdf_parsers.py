@@ -41,6 +41,24 @@ TERMINALS: dict[str, tuple[str, str]] = {
     "NSIGT_DP World": ("NSIGT", "CB"),
 }
 
+# Week-layout filenames (docs/Berthing Report/2026-07-20_Mon/APMT_2026-07-20.pdf)
+_FILENAME_TERMINAL: list[tuple[str, str, str]] = [
+    ("APMT", "APMT", "APM"),
+    ("BMCT", "BMCT", "BMCT"),
+    ("NSICT", "NSICT", "CB"),
+    ("NSIGT", "NSIGT", "CB"),
+    ("DAILY_BERTHING", "NSFT", "NSFT"),
+]
+
+
+def terminal_from_filename(filename: str) -> Optional[tuple[str, str]]:
+    """Map a week-layout PDF name → (terminal, kind), else None."""
+    u = filename.replace("\\", "/").rsplit("/", 1)[-1].upper()
+    for prefix, terminal, kind in _FILENAME_TERMINAL:
+        if u.startswith(prefix):
+            return (terminal, kind)
+    return None
+
 _ANCHOR = {
     "APM":  re.compile(r"^(APM\d{2})\b"),
     "BMCT": re.compile(r"^(BMCT\d{2})\b"),
@@ -48,7 +66,8 @@ _ANCHOR = {
     "SERIAL": re.compile(r"^(\d{1,2})\s+(.+)$"),
 }
 # VIA / rotation code, optionally glued to a 0-4 letter prefix (DP World "AGMS0655").
-_VIA = re.compile(r"\b([A-Z]{0,4})(S0\d{3,4})\b")
+# Codes are S + 4 digits (S0893, S1067, …) — NOT only the older S0xxx form.
+_VIA = re.compile(r"\b([A-Z]{0,4})(S\d{4})\b")
 _DT_FULL = re.compile(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\s+(\d{1,2}):(\d{2})\b")
 _DT_DAYMON = re.compile(r"\b(\d{1,2})-([A-Za-z]{3})\s+(\d{1,2}):(\d{2})\b")
 _ETA_DP = re.compile(r"[A-Za-z]{3}/(\d{1,2})/(\d{1,2})\s+(\d{1,2}):(\d{2})")

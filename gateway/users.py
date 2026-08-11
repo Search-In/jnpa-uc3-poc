@@ -139,22 +139,21 @@ def reset_memory_store() -> None:
 
 
 async def _backend(dsn: str) -> str:
-    """Resolve (and memoise) whether to read users from Postgres or memory.
+    """Resolve whether to read users from Postgres or memory.
 
-    In development an unreachable database pins the empty in-memory store, so a
-    local run without infra still boots (login simply has no accounts to match —
-    the demo profile runs with AUTH_ENABLED=false and never reaches login). In
-    production it raises, because authenticating against a store that silently
-    lost its rows is worse than returning 503.
+    A successful ``db`` probe is memoised. A failed probe in development returns
+    ``mem`` for *this call only* and is NOT pinned — Docker Desktop / local
+    Postgres often flaps at boot; pinning empty memory for the process lifetime
+    made every subsequent login 401 until a full restart. Production still fails
+    closed (raises) when the database is unreachable.
     """
     key = dsn or ""
     cached = _BACKEND.get(key)
-    if cached:
-        return cached
+    if cached == "db":
+        return "db"
     if not key:
         if production_mode():
             raise ProductionSafetyError("postgres", "POSTGRES_DSN is not set")
-        _BACKEND[key] = "mem"
         return "mem"
     try:
         from jnpa_shared.db import execute  # lazy import
@@ -167,7 +166,7 @@ async def _backend(dsn: str) -> str:
         if not allow_memory_store():
             log.error("user_store_db_unavailable_production", error=str(exc))
             raise ProductionSafetyError("postgres", str(exc)) from exc
-        _BACKEND[key] = "mem"
+        # Do NOT pin "mem" — allow the next call to re-probe once Postgres is up.
         log.warning("user_store_db_unavailable_using_memory", error=str(exc))
         return "mem"
 

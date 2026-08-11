@@ -40,7 +40,10 @@
     "uc3Lifecycle": "कंटेनर संचालन",
     "truckOps": "ट्रक संचालन",
     "cargoWhatIf": "कार्गो व्हॉट-इफ",
-    "truckVisit": "ट्रक विज़िट विवरण"
+    "truckVisit": "ट्रक विज़िट विवरण",
+    "vehicleRegistry": "वाहन रजिस्ट्री",
+    "corridorSim": "कॉरिडोर सिमुलेशन",
+    "gateLaneBoard": "गेट और लेन बोर्ड"
   },
   "followBox": {
     "title": "फॉलो द बॉक्स",
@@ -120,7 +123,8 @@
     "container": "कंटेनर",
     "fastag": "फास्टैग",
     "alert": "अलर्ट",
-    "case": "केस आईडी"
+    "case": "केस आईडी",
+    "gateDoc": "फॉर्म 13 / EIR / ई-सील नं."
   },
   "commandCenter": {
     "title": "कमांड सेंटर",

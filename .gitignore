@@ -80,3 +80,7 @@ package-lock.json
 
 # SSH keys for the jnpa3 EC2 tunnel host — never commit (a key was committed once already)
 *.pem
+
+# Local Digital Twin corpus drop (UC1-007); keep README only
+client-data/**
+!client-data/README.md

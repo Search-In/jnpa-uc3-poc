@@ -12,37 +12,14 @@ import {
 } from "@/components/ui/dialog";
 import { Spinner, EmptyState } from "@/components/ui/misc";
 import { STATUS, OKABE_ITO } from "@/lib/tokens";
+import CarbonMethodPanel from "@/components/panels/CarbonMethodPanel";
 import type { CarbonRollup } from "@/lib/types";
-
-// Emission factors mirror the backend (carbon/factors.py). The "effective" per-km
-// factor = nominal laden payload (t) × tonne-km factor (g CO₂e/t·km) ÷ 1000, i.e.
-// the kg CO₂e a laden truck of that class emits per km moved. Kept in sync so the
-// methodology the operator reads matches what the service actually computes.
-const EMISSION_FACTORS: {
-  cls: string;
-  payloadT: number;
-  gPerTonneKm: number;
-  idleGPerMin: number;
-}[] = [
-  { cls: "HGV", payloadT: 20, gPerTonneKm: 62, idleGPerMin: 134 },
-  { cls: "REEFER", payloadT: 18, gPerTonneKm: 78, idleGPerMin: 224 },
-  { cls: "RIGID", payloadT: 10, gPerTonneKm: 85, idleGPerMin: 134 },
-  { cls: "LGV", payloadT: 1, gPerTonneKm: 110, idleGPerMin: 60 },
-];
-
-function effectiveKgPerKm(payloadT: number, gPerTonneKm: number): number {
-  return (payloadT * gPerTonneKm) / 1000;
-}
 
 // "How CO₂ is calculated" — a plain-language methodology dialog so a new user can
 // see exactly how the numbers are derived (no black box). Opened from the ⓘ button
 // in the Carbon Footprint card header.
 function CarbonMethodologyDialog() {
   const { t } = useTranslation();
-  const hgv = EMISSION_FACTORS[0];
-  const hgvKgPerKm = effectiveKgPerKm(hgv.payloadT, hgv.gPerTonneKm); // 1.24
-  const exampleKm = 25;
-  const exampleTotal = hgvKgPerKm * exampleKm; // 31.0 kg (moving only)
 
   return (
     <Dialog>
@@ -77,71 +54,10 @@ function CarbonMethodologyDialog() {
             idle&nbsp;time&nbsp;×&nbsp;idle&nbsp;factor)
           </div>
 
-          <div>
-            <div className="mb-1 text-[11px] uppercase tracking-wide text-muted-foreground">
-              Emission factor by vehicle class
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-[12px] tabular-nums">
-                <thead>
-                  <tr className="text-left text-muted-foreground">
-                    <th className="py-1 pr-3 font-medium">Class</th>
-                    <th className="py-1 pr-3 text-right font-medium">Laden payload</th>
-                    <th className="py-1 pr-3 text-right font-medium">Factor</th>
-                    <th className="py-1 text-right font-medium">Idle</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {EMISSION_FACTORS.map((f) => (
-                    <tr key={f.cls} className="border-t border-border/50">
-                      <td className="py-1 pr-3 font-mono">{f.cls}</td>
-                      <td className="py-1 pr-3 text-right">{f.payloadT} t</td>
-                      <td className="py-1 pr-3 text-right">
-                        {effectiveKgPerKm(f.payloadT, f.gPerTonneKm).toFixed(2)} kg/km
-                      </td>
-                      <td className="py-1 text-right text-muted-foreground">
-                        {f.idleGPerMin} g/min
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <p className="mt-1 text-[10px] text-muted-foreground">
-              Factor = laden payload (t) × tonne-km factor (g CO₂e/t·km) ÷ 1000.
-            </p>
-          </div>
-
-          <div>
-            <div className="mb-1 text-[11px] uppercase tracking-wide text-muted-foreground">
-              Worked example
-            </div>
-            <div className="rounded-md border border-border p-3">
-              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[13px]">
-                <dt className="text-muted-foreground">Vehicle</dt>
-                <dd className="font-mono">TRK-000001</dd>
-                <dt className="text-muted-foreground">Vehicle class</dt>
-                <dd>HGV</dd>
-                <dt className="text-muted-foreground">Distance</dt>
-                <dd>{exampleKm} km</dd>
-                <dt className="text-muted-foreground">Emission factor</dt>
-                <dd>{hgvKgPerKm.toFixed(2)} kg CO₂/km</dd>
-                <dt className="font-medium">Total (moving)</dt>
-                <dd className="font-semibold">
-                  {exampleKm} × {hgvKgPerKm.toFixed(2)} = {exampleTotal.toFixed(1)} kg CO₂e
-                </dd>
-              </dl>
-              <p className="mt-2 text-[10px] text-muted-foreground">
-                Idle emissions (engine running while stationary) are added on top: idle minutes ×
-                the class idle factor above.
-              </p>
-            </div>
-          </div>
-
-          <p className="text-[10px] text-muted-foreground">
-            Factors are IPCC / GHG-Protocol / GLEC constants (diesel 2680 g CO₂e per litre). Unknown
-            classes default to HGV.
-          </p>
+          {/* UC3-036: factors, sources and the assumption come from
+              /api/carbon/method — the same constants the service applies — so the
+              panel cannot drift from the calculation. */}
+          <CarbonMethodPanel />
         </div>
       </DialogContent>
     </Dialog>

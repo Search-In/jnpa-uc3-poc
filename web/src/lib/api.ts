@@ -1094,7 +1094,10 @@ export const api = {
   availableVehicles: (q?: string, limit = 50) => {
     const qs = new URLSearchParams({ limit: String(limit) });
     if (q) qs.set("q", q);
-    return http<{ vehicles: AvailableVehicle[]; count: number }>(
+    // `count` is this page's length (capped by `limit`); `available_total` is how
+    // many vehicles the DATABASE says are assignable right now — that is the
+    // number the "Vehicle (N available)" label must show.
+    return http<{ vehicles: AvailableVehicle[]; count: number; available_total: number }>(
       `/api/vehicles/available?${qs.toString()}`,
     );
   },

@@ -232,3 +232,85 @@ def test_reject_flow_marks_rejected(client):
     assert r.status_code == 200 and r.json()["rejected"] is True
     status = client.get("/api/identity/enrol-request/DRV-W3").json()
     assert status["status"] == "REJECTED" and status["rejection_reason"] == "spoofed"
+
+
+# ---------------------------------------------------------------------------
+# One vehicle, one driver — the enrollment half of the rule
+# ---------------------------------------------------------------------------
+# core.driver_identity has enforced uq_drivers_vehicle_active from the start, but
+# core.driver_enrollment had no equivalent, so the vehicle_assignment_conflict()
+# pre-check in POST /api/identity/drivers was a read-then-write race: two admins
+# (or an admin and a PWA self-enrolment) could both claim the same truck and only
+# discover it at approval. Migration 0139 adds uq_driver_enrol_vehicle_open; the
+# in-memory backend mirrors it so both postures behave identically.
+def test_second_open_enrollment_on_same_vehicle_is_rejected():
+    async def _t():
+        await enr.submit("", driver_id="DRV-V1", name="First", vehicle_no="TRK-000900")
+        with pytest.raises(enr.VehicleAlreadyEnrolled):
+            await enr.submit("", driver_id="DRV-V2", name="Second", vehicle_no="TRK-000900")
+
+    asyncio.run(_t())
+
+
+def test_vehicle_match_ignores_case_and_padding():
+    """Same normalisation as the SQL index (UPPER(TRIM(...))), so ' trk-000901 '
+    cannot sneak past as a different vehicle."""
+    async def _t():
+        await enr.submit("", driver_id="DRV-V3", name="First", vehicle_no="TRK-000901")
+        with pytest.raises(enr.VehicleAlreadyEnrolled):
+            await enr.submit("", driver_id="DRV-V4", name="Second", vehicle_no=" trk-000901 ")
+
+    asyncio.run(_t())
+
+
+def test_resubmitting_the_same_driver_is_still_an_overwrite():
+    """The rule is one OPEN enrollment per vehicle, not one ever: a driver may
+    re-submit their own request (the ON CONFLICT (driver_id) branch)."""
+    async def _t():
+        await enr.submit("", driver_id="DRV-V5", name="Re Submit", vehicle_no="TRK-000902")
+        rec = await enr.submit("", driver_id="DRV-V5", name="Re Submit II",
+                               vehicle_no="TRK-000902")
+        assert rec["name"] == "Re Submit II"
+        assert rec["status"] == enr.PENDING
+
+    asyncio.run(_t())
+
+
+def test_rejected_enrollment_frees_the_vehicle():
+    """REJECTED is not an open state, so the truck returns to the pool."""
+    async def _t():
+        await enr.submit("", driver_id="DRV-V6", name="Rejected", vehicle_no="TRK-000903")
+        await enr.set_status("", "DRV-V6", enr.REJECTED, actor="admin", reason="no permit")
+        rec = await enr.submit("", driver_id="DRV-V7", name="Next", vehicle_no="TRK-000903")
+        assert rec["status"] == enr.PENDING
+
+    asyncio.run(_t())
+
+
+def test_admin_create_reports_the_holder_not_a_bare_409(client):
+    """The dialog renders detail.message, so the conflict must NAME the holder —
+    a bare '409 Conflict' leaves the operator with nothing to act on."""
+    first = client.post("/api/identity/drivers",
+                        json={"name": "First Claim", "vehicle_no": "TRK-000904"})
+    if first.status_code == 404:
+        pytest.skip("no Vehicle Master in this posture; covered by the store tests above")
+    assert first.status_code == 200, first.text
+    second = client.post("/api/identity/drivers",
+                         json={"name": "Second Claim", "vehicle_no": "TRK-000904"})
+    assert second.status_code == 409
+    detail = second.json()["detail"]
+    assert detail["error"] == "vehicle_already_assigned"
+    assert "First Claim" in detail["message"]
+
+
+def test_pwa_self_enrolment_on_a_taken_vehicle_is_409_not_500(client):
+    """Same rule from the driver side: previously the unique-index rejection
+    escaped as an unhandled error."""
+    client.post("/api/identity/drivers",
+                json={"name": "Holder", "vehicle_no": "TRK-000905"})
+    r = client.post("/api/identity/enrol-request", json={
+        "driver_id": "DRV-V8", "name": "PWA Driver", "vehicle_no": "TRK-000905",
+        "consent": True, "images": [IMG]})
+    assert r.status_code in (200, 409)
+    if r.status_code == 409:
+        assert r.json()["detail"]["error"] == "vehicle_already_assigned"

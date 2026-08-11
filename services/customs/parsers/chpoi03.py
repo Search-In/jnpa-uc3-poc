@@ -24,6 +24,7 @@ from .common import (
     parse_document_header,
     to_int,
     to_num,
+    yn,
 )
 
 
@@ -40,7 +41,7 @@ def _container(el: Any, line_no: Optional[int], subline_no: int) -> dict[str, An
         "no_of_packages": to_int(el.findtext("TotalNoofPackagesinContainer")),
         "container_weight": to_num(el.findtext("Containerweight")),
         "iso_size_type": clean(el.findtext("ISOCode")),
-        "soc_flag": clean(el.findtext("SOCFlag")),
+        "soc_flag": yn(el.findtext("SOCFlag")),
     }
 
 

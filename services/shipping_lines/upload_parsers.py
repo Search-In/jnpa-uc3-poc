@@ -309,7 +309,8 @@ def _map_edo_row(raw_row: dict[str, Any]) -> Optional[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------- main parse
-def parse(list_type: str, header: list[str], rows: list[dict[str, Any]]) -> ParseResult:
+def parse(list_type: str, header: list[str], rows: list[dict[str, Any]],
+          terminal: str = "OTHER") -> ParseResult:
     res = ParseResult()
     res.target = _SPECS[list_type]["target"]
     res.row_count = len(rows)
@@ -318,12 +319,16 @@ def parse(list_type: str, header: list[str], rows: list[dict[str, Any]]) -> Pars
     if res.target == "delivery":
         _parse_edo(res, rows)
     else:
-        _parse_advance(res, list_type, rows)
+        _parse_advance(res, list_type, rows, terminal)
     return res
 
 
-def _parse_advance(res: ParseResult, list_type: str, rows: list[dict[str, Any]]) -> None:
-    terminal = "OTHER"
+def _parse_advance(res: ParseResult, list_type: str, rows: list[dict[str, Any]],
+                   terminal: str = "OTHER") -> None:
+    # advance_list_container.terminal_id is NOT NULL and resolves through
+    # ref_terminal(+alias); 'OTHER' resolves nowhere, so a caller that knows
+    # the terminal (e.g. from the filename) must pass it or every row of the
+    # file fails to persist.
     seen: set[tuple[str, str]] = set()
     for i, raw in enumerate(rows, start=1):
         row_norm = {norm_header(k): v for k, v in raw.items() if norm_header(k)}

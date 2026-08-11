@@ -387,6 +387,9 @@ async def commit(
         "case_id": case_id,
         "challan_id": (challan or {}).get("challan_id"),
         "challan_no": (challan or {}).get("challan_no"),
+        # UC3-030: the disclosure travels with every challan-bearing response, so
+        # no client can render a challan number without the SIMULATED badge.
+        **(enforcement.challan_disclosure() if challan else {}),
         "status": res["status"],
         "vehicle_number": plate,
         "driver_id": body.get("driver_id") or None,
@@ -623,6 +626,7 @@ async def enforce(
         "violations": res["breakdown"],
         "fine": res["case_total"],
         "challan_no": (challan or {}).get("challan_no"),
+        **(enforcement.challan_disclosure() if challan else {}),
         "status": res["status"],
         "evidence_url": evidence_url,
         "alert_ids": res["alert_ids"],
@@ -702,6 +706,7 @@ async def enforce(
         "fine_total": res["case_total"],
         "challan_id": (challan or {}).get("challan_id"),
         "challan_no": (challan or {}).get("challan_no"),
+        **(enforcement.challan_disclosure() if challan else {}),
         "status": res["status"],
         "evidence_url": evidence_url,
         "evidence_sha256": sha,

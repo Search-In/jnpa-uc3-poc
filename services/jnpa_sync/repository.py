@@ -141,16 +141,20 @@ async def ensure_api_ingest_schema(dsn: Optional[str] = None) -> None:
 
 
 # The upload-ledger tables a checksum may already be known to (dump imports).
-# Two column conventions coexist: marine/berthing use file_hash, the rest use
-# source_sha256. performance has no file-level hash at all.
-_LEDGER_PROBES: Sequence[tuple[str, str, str]] = (
-    ("core.marine_import_files", "file_hash", "marine"),
-    ("core.berthing_import_file", "file_hash", "berthing"),
-    ("core.customs_message", "source_sha256", "customs"),
-    ("core.sl_import_file", "source_sha256", "shipping_lines"),
-    ("core.cfs_ecy_import_file", "source_sha256", "cfs_ecy"),
-    ("core.gate_doc_import_file", "source_sha256", "gate_documents"),
-    ("core.td_import_file", "source_sha256", "transporters_drivers"),
+# Two column conventions coexist: marine/berthing use file_hash + status, the
+# rest use source_sha256 + import_status. performance has no file-level hash
+# at all. The 4th element names each ledger's status column so the probe can
+# ignore FAILED rows (a recorded attempt, not imported content).
+_LEDGER_PROBES: Sequence[tuple[str, str, str, str]] = (
+    ("core.marine_import_files", "file_hash", "marine", "status"),
+    ("core.berthing_import_file", "file_hash", "berthing", "status"),
+    ("core.customs_message", "source_sha256", "customs", "import_status"),
+    ("core.sl_import_file", "source_sha256", "shipping_lines", "import_status"),
+    ("core.cfs_ecy_import_file", "source_sha256", "cfs_ecy", "import_status"),
+    ("core.gate_doc_import_file", "source_sha256", "gate_documents",
+     "import_status"),
+    ("core.td_import_file", "source_sha256", "transporters_drivers",
+     "import_status"),
 )
 
 
@@ -390,11 +394,15 @@ class SyncRepository:
         worst case is a redundant (still-deduped) download, never a crash."""
         engine = get_engine(self._dsn)
         async with engine.connect() as conn:
-            for table, column, source in _LEDGER_PROBES:
+            for table, column, source, status_col in _LEDGER_PROBES:
                 try:
+                    # A FAILED ledger row is a recorded *attempt* whose domain
+                    # rows were rolled back — it must not suppress the fetch,
+                    # or the record can never be repaired by a re-sync.
                     row = (await conn.execute(text(
                         f"SELECT 1 FROM {table} WHERE {column} = :s "
-                        f"AND data_origin = 'API' LIMIT 1"),
+                        f"AND data_origin = 'API' "
+                        f"AND {status_col} <> 'FAILED' LIMIT 1"),
                         {"s": sha256})).first()
                 except Exception:  # noqa: BLE001 - probe, not a failure
                     continue

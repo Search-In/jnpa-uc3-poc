@@ -882,10 +882,16 @@ async def run_import(docs: Sequence[ParsedDoc], rows: Sequence[Dict[str, Any]],
 
     async with engine.begin() as conn:
         db = (await conn.execute(text("SELECT current_database()"))).scalar()
-        if db != "jnpa_qa":
+        # The guard stays ON by default: an unset UC3_TARGET_DB still means QA
+        # only, so an accidental run against another database aborts as before.
+        # Naming the database explicitly is the operator's opt-in for the case
+        # where the corpus must land somewhere else (e.g. jnpa_schema_v3, which
+        # is what the gateway actually serves).
+        expected = (os.environ.get("UC3_TARGET_DB") or "jnpa_qa").strip()
+        if db != expected:
             raise SourceError(
-                f"refusing to write: connected to database {db!r}, expected 'jnpa_qa'. "
-                f"UC3-002 imports into QA only.")
+                f"refusing to write: connected to database {db!r}, expected {expected!r}. "
+                f"Set UC3_TARGET_DB to the database you intend to write to.")
 
         terminals = {code: tid for code, tid in (await conn.execute(
             text("SELECT code, terminal_id FROM core.ref_terminal"))).all()}

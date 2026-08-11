@@ -12,6 +12,7 @@
 
 import type { LucideIcon } from "lucide-react";
 import {
+  Gauge,
   LayoutDashboard,
   Truck,
   Radio,
@@ -87,7 +88,11 @@ export const NAV_SECTIONS: NavSection[] = [
         id: "traffic",
         i18nKey: "navGroup.traffic",
         icon: Truck,
-        children: [leaf("/live", "nav.live", Radio), leaf("/advisory", "nav.advisory", Route)],
+        children: [
+          leaf("/live", "nav.live", Radio),
+          leaf("/gate-lane-board", "nav.gateLaneBoard", Gauge),
+          leaf("/advisory", "nav.advisory", Route),
+        ],
       },
       leaf("/alerts", "nav.alerts", BellRing),
       leaf("/parking", "nav.parking", SquareParking),
@@ -103,11 +108,13 @@ export const NAV_SECTIONS: NavSection[] = [
       leaf("/gate-customs", "nav.gateCustoms", ShieldCheck),
       leaf("/truck-ops", "nav.truckOps", Truck),
       leaf("/truck-visit", "nav.truckVisit", FileText),
+      leaf("/vehicle-registry", "nav.vehicleRegistry", Truck),
       leaf("/cfs-ecy", "nav.cfsEcy", Boxes),
       leaf("/shipping-lines", "nav.shippingLines", Ship),
       // Cargo What-If sits at the end of the lifecycle section: it asks "what
       // would change" about the journey the screens above show as it is.
       leaf("/cargo-whatif", "nav.cargoWhatIf", FlaskConical),
+      leaf("/corridor-simulation", "nav.corridorSim", FlaskConical),
     ],
   },
   {

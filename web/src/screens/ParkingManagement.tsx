@@ -16,10 +16,12 @@ import {
   Ban,
   CheckCircle2,
   Snowflake,
+  SlidersHorizontal,
 } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
+import CppMeteredReleasePanel from "@/components/panels/CppMeteredReleasePanel";
 import { ArcgisMap } from "@/components/map/ArcgisMap";
 import { useMapSettings } from "@/lib/mapSettings";
 import {
@@ -53,9 +55,16 @@ import type {
 // untouched and continue to render normally everywhere else in the app.
 const SHOW_FACILITIES_MAP = false;
 
-type TabKey = "facilities" | "vehicles" | "history" | "violations" | "reefer";
+type TabKey = "facilities" | "release" | "vehicles" | "history" | "violations" | "reefer";
 
-const PARKING_TABS: TabKey[] = ["facilities", "vehicles", "history", "violations", "reefer"];
+const PARKING_TABS: TabKey[] = [
+  "facilities",
+  "release",
+  "vehicles",
+  "history",
+  "violations",
+  "reefer",
+];
 
 function statusTone(status?: string | null, freePct?: number | null): Tone {
   if (status === "FULL") return "critical";
@@ -248,6 +257,10 @@ export default function ParkingManagement() {
               icon: SquareParking,
               count: facilities.length,
             },
+            // UC3-027 flow F-06. Metered release sits beside occupancy because it
+            // is computed FROM it plus the live gate queue — the operator reads
+            // the plaza's state and its release decision on one screen.
+            { key: "release", label: "Metered Release", icon: SlidersHorizontal },
             { key: "vehicles", label: "Vehicles", icon: Car, count: activeVehicles.length },
             { key: "history", label: "Entry / Exit History", icon: History },
             {
@@ -263,6 +276,7 @@ export default function ParkingManagement() {
           {tab === "facilities" && (
             <FacilitiesTable rows={facilities} status={availQ} onRetry={() => availQ.refetch()} />
           )}
+          {tab === "release" && <CppMeteredReleasePanel />}
           {tab === "vehicles" && (
             <VehiclesTable rows={activeVehicles} status={histQ} onRetry={() => histQ.refetch()} />
           )}

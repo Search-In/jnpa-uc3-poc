@@ -721,16 +721,26 @@ function VehiclesTable({
   );
 }
 
-function StateChip({ state }: { state: string }) {
-  const tone: Tone =
-    state === "AT_GATE_QUEUE" ? "warn" : state === "MOVING" || state === "ENROUTE" ? "ok" : "info";
+// `state` is null for any device the gateway has not classified. Rendering
+// "Unknown" is the honest answer; defaulting it to a movement state would put a
+// status on screen that no backend ever reported.
+function StateChip({ state }: { state: string | null | undefined }) {
+  // This screen's local Tone has no "neutral"; the label already reads
+  // "Unknown", so the tone is cosmetic here and must not imply a movement state.
+  const tone: Tone = !state
+    ? "info"
+    : state === "AT_GATE_QUEUE"
+      ? "warn"
+      : state === "MOVING" || state === "ENROUTE"
+        ? "ok"
+        : "info";
   const colour = TONE_COLOUR[tone];
   return (
     <span
       className="inline-flex items-center rounded-full px-2 py-0.5 text-[10.5px] font-semibold"
       style={{ backgroundColor: `${colour}1f`, color: colour }}
     >
-      {humanize(state)}
+      {state ? humanize(state) : "Unknown"}
     </span>
   );
 }

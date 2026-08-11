@@ -52,7 +52,14 @@ export interface TruckDevice {
   device_id: string;
   plate?: string | null;
   gate_id?: string | null;
-  state: string;
+  /**
+   * Movement state, or null when the gateway has not classified the device yet.
+   *
+   * This was typed `string`, which is why the compiler never flagged the
+   * `.toLowerCase()` that blanked /live: the type asserted a guarantee the API
+   * does not make. Every consumer must handle null.
+   */
+  state: string | null;
   position: { lat: number; lon: number };
   speed_kmh: number;
   heading: number;

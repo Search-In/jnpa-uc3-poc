@@ -278,6 +278,49 @@ class ContainerJobRepository:
         where, p = self._job_where(filters)
         return await self._count(f"SELECT count(*) FROM core.container_job_assignment{where}", p)
 
+    # ------------------------------------------------- UC-II -> UC-III handover
+    # A container that UC-II released is, until a truck is dispatched against it,
+    # a job that does not exist yet: core.container_job_assignment.vehicle_id is
+    # NOT NULL and the assignment gate demands a driver + gate document, so there
+    # is nothing legitimate to insert at release time. The handover queue is
+    # therefore READ from core.cargo (the single source of truth for the release)
+    # rather than projected into a second table — no duplication, no fabricated
+    # job row, and the row disappears from the queue the moment a real job opens
+    # against it.
+    _PENDING_FROM = (
+        " FROM core.cargo c "
+        " WHERE (c.lifecycle_status = 'RELEASED' OR c.is_released) "
+        "   AND NOT EXISTS (SELECT 1 FROM core.container_job_assignment j "
+        "                    WHERE j.container_number = c.container_number "
+        "                      AND j.status NOT IN ('COMPLETED','CANCELLED'))")
+
+    @staticmethod
+    def _pending_where(f: Mapping[str, Any]) -> tuple[str, dict]:
+        """Only the filters that can mean anything for a box with no job yet.
+
+        A query scoped to a vehicle/driver/job-status is asking about dispatched
+        work, so it must NOT be answered with un-dispatched boxes — the caller
+        (service.list_pending_handover) skips the queue entirely for those."""
+        clauses, p = "", {}
+        if f.get("container_number"):
+            clauses = " AND c.container_number = :pcn"
+            p["pcn"] = str(f["container_number"]).strip().upper()
+        return clauses, p
+
+    async def list_pending_handover(self, *, filters: Mapping[str, Any],
+                                    limit: int, offset: int) -> list[dict]:
+        where, p = self._pending_where(filters)
+        p.update(limit=limit, offset=offset)
+        return await self._rows(
+            "SELECT c.container_number, c.lifecycle_status, c.customs_status, "
+            "       c.yard_block, c.vehicle_number, c.vessel_name, c.updated_at"
+            + self._PENDING_FROM + where +
+            " ORDER BY c.updated_at DESC, c.container_number LIMIT :limit OFFSET :offset", p)
+
+    async def count_pending_handover(self, *, filters: Mapping[str, Any]) -> int:
+        where, p = self._pending_where(filters)
+        return await self._count("SELECT count(*)" + self._PENDING_FROM + where, p)
+
     async def vehicles_with_open_jobs(self) -> set[str]:
         """Vehicle IDs currently holding a job that is neither COMPLETED nor
         CANCELLED — i.e. genuinely busy.

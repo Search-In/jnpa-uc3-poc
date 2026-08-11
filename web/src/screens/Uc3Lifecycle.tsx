@@ -418,8 +418,8 @@ export default function Uc3Lifecycle() {
                                 <StatusChip label="RELEASED · NEEDS TRUCK" tone="warn" />
                               </div>
                               <span className="truncate text-[11px] text-muted-foreground">
-                                {j.yard_block ?? "yard —"} · {j.vehicle_no ?? "no truck"} · assign to
-                                start
+                                {j.yard_block ?? "yard —"} · {j.vehicle_no ?? "no truck"} · assign
+                                to start
                               </span>
                             </button>
                           </li>

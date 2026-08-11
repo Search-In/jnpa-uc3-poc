@@ -2468,8 +2468,10 @@ export interface ContainerJob {
 // `vehicle_id` are null and the status is one core.container_job_assignment
 // would reject. It is the INPUT to POST /api/jobs — a click on one belongs in
 // the assignment panel, never in the job stepper.
-export interface PendingHandoverEntry
-  extends Omit<ContainerJob, "id" | "vehicle_id" | "pending_handover"> {
+export interface PendingHandoverEntry extends Omit<
+  ContainerJob,
+  "id" | "vehicle_id" | "pending_handover"
+> {
   id: null;
   vehicle_id: null;
   pending_handover: true;

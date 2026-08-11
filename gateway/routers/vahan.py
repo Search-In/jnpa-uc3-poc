@@ -13,6 +13,7 @@ so the demo can show which path served each request (``/api/debug/decisions``).
 """
 from __future__ import annotations
 
+import re
 import time
 from typing import Any, Optional
 
@@ -35,6 +36,10 @@ from ..state import GatewayState, get_state
 
 log = get_logger("gateway.vahan")
 
+# SARATHI/01's documented date-of-birth pattern, checked here so a bad value
+# never silently downgrades the request to SARATHI/02.
+_RE_DOB = re.compile(r"^\d{4}-(0[1-9]|1[012])-(0[1-9]|[12][0-9]|3[01])$")
+
 router = APIRouter(prefix="/api/vahan", tags=["vahan"])
 
 
@@ -53,6 +58,15 @@ async def _try_upstream(
         resp = await state.http.get(url)
     except httpx.HTTPError as exc:
         log.warning("vahan_upstream_unreachable", url=url, error=str(exc))
+        return None
+    except Exception as exc:  # noqa: BLE001
+        # Anything the transport stack raises that is NOT an httpx error still
+        # means "this rung did not answer" — e.g. a proxy speaking a broken
+        # SOCKS handshake raises socksio.ProtocolError, which sailed past the
+        # clause above and turned a routine miss into a 500. A rung failing is
+        # the ladder working; it must never be able to fail the request.
+        log.warning("vahan_upstream_transport_error", url=url,
+                    error=f"{type(exc).__name__}: {exc}")
         return None
     finally:
         UPSTREAM_LATENCY.labels("vahan", target).observe(time.perf_counter() - t0)
@@ -114,10 +128,10 @@ async def _ulip_rc(state: GatewayState, plate: str) -> Optional[dict]:
     t0 = time.perf_counter()
     try:
         envelope = await client.fetch_vehicle_by_rc(plate)
-        fields = normalize_rc(envelope)
+        fields = _matching_rc(normalize_rc(envelope), plate, "VAHAN/04")
         if not fields:
             envelope = await client.fetch_vehicle_by_rc_xml(plate)
-            fields = normalize_vahan_xml(envelope)
+            fields = _matching_rc(normalize_vahan_xml(envelope), plate, "VAHAN/01")
     except UlipError as exc:
         log.warning("vahan_ulip_miss", plate=plate, error=type(exc).__name__)
         return None
@@ -127,11 +141,41 @@ async def _ulip_rc(state: GatewayState, plate: str) -> Optional[dict]:
     return rc_payload(record) if record else None
 
 
-async def _ulip_dl(state: GatewayState, dl: str) -> Optional[dict]:
+def _matching_rc(fields: Optional[dict], plate: str,
+                 api: str) -> Optional[dict]:
+    """Drop an RC that is not for the plate we asked about.
+
+    VAHAN/01 on staging answers a *different* registration for the same input
+    on roughly half of all calls — asking for ``UP32KH0320`` returns
+    ``RJ11GC0346`` (a different make, class and owner) about as often as it
+    returns the right vehicle. VAHAN/04 is stable. Whatever the cause, binding
+    a stranger's registration to a plate at the gate is the worst failure this
+    module can produce: it would clear a truck on someone else's fitness and
+    blacklist status. So the answer is checked against the question, and a
+    mismatch is treated as a miss and dropped to the next rung.
+    """
+    if not fields:
+        return None
+    returned = normalize_plate(str(fields.get("rc_number") or ""))
+    if returned and returned != normalize_plate(plate):
+        log.warning("vahan_ulip_plate_mismatch", api=api,
+                    requested=plate, returned=returned)
+        return None
+    return fields
+
+
+async def _ulip_dl(state: GatewayState, dl: str,
+                   dob: Optional[str] = None) -> Optional[dict]:
     """SARATHI/02 -> a SarathiRecord payload, or None on any miss.
 
-    SARATHI/01 is not attempted as a fallback: it additionally requires the
-    holder's date of birth, which the gate does not hold.
+    When the caller supplies the holder's date of birth, **SARATHI/01** is
+    tried first and SARATHI/02 is the fallback. /01 needs the extra identifier
+    but answers with strictly more: the licence issue date, the issuing state
+    and RTO, and — uniquely among the granted APIs — the holder's name
+    unmasked plus a photograph. That is the difference between a licence check
+    and enough identity to issue a port pass, so it is worth the extra field
+    whenever enrolment has it. The gate itself never does, which is why /02
+    remains the default path.
     """
     from integrations.ulip import UlipError
     from integrations.ulip.records import dl_to_record
@@ -140,8 +184,16 @@ async def _ulip_dl(state: GatewayState, dl: str) -> Optional[dict]:
     client = _ulip(state.cfg)
     t0 = time.perf_counter()
     try:
-        envelope = await client.fetch_dl(dl)
-        fields = normalize_dl(envelope)
+        fields = None
+        if dob:
+            try:
+                fields = normalize_dl(await client.fetch_dl_with_dob(dl, dob))
+            except UlipError as exc:
+                # A bad DOB or a licence /01 does not hold must not cost the
+                # caller the ordinary /02 answer.
+                log.info("sarathi01_miss", dl=dl, error=type(exc).__name__)
+        if not fields:
+            fields = normalize_dl(await client.fetch_dl(dl))
     except UlipError as exc:
         log.warning("sarathi_ulip_miss", dl=dl, error=type(exc).__name__)
         return None
@@ -304,7 +356,14 @@ def _persist_dl(state: GatewayState, dl: str, record: Optional[dict], source: st
 
 
 @router.get("/dl/{dl_number}")
-async def sarathi_dl(dl_number: str, state: GatewayState = Depends(get_state)) -> dict:
+async def sarathi_dl(
+    dl_number: str,
+    dob: Optional[str] = Query(
+        None, description="Holder's date of birth as YYYY-MM-DD. When given, "
+                          "SARATHI/01 is tried first (richer record, unmasked "
+                          "name, photograph); SARATHI/02 remains the fallback."),
+    state: GatewayState = Depends(get_state),
+) -> dict:
     """Sarathi DL lookup — LIVE_PRIMARY -> LIVE_FALLBACK -> CACHED.
 
     DLs have no provisional rung (a licence cannot be "admitted on trust"); a
@@ -312,13 +371,24 @@ async def sarathi_dl(dl_number: str, state: GatewayState = Depends(get_state)) -
     """
     cfg = state.cfg
     dl = dl_number.strip().upper().replace(" ", "")
+    if dob and not _RE_DOB.match(dob.strip()):
+        # Falling back to SARATHI/02 on a malformed date would answer 200 with
+        # a thinner record than the caller asked for, and they would have no
+        # way to tell. A bad argument is the caller's to fix.
+        raise HTTPException(status_code=422, detail={
+            "error": "invalid_dob",
+            "expected": "YYYY-MM-DD (SARATHI/01 field pattern)",
+            "received": dob})
     path = f"/sarathi/dl/{dl}"
+    # The DOB selects a different upstream API with a richer record, so a
+    # cached /02 answer must not be served for a /01 request or vice versa.
+    cache_key = f"{dl}|{dob}" if dob else dl
 
     # LIVE_PRIMARY is ULIP SARATHI/02 (a direct client call, not an HTTP
     # upstream); LIVE_FALLBACK is still the vahan-sim service.
     for kind, target, enabled, fetch in (
         ("LIVE_PRIMARY", "ulip", cfg.ulip_live_enabled,
-         lambda: _ulip_dl(state, dl)),
+         lambda: _ulip_dl(state, dl, dob)),
         ("LIVE_FALLBACK", "vahan-sim", True,
          lambda: _try_upstream(state, cfg.vahan_sim_url, path, "vahan-sim")),
     ):
@@ -327,7 +397,7 @@ async def sarathi_dl(dl_number: str, state: GatewayState = Depends(get_state)) -
         t0 = time.perf_counter()
         data = await fetch()
         if data is not None:
-            await cache.put("sarathi", dl, data, ttl=cfg.cache_ttl_vahan_s)
+            await cache.put("sarathi", cache_key, data, ttl=cfg.cache_ttl_vahan_s)
             await state.record_decision(
                 api="vahan", key=dl, decision_path=kind,
                 latency_ms=(time.perf_counter() - t0) * 1000, source=target,
@@ -337,7 +407,7 @@ async def sarathi_dl(dl_number: str, state: GatewayState = Depends(get_state)) -
             return {"dl": dl, "decision_path": kind, "record": data,
                     "status": vehicle_intel.dl_status(data)}
 
-    cached = await cache.get("sarathi", dl)
+    cached = await cache.get("sarathi", cache_key)
     if cached is not None:
         await state.record_decision(api="vahan", key=dl, decision_path="CACHED",
                                     source="sarathi", source_state=SourceState.DEGRADED, ok=False)

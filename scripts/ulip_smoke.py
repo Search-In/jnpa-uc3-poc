@@ -34,6 +34,8 @@ import os
 import sys
 import time
 from pathlib import Path
+
+import httpx
 from typing import Any, Callable, Dict, List, Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -166,13 +168,21 @@ def _dl_summary(fields: Optional[Dict[str, Any]]) -> str:
 
 
 async def run(state_id: str) -> tuple[int, List[Dict[str, Any]]]:
-    client = UlipClient()
+    # ULIP allowlists ONE egress IP (the deployment's Elastic IP). Running this
+    # from anywhere else needs a proxy that egresses there — e.g. an ssh SOCKS
+    # tunnel to that host: ``ssh -D 1081 -N ec2-user@<host>`` then
+    # ``ULIP_PROXY=socks5://127.0.0.1:1081``. Needs httpx[socks].
+    proxy = os.environ.get("ULIP_PROXY", "").strip() or None
+    http = httpx.AsyncClient(proxy=proxy, timeout=30.0) if proxy else None
+    client = UlipClient(http_client=http)
     if not client.configured:
         print("FATAL: no ULIP credential. Set ULIP_CLIENT_ID + ULIP_CLIENT_SECRET "
               "(or ULIP_API_KEY).", file=sys.stderr)
         return 2, []
     print(f"endpoint : {client.api_url}")
     print(f"auth     : {client.auth_mode}")
+    if proxy:
+        print(f"egress   : via {proxy}")
     print()
 
     results: List[Dict[str, Any]] = []

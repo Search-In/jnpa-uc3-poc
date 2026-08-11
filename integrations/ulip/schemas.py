@@ -358,6 +358,54 @@ def normalize_dl(envelope: "UlipEnvelope") -> Optional[Dict[str, Any]]:
             "transport_valid_to": _first(info, "TransportValidityTodate"),
             "non_transport_valid_to": _first(info, "NonTransportValidityTodate"),
         }
+    return _normalize_dl_detail(envelope)
+
+
+def _normalize_dl_detail(envelope: "UlipEnvelope") -> Optional[Dict[str, Any]]:
+    """SARATHI/01's ``dldetobj`` shape -> the same flat DL dict as /02.
+
+    /01 answers a much richer document than /02 and shares none of its field
+    names: the licence lives in ``dldetobj[].dlobj`` (``dlLicno``,
+    ``dlStatus``, ``dlTrValdtoDt``, ``dlNtValdtoDt``), the classes of vehicle
+    in ``dldetobj[].dlcovs[].covdesc``, and the holder in a ``bio*`` block.
+    Normalising both to one shape is what lets /01 stand in for /02 wherever
+    the caller only needs identity and validity.
+
+    Two fields /02 does not carry are worth having for driver enrolment at the
+    port: ``bioNatName`` is the holder's name **unmasked** (``bioFullName`` is
+    the masked spelling), and ``biPhoto`` is a base64 JPEG usable for a port
+    pass. Dates here are ISO ``YYYY-MM-DD``; /02 sends ``DD-MM-YYYY``, and
+    ``parse_date`` accepts both.
+    """
+    for item in _walk_dicts(envelope.response_items()):
+        dl = item.get("dlobj")
+        if not isinstance(dl, dict) or not _first(dl, "dlLicno", "dlOldLicno"):
+            continue
+        classes: List[str] = []
+        covs = item.get("dlcovs")
+        if isinstance(covs, list):
+            for cov in covs:
+                if isinstance(cov, dict):
+                    desc = _first(cov, "covdesc", "covabbrv")
+                    if desc is not None and str(desc).strip():
+                        classes.append(str(desc).strip())
+        bio = next((b for b in _walk_dicts([item])
+                    if isinstance(b, dict) and _first(b, "bioNatName",
+                                                      "bioFullName")), {})
+        return {
+            "holder_name": _first(bio, "bioNatName", "bioFullName"),
+            "dl_status": _first(dl, "dlStatus"),
+            "vehicle_classes": classes,
+            "transport_valid_to": _first(dl, "dlTrValdtoDt", "dlTrValdtoDate"),
+            "non_transport_valid_to": _first(dl, "dlNtValdtoDt",
+                                             "dlNtValdtoDate"),
+            "dl_number": _first(dl, "dlLicno", "dlOldLicno"),
+            "date_of_issue": _first(dl, "dlIssuedt", "dlIssueDate"),
+            "date_of_birth": _first(bio, "bioDob"),
+            "state": _first(dl, "stateName"),
+            "rto_code": _first(dl, "dlRtoCode", "dlIssueauth"),
+            "photo_base64": _first(bio, "biPhoto"),
+        }
     return None
 
 
@@ -401,18 +449,34 @@ def _gs_rows(envelope: "UlipEnvelope") -> List[Dict[str, Any]]:
 
 def normalize_toll_plazas(envelope: "UlipEnvelope",
                           state_id: Any) -> List[Dict[str, Any]]:
-    """GATISHAKTI/04 -> NHAI toll-plaza rows keyed for ``core.gs_toll_plaza``."""
+    """GATISHAKTI/04 -> NHAI toll-plaza rows keyed for ``core.gs_toll_plaza``.
+
+    The live field names are nothing like the integration document's generic
+    ``vname``/``lat``/``lon`` sample — a real row is::
+
+        {"plaza_name": "Nandgaon Peth", "tollplazal": 20.951008,
+         "tollplaz_1": 77.788359, "nooflanes": "4L", "nhno_new": "NH- 53",
+         "nearesthos": null, "tollcollec": null,
+         "project_na": "Fagne-MH/GJ Border"}
+
+    ``tollplazal`` / ``tollplaz_1`` are the latitude and longitude, truncated
+    to ten characters by whatever shapefile export produced them. Matching only
+    the documented names returned **zero plazas for every state** — verified
+    against staging on 2026-08-11 — so the live spellings lead the alias lists.
+    """
     plazas: List[Dict[str, Any]] = []
     for row in _gs_rows(envelope):
-        name = _first(row, "vname", "name", "tollPlazaName", "plazaName")
+        name = _first(row, "plaza_name", "vname", "name",
+                      "tollPlazaName", "plazaName")
         if name is None:
             continue
         plazas.append({
             "state_id": str(state_id),
             "name": str(name),
-            "nh_no": _first(row, "nhno", "nh_no", "nhNumber"),
-            "latitude": _as_coord(_first(row, "lat", "latitude")),
-            "longitude": _as_coord(_first(row, "lon", "long", "longitude")),
+            "nh_no": _first(row, "nhno_new", "nhno", "nh_no", "nhNumber"),
+            "latitude": _as_coord(_first(row, "tollplazal", "lat", "latitude")),
+            "longitude": _as_coord(_first(row, "tollplaz_1", "lon", "long",
+                                          "longitude")),
             "detail": row,
         })
     return plazas
@@ -420,14 +484,33 @@ def normalize_toll_plazas(envelope: "UlipEnvelope",
 
 def normalize_road_network(envelope: "UlipEnvelope",
                            **keys: Any) -> List[Dict[str, Any]]:
-    """GATISHAKTI/01·02·03 -> road rows keyed for ``core.gs_road_segment`` /
-    ``core.gs_road_point``. ``keys`` (``state_id`` / ``nh_no``) is stamped onto
-    every row so the caller's query parameter survives into the table."""
+    """GATISHAKTI/01·02·03 -> reference rows keyed for ``core.gs_road_segment``
+    / ``core.gs_road_point``. ``keys`` (``state_id`` / ``nh_no``) is stamped
+    onto every row so the caller's query parameter survives into the table.
+
+    What these three APIs actually return on staging is NOT what the
+    integration document's ``vname``/``lat``/``lon`` sample suggests, and the
+    three do not share a schema (verified 2026-08-11):
+
+    * ``GATISHAKTI/01`` — highway segments, ``road_name`` / ``road_type`` /
+      ``lane_statu`` / ``gis_length`` / ``state_ut``. **No coordinates at
+      all**, so these rows carry attributes but no geometry.
+    * ``GATISHAKTI/02`` — food-storage depots, ``infrastr_n`` / ``infrastr_a``
+      / ``storage_ca`` / ``type_infra``. Warehousing infrastructure, not a
+      road network.
+    * ``GATISHAKTI/03`` — industrial parks, ``park_name`` / ``vname`` /
+      ``dist_name`` / ``land_cat`` with ``lat`` / ``lon``.
+
+    Every row is kept whole in ``detail`` precisely because the payloads differ
+    this much; ``name`` picks the best label each schema offers, and rows
+    without coordinates are stored with nulls rather than dropped.
+    """
     rows: List[Dict[str, Any]] = []
     for row in _gs_rows(envelope):
         rows.append({
             **{k: (str(v) if v is not None else None) for k, v in keys.items()},
-            "name": _first(row, "vname", "name", "roadName"),
+            "name": _first(row, "road_name", "park_name", "infrastr_n",
+                           "vname", "name", "roadName"),
             "latitude": _as_coord(_first(row, "lat", "latitude")),
             "longitude": _as_coord(_first(row, "lon", "long", "longitude")),
             "detail": row,

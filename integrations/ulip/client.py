@@ -74,6 +74,12 @@ DEFAULT_API_URL = "https://www.ulip.dpiit.gov.in/ulip/v1.0.0"
 STAGING_API_URL = "https://www.ulipstaging.dpiit.gov.in/ulip/v1.0.0"
 LOGIN_PATH = "user/login"
 
+# ULIP requires an explicit JSON Accept header and rejects anything else with a
+# bodiless **HTTP 400** — including httpx's default ``Accept: */*``. Verified
+# against staging on 2026-08-11: identical login payload, `*/*` -> 400,
+# `application/json` -> 200. Send this on every request, login included.
+JSON_HEADERS = {"Accept": "application/json", "Content-Type": "application/json"}
+
 # The 13 APIs granted to this account, keyed by the logical name used in the
 # ``ULIP_<KEY>_API`` env override. Values are the paths documented in
 # ulip-docs/*.pdf. NLDSL also documents VAHAN/05, VAHAN/06, GATISHAKTI/05 and
@@ -402,7 +408,7 @@ class UlipClient:
         if not envelope.ok:
             raise UlipInvalidResponse(
                 "ULIP reported an API-level error: "
-                f"code={envelope.code!r} message={self._redact(str(envelope.message))!r}")
+                f"code={envelope.code!r} message={self._redact(_envelope_reason(envelope))!r}")
         return envelope
 
     async def _post_json(self, client: httpx.AsyncClient, url: str,
@@ -419,7 +425,7 @@ class UlipClient:
             try:
                 resp = await client.post(
                     url, json=payload,
-                    headers={"Authorization": f"Bearer {token}"},
+                    headers={"Authorization": f"Bearer {token}", **JSON_HEADERS},
                     timeout=self.timeout_s,
                 )
             except httpx.TimeoutException as exc:
@@ -497,6 +503,7 @@ class UlipClient:
             resp = await client.post(
                 url,
                 json={"username": self.client_id, "password": self.client_secret},
+                headers=JSON_HEADERS,
                 timeout=self.timeout_s,
             )
         except httpx.TimeoutException as exc:
@@ -505,12 +512,16 @@ class UlipClient:
             raise UlipUnavailable(
                 f"ULIP login unreachable: {self._redact(str(exc))}") from exc
         if resp.status_code == 412:
-            # 412 is returned identically for a nonexistent username, so it
-            # says nothing about the credential — it is the IP allowlist.
+            # 412 is returned WITHOUT evaluating the password — for an
+            # unregistered caller IP and for a username ULIP does not know.
+            # A wrong password against a known username answers 401 instead
+            # (both verified against staging on 2026-08-11), so 412 never
+            # means "check the password".
             raise UlipAccessDenied(
                 "ULIP login denied before the credential was evaluated "
                 f"(HTTP 412: {_error_reason(resp) or 'Access denied'}) — "
-                "ask NLDSL to whitelist this deployment's egress IP")
+                "this deployment's egress IP is not registered with NLDSL, "
+                "or ULIP does not know the configured username")
         if resp.status_code != 200:
             raise UlipAuthError(
                 f"ULIP login rejected (HTTP {resp.status_code})")
@@ -523,6 +534,30 @@ class UlipClient:
             raise UlipAuthError("ULIP login answered without a token")
         log.info("ulip_login_ok")
         return token
+
+
+def _envelope_reason(envelope: "UlipEnvelope") -> str:
+    """The most useful text in a failing envelope.
+
+    ULIP frequently leaves the top-level ``message`` null and puts the real
+    reason in the first response element — an upstream outage arrives as
+    ``{"response": [{"response": "LDB_01 - 3rd party service is down!",
+    "responseStatus": "ERROR"}], "error": "true"}``. Reporting ``message=None``
+    for that would send the reader hunting for a bug in our own code.
+    """
+    if envelope.message not in (None, ""):
+        return str(envelope.message)
+    items = envelope.response
+    if isinstance(items, dict):
+        items = [items]
+    for item in items or []:
+        if isinstance(item, str) and item.strip():
+            return item.strip()
+        if isinstance(item, dict):
+            inner = item.get("response") or item.get("message")
+            if isinstance(inner, str) and inner.strip():
+                return inner.strip()
+    return str(envelope.message)
 
 
 def _extract_token(body: Any) -> Optional[str]:

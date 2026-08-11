@@ -276,6 +276,8 @@ export class LiveAdapter implements DataAdapter {
 
   // --- FASTag (ULIP) — /api/fastag/* ---
   fastagBalance = (rcNumber: string) => api.fastagBalance(rcNumber);
+  fastagTagStatus = (ref: { rc_number?: string; tag_id?: string }) =>
+    api.fastagTagStatus(ref);
   fastagTransactions = (rcNumber: string) => api.fastagTransactions(rcNumber);
   tollEnroute = (body: import("@/lib/types").TollEnrouteInput) => api.tollEnroute(body);
   fastagHealth = () => api.fastagHealth();

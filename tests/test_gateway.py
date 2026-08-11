@@ -473,3 +473,25 @@ def test_fault_control_validation_and_clear_all():
         assert banner["active"] is False
     finally:
         client.__exit__(None, None, None)
+
+
+def test_ulip_rc_for_a_different_plate_is_dropped():
+    """VAHAN/01 on staging answers a DIFFERENT registration for the same input
+    on roughly half of all calls — asking for UP32KH0320 returns RJ11GC0346,
+    a different make, class and owner. Binding that to the requested plate
+    would clear a truck at the gate on a stranger's fitness and blacklist
+    status, so a mismatched answer is treated as a miss.
+    """
+    import gateway.routers.vahan as vahanmod
+
+    right = {"rc_number": "UP32KH0320", "vehicle_class": "M-Cycle/Scooter"}
+    wrong = {"rc_number": "RJ11GC0346", "vehicle_class": "TATA LPT 2818"}
+
+    assert vahanmod._matching_rc(right, "UP32KH0320", "VAHAN/01") == right
+    assert vahanmod._matching_rc(wrong, "UP32KH0320", "VAHAN/01") is None
+    # Spacing/case differences are formatting, not a different vehicle.
+    assert vahanmod._matching_rc({"rc_number": "up32 kh 0320"},
+                                 "UP32KH0320", "VAHAN/04") is not None
+    # An answer with no registration number at all cannot be checked; the
+    # normalisers already reject those, so it must not be silently admitted.
+    assert vahanmod._matching_rc({}, "UP32KH0320", "VAHAN/04") is None

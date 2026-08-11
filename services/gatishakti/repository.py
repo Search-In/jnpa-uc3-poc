@@ -122,7 +122,7 @@ class GatiShaktiRepository:
             """
             SELECT state_id, name, nh_no, latitude, longitude, fetched_at
             FROM core.gs_toll_plaza
-            WHERE (:state_id IS NULL OR state_id = :state_id)
+            WHERE (CAST(:state_id AS text) IS NULL OR state_id = CAST(:state_id AS text))
             ORDER BY name
             LIMIT :limit
             """,
@@ -136,8 +136,8 @@ class GatiShaktiRepository:
             """
             SELECT state_id, nh_no, name, latitude, longitude, fetched_at
             FROM core.gs_road_segment
-            WHERE (:state_id IS NULL OR state_id = :state_id)
-              AND (:nh_no IS NULL OR nh_no = :nh_no)
+            WHERE (CAST(:state_id AS text) IS NULL OR state_id = CAST(:state_id AS text))
+              AND (CAST(:nh_no AS text) IS NULL OR nh_no = CAST(:nh_no AS text))
             ORDER BY name
             LIMIT :limit
             """,
@@ -150,7 +150,7 @@ class GatiShaktiRepository:
             """
             SELECT state_id, name, latitude, longitude, fetched_at
             FROM core.gs_road_point
-            WHERE (:state_id IS NULL OR state_id = :state_id)
+            WHERE (CAST(:state_id AS text) IS NULL OR state_id = CAST(:state_id AS text))
             ORDER BY name
             LIMIT :limit
             """,
@@ -173,7 +173,12 @@ class GatiShaktiRepository:
         try:
             rows = await fetch_all(sql, params, dsn=self._dsn)
         except Exception as exc:  # noqa: BLE001 — DB down == rung is empty
-            log.debug("gatishakti_select_failed", error=str(exc))
+            # WARNING, not debug: an empty rung is indistinguishable from "this
+            # state has no toll plazas" on the wire, so a query that fails
+            # silently reads as legitimately-absent data. A malformed statement
+            # hid here for a whole release — every list endpoint returned
+            # FALLBACK/empty while the rows were sitting in the table.
+            log.warning("gatishakti_select_failed", error=str(exc))
             return []
         out: List[Dict[str, Any]] = []
         for row in rows:

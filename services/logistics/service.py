@@ -72,6 +72,17 @@ STATUS_OFFLINE = "OFFLINE"
 # ISO-6346 container number: 3 owner letters + category letter + 7 digits.
 _CONTAINER_RE = re.compile(r"^[A-Z]{3}[UJZ]\d{7}$")
 
+# …but LDB does not enforce the category letter. ULIP's own LDB integration
+# document uses ``NSST1234570`` as its worked example, whose 4th character is
+# ``T`` — so the strict pattern classifies it as a VEHICLE and the tracking
+# call goes to FASTAG/01 instead of LDB/01. That fails *silently*: the answer
+# comes back LIVE with zero events, which reads as "this container is not
+# being tracked" rather than "we asked the wrong API". Any 4 letters followed
+# by 7 digits is treated as a container; the strict form above still wins
+# where it matches, and nothing else has this shape (plates are never
+# 4-letters-then-7-digits).
+_CONTAINER_LOOSE_RE = re.compile(r"^[A-Z]{4}\d{7}$")
+
 # A reference is IN_TRANSIT when its newest event is younger than this.
 _IN_TRANSIT_WINDOW_S = 24 * 3600
 
@@ -88,8 +99,15 @@ def cache_key_summary() -> str:
 
 
 def classify_ref(ref_id: str) -> str:
-    """VEHICLE or CONTAINER for one reference id (ISO-6346 -> CONTAINER)."""
-    return (REF_TYPE_CONTAINER if _CONTAINER_RE.match(ref_id.strip().upper())
+    """VEHICLE or CONTAINER for one reference id (ISO-6346 -> CONTAINER).
+
+    Picking the wrong type sends the lookup to the wrong ULIP API and answers
+    "no data" instead of erroring, so the loose form is deliberately accepted
+    (see :data:`_CONTAINER_LOOSE_RE`).
+    """
+    ref = ref_id.strip().upper()
+    return (REF_TYPE_CONTAINER
+            if _CONTAINER_RE.match(ref) or _CONTAINER_LOOSE_RE.match(ref)
             else REF_TYPE_VEHICLE)
 
 

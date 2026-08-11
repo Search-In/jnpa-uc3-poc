@@ -123,11 +123,15 @@ def dl_to_record(dl_number: str, fields: Mapping[str, Any]) -> Optional[SarathiR
         dl_number=str(dl_number).strip().upper(),
         holder_name_masked=(holder_text if _already_masked(holder_text)
                             else mask_owner_name(holder_text)) or None,
-        date_of_issue=None,   # SARATHI/02 does not publish an issue date
+        # SARATHI/02 publishes none of these three; SARATHI/01 publishes all
+        # of them, so they populate whenever the richer API answered.
+        date_of_issue=parse_date(fields.get("date_of_issue")),
         valid_to=valid_to,
         vehicle_classes=[str(c) for c in (fields.get("vehicle_classes") or [])],
-        state=None,
-        rto_code=None,
+        state=(str(fields["state"]).strip() or None
+               if fields.get("state") else None),
+        rto_code=(str(fields["rto_code"]).strip() or None
+                  if fields.get("rto_code") else None),
         blacklist_status=(
             BlacklistStatus.CLEAR
             if any(marker in status for marker in _DL_ACTIVE_MARKERS)

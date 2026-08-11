@@ -18,8 +18,13 @@ import {
   CheckCircle2,
   CircleSlash,
   MapPinned,
+  Search,
+  Fingerprint,
+  Cog,
+  IdCard,
 } from "lucide-react";
 import { getAdapter } from "@/data";
+import { api } from "@/lib/api";
 import type { FleetVehicle, VehicleStatus } from "@/lib/types";
 import { Card } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/misc";
@@ -44,7 +49,7 @@ import { authEnabled, getRole } from "@/lib/auth";
 import { STATUS } from "@/lib/tokens";
 import { fmtDateTimeIST } from "@/lib/utils";
 
-type PageTab = "fleet" | "transporters" | "drivers" | "blacklist" | "upload";
+type PageTab = "fleet" | "rc-lookup" | "transporters" | "drivers" | "blacklist" | "upload";
 
 // Master-data upload is write-gated to control room + customs (+ admin), mirroring
 // the gateway RBAC on /api/td-upload. Client gate only — the API enforces it too.
@@ -76,6 +81,7 @@ export default function VehicleManagement() {
     return tab === "transporters" ||
       tab === "blacklist" ||
       tab === "drivers" ||
+      tab === "rc-lookup" ||
       (tab === "upload" && CAN_UPLOAD)
       ? (tab as PageTab)
       : "fleet";
@@ -90,6 +96,7 @@ export default function VehicleManagement() {
       tab === "blacklist" ||
       tab === "drivers" ||
       tab === "fleet" ||
+      tab === "rc-lookup" ||
       (tab === "upload" && CAN_UPLOAD)
     ) {
       setPageTab(tab as PageTab);
@@ -233,6 +240,7 @@ export default function VehicleManagement() {
           onChange={setPageTab}
           tabs={[
             { key: "fleet", label: t("vehicles.tabFleet", "Fleet") },
+            { key: "rc-lookup", label: t("vehicles.tabRcLookup", "RC Lookup") },
             { key: "transporters", label: t("vehicles.tabTransporters", "Transporters") },
             { key: "drivers", label: t("vehicles.tabDrivers", "Drivers") },
             { key: "blacklist", label: t("vehicles.tabBlacklist", "Blacklist") },
@@ -313,6 +321,12 @@ export default function VehicleManagement() {
             </Card>
           </div>
         </>
+      )}
+
+      {pageTab === "rc-lookup" && (
+        <div className="px-4 pt-3">
+          <RcLookupPanel />
+        </div>
       )}
 
       {pageTab === "transporters" && (
@@ -683,6 +697,221 @@ function Field({ k, v, mono }: { k: string; v?: React.ReactNode; mono?: boolean 
     <div className="min-w-0">
       <dt className="text-[10px] uppercase tracking-wide text-muted-foreground">{k}</dt>
       <dd className={`truncate text-foreground ${mono ? "font-mono" : ""}`}>{v || "—"}</dd>
+    </div>
+  );
+}
+
+// --- RC Lookup (VAHAN via ULIP) ---------------------------------------------
+// Three ways to identify the same vehicle. The plate is the everyday key; the
+// chassis and engine numbers are what an operator falls back to when the plate
+// is unreadable, damaged or suspected of being tampered with — which is exactly
+// when the identity question matters most. Chassis/engine are served only by
+// ULIP (VAHAN/02 and /03); the simulator is keyed by plate, so those two answer
+// 503 when the live integration is off rather than resolving a different
+// vehicle from a different source.
+
+type LookupKey = "plate" | "chassis" | "engine";
+
+const LOOKUPS: { key: LookupKey; label: string; icon: typeof Search; api: string;
+                 placeholder: string; hint: string }[] = [
+  { key: "plate", label: "Registration", icon: Search, api: "VAHAN/04",
+    placeholder: "MH12AB1234",
+    hint: "The everyday key. Falls back through the vehicle ladder when ULIP misses." },
+  { key: "chassis", label: "Chassis", icon: Fingerprint, api: "VAHAN/02",
+    placeholder: "MAT partial or full chassis number",
+    hint: "Use when the plate is unreadable or disputed. ULIP-only — no fallback." },
+  { key: "engine", label: "Engine", icon: Cog, api: "VAHAN/03",
+    placeholder: "Engine number",
+    hint: "Cross-check against the chassis result; a disagreement warrants inspection." },
+];
+
+function lookupError(e: unknown): string {
+  const msg = e instanceof Error ? e.message : String(e);
+  if (/\b404\b/.test(msg)) return "VAHAN has no vehicle registered against this number.";
+  if (/\b503\b/.test(msg))
+    return "Live VAHAN lookups are turned off. Chassis and engine searches are served only by ULIP, which is currently disabled.";
+  if (/\b422\b|\b400\b/.test(msg)) return "That number does not look valid — check it and try again.";
+  if (/\b40[13]\b/.test(msg)) return "You don't have permission to run VAHAN lookups.";
+  if (/failed to fetch|networkerror|load failed/i.test(msg))
+    return "Could not reach the gateway — check that the backend is running.";
+  return "The lookup failed — please try again.";
+}
+
+/** Presentable label for a record key: rc_owner_name -> "Rc Owner Name". */
+function prettyKey(k: string): string {
+  return k
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .replace(/\bRc\b/, "RC")
+    .replace(/\bDl\b/, "DL")
+    .replace(/\bRto\b/, "RTO");
+}
+
+function RcLookupPanel() {
+  const [kind, setKind] = useState<LookupKey>("plate");
+  const [input, setInput] = useState("");
+  const [query, setQuery] = useState<{ kind: LookupKey; value: string } | null>(null);
+  // These three read VAHAN through the gateway, not the demo adapter — there is
+  // no simulated national register to answer them. Saying so up front beats
+  // letting the operator search and get a failure that looks like a defect.
+  const demo = getAdapter().mode === "mock";
+
+  const q = useQuery({
+    queryKey: ["vahan-lookup", query?.kind, query?.value],
+    queryFn: async () => {
+      const v = query!.value;
+      if (query!.kind === "chassis") return api.vahanByChassis(v);
+      if (query!.kind === "engine") return api.vahanByEngine(v);
+      const intel = await api.vehicleIntel(v);
+      return { record: intel as unknown as Record<string, unknown>,
+               decision_path: (intel as any)?.decision_path ?? (intel as any)?.path };
+    },
+    enabled: !!query?.value,
+    retry: false,
+  });
+
+  const active = LOOKUPS.find((l) => l.key === kind)!;
+  const record = (q.data as any)?.record as Record<string, unknown> | undefined;
+  // The RC is nested one level down on some rungs; unwrap it so the same grid
+  // renders every source identically.
+  const fields = useMemo(() => {
+    const r: Record<string, unknown> | undefined =
+      record && typeof (record as any).record === "object"
+        ? ((record as any).record as Record<string, unknown>)
+        : record;
+    if (!r) return [];
+    return Object.entries(r).filter(
+      ([, v]) => v != null && v !== "" && typeof v !== "object",
+    );
+  }, [record]);
+
+  function run() {
+    const v = input.trim().toUpperCase();
+    if (v) setQuery({ kind, value: v });
+  }
+
+  return (
+    <div className="space-y-3">
+      <Card className="p-4">
+        <div className="mb-3 flex flex-wrap gap-1.5">
+          {LOOKUPS.map((l) => (
+            <button
+              key={l.key}
+              onClick={() => {
+                setKind(l.key);
+                setQuery(null);
+              }}
+              className={`inline-flex h-8 items-center gap-1.5 rounded-md border px-3 text-[13px] ${
+                kind === l.key
+                  ? "border-primary bg-primary/10 font-semibold text-primary"
+                  : "border-border hover:bg-muted"
+              }`}
+            >
+              <l.icon className="h-3.5 w-3.5" /> {l.label}
+              <span className="font-mono text-[10px] text-muted-foreground">{l.api}</span>
+            </button>
+          ))}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative min-w-0 flex-1 sm:max-w-md">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <input
+              value={input}
+              onChange={(e) => setInput(e.target.value.toUpperCase())}
+              onKeyDown={(e) => e.key === "Enter" && run()}
+              disabled={demo}
+              placeholder={active.placeholder}
+              autoCapitalize="characters"
+              spellCheck={false}
+              className="h-9 w-full rounded-md border border-border bg-background pl-9 pr-3 font-mono text-[13px] outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+            />
+          </div>
+          <button
+            onClick={run}
+            disabled={demo || !input.trim()}
+            className="inline-flex h-9 items-center gap-1.5 rounded-md bg-primary px-4 text-[13px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          >
+            <IdCard className="h-4 w-4" /> Look up
+          </button>
+        </div>
+        <p className="mt-2 text-[11px] text-muted-foreground">{active.hint}</p>
+      </Card>
+
+      {demo && (
+        <Card className="p-4">
+          <div className="rounded-md border border-border bg-muted/40 px-3 py-2.5 text-[13px]">
+            <div className="font-medium">Live VAHAN lookups are unavailable in demo mode.</div>
+            <p className="mt-1 text-muted-foreground">
+              These three searches query the national vehicle register through ULIP
+              ({LOOKUPS.map((l) => l.api).join(", ")}). There is no simulated source
+              behind them, so they answer only against a live gateway with the ULIP
+              integration enabled.
+            </p>
+          </div>
+        </Card>
+      )}
+
+      {!demo && !query && (
+        <Card className="p-0">
+          <div className="px-4 py-10 text-center text-[13px] text-muted-foreground">
+            Search by {active.label.toLowerCase()} to resolve the registration certificate.
+          </div>
+        </Card>
+      )}
+
+      {query && q.isLoading && (
+        <Card className="p-0">
+          <div className="flex items-center justify-center gap-2 px-4 py-10 text-[13px] text-muted-foreground">
+            <Spinner /> Querying VAHAN via ULIP…
+          </div>
+        </Card>
+      )}
+
+      {query && q.isError && (
+        <Card className="p-4">
+          <div className="rounded-md border border-severity-critical/40 bg-severity-critical/10 px-3 py-2 text-xs">
+            {lookupError(q.error)}
+          </div>
+        </Card>
+      )}
+
+      {query && !q.isLoading && !q.isError && (
+        <Card className="p-0">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2.5">
+            <h3 className="text-sm font-semibold">
+              Registration Certificate · {query.value}
+            </h3>
+            <div className="flex items-center gap-1.5">
+              <StatusChip label={active.api} tone="info" />
+              {(q.data as any)?.decision_path && (
+                <StatusChip label={String((q.data as any).decision_path)} tone="neutral" />
+              )}
+            </div>
+          </div>
+          {fields.length === 0 ? (
+            <div className="px-4 py-10 text-center text-[13px] text-muted-foreground">
+              VAHAN returned no record for this {active.label.toLowerCase()}.
+            </div>
+          ) : (
+            <div className="grid gap-x-8 p-4 sm:grid-cols-2">
+              {fields.map(([k, v]) => (
+                <div
+                  key={k}
+                  className="flex justify-between gap-3 border-b border-border/40 py-1.5 text-[13px]"
+                >
+                  <span className="text-muted-foreground">{prettyKey(k)}</span>
+                  <span className="truncate text-right font-medium">{String(v)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="border-t border-border px-4 py-2.5 text-[11px] text-muted-foreground">
+            VAHAN masks the owner name, addresses, mobile number, chassis and engine
+            numbers for all users. A masked value is stored exactly as received and is
+            never re-masked or used as a lookup key.
+          </div>
+        </Card>
+      )}
     </div>
   );
 }

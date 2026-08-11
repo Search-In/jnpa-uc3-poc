@@ -427,3 +427,208 @@ def test_api_paths_are_env_overridable(monkeypatch):
     monkeypatch.setenv("ULIP_VAHAN_RC_API", "VAHAN/07")
     client = UlipClient(api_key="x")
     assert client.api_path("VAHAN_RC") == "VAHAN/07"
+
+
+# ===========================================================================
+# LIVE shapes — recorded from ULIP staging on 2026-08-11, after NLDSL
+# whitelisted the deployment's egress IP.
+#
+# These differ materially from the integration documents' samples, and each
+# difference below was a live defect in this integration before it was
+# recorded here. Fixtures come from real answers, not from the PDFs.
+# ===========================================================================
+GS04_LIVE = ok([{"response": {"data": [
+    {"plaza_name": "(Planned) Tilasar", "tollplazal": 21.173482,
+     "tollplaz_1": 74.005793, "nooflanes": "4L", "nhno_new": "NH- 53",
+     "nearesthos": None, "tollcollec": None,
+     "project_na": "Fagne-MH/GJ Border"},
+    {"plaza_name": "Nandgaon Peth", "tollplazal": 20.951008,
+     "tollplaz_1": 77.788359, "nooflanes": "4L", "nhno_new": "NH- 53"},
+], "Result": True}, "responseStatus": "SUCCESS"}])
+
+GS01_LIVE = ok([{"response": {"data": [
+    {"road_name": "NH-5", "gis_length": 11.0479145145,
+     "road_type": "National Highway", "lane_statu": "6L",
+     "state_ut": "Haryana"},
+], "Result": True}, "responseStatus": "SUCCESS"}])
+
+GS02_LIVE = ok([{"response": {"data": [
+    {"infrastr_s": "MAHARASHTRA", "infrastr_a": "C-65, MIDC,MIRJOLE  RATNAGIRI",
+     "infrastr_n": "FSD RATNAGIRI", "type_owner": "Own",
+     "storage_ca": "11664", "type_infra": "Covered",
+     "infrastr_v": "MIDC ,MIRJOLE"},
+], "Result": True}, "responseStatus": "SUCCESS"}])
+
+GS03_LIVE = ok([{"response": {"data": [
+    {"st_name": "MAHARASHTRA", "dist_name": "Latur", "sub_dist": "Nilanga",
+     "vname": "Aurad (sha)",
+     "park_name": "Nilanga Co-Op. Industrial Estate Ltd.",
+     "land_cat": "", "land_avail": 0.0, "park_type": "Other",
+     "lat": "18.069549104620279", "lon": "76.7894777008746985"},
+], "Result": True}, "responseStatus": "SUCCESS"}])
+
+
+def test_gatishakti04_live_field_names_yield_plazas():
+    """Regression: the live rows use ``plaza_name`` / ``tollplazal`` /
+    ``tollplaz_1``, not the document's ``vname`` / ``lat`` / ``lon``. Matching
+    only the documented names returned ZERO plazas for every state, which read
+    as "this state has no toll plazas" rather than as a mapping bug."""
+    plazas = normalize_toll_plazas(env(GS04_LIVE), 27)
+    assert len(plazas) == 2
+    assert plazas[0]["name"] == "(Planned) Tilasar"
+    assert plazas[0]["latitude"] == 21.173482
+    assert plazas[0]["longitude"] == 74.005793
+    assert plazas[0]["nh_no"] == "NH- 53"
+    assert plazas[0]["state_id"] == "27"
+
+
+def test_gatishakti_01_02_03_do_not_share_a_schema():
+    """The three 'road' APIs return three unrelated datasets on staging:
+    highway segments WITHOUT coordinates, food-storage depots, and industrial
+    parks. Each must still yield a usable label, and the raw row must survive
+    in ``detail`` because no single mapping fits all three."""
+    road = normalize_road_network(env(GS01_LIVE), nh_no="NH-5")
+    assert road[0]["name"] == "NH-5"
+    assert road[0]["latitude"] is None and road[0]["longitude"] is None
+    assert road[0]["detail"]["lane_statu"] == "6L"
+
+    depot = normalize_road_network(env(GS02_LIVE), state_id=27)
+    assert depot[0]["name"] == "FSD RATNAGIRI"
+    assert depot[0]["detail"]["storage_ca"] == "11664"
+
+    park = normalize_road_network(env(GS03_LIVE), state_id=27)
+    assert park[0]["name"] == "Nilanga Co-Op. Industrial Estate Ltd."
+    assert park[0]["latitude"] == 18.069549104620279
+
+
+def test_sarathi_live_empty_transport_validity_falls_back():
+    """A licence with no transport endorsement returns
+    ``TransportValidityTodate: ""``. The empty string must fall through to the
+    non-transport date rather than leaving the record with no expiry."""
+    live = ok([{"response": {"DLinformation": {
+        "Classofcovs": [{"CovDiscription": "LIGHT MOTOR VEHICLE", "CovCode": 4}],
+        "NonTransportValidityTodate": "03-12-2031",
+        "TransportValidityTodate": "",
+        "DL_Holder_FullName": "MAJJI KESAVARAO", "DL_status": "Active."}},
+        "responseStatus": "SUCCESS", "message": None}])
+    record = dl_to_record("AP01620210000019", normalize_dl(env(live)))
+    assert record.valid_to.isoformat() == "2031-12-03"
+
+
+@pytest.mark.asyncio
+async def test_every_request_sends_an_explicit_json_accept_header():
+    """ULIP answers a bodiless HTTP 400 to httpx's default ``Accept: */*``.
+    Verified against staging: same payload, ``*/*`` -> 400,
+    ``application/json`` -> 200. Login is included — it is the first call
+    made, so getting this wrong locks the whole integration out."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("accept", ""))
+        if request.url.path.endswith("/user/login"):
+            return httpx.Response(200, json={"response": {"id": "tok"}})
+        return httpx.Response(200, json=ok([]))
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as http:
+        client = UlipClient(api_url="https://ulip.test/ulip/v1.0.0",
+                            client_id="u", client_secret="p", http_client=http)
+        await client.fetch_vehicle_by_rc("UP32KH0320")
+    assert seen and all(a == "application/json" for a in seen), seen
+
+
+@pytest.mark.asyncio
+async def test_upstream_outage_reports_the_reason_not_message_none():
+    """LDB's upstream was down during live testing and ULIP reported it as
+    ``{"response": [{"response": "LDB_01 - 3rd party service is down!"}],
+    "error": "true", "message": null}``. Surfacing ``message=None`` sent the
+    reader hunting for a bug in our own code, so the reason is dug out."""
+    body = {"response": [{"response": "LDB_01 - 3rd party service is down!",
+                          "responseStatus": "ERROR"}],
+            "error": "true", "code": "200", "message": None}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=body)
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as http:
+        client = UlipClient(api_url="https://ulip.test/ulip/v1.0.0",
+                            api_key="static", http_client=http)
+        with pytest.raises(Exception) as exc:
+            await client.fetch_container_tracking("NSST1234570")
+    assert "3rd party service is down" in str(exc.value)
+
+
+# ===========================================================================
+# SARATHI/01 — response schema supplied by NLDSL on 2026-08-11 (the .docx that
+# was missing from the original integration pack). It shares NO field names
+# with SARATHI/02, so it needs its own mapping onto the same flat shape.
+# ===========================================================================
+SARATHI01_HIT = ok([{"response": {"dldetobj": [{
+    "dlobj": {
+        "dlLicno": "GJ04 20120005008  ", "dlStatus": "Active",
+        "dlIssuedt": "2012-03-07", "dlTrValdtoDt": "2022-08-09",
+        "dlNtValdtoDt": "2032-03-06", "dlRtoCode": "GJ33",
+        "stateName": "Gujarat", "statecd": "GJ",
+    },
+    "dlcovs": [
+        {"covabbrv": "MCWG  ", "covdesc": "Motor Cycle with Gear(Non Transport)"},
+        {"covabbrv": "TRANS", "covdesc": "Transport Vehicle-M/HMV (Goods & Passenger)"},
+        {"covabbrv": "LMV   ", "covdesc": "LIGHT MOTOR VEHICLE"},
+    ],
+    "bioObj": {
+        "bioNatName": "MAHESHKUMAR  GOHIL",
+        "bioFullName": "M*********R G***L",
+        "bioDob": "1987-05-26", "bioGenderDesc": "Male        ",
+        "bioSwdFullName": "RAMJIBHAI  GOHIL", "biPhoto": "/9j/4AAQSkZJRgABAQ",
+    },
+}]}, "responseStatus": "SUCCESS", "message": None}])
+
+
+def test_sarathi01_maps_onto_the_same_shape_as_sarathi02():
+    """/01 keeps the licence in ``dlobj``, the classes in ``dlcovs`` and the
+    holder in a ``bio`` block — no field name in common with /02. Both must
+    normalise to one shape or /01 cannot stand in for /02."""
+    fields = normalize_dl(env(SARATHI01_HIT))
+    assert fields["dl_status"] == "Active"
+    assert fields["transport_valid_to"] == "2022-08-09"
+    assert fields["non_transport_valid_to"] == "2032-03-06"
+    assert len(fields["vehicle_classes"]) == 3
+    assert "LIGHT MOTOR VEHICLE" in fields["vehicle_classes"]
+
+
+def test_sarathi01_prefers_the_unmasked_holder_name():
+    """``bioFullName`` is masked (``M*********R G***L``) but ``bioNatName``
+    carries the real name — the only granted API that returns one unmasked.
+    Driver enrolment and police-report surfaces need it."""
+    fields = normalize_dl(env(SARATHI01_HIT))
+    assert fields["holder_name"] == "MAHESHKUMAR  GOHIL"
+    assert fields["photo_base64"].startswith("/9j/")
+
+
+def test_sarathi01_populates_the_fields_sarathi02_cannot():
+    """Issue date, state and RTO are absent from /02 and present in /01, and
+    /01's dates are ISO where /02's are DD-MM-YYYY."""
+    record = dl_to_record("GJ0420120005008", normalize_dl(env(SARATHI01_HIT)))
+    assert record.date_of_issue.isoformat() == "2012-03-07"
+    assert record.valid_to.isoformat() == "2022-08-09"   # transport wins
+    assert record.state == "Gujarat"
+    assert record.rto_code == "GJ33"
+
+
+def test_gatishakti_queries_never_bind_an_untyped_null_comparison():
+    """Regression: ``WHERE (:state_id IS NULL OR state_id = :state_id)`` makes
+    asyncpg raise ``AmbiguousParameterError: could not determine data type of
+    parameter $1``. Because the repository swallows query errors to mean "the
+    DATABASE rung is empty", every GatiShakti list endpoint answered
+    ``path: FALLBACK, count: 0`` while the rows sat in the table — a silent
+    failure indistinguishable from "this state has no toll plazas". Any
+    ``:param IS NULL`` must be cast.
+    """
+    import re
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1]
+           / "services" / "gatishakti" / "repository.py").read_text()
+    bare = re.findall(r":(\w+)\s+IS\s+NULL", src)
+    assert not bare, f"uncast NULL-compared bind parameters: {bare}"

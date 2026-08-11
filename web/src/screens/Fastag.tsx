@@ -37,6 +37,8 @@ import {
 import { EmptyState, LoadingState } from "@/components/ui/misc";
 import { fmtDateTimeIST, relativeAge } from "@/lib/utils";
 import type {
+  FastagTagRow,
+  FastagTagStatus,
   FastagTransactionRow,
   FastagTransactions,
   TollEnroute,
@@ -44,7 +46,14 @@ import type {
 } from "@/lib/types";
 
 const VEHICLE_TYPES = ["CAR", "LMV", "LGV", "HGV", "TRUCK", "BUS", "MAV", "MMV", "2W", "3W"];
-type TabKey = "balance" | "transactions" | "journey" | "enroute" | "history" | "health";
+type TabKey =
+  | "balance"
+  | "tags"
+  | "transactions"
+  | "journey"
+  | "enroute"
+  | "history"
+  | "health";
 
 function friendlyError(e: unknown): string {
   const msg = e instanceof Error ? e.message : String(e);
@@ -57,12 +66,38 @@ function friendlyError(e: unknown): string {
   return "Something went wrong — please try again.";
 }
 
+// NETC reports TAGSTATUS as a single letter — ULIP returns "A"/"C", not the
+// word "Activated" the older vendor sent. Matching only on words made every
+// live tag render neutral and counted an active tag as inactive, so the codes
+// are decoded first and the word forms kept for stored/simulated rows.
+const NETC_TAG_STATUS: Record<string, { label: string; tone: Tone }> = {
+  A: { label: "Active", tone: "ok" },
+  B: { label: "Blacklisted", tone: "critical" },
+  C: { label: "Closed", tone: "neutral" },
+  E: { label: "Exception", tone: "warn" },
+  H: { label: "Hotlisted", tone: "critical" },
+  L: { label: "Low balance", tone: "warn" },
+};
+
 function tagTone(status?: string | null): Tone {
-  const s = (status ?? "").toLowerCase();
+  const raw = (status ?? "").trim();
+  if (raw.length === 1) return NETC_TAG_STATUS[raw.toUpperCase()]?.tone ?? "neutral";
+  const s = raw.toLowerCase();
   if (s.includes("activ")) return "ok";
   if (s.includes("low")) return "warn";
   if (s.includes("block") || s.includes("blacklist")) return "critical";
   return "neutral";
+}
+
+/** "A" -> "Active"; anything already spelled out is passed through. */
+function tagStatusLabel(status?: string | null): string {
+  const raw = (status ?? "").trim();
+  if (!raw) return "—";
+  if (raw.length === 1) {
+    const known = NETC_TAG_STATUS[raw.toUpperCase()];
+    return known ? `${known.label} (${raw.toUpperCase()})` : raw.toUpperCase();
+  }
+  return raw;
 }
 function sourceTone(src?: string | null): Tone {
   const s = (src ?? "").toUpperCase();
@@ -138,6 +173,15 @@ export default function Fastag() {
   const healthQ = useQuery({
     queryKey: ["fastag-health"],
     queryFn: () => getAdapter().fastagHealth(),
+    retry: false,
+  });
+  // FASTAG/02 — the NETC tag registry. Distinct from balance: this is the one
+  // ULIP surface that says whether the tag on the windscreen is active and
+  // issued against the plate presented at the gate.
+  const tagsQ = useQuery({
+    queryKey: ["fastag-tags", rc],
+    queryFn: () => getAdapter().fastagTagStatus({ rc_number: rc }),
+    enabled,
     retry: false,
   });
 
@@ -226,9 +270,13 @@ export default function Fastag() {
             icon={Wallet}
             label="Current Balance"
             value={b?.available_balance != null ? `₹${b.available_balance}` : "—"}
-            tone="ok"
+            tone={b && b.data_available === false ? "neutral" : "ok"}
             loading={balanceQ.isLoading}
-            sub={b?.tag_status ?? undefined}
+            sub={
+              b && b.data_available === false
+                ? "not published by ULIP"
+                : (b?.tag_status ?? undefined)
+            }
           />
           <StatCard
             icon={CalendarClock}
@@ -247,9 +295,16 @@ export default function Fastag() {
           <StatCard
             icon={Nfc}
             label="Active FASTags"
-            value={b ? (tagTone(b.tag_status) === "ok" ? 1 : 0) : "—"}
+            value={
+              enabled && tagsQ.data
+                ? tagsQ.data.tags.filter((t) => tagTone(t.tag_status) === "ok").length
+                : "—"
+            }
             tone="info"
-            loading={balanceQ.isLoading}
+            loading={tagsQ.isLoading}
+            sub={
+              tagsQ.data && tagsQ.data.count > 0 ? `${tagsQ.data.count} issued` : undefined
+            }
           />
           <StatCard icon={Route} label="Toll Enroute" value="Plan" tone="neutral" />
           <StatCard
@@ -271,6 +326,12 @@ export default function Fastag() {
           tabs={[
             { key: "balance", label: "Balance", icon: Wallet },
             {
+              key: "tags",
+              label: "Tag Status",
+              icon: Nfc,
+              count: enabled ? tagsQ.data?.count : undefined,
+            },
+            {
               key: "transactions",
               label: "Transactions",
               icon: ArrowLeftRight,
@@ -284,6 +345,7 @@ export default function Fastag() {
         />
 
         {tab === "balance" && <BalanceView rc={rc} balanceQ={balanceQ} />}
+        {tab === "tags" && <TagStatusView rc={rc} tagsQ={tagsQ} />}
         {tab === "transactions" && <TransactionsView rc={rc} rows={rows} status={txQ} />}
         {tab === "journey" && <JourneyView rc={rc} rows={rows} status={txQ} />}
         {tab === "enroute" && <EnrouteView />}
@@ -325,11 +387,41 @@ function BalanceView({ rc, balanceQ }: { rc: string; balanceQ: any }) {
       </Card>
     );
   const b = balanceQ.data;
+  // ULIP grants no wallet-balance API — FASTAG/01 returns toll crossings and
+  // FASTAG/02 the tag registry, neither carries a balance. So this surface can
+  // only replay a stored snapshot, and when we hold none the honest answer is
+  // to say so. Showing "₹0" here would read as an empty wallet and could send
+  // a truck away from the gate over a figure ULIP never published.
+  if (b.data_available === false)
+    return (
+      <Card className="p-0">
+        <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
+          <h3 className="text-sm font-semibold">FASTag Balance · {b.rc_number ?? rc}</h3>
+          <StatusChip label="No data" tone="neutral" />
+        </div>
+        <div className="p-4">
+          <div className="rounded-md border border-border bg-muted/40 px-3 py-2.5 text-[13px]">
+            <div className="font-medium">Wallet balance is not published by ULIP.</div>
+            <p className="mt-1 text-muted-foreground">
+              None of the granted ULIP APIs returns a FASTag wallet balance — FASTAG/01
+              returns toll crossings and FASTAG/02 the tag registry. This panel replays a
+              stored snapshot when one exists; there is none for this vehicle
+              {b.source ? ` (${b.source})` : ""}. Tag validity is on the{" "}
+              <span className="font-medium">Tag Status</span> tab, and toll activity on{" "}
+              <span className="font-medium">Transactions</span>.
+            </p>
+          </div>
+        </div>
+      </Card>
+    );
   return (
     <Card className="p-0">
       <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
         <h3 className="text-sm font-semibold">FASTag Balance · {b.rc_number ?? rc}</h3>
-        <StatusChip label={b.tag_status ?? "—"} tone={tagTone(b.tag_status)} />
+        <div className="flex items-center gap-1.5">
+          {b.source && <StatusChip label={b.source} tone="info" />}
+          <StatusChip label={b.tag_status ?? "—"} tone={tagTone(b.tag_status)} />
+        </div>
       </div>
       <div className="grid gap-x-8 p-4 sm:grid-cols-2">
         <KV k="Customer Name" v={b.customer_name} />
@@ -348,6 +440,114 @@ function BalanceView({ rc, balanceQ }: { rc: string; balanceQ: any }) {
         <KV k="Tag Status" v={b.tag_status} />
       </div>
     </Card>
+  );
+}
+
+// --- Tag Status (FASTAG/02) --------------------------------------------------
+
+const TAG_COLUMNS: Column<FastagTagRow & { __k?: number }>[] = [
+  { key: "tag", header: "Tag ID", className: "font-mono", render: (t) => t.tag_id ?? "—" },
+  {
+    key: "status",
+    header: "Status",
+    render: (t) => (
+      <StatusChip label={tagStatusLabel(t.tag_status)} tone={tagTone(t.tag_status)} />
+    ),
+  },
+  { key: "rc", header: "Registered To", render: (t) => t.rc_number ?? "—" },
+  { key: "class", header: "Class", render: (t) => t.vehicle_class ?? "—" },
+  {
+    key: "com",
+    header: "Commercial",
+    render: (t) =>
+      t.commercial_vehicle == null ? "—" : /^(t|true|y|yes)$/i.test(t.commercial_vehicle) ? "Yes" : "No",
+  },
+  { key: "bank", header: "Bank ID", className: "font-mono", render: (t) => t.bank_id ?? "—" },
+  { key: "issued", header: "Issued", render: (t) => t.issue_date ?? "—" },
+  { key: "exc", header: "Exc. Code", render: (t) => t.exc_code ?? "—" },
+];
+
+function TagStatusView({ rc, tagsQ }: { rc: string; tagsQ: any }) {
+  const [tagInput, setTagInput] = useState("");
+  const [tagId, setTagId] = useState("");
+  // A tag-id lookup answers the reverse question — "whose vehicle is this tag
+  // issued against?" — which is how a tag read at the gate is checked against
+  // the plate the camera saw.
+  const byTagQ = useQuery<FastagTagStatus>({
+    queryKey: ["fastag-tags-by-id", tagId],
+    queryFn: () => getAdapter().fastagTagStatus({ tag_id: tagId }),
+    enabled: !!tagId,
+    retry: false,
+  });
+
+  const active = tagId ? byTagQ : tagsQ;
+  const data: FastagTagStatus | undefined = active.data;
+  const rows = data?.tags ?? [];
+
+  return (
+    <div className="space-y-3">
+      <Card className="p-4">
+        <div className="flex flex-wrap items-end gap-2">
+          <Field label="Look up by Tag ID (instead of the RC above)">
+            <input
+              value={tagInput}
+              onChange={(e) => setTagInput(e.target.value.toUpperCase())}
+              onKeyDown={(e) => e.key === "Enter" && setTagId(tagInput.trim())}
+              placeholder="34161FA8203286140F4064E0"
+              autoCapitalize="characters"
+              spellCheck={false}
+              className="h-9 w-full min-w-0 rounded-md border border-border bg-background px-3 font-mono text-[13px] outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 sm:w-80"
+            />
+          </Field>
+          <button
+            onClick={() => setTagId(tagInput.trim())}
+            disabled={!tagInput.trim()}
+            className="inline-flex h-9 items-center gap-1.5 rounded-md bg-primary px-4 text-[13px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          >
+            <Nfc className="h-4 w-4" /> Check Tag
+          </button>
+          {tagId && (
+            <button
+              onClick={() => {
+                setTagId("");
+                setTagInput("");
+              }}
+              className="inline-flex h-9 items-center rounded-md border border-border px-3 text-[13px] hover:bg-muted"
+            >
+              Back to RC
+            </button>
+          )}
+        </div>
+      </Card>
+
+      {!rc && !tagId ? (
+        <Card className="p-0">
+          <EmptyState>Enter an RC number above, or a tag id here, to see the NETC tag registry.</EmptyState>
+        </Card>
+      ) : (
+        <Card className="overflow-hidden">
+          <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
+            <h3 className="text-sm font-semibold">
+              NETC Tag Registry · {tagId ? `tag ${tagId}` : rc}
+            </h3>
+            {rows.length > 1 && (
+              <span className="text-[11px] text-muted-foreground">
+                {rows.length} tags — re-issues keep the historic rows
+              </span>
+            )}
+          </div>
+          <DataTable
+            columns={TAG_COLUMNS}
+            rows={rows.map((t, i) => ({ ...t, __k: i }))}
+            rowKey={(t) => String(t.__k)}
+            status={active}
+            onRetry={() => active.refetch?.()}
+            emptyLabel="No FASTag is registered against this reference."
+            pageSize={10}
+          />
+        </Card>
+      )}
+    </div>
   );
 }
 

@@ -12,6 +12,8 @@ import type { Gate, TrafficSnapshot, TruckDevice, VehicleIntel } from "@/lib/typ
 import { ArcgisMap } from "@/components/map/ArcgisMap";
 import { Card, CardContent } from "@/components/ui/card";
 import { ThroughputChart } from "@/components/ThroughputChart";
+import DualTatCard from "@/components/panels/DualTatCard";
+import KpiDistributionPanel from "@/components/panels/KpiDistributionPanel";
 import { KpiStrip } from "@/components/panels/KpiStrip";
 import { CarbonTile } from "@/components/panels/CarbonTile";
 import { WeatherTile } from "@/components/panels/WeatherTile";
@@ -314,6 +316,12 @@ export default function LiveOperations() {
             {t("liveOps.corridorKpis")}
           </h2>
           <KpiStrip />
+          {/* UC3-035 / UI-122: the two turnaround definitions render as a pair
+              beside the KPI strip. The strip's single tat_inside_port figure is
+              one definition; this card is what stops it being read as "the" TAT. */}
+          <DualTatCard />
+          {/* UC3-035: daily average / median / P90 / peak-hour ratio for the same KPIs. */}
+          <KpiDistributionPanel />
         </div>
 
         {/* Gate throughput + queue tiles. */}

@@ -33,7 +33,7 @@
 // so the scan stays visible while you read the fields. Below `lg` the panes
 // collapse to one column and the body scrolls as a whole, in the reading order
 // list → detail → scan.
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ExternalLink, Search } from "lucide-react";
 
@@ -501,6 +501,8 @@ export default function TruckVisitDetail() {
   const [lookup, setLookup] = useState(incoming || EXAMPLE_TRUCK);
   const [truck, setTruck] = useState(incoming || EXAMPLE_TRUCK);
   const [selected, setSelected] = useState<number | null>(null);
+  /** The document the resolver picked, honoured once its list arrives. */
+  const resolvedDocId = useRef<number | null>(null);
 
   useEffect(() => {
     if (incoming && incoming !== lookup) {
@@ -524,6 +526,13 @@ export default function TruckVisitDetail() {
     if (r?.status !== "RESOLVED" || !r.trips.length) return;
     const t = r.trips[0];
     if (t.vehicle_no) setTruck(norm(t.vehicle_no));
+    // Remember the resolver's choice as well as applying it. Changing `truck`
+    // refetches the document list, and that list arrives AFTER this runs — so
+    // without a durable note of the intent, the list effect below would see a
+    // selection that is not yet in `docs` and overwrite it with the newest
+    // document. The operator searched a container and landed on a different
+    // visit; this ref is what stops that.
+    resolvedDocId.current = t.doc_id;
     setSelected(t.doc_id);
   }, [resolveQ.data]);
 
@@ -552,9 +561,15 @@ export default function TruckVisitDetail() {
       setSelected(null);
       return;
     }
-    setSelected((prev) =>
-      prev != null && docs.some((d) => d.doc_id === prev) ? prev : docs[0].doc_id,
-    );
+    setSelected((prev) => {
+      // The resolver's choice wins as soon as its document is in the list.
+      const wanted = resolvedDocId.current;
+      if (wanted != null && docs.some((d) => d.doc_id === wanted)) {
+        resolvedDocId.current = null;
+        return wanted;
+      }
+      return prev != null && docs.some((d) => d.doc_id === prev) ? prev : docs[0].doc_id;
+    });
   }, [docs]);
 
   const current = docs.find((d) => d.doc_id === selected) ?? null;

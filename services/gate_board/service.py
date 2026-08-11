@@ -153,6 +153,91 @@ def release_plan_for(*, terminal_code: str, gate_id: Optional[str], queue: int,
     }
 
 
+
+
+# --- UC3-023: EC-6 camera-outage degraded ladder -----------------------------
+#
+# A gate confirms a vehicle by joining an ANPR plate read with an RFID tag read.
+# When the camera's frames stop, the ANPR half is gone and the gate does NOT
+# stop working — it drops to RFID-only confirmation at a RECORDED lower
+# confidence, plus a manual-verify lane for anything RFID alone cannot settle.
+#
+# The confidence drop is the point. A gate that silently kept reporting the same
+# confidence after losing half its evidence would be asserting a certainty it no
+# longer has, and every downstream decision (Auto-LEO identity match, violation
+# plate attribution) would inherit that false certainty.
+#
+# Rungs, mapped from the camera feed's own state — never a UI-only status:
+#   LIVE      frames arriving       -> ANPR+RFID join, full confidence
+#   DEGRADED  frames stale (cached) -> ANPR+RFID at reduced confidence
+#   NO_FEED   frames stopped        -> RFID-only + manual-verify lane
+#
+#: Confidence the gate records per rung. LIVE is the joined ANPR+RFID figure;
+#: the others are what the gate can honestly claim with less evidence.
+GATE_CONFIDENCE_BY_RUNG: Dict[str, float] = {
+    "LIVE": 0.97,
+    "DEGRADED": 0.82,
+    "NO_FEED": 0.60,
+}
+
+#: Service-rate multiplier per rung. A manual-verify lane is slower than an
+#: automated one, so losing the camera cuts the gate's throughput — which is what
+#: makes the queue forecast worsen rather than staying flat through an outage.
+SERVICE_RATE_FACTOR_BY_RUNG: Dict[str, float] = {
+    "LIVE": 1.0,
+    "DEGRADED": 0.85,
+    "NO_FEED": 0.55,
+}
+
+#: EC-6 timing contract.
+NO_FEED_DETECT_SECONDS = 5      # frames stop -> no_feed raised within 5 s
+CARD_DOWN_VISIBLE_SECONDS = 60  # source card reads DOWN within 60 s
+
+
+def rung_from_camera(decision_path: Optional[str]) -> str:
+    """Map the camera's own decision path onto the gate's confirmation rung.
+
+    Reads the ANPR cascade's state (LIVE / CACHED / SYNTHETIC) rather than
+    inventing a parallel status, so the gate cannot disagree with the health
+    strip about whether a camera is up.
+    """
+    p = (decision_path or "").upper()
+    if p == "LIVE":
+        return "LIVE"
+    if p == "CACHED":
+        return "DEGRADED"
+    return "NO_FEED"
+
+
+def degraded_mode_for(camera: Dict[str, Any]) -> Dict[str, Any]:
+    """The gate's confirmation posture for one camera's current state."""
+    rung = rung_from_camera(camera.get("decision_path"))
+    no_feed = rung == "NO_FEED"
+    return {
+        "camera_id": camera.get("camera_id"),
+        "decision_path": camera.get("decision_path"),
+        "frame_age_s": camera.get("frame_age_s"),
+        "fault_injected": bool(camera.get("forced")),
+        "rung": rung,
+        "no_feed": no_feed,
+        # What the gate uses to confirm a vehicle at this rung.
+        "confirmation_mode": "RFID_ONLY" if no_feed else "ANPR_RFID_JOIN",
+        "confidence": GATE_CONFIDENCE_BY_RUNG[rung],
+        "confidence_basis": (
+            "RFID tag read only — the ANPR half of the join is unavailable"
+            if no_feed else
+            "ANPR plate read joined with the RFID tag read"
+            if rung == "LIVE" else
+            "ANPR read is stale (served from cache) and joined with RFID"),
+        "manual_verify_lane": no_feed,
+        "service_rate_factor": SERVICE_RATE_FACTOR_BY_RUNG[rung],
+        "source_card": "DOWN" if no_feed else ("DEGRADED" if rung == "DEGRADED" else "LIVE"),
+        # Replayed frames are never presented as live: the badge follows the rung.
+        "feed_label": "LIVE" if rung == "LIVE" else ("REPLAY" if rung == "DEGRADED"
+                                                     else "NO FEED"),
+    }
+
+
 class GateBoardService:
     def __init__(self, dsn: Optional[str] = None,
                  repository: Optional[GateBoardRepository] = None) -> None:
@@ -307,6 +392,52 @@ class GateBoardService:
 
     async def acknowledge_task(self, task_id: str, actor: Optional[str]) -> Optional[dict]:
         return await self._repo.acknowledge_task(task_id, actor)
+
+
+    # ------------------------------------------------- UC3-023 degraded gate
+    async def camera_degraded_mode(self, cameras: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """The EC-6 ladder across every gate camera, with the queue impact.
+
+        ``cameras`` comes from the ANPR cascade (/api/kpi/cameras), so the state
+        shown here is the feed's ACTUAL state — including a fault injected
+        through /api/control/fault — and not a status this layer made up.
+        """
+        modes = [degraded_mode_for(c) for c in cameras]
+        degraded = [m for m in modes if m["rung"] != "LIVE"]
+        no_feed = [m for m in modes if m["no_feed"]]
+
+        # The gate's effective service rate is the mean factor across its
+        # cameras, so a camera outage visibly cuts throughput and therefore
+        # worsens the queue forecast rather than leaving it flat.
+        factor = (sum(m["service_rate_factor"] for m in modes) / len(modes)) if modes else 1.0
+        nominal_vph = NOMINAL_LANE_VPH * 2  # two inbound lanes per gate
+        return {
+            "cameras": modes,
+            "count": len(modes),
+            "degraded_count": len(degraded),
+            "no_feed_count": len(no_feed),
+            "overall_rung": ("NO_FEED" if no_feed else
+                             "DEGRADED" if degraded else "LIVE"),
+            "service_rate_factor": round(factor, 3),
+            "nominal_service_vph": nominal_vph,
+            "effective_service_vph": round(nominal_vph * factor, 2),
+            "timing_contract": {
+                "no_feed_detect_seconds": NO_FEED_DETECT_SECONDS,
+                "card_down_visible_seconds": CARD_DOWN_VISIBLE_SECONDS,
+                "note": ("EC-6: frames stop -> no_feed within 5 s; the source card "
+                         "reads DOWN and is evaluator-visible within 60 s."),
+            },
+            "fault_injection": {
+                "endpoint": "/api/control/fault/camera",
+                "note": ("The drill uses the project's existing fault console. "
+                         "Forcing the camera rung drives this ladder end to end."),
+            },
+            "reconciliation": {
+                "note": ("On restore the ladder walks back to LIVE and the rung "
+                         "change is written to the decision log, so the outage and "
+                         "its recovery are both auditable."),
+            },
+        }
 
     # --------------------------------------------------------- UC3-027 CPP
     async def compute_release_plans(self, *, mode: str = "METERED",

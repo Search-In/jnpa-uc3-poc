@@ -95,6 +95,7 @@ from .routers import (
     container_job,
     document_ocr,
     double_trip,
+    corridor_heatmap,
     corridor_sim,
     dq,
     driver_jobs,
@@ -761,6 +762,7 @@ app.include_router(cfs_ecy.router)           # CFS-ECY CODECO gate movements (mo
 app.include_router(dq.router)                # Data Quality ledger over core.dq_issue (read-only)
 app.include_router(vehicle_registry.router)   # UC3-004 vehicle->transporter registry (MIXED provenance)
 app.include_router(corridor_sim.router)      # UC3-005 frozen NH-348 20k simulation (SIMULATED only)
+app.include_router(corridor_heatmap.router)  # UC3-020 T-01 corridor congestion heatmap
 app.include_router(gate_board.router)        # UC3-021 gate & lane board + UC3-027 CPP metered release
 app.include_router(auto_leo.router)          # UC3-040 Auto-LEO four-way join board
 app.include_router(trip_search.router)       # UC3-024 trip resolver + UC3-025 visit timeline

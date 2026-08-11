@@ -159,6 +159,33 @@ async def acknowledge_task(
     return row
 
 
+@router.get("/api/gate-board/degraded-mode")
+async def degraded_mode(
+    request: Request,
+    svc: GateBoardService = Depends(get_service),
+) -> Dict[str, Any]:
+    """EC-6 camera-outage ladder for the gate (UC3-023).
+
+    Reads each camera's ACTUAL rung from the ANPR cascade — including any fault
+    forced through /api/control/fault — and reports what the gate can honestly
+    confirm with the evidence it still has:
+
+        LIVE      ANPR + RFID join            confidence 0.97
+        DEGRADED  stale (replayed) ANPR + RFID confidence 0.82
+        NO_FEED   RFID only + manual verify   confidence 0.60
+
+    The confidence drop is recorded rather than hidden: a gate that kept
+    asserting full confidence after losing half its evidence would pass that
+    false certainty to every downstream decision.
+    """
+    from .anpr import KNOWN_CAMERAS, camera_state
+
+    gw = getattr(request.app.state, "gw", None)
+    cameras = [camera_state(gw, cam) for cam in KNOWN_CAMERAS] if gw else []
+    REQUESTS.labels("gate_board", "ok").inc()
+    return await svc.camera_degraded_mode(cameras)
+
+
 # ------------------------------------------------------------------ UC3-027
 @router.get("/api/cpp/board")
 async def cpp_board(svc: GateBoardService = Depends(get_service)) -> Dict[str, Any]:

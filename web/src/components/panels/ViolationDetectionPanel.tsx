@@ -717,10 +717,7 @@ export function ViolationDetectionPanel() {
             </dl>
 
             {/* UC3-030: a challan number never appears without its disclosure. */}
-            <ChallanSimulatedBadge
-              challanNo={incident.challan_no}
-              disclosure={incident}
-            />
+            <ChallanSimulatedBadge challanNo={incident.challan_no} disclosure={incident} />
 
             {/* Lifecycle stepper — highlights the case's current state. */}
             <CaseLifecycle status={incident.status} />
@@ -818,10 +815,7 @@ export function ViolationDetectionPanel() {
             </dl>
 
             {/* UC3-030: the auto-enforce path badges its challan too. */}
-            <ChallanSimulatedBadge
-              challanNo={enforced.challan_no}
-              disclosure={enforced}
-            />
+            <ChallanSimulatedBadge challanNo={enforced.challan_no} disclosure={enforced} />
 
             <div className="space-y-1">
               {enforced.violations.map((v) => (

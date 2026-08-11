@@ -46,6 +46,7 @@ from typing import Any, Optional
 from .base import (SOURCE_ASSUMED, SOURCE_DERIVED, SOURCE_MEASURED,
                    SOURCE_PARAMETER, SimulationResult, pct)
 from .gate_slotting import derive_sustained_rate, load_profile
+from .plausibility import TEU_PER_TRIP, from_sample
 
 SCENARIO = "modal-shift"
 DEFAULT_SHIFT_PCT = 0.20
@@ -154,12 +155,36 @@ async def run(repo: Any, params: dict) -> SimulationResult:
     observed_trips = sum(h["arrivals"] for h in profile)
 
     # ---- 4. TEU -> trips ----------------------------------------------------
-    if road_teus > 0 and observed_trips > 0:
-        teu_per_trip = round(road_teus / observed_trips, 3)
+    derived_teu_per_trip = (round(road_teus / observed_trips, 3)
+                            if road_teus > 0 and observed_trips > 0 else None)
+    # A container truck carries one TEU (20ft) or two (40ft). A derived figure
+    # outside that band, or one resting on a handful of gate records, is not a
+    # measurement of anything: on JNPA's RDS this produced 50 TEU/trip from
+    # 250 road TEU over 5 core.eir rows, which understated the extra truck count
+    # by a factor of ~25 and made the gate look comfortable when it was not.
+    verdict = from_sample("teu_per_trip", derived_teu_per_trip, observed_trips,
+                          TEU_PER_TRIP)
+    if derived_teu_per_trip is not None and verdict:
+        teu_per_trip = derived_teu_per_trip
         res.assume("teu_per_trip", teu_per_trip,
                    f"derived from this window: {road_teus:.0f} road TEU "
                    f"(total_teus - rail_total_teus) over {observed_trips} observed "
                    "gate trips", SOURCE_DERIVED)
+    elif derived_teu_per_trip is not None:
+        teu_per_trip = FALLBACK_TEU_PER_TRIP
+        res.assume(
+            "teu_per_trip", teu_per_trip,
+            f"the window implies {derived_teu_per_trip:g} TEU per trip "
+            f"({road_teus:.0f} road TEU over {observed_trips} observed gate trip(s)), "
+            f"which is REJECTED: {verdict.reason}. One TEU per trip is used "
+            "instead. The trip counts below are therefore a lower bound on demand, "
+            "and the gate profile needs a real gate transaction log before the "
+            "absorption verdict can be relied on.", SOURCE_ASSUMED)
+        res.note(
+            f"teu_per_trip derived from this window ({derived_teu_per_trip:g}) was "
+            f"rejected as implausible: {verdict.reason}. "
+            + ("core.eir carries too few gate records for this window to "
+               "characterise road movements." if verdict.thin_sample else ""))
     else:
         teu_per_trip = FALLBACK_TEU_PER_TRIP
         res.assume("teu_per_trip", teu_per_trip,

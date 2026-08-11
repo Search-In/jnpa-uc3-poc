@@ -1,0 +1,3428 @@
+{
+ "vessel-bunching": {
+  "scenario": "vessel-bunching",
+  "method": "Take the calls contending for berths on the study day and the berths they occupy. Schedule four candidate orderings (FCFS, SPT, MAX_MOVES, LINE_PRIORITY) by list-scheduling: each vessel in turn takes the berth that frees earliest and starts at max(ready, berth_free). Score every ordering on the SAME declared objective - total waiting time across the queue (+0.5 per berth reassignment), to minimise - and report the cost of each alternative against the recommended one. Objective weights are shared with the UC-1 berth optimiser (uc1_m5_berth_optimiser.py): cost = 1.0*waiting_hours + 2.0*tide_misses + 0.5*berth_shifts.",
+  "result": {
+   "coverage": {
+    "requested": "2026-08-06T00:00:00+00:00",
+    "basis": "MEASURED",
+    "measured_through": "2026-08-06T00:00:00+00:00"
+   },
+   "objective": {
+    "id": "waiting_time",
+    "description": "total waiting time across the queue (+0.5 per berth reassignment)",
+    "direction": "minimise"
+   },
+   "berth_pool": [
+    "APM01",
+    "APM02",
+    "BMCT01",
+    "BMCT03",
+    "BMCT05",
+    "BMCT06",
+    "CB01",
+    "CB02",
+    "CB04",
+    "CB06"
+   ],
+   "vessels_contending": 12,
+   "load_by_terminal": {
+    "NSFT": 2,
+    "BMCT": 4,
+    "APMT": 4,
+    "NSICT": 1,
+    "NSIGT": 1
+   },
+   "recommended": {
+    "ordering": "FCFS",
+    "objective_value": 3.0,
+    "sequence": [
+     {
+      "position": 1,
+      "vessel": "COSCO ENGLAND",
+      "voyage": "INNSA1NF0S1188",
+      "terminal": "NSFT",
+      "assigned_berth": "CB01",
+      "original_berth": "CB01",
+      "berth_shift": false,
+      "start": "2026-08-06T02:24:00+00:00",
+      "end": "2026-08-07T21:16:59.880000+00:00",
+      "waiting_hours": 0.0,
+      "gross_moves": 0,
+      "service_hours_assumed": false
+     },
+     {
+      "position": 2,
+      "vessel": "CNC TIGER",
+      "voyage": "INNSA1NF0S1192",
+      "terminal": "NSFT",
+      "assigned_berth": "CB02",
+      "original_berth": "CB02",
+      "berth_shift": false,
+      "start": "2026-08-06T03:36:00+00:00",
+      "end": "2026-08-07T01:36:00+00:00",
+      "waiting_hours": 0.0,
+      "gross_moves": 0,
+      "service_hours_assumed": false
+     },
+     {
+      "position": 3,
+      "vessel": "HMM FOREST",
+      "voyage": "INNSA1BM0S1158",
+      "terminal": "BMCT",
+      "assigned_berth": "BMCT01",
+      "original_berth": "BMCT01",
+      "berth_shift": false,
+      "start": "2026-08-06T03:47:00+00:00",
+      "end": "2026-08-07T18:14:00+00:00",
+      "waiting_hours": 0.0,
+      "gross_moves": 0,
+      "service_hours_assumed": false
+     },
+     {
+      "position": 4,
+      "vessel": "ATLANTA EXPRESS",
+      "voyage": "INNSA1GT0S1129",
+      "terminal": "APMT",
+      "assigned_berth": "APM01",
+      "original_berth": "APM01",
+      "berth_shift": false,
+      "start": "2026-08-06T04:30:00+00:00",
+      "end": "2026-08-06T14:00:00+00:00",
+      "waiting_hours": 0.0,
+      "gross_moves": 0,
+      "service_hours_assumed": false
+     },
+     {
+      "position": 5,
+      "vessel": "ONE RECOGNITION_AUG",
+      "voyage": "S0475_AUG",
+      "terminal": "APMT",
+      "assigned_berth": "APM02",
+      "original_berth": "APM02",
+      "berth_shift": false,
+      "start": "2026-08-06T05:52:00+00:00",
+      "end": "2026-08-06T15:52:00+00:00",
+      "waiting_hours": 0.0,
+      "gross_moves": 100.0,
+      "service_hours_assumed": false
+     },
+     {
+      "position": 6,
+      "vessel": "GSL MELITA",
+      "voyage": "INNSA1GT0S1106",
+      "terminal": "APMT",
+      "assigned_berth": "BMCT03",
+      "original_berth": "APM02",
+      "berth_shift": true,
+      "start": "2026-08-06T06:30:00+00:00",
+      "end": "2026-08-06T23:43:00.120000+00:00",
+      "waiting_hours": 0.0,
+      "gross_moves": 0,
+      "service_hours_assumed": false
+     },
+     {
+      "position": 7,
+      "vessel": "FLEXI 2",
+      "voyage": "INNSA1BM0S9M03",
+      "terminal": "BMCT",
+      "assigned_berth": "BMCT05",
+      "original_berth": "BMCT05",
+      "berth_shift": false,
+      "start": "2026-08-06T06:45:00+00:00",
+      "end": "2026-08-07T02:36:00+00:00",
+      "waiting_hours": 0.0,
+      "gross_moves": 0,
+      "service_hours_assumed": false
+     },
+     {
+      "position": 8,
+      "vessel": "FOLK JUBAIL",
+      "voyage": "INNSA1BM0S9M00",
+      "terminal": "BMCT",
+      "assigned_berth": "BMCT06",
+      "original_berth": "BMCT03",
+      "berth_shift": true,
+      "start": "2026-08-06T07:04:00+00:00",
+      "end": "2026-08-07T00:46:00+00:00",
+      "waiting_hours": 0.0,
+      "gross_moves": 0,
+      "service_hours_assumed": false
+     },
+     {
+      "position": 9,
+      "vessel": "ONE RELIABILITY",
+      "voyage": "INNSA1BM0S9M04",
+      "terminal": "BMCT",
+      "assigned_berth": "CB04",
+      "original_berth": "BMCT06",
+      "berth_shift": true,
+      "start": "2026-08-06T08:01:00+00:00",
+      "end": "2026-08-07T19:53:59.880000+00:00",
+      "waiting_hours": 0.0,
+      "gross_moves": 0,
+      "service_hours_assumed": false
+     },
+     {
+      "position": 10,
+      "vessel": "TAYMA EXPRESS_AUG",
+      "voyage": "S0484_AUG",
+      "terminal": "APMT",
+      "assigned_berth": "CB06",
+      "original_berth": "APM01",
+      "berth_shift": true,
+      "start": "2026-08-06T13:18:00+00:00",
+      "end": "2026-08-06T23:18:00+00:00",
+      "waiting_hours": 0.0,
+      "gross_moves": 100.0,
+      "service_hours_assumed": false
+     },
+     {
+      "position": 11,
+      "vessel": "STAR BLESSING",
+      "voyage": "INNSA1NS0S9I05",
+      "terminal": "NSICT",
+      "assigned_berth": "APM01",
+      "original_berth": "CB04",
+      "berth_shift": true,
+      "start": "2026-08-06T16:07:00+00:00",
+      "end": "2026-08-07T05:14:00.120000+00:00",
+      "waiting_hours": 0.0,
+      "gross_moves": 0,
+      "service_hours_assumed": false
+     },
+     {
+      "position": 12,
+      "vessel": "MELBOURNE BRIDGE",
+      "voyage": "INNSA1NG0S9G01",
+      "terminal": "NSIGT",
+      "assigned_berth": "APM02",
+      "original_berth": "CB06",
+      "berth_shift": true,
+      "start": "2026-08-06T16:21:00+00:00",
+      "end": "2026-08-07T16:55:59.880000+00:00",
+      "waiting_hours": 0.0,
+      "gross_moves": 0,
+      "service_hours_assumed": false
+     }
+    ],
+    "metrics": {
+     "total_waiting_hours": 0.0,
+     "mean_waiting_hours": 0.0,
+     "max_waiting_hours": 0.0,
+     "berth_shifts": 6,
+     "tide_misses": 0,
+     "moves_handled": 200.0,
+     "calls_completed_in_horizon": 4,
+     "makespan": "2026-08-07T21:16:59.880000+00:00"
+    }
+   },
+   "alternatives": [
+    {
+     "ordering": "LINE_PRIORITY",
+     "objective_value": 3.0,
+     "cost_vs_recommended": 0.0,
+     "is_baseline": false,
+     "metrics": {
+      "total_waiting_hours": 0.0,
+      "mean_waiting_hours": 0.0,
+      "max_waiting_hours": 0.0,
+      "berth_shifts": 6,
+      "tide_misses": 0,
+      "moves_handled": 200.0,
+      "calls_completed_in_horizon": 4,
+      "makespan": "2026-08-07T21:16:59.880000+00:00"
+     }
+    },
+    {
+     "ordering": "MAX_MOVES",
+     "objective_value": 8.48,
+     "cost_vs_recommended": 5.48,
+     "is_baseline": false,
+     "metrics": {
+      "total_waiting_hours": 5.98,
+      "mean_waiting_hours": 0.5,
+      "max_waiting_hours": 5.98,
+      "berth_shifts": 5,
+      "tide_misses": 0,
+      "moves_handled": 200.0,
+      "calls_completed_in_horizon": 4,
+      "makespan": "2026-08-08T01:52:59.880000+00:00"
+     }
+    },
+    {
+     "ordering": "SPT",
+     "objective_value": 27.19,
+     "cost_vs_recommended": 24.19,
+     "is_baseline": false,
+     "metrics": {
+      "total_waiting_hours": 23.69,
+      "mean_waiting_hours": 1.97,
+      "max_waiting_hours": 13.47,
+      "berth_shifts": 7,
+      "tide_misses": 0,
+      "moves_handled": 200.0,
+      "calls_completed_in_horizon": 4,
+      "makespan": "2026-08-08T10:44:59.880000+00:00"
+     }
+    }
+   ]
+  },
+  "figures": {
+   "vessels_contending": 12,
+   "berths_available": 10,
+   "recommended_ordering": "FCFS",
+   "objective_value_recommended": 3.0,
+   "objective_value_baseline_fcfs": 3.0,
+   "improvement_vs_baseline": 0.0,
+   "improvement_vs_baseline_pct": 0.0,
+   "total_waiting_hours_recommended": 0.0,
+   "total_waiting_hours_baseline": 0.0,
+   "berth_shifts_recommended": 6,
+   "moves_handled_recommended": 200.0,
+   "busiest_terminal": "BMCT",
+   "busiest_terminal_calls": 4
+  },
+  "assumptions": [
+   {
+    "field": "objective",
+    "value": "waiting_time",
+    "reason": "the basis this order optimises for, as the Notice requires it be stated: total waiting time across the queue (+0.5 per berth reassignment) (minimise)",
+    "source": "PARAMETER"
+   },
+   {
+    "field": "readiness",
+    "value": "later of study-day start and recorded alongside time",
+    "reason": "the daily berthing feed carries no ETA/ATA, so arrival at the anchorage cannot be measured. On a bunching day the Notice's premise is that the vessels are already present, so they contend from the opening of the day.",
+    "source": "ASSUMED"
+   },
+   {
+    "field": "tide_misses",
+    "value": 0,
+    "reason": "the objective carries a tide-miss term for parity with the UC-1 optimiser, but tidal windows are a UC-1 dataset and are not in this database, so the term contributes nothing here and no tide-driven infeasibility is claimed.",
+    "source": "ASSUMED"
+   }
+  ],
+  "queries": [
+   {
+    "purpose": "vessel calls joined to their gross-move counts",
+    "sql": "SELECT b.id AS berthing_record_id, b.terminal, b.vessel_name, b.voyage_number, b.berth_number, b.cargo_operation_start, b.cargo_operation_end, b.berthing_time, b.departure_time, b.ata, b.eta, m.id AS moves_id, m.vcn, m.discharge_moves, m.load_moves, m.restow_moves, m.gross_moves, m.cranes_deployed, m.data_origin, m.source_note FROM core.berthing_record b LEFT JOIN core.vessel_call_moves m ON m.berthing_record_id = b.id OR (m.terminal = b.terminal AND m.voyage_number = b.voyage_number AND m.vessel_name = b.vessel_name) WHERE (CAST(:terminal AS text) IS NULL OR b.terminal = CAST(:terminal AS text)) AND COALESCE(b.cargo_operation_start, b.berthing_time, b.ata, b.eta) BETWEEN :from_ts AND :to_ts ORDER BY COALESCE(b.cargo_operation_start, b.berthing_time, b.ata, b.eta) ASC, b.id ASC",
+    "params": {
+     "terminal": null,
+     "from_ts": "2026-08-06T00:00:00+00:00",
+     "to_ts": "2026-08-07T00:00:00+00:00"
+    },
+    "api": "POST /api/cargo/simulate/crane-productivity",
+    "row_count": 12
+   }
+  ],
+  "recommendations": [
+   {
+    "action": "KEEP_ARRIVAL_ORDER",
+    "reason": "no alternative ordering beats arrival order on total waiting time across the queue (+0.5 per berth reassignment); the queue is already sequenced as well as this objective allows",
+    "objective_value": 3.0
+   },
+   {
+    "action": "CONFIRM_BERTH_REASSIGNMENTS",
+    "reason": "6 call(s) are proposed on a berth other than the one recorded against them; each needs a length and draft check before it is issued",
+    "count": 6
+   },
+   {
+    "action": "REBALANCE_ACROSS_TERMINALS",
+    "reason": "BMCT carries 4 of 12 contending calls (33.3%); the Notice's premise of uneven distribution is visible in the data and is not addressed by resequencing within a terminal alone",
+    "terminal": "BMCT",
+    "calls": 4,
+    "share_pct": 33.3
+   }
+  ],
+  "data_available": true,
+  "notes": []
+ },
+ "berth-cascade": {
+  "scenario": "berth-cascade",
+  "method": "Read every vessel call at all terminals whose operation window opens in the 48h from 2026-08-02T00:00:00+00:00 (core.berthing_record). Extend the target call's operation end by 6.0h, then cascade down its berth: a berth serves one vessel at a time, so new_start = max(original_start, previous_new_end). Report each displaced call's delay and the sum across the queue.",
+  "result": {
+   "terminal": null,
+   "window": {
+    "from": "2026-08-02T00:00:00+00:00",
+    "to": "2026-08-04T00:00:00+00:00",
+    "hours": 48
+   },
+   "target_call": {
+    "berthing_record_id": 453,
+    "vessel_name": "CNC TIGER_AUG",
+    "voyage_number": "S0536_AUG",
+    "berth_number": "UNASSIGNED",
+    "original_end": "2026-08-02T11:17:00+00:00",
+    "new_end": "2026-08-02T17:17:00+00:00"
+   },
+   "displaced_calls": [
+    {
+     "vessel": "SLA TOPAZ",
+     "voyage": "INNSA1GT0S1032",
+     "berth": "APM02",
+     "original_time": "2026-08-02T10:25:00+00:00",
+     "new_time": "2026-08-02T18:24:00+00:00",
+     "delay_hours": 7.98,
+     "duration_assumed": false
+    },
+    {
+     "vessel": "WADI ALRAYAN_AUG",
+     "voyage": "S0496_AUG",
+     "berth": "UNASSIGNED",
+     "original_time": "2026-08-02T17:11:00+00:00",
+     "new_time": "2026-08-02T17:17:00+00:00",
+     "delay_hours": 0.1,
+     "duration_assumed": false
+    },
+    {
+     "vessel": "ESL DACHAN BAY",
+     "voyage": "INNSA1BM0S1051",
+     "berth": "BMCT03",
+     "original_time": "2026-08-02T19:09:00+00:00",
+     "new_time": "2026-08-03T04:19:00+00:00",
+     "delay_hours": 9.17,
+     "duration_assumed": false
+    },
+    {
+     "vessel": "WAN HAI 326_AUG",
+     "voyage": "S0586_AUG",
+     "berth": "APM02",
+     "original_time": "2026-08-03T00:17:00+00:00",
+     "new_time": "2026-08-03T11:25:00.120000+00:00",
+     "delay_hours": 11.13,
+     "duration_assumed": false
+    },
+    {
+     "vessel": "INTERASIA TRIUMPH",
+     "voyage": "INNSA1GT0S1149",
+     "berth": "APM01",
+     "original_time": "2026-08-03T01:14:00+00:00",
+     "new_time": "2026-08-03T03:36:00+00:00",
+     "delay_hours": 2.37,
+     "duration_assumed": false
+    },
+    {
+     "vessel": "CICCIO_AUG",
+     "voyage": "S0594_AUG",
+     "berth": "BMCT05",
+     "original_time": "2026-08-03T05:58:00+00:00",
+     "new_time": "2026-08-03T18:14:00+00:00",
+     "delay_hours": 12.27,
+     "duration_assumed": false
+    },
+    {
+     "vessel": "ZULFA 1_AUG",
+     "voyage": "S0560_AUG",
+     "berth": "BMCT05",
+     "original_time": "2026-08-03T17:14:00+00:00",
+     "new_time": "2026-08-04T04:14:00+00:00",
+     "delay_hours": 11.0,
+     "duration_assumed": false
+    },
+    {
+     "vessel": "AGIOS DIMITRIOS_AUG",
+     "voyage": "S0655_AUG",
+     "berth": "CB05",
+     "original_time": "2026-08-03T20:00:00+00:00",
+     "new_time": "2026-08-04T19:38:00.120000+00:00",
+     "delay_hours": 23.63,
+     "duration_assumed": false
+    },
+    {
+     "vessel": "SHENTON WAY_AUG",
+     "voyage": "S0601_AUG",
+     "berth": "BMCT03",
+     "original_time": "2026-08-03T22:14:00+00:00",
+     "new_time": "2026-08-05T01:20:59.880000+00:00",
+     "delay_hours": 27.12,
+     "duration_assumed": false
+    },
+    {
+     "vessel": "JI ZHE 6",
+     "voyage": "INNSA1BM0S1156",
+     "berth": "BMCT05",
+     "original_time": "2026-08-03T22:43:00+00:00",
+     "new_time": "2026-08-04T14:14:00+00:00",
+     "delay_hours": 15.52,
+     "duration_assumed": false
+    }
+   ],
+   "unaffected_calls": [
+    {
+     "vessel": "MARTHA A",
+     "voyage": "INNSA1BM0S1009",
+     "berth": "BMCT03"
+    },
+    {
+     "vessel": "MSC VIVIANA",
+     "voyage": "INNSA1BM0S1091",
+     "berth": "BMCT06"
+    },
+    {
+     "vessel": "MSC FIE X",
+     "voyage": "INNSA1NS0S1122",
+     "berth": "CB04"
+    },
+    {
+     "vessel": "NORTHERN PRACTISE",
+     "voyage": "INNSA1NG0S0959",
+     "berth": "CB06"
+    },
+    {
+     "vessel": "BANGKOK BRIDGE_AUG",
+     "voyage": "S0567_AUG",
+     "berth": "APM02"
+    },
+    {
+     "vessel": "APL OREGON",
+     "voyage": "INNSA1NF0S1062",
+     "berth": "CB01"
+    },
+    {
+     "vessel": "OOCL LUXEMBOURG_AUG",
+     "voyage": "S0561_AUG",
+     "berth": "APM01"
+    },
+    {
+     "vessel": "SYNERGY OAKLAND_AUG",
+     "voyage": "S0555_AUG",
+     "berth": "BMCT03"
+    },
+    {
+     "vessel": "DONG CHENG LAN TIAN",
+     "voyage": "INNSA1NS0S1020",
+     "berth": "CB05"
+    },
+    {
+     "vessel": "ONE READINESS_AUG",
+     "voyage": "S0473_AUG",
+     "berth": "BMCT01"
+    },
+    {
+     "vessel": "TS KEELUNG",
+     "voyage": "INNSA1NG0S1099",
+     "berth": "CB06"
+    },
+    {
+     "vessel": "CMA CGM BUTTERFLY",
+     "voyage": "INNSA1NF0S0996",
+     "berth": "CB02"
+    },
+    {
+     "vessel": "AL SEEF",
+     "voyage": "INNSA1BM0S1114",
+     "berth": "BMCT05"
+    },
+    {
+     "vessel": "JOLLY BIANCO_AUG",
+     "voyage": "S0605_AUG",
+     "berth": "BMCT04"
+    },
+    {
+     "vessel": "CMA CGM LA SCALA_AUG",
+     "voyage": "S0537_AUG",
+     "berth": "BMCT02"
+    },
+    {
+     "vessel": "APL SOUTHAMPTON_AUG",
+     "voyage": "S0535_AUG",
+     "berth": "UNASSIGNED"
+    },
+    {
+     "vessel": "KONRAD",
+     "voyage": "INNSA1BM0S1190",
+     "berth": "BMCT01"
+    },
+    {
+     "vessel": "SEATRADE PERU",
+     "voyage": "INNSA1NS0S1133",
+     "berth": "CB05"
+    },
+    {
+     "vessel": "DP WORLD JEDDAH",
+     "voyage": "INNSA1NS0S1071",
+     "berth": "CB04"
+    },
+    {
+     "vessel": "PORT KELANG EXPRESS_AUG",
+     "voyage": "S0485_AUG",
+     "berth": "APM02"
+    }
+   ]
+  },
+  "figures": {
+   "calls_in_window": 31,
+   "calls_displaced": 10,
+   "cumulative_delay_hours": 120.29,
+   "max_single_delay_hours": 27.12,
+   "mean_delay_hours": 12.03,
+   "target_delay_hours": 6.0,
+   "berths_in_window": 14
+  },
+  "assumptions": [
+   {
+    "field": "delay_hours",
+    "value": 6.0,
+    "reason": "the overrun stated in the scenario",
+    "source": "PARAMETER"
+   },
+   {
+    "field": "horizon_hours",
+    "value": 48,
+    "reason": "cumulative delay is reported over this window, per the Notice",
+    "source": "PARAMETER"
+   },
+   {
+    "field": "berth_exclusivity",
+    "value": true,
+    "reason": "one vessel occupies a berth at a time, so a call cannot start before the previous call at that berth completes; calls at other berths are unaffected",
+    "source": "ASSUMED"
+   },
+   {
+    "field": "target_call",
+    "value": {
+     "berthing_record_id": 453,
+     "vessel_name": "CNC TIGER_AUG",
+     "voyage_number": "S0536_AUG",
+     "berth_number": "UNASSIGNED",
+     "terminal": "NSFT"
+    },
+    "reason": "no vessel was named in the request, so the first call in the window is treated as the overrunning one",
+    "source": "ASSUMED"
+   }
+  ],
+  "queries": [
+   {
+    "purpose": "berth queue for the cascade window",
+    "sql": "SELECT id, terminal, vessel_name, voyage_number, imo_number, berth_number, shipping_line, eta, ata, berthing_time, departure_time, cargo_operation_start, cargo_operation_end, status FROM core.berthing_record WHERE (CAST(:terminal AS text) IS NULL OR terminal = CAST(:terminal AS text)) AND COALESCE(cargo_operation_start, berthing_time, ata, eta) BETWEEN :from_ts AND :to_ts ORDER BY COALESCE(cargo_operation_start, berthing_time, ata, eta) ASC, berth_number ASC, id ASC",
+    "params": {
+     "terminal": null,
+     "from_ts": "2026-08-02T00:00:00+00:00",
+     "to_ts": "2026-08-04T00:00:00+00:00"
+    },
+    "api": "POST /api/cargo/simulate/berth-cascade",
+    "row_count": 31
+   }
+  ],
+  "recommendations": [
+   {
+    "action": "RESEQUENCE_BERTH",
+    "reason": "10 calls at berth UNASSIGNED inherit 120.29h of delay; moving SHENTON WAY_AUG to a free berth in the window removes the largest single displacement",
+    "berth": "UNASSIGNED",
+    "candidate": "SHENTON WAY_AUG",
+    "recovers_hours": 27.12
+   },
+   {
+    "action": "NOTIFY_DOWNSTREAM",
+    "reason": "each displaced call's yard, gate and haulage bookings are keyed to its original window and need re-issuing",
+    "affected_vessels": [
+     "SLA TOPAZ",
+     "WADI ALRAYAN_AUG",
+     "ESL DACHAN BAY",
+     "WAN HAI 326_AUG",
+     "INTERASIA TRIUMPH",
+     "CICCIO_AUG",
+     "ZULFA 1_AUG",
+     "AGIOS DIMITRIOS_AUG",
+     "SHENTON WAY_AUG",
+     "JI ZHE 6"
+    ]
+   }
+  ],
+  "data_available": true,
+  "notes": []
+ },
+ "modal-shift": {
+  "scenario": "modal-shift",
+  "method": "Take rail volume for 2026-08-01..2026-08-03 from core.perf_daily_traffic (rail_total_teus). Shift 20.0% of it to road. Convert TEU to truck trips using teu_per_trip derived from the same window (road TEU / observed gate trips). Build the baseline hourly gate profile from core.eir.truck_in_time, add the extra trips in proportion to the observed arrival shape, then test the shifted profile against each measurable ceiling (gate sustained rate, declared TAS slot capacity) and report the one breached earliest.",
+  "result": {
+   "window": {
+    "from": "2026-08-01",
+    "to": "2026-08-03"
+   },
+   "terminal": null,
+   "rail_volume": {
+    "rail_teus": 2150.0,
+    "total_teus": 2400.0,
+    "road_teus": 250.0,
+    "rakes": 16
+   },
+   "container_mode_split": {
+    "ROAD": 11914
+   },
+   "baseline_profile": [
+    {
+     "hour": "2026-08-01T00:00:00+00:00",
+     "arrivals": 5
+    }
+   ],
+   "shifted_profile": [
+    {
+     "hour": "2026-08-01T00:00:00+00:00",
+     "baseline": 5,
+     "added": 430,
+     "shifted": 435
+    }
+   ],
+   "saturated_hours": [
+    {
+     "hour": "2026-08-01T00:00:00+00:00",
+     "constraint": "GATE_THROUGHPUT",
+     "ceiling": 10.0,
+     "load": 435,
+     "excess": 425.0
+    }
+   ],
+   "first_constraint": {
+    "hour": "2026-08-01T00:00:00+00:00",
+    "constraint": "GATE_THROUGHPUT",
+    "ceiling": 10.0,
+    "load": 435,
+    "excess": 425.0
+   },
+   "gate_absorbs_load": false
+  },
+  "figures": {
+   "rail_teus_in_window": 2150.0,
+   "shifted_teus": 430.0,
+   "teu_per_trip": 1.0,
+   "additional_truck_trips": 430,
+   "baseline_trips": 5,
+   "shifted_trips": 435,
+   "trip_increase_pct": 8600.0,
+   "sustained_rate_per_hour": 10.0,
+   "baseline_peak": 5,
+   "shifted_peak": 435,
+   "peak_increase_pct": 8600.0,
+   "saturated_hours_before": 0,
+   "saturated_hours_after": 1,
+   "additional_saturated_hours": 1
+  },
+  "assumptions": [
+   {
+    "field": "shift_pct",
+    "value": 0.2,
+    "reason": "the modal shift stated in the scenario",
+    "source": "PARAMETER"
+   },
+   {
+    "field": "arrival_source",
+    "value": "core.eir",
+    "reason": "the table the baseline hourly profile was read from",
+    "source": "MEASURED"
+   },
+   {
+    "field": "teu_per_trip",
+    "value": 1.0,
+    "reason": "the window implies 50 TEU per trip (250 road TEU over 5 observed gate trip(s)), which is REJECTED: derived from only 5 observation(s); at least 30 are needed for a per-unit rate to be defensible. One TEU per trip is used instead. The trip counts below are therefore a lower bound on demand, and the gate profile needs a real gate transaction log before the absorption verdict can be relied on.",
+    "source": "ASSUMED"
+   },
+   {
+    "field": "shift_arrival_shape",
+    "value": "proportional to observed",
+    "reason": "the shifted boxes are assumed to arrive across the day in the same shape as the trucks already arriving. A uniform spread would produce a lower peak and a later first constraint, so this is the more conservative of the two readings",
+    "source": "ASSUMED"
+   },
+   {
+    "field": "gate_sustained_rate",
+    "value": 10.0,
+    "reason": "mean declared TAS slot capacity across 8 provisioned hours (core.tas_appointment) \u2014 a policy figure, not an inference",
+    "source": "MEASURED"
+   }
+  ],
+  "queries": [
+   {
+    "purpose": "daily rail vs total TEU by terminal (core.perf_daily_traffic)",
+    "sql": "SELECT report_date, terminal_code, total_teus, imp_teus, exp_teus, rakes, rail_dis_teus, rail_ldg_teus, rail_total_teus FROM core.perf_daily_traffic WHERE period = 'DAY' AND report_date >= :from_date AND report_date <= :to_date AND (CAST(:terminal AS text) IS NULL OR terminal_code = CAST(:terminal AS text)) ORDER BY report_date ASC, terminal_code ASC",
+    "params": {
+     "from_date": "2026-08-01",
+     "to_date": "2026-08-03",
+     "terminal": null
+    },
+    "api": "GET /api/performance/daily/traffic",
+    "row_count": 23
+   },
+   {
+    "purpose": "per-container evacuation mode split (core.cargo, migration 0128)",
+    "sql": "SELECT COALESCE(evacuation_mode, 'UNKNOWN') AS evacuation_mode, COALESCE(evacuation_mode_source, 'ASSUMED') AS source, count(*) AS containers FROM core.cargo WHERE created_at >= :from_ts AND created_at < :to_ts GROUP BY 1, 2 ORDER BY 1, 2",
+    "params": {
+     "from_ts": "2026-08-01T00:00:00+00:00",
+     "to_ts": "2026-08-04T00:00:00+00:00"
+    },
+    "api": "GET /api/cargo?limit=\u2026",
+    "row_count": 1
+   },
+   {
+    "purpose": "hourly truck arrivals at the gate (core.eir)",
+    "sql": "SELECT date_trunc('hour', e.truck_in_time) AS bucket, count(*) AS arrivals, count(DISTINCT e.truck_no) AS unique_trucks, count(*) FILTER (WHERE e.truck_out_time IS NOT NULL) AS completed, round(avg(e.tat_minutes)::numeric, 1) AS avg_tat_min FROM core.eir e WHERE e.truck_in_time >= :from_ts AND e.truck_in_time < :to_ts AND (CAST(:terminal AS text) IS NULL OR e.terminal ILIKE CAST(:terminal_like AS text)) GROUP BY date_trunc('hour', e.truck_in_time) ORDER BY bucket ASC",
+    "params": {
+     "from_ts": "2026-08-01T00:00:00+00:00",
+     "to_ts": "2026-08-04T00:00:00+00:00",
+     "terminal": null,
+     "terminal_like": null
+    },
+    "api": "GET /api/gate/hourly-profile",
+    "row_count": 1
+   },
+   {
+    "purpose": "declared hourly gate capacity (core.tas_appointment)",
+    "sql": "SELECT date_trunc('hour', window_start) AS bucket, sum(capacity) AS slot_capacity, sum(booked) AS slot_booked, count(*) AS windows FROM core.tas_appointment WHERE window_start >= :from_ts AND window_start < :to_ts AND (CAST(:gate_id AS text) IS NULL OR gate_id = CAST(:gate_id AS text)) GROUP BY date_trunc('hour', window_start) ORDER BY bucket ASC",
+    "params": {
+     "from_ts": "2026-08-01T00:00:00+00:00",
+     "to_ts": "2026-08-04T00:00:00+00:00",
+     "gate_id": null
+    },
+    "api": "GET /api/tas/slots",
+    "row_count": 8
+   },
+   {
+    "purpose": "declared hourly gate capacity (core.tas_appointment)",
+    "sql": "SELECT date_trunc('hour', window_start) AS bucket, sum(capacity) AS slot_capacity, sum(booked) AS slot_booked, count(*) AS windows FROM core.tas_appointment WHERE window_start >= :from_ts AND window_start < :to_ts AND (CAST(:gate_id AS text) IS NULL OR gate_id = CAST(:gate_id AS text)) GROUP BY date_trunc('hour', window_start) ORDER BY bucket ASC",
+    "params": {
+     "from_ts": "2026-08-01T00:00:00+00:00",
+     "to_ts": "2026-08-04T00:00:00+00:00",
+     "gate_id": null
+    },
+    "api": "GET /api/tas/slots",
+    "row_count": 8
+   }
+  ],
+  "recommendations": [
+   {
+    "action": "STAGGER_SHIFTED_ARRIVALS",
+    "reason": "the shift adds 430 trips and saturates 1 hours (up from 0); booking the shifted boxes into the hours already running below 10.0/h avoids the new peak entirely",
+    "additional_trips": 430,
+    "saturated_hours": 1
+   },
+   {
+    "action": "RELIEVE_FIRST_CONSTRAINT",
+    "reason": "GATE_THROUGHPUT is breached first, at 2026-08-01 00:00:00+00:00, by 425.0 trucks",
+    "constraint": "GATE_THROUGHPUT",
+    "hour": "2026-08-01T00:00:00+00:00"
+   }
+  ],
+  "data_available": true,
+  "notes": [
+   "teu_per_trip derived from this window (50) was rejected as implausible: derived from only 5 observation(s); at least 30 are needed for a per-unit rate to be defensible. core.eir carries too few gate records for this window to characterise road movements.",
+   "yard ground-slot capacity, truck parking and the road corridor are also candidate constraints, but this database carries no hourly measure of them, so they are not evaluated here."
+  ]
+ },
+ "crane-productivity": {
+  "scenario": "crane-productivity",
+  "method": "Per vessel call: productivity = gross_moves / hours_worked, where gross_moves is core.vessel_call_moves (migration 0129) and hours_worked = cargo_operation_end - cargo_operation_start from core.berthing_record. Apply a 25.0% cut: reduced_rate = rate x (1 - r), so new_hours = hours_worked / (1 - r) and delta = new_hours - hours_worked. Feed delta into the per-berth cascade (scenario I-B) to get the queue effect behind the call.",
+  "result": {
+   "terminal": null,
+   "window": {
+    "from": "2026-08-01T00:00:00+00:00",
+    "to": "2026-08-03T00:00:00+00:00",
+    "hours": 48
+   },
+   "baseline_by_call": [
+    {
+     "berthing_record_id": 512,
+     "terminal": "APMT",
+     "vessel_name": "WAN HAI 359",
+     "voyage_number": "INNSA1GT0S1054",
+     "berth_number": "APM01",
+     "operation_start": "2026-08-01T01:21:00+00:00",
+     "operation_end": "2026-08-01T19:41:00+00:00",
+     "hours_worked": 18.3333,
+     "gross_moves": 1815.0,
+     "discharge_moves": 890.0,
+     "load_moves": 925.0,
+     "cranes_deployed": null,
+     "moves_per_hour": 99.0,
+     "moves_per_crane_hour": null,
+     "moves_data_origin": "API",
+     "moves_source_note": "portdata-20260805 - move counts published in the JNPA daily berthing report (importMoves/exportMoves)",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 518,
+     "terminal": "BMCT",
+     "vessel_name": "BAMSI BEYREK",
+     "voyage_number": "INNSA1BM0S1087",
+     "berth_number": "BMCT04",
+     "operation_start": "2026-08-01T02:29:00+00:00",
+     "operation_end": "2026-08-01T14:13:00+00:00",
+     "hours_worked": 11.7333,
+     "gross_moves": 755.0,
+     "discharge_moves": 432.0,
+     "load_moves": 323.0,
+     "cranes_deployed": null,
+     "moves_per_hour": 64.35,
+     "moves_per_crane_hour": null,
+     "moves_data_origin": "API",
+     "moves_source_note": "portdata-20260805 - move counts published in the JNPA daily berthing report (importMoves/exportMoves)",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 523,
+     "terminal": "NSFT",
+     "vessel_name": "YOKOHAMA STAR",
+     "voyage_number": "INNSA1NF0S1042",
+     "berth_number": "CB02",
+     "operation_start": "2026-08-01T02:46:00+00:00",
+     "operation_end": "2026-08-01T18:19:00+00:00",
+     "hours_worked": 15.55,
+     "gross_moves": 1027.0,
+     "discharge_moves": 477.0,
+     "load_moves": 550.0,
+     "cranes_deployed": null,
+     "moves_per_hour": 66.05,
+     "moves_per_crane_hour": null,
+     "moves_data_origin": "API",
+     "moves_source_note": "portdata-20260805 - move counts published in the JNPA daily berthing report (importMoves/exportMoves)",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 469,
+     "terminal": "BMCT",
+     "vessel_name": "EVER LUNAR_AUG",
+     "voyage_number": "S0522_AUG",
+     "berth_number": "BMCT01",
+     "operation_start": "2026-08-01T07:55:00+00:00",
+     "operation_end": "2026-08-01T17:55:00+00:00",
+     "hours_worked": 10.0,
+     "gross_moves": 100.0,
+     "discharge_moves": 50.0,
+     "load_moves": 40.0,
+     "cranes_deployed": 2.0,
+     "moves_per_hour": 10.0,
+     "moves_per_crane_hour": 5.0,
+     "moves_data_origin": "DERIVED",
+     "moves_source_note": "DERIVED",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 434,
+     "terminal": "APMT",
+     "vessel_name": "YM MILESTONE_AUG",
+     "voyage_number": "S0460_AUG",
+     "berth_number": "APM01",
+     "operation_start": "2026-08-01T08:07:00+00:00",
+     "operation_end": "2026-08-01T18:07:00+00:00",
+     "hours_worked": 10.0,
+     "gross_moves": 100.0,
+     "discharge_moves": 50.0,
+     "load_moves": 40.0,
+     "cranes_deployed": 2.0,
+     "moves_per_hour": 10.0,
+     "moves_per_crane_hour": 5.0,
+     "moves_data_origin": "DERIVED",
+     "moves_source_note": "DERIVED",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 526,
+     "terminal": "NSICT",
+     "vessel_name": "ZHONG GU KUN MING",
+     "voyage_number": "INNSA1NS0S1029",
+     "berth_number": "CB05",
+     "operation_start": "2026-08-01T09:55:00+00:00",
+     "operation_end": "2026-08-02T16:06:00+00:00",
+     "hours_worked": 30.1833,
+     "gross_moves": 1545.0,
+     "discharge_moves": 503.0,
+     "load_moves": 1042.0,
+     "cranes_deployed": null,
+     "moves_per_hour": 51.19,
+     "moves_per_crane_hour": null,
+     "moves_data_origin": "API",
+     "moves_source_note": "portdata-20260805 - move counts published in the JNPA daily berthing report (importMoves/exportMoves)",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 472,
+     "terminal": "BMCT",
+     "vessel_name": "MSC MARIA SAVERIA_AUG",
+     "voyage_number": "S0399_AUG",
+     "berth_number": "BMCT04",
+     "operation_start": "2026-08-01T10:22:00+00:00",
+     "operation_end": "2026-08-01T20:22:00+00:00",
+     "hours_worked": 10.0,
+     "gross_moves": 100.0,
+     "discharge_moves": 50.0,
+     "load_moves": 40.0,
+     "cranes_deployed": 2.0,
+     "moves_per_hour": 10.0,
+     "moves_per_crane_hour": 5.0,
+     "moves_data_origin": "DERIVED",
+     "moves_source_note": "DERIVED",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 519,
+     "terminal": "BMCT",
+     "vessel_name": "VELA NOVA",
+     "voyage_number": "INNSA1BM0S1088",
+     "berth_number": "BMCT03",
+     "operation_start": "2026-08-01T10:37:00+00:00",
+     "operation_end": "2026-08-01T22:23:00+00:00",
+     "hours_worked": 11.7667,
+     "gross_moves": 634.0,
+     "discharge_moves": 259.0,
+     "load_moves": 375.0,
+     "cranes_deployed": null,
+     "moves_per_hour": 53.88,
+     "moves_per_crane_hour": null,
+     "moves_data_origin": "API",
+     "moves_source_note": "portdata-20260805 - move counts published in the JNPA daily berthing report (importMoves/exportMoves)",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 473,
+     "terminal": "BMCT",
+     "vessel_name": "MSC VALERIA_AUG",
+     "voyage_number": "S0598_AUG",
+     "berth_number": "BMCT05",
+     "operation_start": "2026-08-01T14:16:00+00:00",
+     "operation_end": "2026-08-02T00:16:00+00:00",
+     "hours_worked": 10.0,
+     "gross_moves": 100.0,
+     "discharge_moves": 50.0,
+     "load_moves": 40.0,
+     "cranes_deployed": 2.0,
+     "moves_per_hour": 10.0,
+     "moves_per_crane_hour": 5.0,
+     "moves_data_origin": "DERIVED",
+     "moves_source_note": "DERIVED",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 528,
+     "terminal": "NSIGT",
+     "vessel_name": "GREENFIELD",
+     "voyage_number": "INNSA1NG0S1123",
+     "berth_number": "CB06",
+     "operation_start": "2026-08-01T14:16:00+00:00",
+     "operation_end": "2026-08-02T04:30:00+00:00",
+     "hours_worked": 14.2333,
+     "gross_moves": 1757.0,
+     "discharge_moves": 837.0,
+     "load_moves": 920.0,
+     "cranes_deployed": null,
+     "moves_per_hour": 123.44,
+     "moves_per_crane_hour": null,
+     "moves_data_origin": "API",
+     "moves_source_note": "portdata-20260805 - move counts published in the JNPA daily berthing report (importMoves/exportMoves)",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 452,
+     "terminal": "NSFT",
+     "vessel_name": "ESL DUBAI_AUG",
+     "voyage_number": "S0468_AUG",
+     "berth_number": null,
+     "operation_start": "2026-08-01T17:55:00+00:00",
+     "operation_end": "2026-08-02T03:55:00+00:00",
+     "hours_worked": 10.0,
+     "gross_moves": 100.0,
+     "discharge_moves": 50.0,
+     "load_moves": 40.0,
+     "cranes_deployed": 2.0,
+     "moves_per_hour": 10.0,
+     "moves_per_crane_hour": 5.0,
+     "moves_data_origin": "DERIVED",
+     "moves_source_note": "DERIVED",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 468,
+     "terminal": "BMCT",
+     "vessel_name": "GFS JUNO_AUG",
+     "voyage_number": "S0571_AUG",
+     "berth_number": "BMCT05",
+     "operation_start": "2026-08-01T19:08:00+00:00",
+     "operation_end": "2026-08-02T05:08:00+00:00",
+     "hours_worked": 10.0,
+     "gross_moves": 100.0,
+     "discharge_moves": 50.0,
+     "load_moves": 40.0,
+     "cranes_deployed": 2.0,
+     "moves_per_hour": 10.0,
+     "moves_per_crane_hour": 5.0,
+     "moves_data_origin": "DERIVED",
+     "moves_source_note": "DERIVED",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 520,
+     "terminal": "BMCT",
+     "vessel_name": "XIN SHANGHAI",
+     "voyage_number": "INNSA1BM0S1073",
+     "berth_number": "BMCT04",
+     "operation_start": "2026-08-01T19:12:00+00:00",
+     "operation_end": "2026-08-04T07:35:00+00:00",
+     "hours_worked": 60.3833,
+     "gross_moves": 3459.0,
+     "discharge_moves": 1474.0,
+     "load_moves": 1985.0,
+     "cranes_deployed": null,
+     "moves_per_hour": 57.28,
+     "moves_per_crane_hour": null,
+     "moves_data_origin": "API",
+     "moves_source_note": "portdata-20260805 - move counts published in the JNPA daily berthing report (importMoves/exportMoves)",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 466,
+     "terminal": "BMCT",
+     "vessel_name": "KMTC MOMBASA_AUG",
+     "voyage_number": "S0445_AUG",
+     "berth_number": "BMCT02",
+     "operation_start": "2026-08-01T20:41:00+00:00",
+     "operation_end": "2026-08-02T06:41:00+00:00",
+     "hours_worked": 10.0,
+     "gross_moves": 100.0,
+     "discharge_moves": 50.0,
+     "load_moves": 40.0,
+     "cranes_deployed": 2.0,
+     "moves_per_hour": 10.0,
+     "moves_per_crane_hour": 5.0,
+     "moves_data_origin": "DERIVED",
+     "moves_source_note": "DERIVED",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 546,
+     "terminal": "NSICT",
+     "vessel_name": "DP WORLD INDUS",
+     "voyage_number": "INNSA1NS0S1082",
+     "berth_number": "CB04",
+     "operation_start": "2026-08-01T21:00:00+00:00",
+     "operation_end": "2026-08-02T05:28:00+00:00",
+     "hours_worked": 8.4667,
+     "gross_moves": 430.0,
+     "discharge_moves": 0.0,
+     "load_moves": 430.0,
+     "cranes_deployed": null,
+     "moves_per_hour": 50.79,
+     "moves_per_crane_hour": null,
+     "moves_data_origin": "API",
+     "moves_source_note": "portdata-20260805 - move counts published in the JNPA daily berthing report (importMoves/exportMoves)",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 542,
+     "terminal": "NSFT",
+     "vessel_name": "ZHONG GU RI ZHAO",
+     "voyage_number": "INNSA1NF0S0920",
+     "berth_number": "CB02",
+     "operation_start": "2026-08-01T21:50:00+00:00",
+     "operation_end": "2026-08-02T20:09:00+00:00",
+     "hours_worked": 22.3167,
+     "gross_moves": 1429.0,
+     "discharge_moves": 928.0,
+     "load_moves": 501.0,
+     "cranes_deployed": null,
+     "moves_per_hour": 64.03,
+     "moves_per_crane_hour": null,
+     "moves_data_origin": "API",
+     "moves_source_note": "portdata-20260805 - move counts published in the JNPA daily berthing report (importMoves/exportMoves)",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 536,
+     "terminal": "BMCT",
+     "vessel_name": "USSAMA BHUM",
+     "voyage_number": "INNSA1BM0S1065",
+     "berth_number": "BMCT02",
+     "operation_start": "2026-08-01T22:34:00+00:00",
+     "operation_end": "2026-08-04T23:39:00+00:00",
+     "hours_worked": 73.0833,
+     "gross_moves": 3626.0,
+     "discharge_moves": 1683.0,
+     "load_moves": 1943.0,
+     "cranes_deployed": null,
+     "moves_per_hour": 49.61,
+     "moves_per_crane_hour": null,
+     "moves_data_origin": "API",
+     "moves_source_note": "portdata-20260805 - move counts published in the JNPA daily berthing report (importMoves/exportMoves)",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 453,
+     "terminal": "NSFT",
+     "vessel_name": "CNC TIGER_AUG",
+     "voyage_number": "S0536_AUG",
+     "berth_number": null,
+     "operation_start": "2026-08-02T01:17:00+00:00",
+     "operation_end": "2026-08-02T11:17:00+00:00",
+     "hours_worked": 10.0,
+     "gross_moves": 100.0,
+     "discharge_moves": 50.0,
+     "load_moves": 40.0,
+     "cranes_deployed": 2.0,
+     "moves_per_hour": 10.0,
+     "moves_per_crane_hour": 5.0,
+     "moves_data_origin": "DERIVED",
+     "moves_source_note": "DERIVED",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 537,
+     "terminal": "BMCT",
+     "vessel_name": "MARTHA A",
+     "voyage_number": "INNSA1BM0S1009",
+     "berth_number": "BMCT03",
+     "operation_start": "2026-08-02T03:20:00+00:00",
+     "operation_end": "2026-08-02T13:03:00+00:00",
+     "hours_worked": 9.7167,
+     "gross_moves": 592.0,
+     "discharge_moves": 157.0,
+     "load_moves": 435.0,
+     "cranes_deployed": null,
+     "moves_per_hour": 60.93,
+     "moves_per_crane_hour": null,
+     "moves_data_origin": "API",
+     "moves_source_note": "portdata-20260805 - move counts published in the JNPA daily berthing report (importMoves/exportMoves)",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 538,
+     "terminal": "BMCT",
+     "vessel_name": "MSC VIVIANA",
+     "voyage_number": "INNSA1BM0S1091",
+     "berth_number": "BMCT06",
+     "operation_start": "2026-08-02T06:35:00+00:00",
+     "operation_end": "2026-08-04T00:45:00+00:00",
+     "hours_worked": 42.1667,
+     "gross_moves": 2709.0,
+     "discharge_moves": 1388.0,
+     "load_moves": 1321.0,
+     "cranes_deployed": null,
+     "moves_per_hour": 64.25,
+     "moves_per_crane_hour": null,
+     "moves_data_origin": "API",
+     "moves_source_note": "portdata-20260805 - move counts published in the JNPA daily berthing report (importMoves/exportMoves)",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 547,
+     "terminal": "NSICT",
+     "vessel_name": "MSC FIE X",
+     "voyage_number": "INNSA1NS0S1122",
+     "berth_number": "CB04",
+     "operation_start": "2026-08-02T07:31:00+00:00",
+     "operation_end": "2026-08-03T18:52:00+00:00",
+     "hours_worked": 35.35,
+     "gross_moves": 1532.0,
+     "discharge_moves": 197.0,
+     "load_moves": 1335.0,
+     "cranes_deployed": null,
+     "moves_per_hour": 43.34,
+     "moves_per_crane_hour": null,
+     "moves_data_origin": "API",
+     "moves_source_note": "portdata-20260805 - move counts published in the JNPA daily berthing report (importMoves/exportMoves)",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 550,
+     "terminal": "NSIGT",
+     "vessel_name": "NORTHERN PRACTISE",
+     "voyage_number": "INNSA1NG0S0959",
+     "berth_number": "CB06",
+     "operation_start": "2026-08-02T07:58:00+00:00",
+     "operation_end": "2026-08-02T19:05:00+00:00",
+     "hours_worked": 11.1167,
+     "gross_moves": 1151.0,
+     "discharge_moves": 581.0,
+     "load_moves": 570.0,
+     "cranes_deployed": null,
+     "moves_per_hour": 103.54,
+     "moves_per_crane_hour": null,
+     "moves_data_origin": "API",
+     "moves_source_note": "portdata-20260805 - move counts published in the JNPA daily berthing report (importMoves/exportMoves)",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 435,
+     "terminal": "APMT",
+     "vessel_name": "BANGKOK BRIDGE_AUG",
+     "voyage_number": "S0567_AUG",
+     "berth_number": "APM02",
+     "operation_start": "2026-08-02T08:24:00+00:00",
+     "operation_end": "2026-08-02T18:24:00+00:00",
+     "hours_worked": 10.0,
+     "gross_moves": 100.0,
+     "discharge_moves": 50.0,
+     "load_moves": 40.0,
+     "cranes_deployed": 2.0,
+     "moves_per_hour": 10.0,
+     "moves_per_crane_hour": 5.0,
+     "moves_data_origin": "DERIVED",
+     "moves_source_note": "DERIVED",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 530,
+     "terminal": "APMT",
+     "vessel_name": "SLA TOPAZ",
+     "voyage_number": "INNSA1GT0S1032",
+     "berth_number": "APM02",
+     "operation_start": "2026-08-02T10:25:00+00:00",
+     "operation_end": "2026-08-03T03:26:00+00:00",
+     "hours_worked": 17.0167,
+     "gross_moves": 2246.0,
+     "discharge_moves": 1104.0,
+     "load_moves": 1142.0,
+     "cranes_deployed": null,
+     "moves_per_hour": 131.99,
+     "moves_per_crane_hour": null,
+     "moves_data_origin": "API",
+     "moves_source_note": "portdata-20260805 - move counts published in the JNPA daily berthing report (importMoves/exportMoves)",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 543,
+     "terminal": "NSFT",
+     "vessel_name": "APL OREGON",
+     "voyage_number": "INNSA1NF0S1062",
+     "berth_number": "CB01",
+     "operation_start": "2026-08-02T11:05:00+00:00",
+     "operation_end": "2026-08-04T01:32:00+00:00",
+     "hours_worked": 38.45,
+     "gross_moves": 2133.0,
+     "discharge_moves": 1191.0,
+     "load_moves": 942.0,
+     "cranes_deployed": null,
+     "moves_per_hour": 55.47,
+     "moves_per_crane_hour": null,
+     "moves_data_origin": "API",
+     "moves_source_note": "portdata-20260805 - move counts published in the JNPA daily berthing report (importMoves/exportMoves)",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 450,
+     "terminal": "NSFT",
+     "vessel_name": "WADI ALRAYAN_AUG",
+     "voyage_number": "S0496_AUG",
+     "berth_number": null,
+     "operation_start": "2026-08-02T17:11:00+00:00",
+     "operation_end": "2026-08-03T03:11:00+00:00",
+     "hours_worked": 10.0,
+     "gross_moves": 100.0,
+     "discharge_moves": 50.0,
+     "load_moves": 40.0,
+     "cranes_deployed": 2.0,
+     "moves_per_hour": 10.0,
+     "moves_per_crane_hour": 5.0,
+     "moves_data_origin": "DERIVED",
+     "moves_source_note": "DERIVED",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 455,
+     "terminal": "APMT",
+     "vessel_name": "OOCL LUXEMBOURG_AUG",
+     "voyage_number": "S0561_AUG",
+     "berth_number": "APM01",
+     "operation_start": "2026-08-02T17:36:00+00:00",
+     "operation_end": "2026-08-03T03:36:00+00:00",
+     "hours_worked": 10.0,
+     "gross_moves": 100.0,
+     "discharge_moves": 50.0,
+     "load_moves": 40.0,
+     "cranes_deployed": 2.0,
+     "moves_per_hour": 10.0,
+     "moves_per_crane_hour": 5.0,
+     "moves_data_origin": "DERIVED",
+     "moves_source_note": "DERIVED",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 467,
+     "terminal": "BMCT",
+     "vessel_name": "SYNERGY OAKLAND_AUG",
+     "voyage_number": "S0555_AUG",
+     "berth_number": "BMCT03",
+     "operation_start": "2026-08-02T18:19:00+00:00",
+     "operation_end": "2026-08-03T04:19:00+00:00",
+     "hours_worked": 10.0,
+     "gross_moves": 100.0,
+     "discharge_moves": 50.0,
+     "load_moves": 40.0,
+     "cranes_deployed": 2.0,
+     "moves_per_hour": 10.0,
+     "moves_per_crane_hour": 5.0,
+     "moves_data_origin": "DERIVED",
+     "moves_source_note": "DERIVED",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 548,
+     "terminal": "NSICT",
+     "vessel_name": "DONG CHENG LAN TIAN",
+     "voyage_number": "INNSA1NS0S1020",
+     "berth_number": "CB05",
+     "operation_start": "2026-08-02T18:50:00+00:00",
+     "operation_end": "2026-08-03T16:52:00+00:00",
+     "hours_worked": 22.0333,
+     "gross_moves": 866.0,
+     "discharge_moves": 482.0,
+     "load_moves": 384.0,
+     "cranes_deployed": null,
+     "moves_per_hour": 39.3,
+     "moves_per_crane_hour": null,
+     "moves_data_origin": "API",
+     "moves_source_note": "portdata-20260805 - move counts published in the JNPA daily berthing report (importMoves/exportMoves)",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 539,
+     "terminal": "BMCT",
+     "vessel_name": "ESL DACHAN BAY",
+     "voyage_number": "INNSA1BM0S1051",
+     "berth_number": "BMCT03",
+     "operation_start": "2026-08-02T19:09:00+00:00",
+     "operation_end": "2026-08-04T16:11:00+00:00",
+     "hours_worked": 45.0333,
+     "gross_moves": 2019.0,
+     "discharge_moves": 936.0,
+     "load_moves": 1083.0,
+     "cranes_deployed": null,
+     "moves_per_hour": 44.83,
+     "moves_per_crane_hour": null,
+     "moves_data_origin": "API",
+     "moves_source_note": "portdata-20260805 - move counts published in the JNPA daily berthing report (importMoves/exportMoves)",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 465,
+     "terminal": "BMCT",
+     "vessel_name": "ONE READINESS_AUG",
+     "voyage_number": "S0473_AUG",
+     "berth_number": "BMCT01",
+     "operation_start": "2026-08-02T19:59:00+00:00",
+     "operation_end": "2026-08-03T05:59:00+00:00",
+     "hours_worked": 10.0,
+     "gross_moves": 100.0,
+     "discharge_moves": 50.0,
+     "load_moves": 40.0,
+     "cranes_deployed": 2.0,
+     "moves_per_hour": 10.0,
+     "moves_per_crane_hour": 5.0,
+     "moves_data_origin": "DERIVED",
+     "moves_source_note": "DERIVED",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 567,
+     "terminal": "NSIGT",
+     "vessel_name": "TS KEELUNG",
+     "voyage_number": "INNSA1NG0S1099",
+     "berth_number": "CB06",
+     "operation_start": "2026-08-02T21:27:00+00:00",
+     "operation_end": "2026-08-04T12:04:00+00:00",
+     "hours_worked": 38.6167,
+     "gross_moves": 3703.0,
+     "discharge_moves": 2214.0,
+     "load_moves": 1489.0,
+     "cranes_deployed": null,
+     "moves_per_hour": 95.89,
+     "moves_per_crane_hour": null,
+     "moves_data_origin": "API",
+     "moves_source_note": "portdata-20260805 - move counts published in the JNPA daily berthing report (importMoves/exportMoves)",
+     "derivable": true
+    },
+    {
+     "berthing_record_id": 563,
+     "terminal": "NSFT",
+     "vessel_name": "CMA CGM BUTTERFLY",
+     "voyage_number": "INNSA1NF0S0996",
+     "berth_number": "CB02",
+     "operation_start": "2026-08-02T23:38:00+00:00",
+     "operation_end": "2026-08-04T12:21:00+00:00",
+     "hours_worked": 36.7167,
+     "gross_moves": 2023.0,
+     "discharge_moves": 891.0,
+     "load_moves": 1132.0,
+     "cranes_deployed": null,
+     "moves_per_hour": 55.1,
+     "moves_per_crane_hour": null,
+     "moves_data_origin": "API",
+     "moves_source_note": "portdata-20260805 - move counts published in the JNPA daily berthing report (importMoves/exportMoves)",
+     "derivable": true
+    }
+   ],
+   "calls_without_moves": [],
+   "target_call": {
+    "vessel_name": "SLA TOPAZ",
+    "voyage_number": "INNSA1GT0S1032",
+    "berth_number": "APM02",
+    "gross_moves": 2246.0,
+    "cranes_deployed": null,
+    "moves_data_origin": "API"
+   },
+   "before": {
+    "moves_per_hour": 131.99,
+    "hours_worked": 17.0167,
+    "operation_end": "2026-08-03T03:26:00+00:00"
+   },
+   "after": {
+    "moves_per_hour": 98.99,
+    "hours_worked": 22.69,
+    "operation_end": "2026-08-03T09:06:12+00:00"
+   },
+   "berth_queue_impact": [
+    {
+     "vessel": "YM MILESTONE_AUG",
+     "voyage": "S0460_AUG",
+     "berth": "APM01",
+     "original_time": "2026-08-01T08:07:00+00:00",
+     "new_time": "2026-08-01T19:40:59.880000+00:00",
+     "delay_hours": 11.57
+    },
+    {
+     "vessel": "MSC MARIA SAVERIA_AUG",
+     "voyage": "S0399_AUG",
+     "berth": "BMCT04",
+     "original_time": "2026-08-01T10:22:00+00:00",
+     "new_time": "2026-08-01T14:12:59.880000+00:00",
+     "delay_hours": 3.85
+    },
+    {
+     "vessel": "GFS JUNO_AUG",
+     "voyage": "S0571_AUG",
+     "berth": "BMCT05",
+     "original_time": "2026-08-01T19:08:00+00:00",
+     "new_time": "2026-08-02T00:16:00+00:00",
+     "delay_hours": 5.13
+    },
+    {
+     "vessel": "XIN SHANGHAI",
+     "voyage": "INNSA1BM0S1073",
+     "berth": "BMCT04",
+     "original_time": "2026-08-01T19:12:00+00:00",
+     "new_time": "2026-08-02T00:12:59.880000+00:00",
+     "delay_hours": 5.02
+    },
+    {
+     "vessel": "USSAMA BHUM",
+     "voyage": "INNSA1BM0S1065",
+     "berth": "BMCT02",
+     "original_time": "2026-08-01T22:34:00+00:00",
+     "new_time": "2026-08-02T06:41:00+00:00",
+     "delay_hours": 8.12
+    },
+    {
+     "vessel": "CNC TIGER_AUG",
+     "voyage": "S0536_AUG",
+     "berth": "UNASSIGNED",
+     "original_time": "2026-08-02T01:17:00+00:00",
+     "new_time": "2026-08-02T03:55:00+00:00",
+     "delay_hours": 2.63
+    },
+    {
+     "vessel": "ESL DACHAN BAY",
+     "voyage": "INNSA1BM0S1051",
+     "berth": "BMCT03",
+     "original_time": "2026-08-02T19:09:00+00:00",
+     "new_time": "2026-08-03T04:19:00+00:00",
+     "delay_hours": 9.17
+    }
+   ]
+  },
+  "figures": {
+   "calls_in_window": 33,
+   "calls_with_derivable_productivity": 33,
+   "fleet_mean_moves_per_hour": 45.58,
+   "fleet_min_moves_per_hour": 10.0,
+   "fleet_max_moves_per_hour": 131.99,
+   "baseline_moves_per_hour": 131.99,
+   "reduced_moves_per_hour": 98.99,
+   "baseline_turnaround_hours": 17.0167,
+   "reduced_turnaround_hours": 22.69,
+   "turnaround_increase_hours": 5.67,
+   "turnaround_increase_pct": 33.3,
+   "calls_displaced": 7,
+   "cumulative_berth_delay_hours": 45.49,
+   "total_delay_hours": 51.16
+  },
+  "assumptions": [
+   {
+    "field": "reduction_pct",
+    "value": 0.25,
+    "reason": "the productivity cut stated in the scenario",
+    "source": "PARAMETER"
+   },
+   {
+    "field": "hours_worked",
+    "value": "cargo_operation_end - cargo_operation_start",
+    "reason": "elapsed operation window is used as hours worked; the data does not distinguish worked hours from idle time inside the window, so this is elapsed time, not gang-hours",
+    "source": "MEASURED"
+   },
+   {
+    "field": "moves_unchanged_under_reduction",
+    "value": true,
+    "reason": "a productivity cut changes the RATE, not the workload: the same gross moves are handled over a longer window",
+    "source": "PARAMETER"
+   },
+   {
+    "field": "gross_moves",
+    "value": "DERIVED from core.edi_vessel_container",
+    "reason": "13 of 33 calls have no JNPA-published move count; the EDI manifest line count per VCN is used as a proxy. It excludes restows and any box handled outside the manifest, so the productivity figure for those calls is a lower bound",
+    "source": "DERIVED"
+   },
+   {
+    "field": "target_call",
+    "value": "SLA TOPAZ",
+    "reason": "no vessel was named, so the call with the highest derivable productivity is modelled \u2014 the one a 25% cut costs most",
+    "source": "DERIVED"
+   }
+  ],
+  "queries": [
+   {
+    "purpose": "vessel calls joined to their gross-move counts",
+    "sql": "SELECT b.id AS berthing_record_id, b.terminal, b.vessel_name, b.voyage_number, b.berth_number, b.cargo_operation_start, b.cargo_operation_end, b.berthing_time, b.departure_time, b.ata, b.eta, m.id AS moves_id, m.vcn, m.discharge_moves, m.load_moves, m.restow_moves, m.gross_moves, m.cranes_deployed, m.data_origin, m.source_note FROM core.berthing_record b LEFT JOIN core.vessel_call_moves m ON m.berthing_record_id = b.id OR (m.terminal = b.terminal AND m.voyage_number = b.voyage_number AND m.vessel_name = b.vessel_name) WHERE (CAST(:terminal AS text) IS NULL OR b.terminal = CAST(:terminal AS text)) AND COALESCE(b.cargo_operation_start, b.berthing_time, b.ata, b.eta) BETWEEN :from_ts AND :to_ts ORDER BY COALESCE(b.cargo_operation_start, b.berthing_time, b.ata, b.eta) ASC, b.id ASC",
+    "params": {
+     "terminal": null,
+     "from_ts": "2026-08-01T00:00:00+00:00",
+     "to_ts": "2026-08-03T00:00:00+00:00"
+    },
+    "api": "POST /api/cargo/simulate/crane-productivity",
+    "row_count": 33
+   }
+  ],
+  "recommendations": [
+   {
+    "action": "ADD_CRANE_CAPACITY",
+    "reason": "restoring 25.0% of the rate on SLA TOPAZ recovers 5.67h of its own turnaround and 45.49h across the 7 calls behind it",
+    "vessel": "SLA TOPAZ",
+    "recovers_hours": 51.16
+   },
+   {
+    "action": "RESEQUENCE_BERTH",
+    "reason": "the queue behind the slowed call inherits the whole overrun; moving the next call to a berth free in the window caps the propagation",
+    "berth": "APM02",
+    "first_displaced": "YM MILESTONE_AUG"
+   }
+  ],
+  "data_available": true,
+  "notes": [
+   "cranes_deployed is not reported for this call, so the figure is moves per VESSEL hour, not per crane hour."
+  ]
+ },
+ "gate-slotting": {
+  "scenario": "gate-slotting",
+  "method": "Bucket real gate arrivals by hour from core.eir.truck_in_time (core.gate_event as fallback) over the requested window. Establish the sustained gate rate from declared TAS slot capacity if provisioned, else the p90 of observed hourly completions. Flag every hour whose arrivals exceed it. Then cap each hour at that rate and spill the excess forward into later hours with headroom, and compare the resulting peak with the observed one.",
+  "result": {
+   "window": {
+    "from": "2026-08-03T00:00:00+00:00",
+    "to": "2026-08-04T00:00:00+00:00"
+   },
+   "terminal": null,
+   "gate_id": null,
+   "arrival_pattern": {
+    "hourly": [
+     {
+      "bucket": "2026-08-03T00:00:00+00:00",
+      "arrivals": 227,
+      "completed": 221,
+      "unique_trucks": 257,
+      "avg_tat_min": null
+     },
+     {
+      "bucket": "2026-08-03T01:00:00+00:00",
+      "arrivals": 264,
+      "completed": 266,
+      "unique_trucks": 295,
+      "avg_tat_min": null
+     },
+     {
+      "bucket": "2026-08-03T02:00:00+00:00",
+      "arrivals": 233,
+      "completed": 239,
+      "unique_trucks": 271,
+      "avg_tat_min": null
+     },
+     {
+      "bucket": "2026-08-03T03:00:00+00:00",
+      "arrivals": 264,
+      "completed": 258,
+      "unique_trucks": 294,
+      "avg_tat_min": null
+     },
+     {
+      "bucket": "2026-08-03T04:00:00+00:00",
+      "arrivals": 269,
+      "completed": 268,
+      "unique_trucks": 300,
+      "avg_tat_min": null
+     },
+     {
+      "bucket": "2026-08-03T05:00:00+00:00",
+      "arrivals": 257,
+      "completed": 260,
+      "unique_trucks": 294,
+      "avg_tat_min": null
+     },
+     {
+      "bucket": "2026-08-03T06:00:00+00:00",
+      "arrivals": 284,
+      "completed": 283,
+      "unique_trucks": 317,
+      "avg_tat_min": null
+     },
+     {
+      "bucket": "2026-08-03T07:00:00+00:00",
+      "arrivals": 272,
+      "completed": 272,
+      "unique_trucks": 315,
+      "avg_tat_min": null
+     },
+     {
+      "bucket": "2026-08-03T08:00:00+00:00",
+      "arrivals": 186,
+      "completed": 4176,
+      "unique_trucks": 6161,
+      "avg_tat_min": null
+     },
+     {
+      "bucket": "2026-08-03T09:00:00+00:00",
+      "arrivals": 10,
+      "completed": 7,
+      "unique_trucks": 10,
+      "avg_tat_min": null
+     },
+     {
+      "bucket": "2026-08-03T10:00:00+00:00",
+      "arrivals": 33,
+      "completed": 32,
+      "unique_trucks": 38,
+      "avg_tat_min": null
+     },
+     {
+      "bucket": "2026-08-03T11:00:00+00:00",
+      "arrivals": 62,
+      "completed": 4063,
+      "unique_trucks": 6072,
+      "avg_tat_min": null
+     },
+     {
+      "bucket": "2026-08-03T12:00:00+00:00",
+      "arrivals": 9,
+      "completed": 8,
+      "unique_trucks": 9,
+      "avg_tat_min": null
+     },
+     {
+      "bucket": "2026-08-03T13:00:00+00:00",
+      "arrivals": 12,
+      "completed": 4010,
+      "unique_trucks": 6014,
+      "avg_tat_min": null
+     },
+     {
+      "bucket": "2026-08-03T14:00:00+00:00",
+      "arrivals": 10,
+      "completed": 8,
+      "unique_trucks": 10,
+      "avg_tat_min": null
+     },
+     {
+      "bucket": "2026-08-03T15:00:00+00:00",
+      "arrivals": 35,
+      "completed": 34,
+      "unique_trucks": 38,
+      "avg_tat_min": null
+     },
+     {
+      "bucket": "2026-08-03T16:00:00+00:00",
+      "arrivals": 43,
+      "completed": 45,
+      "unique_trucks": 51,
+      "avg_tat_min": null
+     },
+     {
+      "bucket": "2026-08-03T17:00:00+00:00",
+      "arrivals": 34,
+      "completed": 34,
+      "unique_trucks": 40,
+      "avg_tat_min": null
+     },
+     {
+      "bucket": "2026-08-03T18:00:00+00:00",
+      "arrivals": 38,
+      "completed": 38,
+      "unique_trucks": 41,
+      "avg_tat_min": null
+     },
+     {
+      "bucket": "2026-08-03T19:00:00+00:00",
+      "arrivals": 63,
+      "completed": 60,
+      "unique_trucks": 67,
+      "avg_tat_min": null
+     },
+     {
+      "bucket": "2026-08-03T20:00:00+00:00",
+      "arrivals": 75,
+      "completed": 76,
+      "unique_trucks": 87,
+      "avg_tat_min": null
+     },
+     {
+      "bucket": "2026-08-03T21:00:00+00:00",
+      "arrivals": 69,
+      "completed": 67,
+      "unique_trucks": 77,
+      "avg_tat_min": null
+     },
+     {
+      "bucket": "2026-08-03T22:00:00+00:00",
+      "arrivals": 83,
+      "completed": 84,
+      "unique_trucks": 92,
+      "avg_tat_min": null
+     },
+     {
+      "bucket": "2026-08-03T23:00:00+00:00",
+      "arrivals": 88,
+      "completed": 87,
+      "unique_trucks": 105,
+      "avg_tat_min": null
+     }
+    ],
+    "peak_hour": "2026-08-03T06:00:00+00:00",
+    "peak_arrivals": 284,
+    "peak_to_mean_ratio": 2.33,
+    "shape": "PEAKED"
+   },
+   "saturated_periods": [
+    {
+     "hour": "2026-08-03T06:00:00+00:00",
+     "arrivals": 284,
+     "sustained_rate": 269.0,
+     "excess": 15.0
+    },
+    {
+     "hour": "2026-08-03T07:00:00+00:00",
+     "arrivals": 272,
+     "sustained_rate": 269.0,
+     "excess": 3.0
+    }
+   ],
+   "proposed_slots": [
+    {
+     "hour": "2026-08-03T00:00:00+00:00",
+     "cap": 269,
+     "booked": 227,
+     "deferred_out": 0,
+     "absorbed_from_earlier": 0
+    },
+    {
+     "hour": "2026-08-03T01:00:00+00:00",
+     "cap": 269,
+     "booked": 264,
+     "deferred_out": 0,
+     "absorbed_from_earlier": 0
+    },
+    {
+     "hour": "2026-08-03T02:00:00+00:00",
+     "cap": 269,
+     "booked": 233,
+     "deferred_out": 0,
+     "absorbed_from_earlier": 0
+    },
+    {
+     "hour": "2026-08-03T03:00:00+00:00",
+     "cap": 269,
+     "booked": 264,
+     "deferred_out": 0,
+     "absorbed_from_earlier": 0
+    },
+    {
+     "hour": "2026-08-03T04:00:00+00:00",
+     "cap": 269,
+     "booked": 269,
+     "deferred_out": 0,
+     "absorbed_from_earlier": 0
+    },
+    {
+     "hour": "2026-08-03T05:00:00+00:00",
+     "cap": 269,
+     "booked": 257,
+     "deferred_out": 0,
+     "absorbed_from_earlier": 0
+    },
+    {
+     "hour": "2026-08-03T06:00:00+00:00",
+     "cap": 269,
+     "booked": 269,
+     "deferred_out": 15,
+     "absorbed_from_earlier": 0
+    },
+    {
+     "hour": "2026-08-03T07:00:00+00:00",
+     "cap": 269,
+     "booked": 269,
+     "deferred_out": 3,
+     "absorbed_from_earlier": 0
+    },
+    {
+     "hour": "2026-08-03T08:00:00+00:00",
+     "cap": 269,
+     "booked": 204,
+     "deferred_out": 0,
+     "absorbed_from_earlier": 18
+    },
+    {
+     "hour": "2026-08-03T09:00:00+00:00",
+     "cap": 269,
+     "booked": 10,
+     "deferred_out": 0,
+     "absorbed_from_earlier": 0
+    },
+    {
+     "hour": "2026-08-03T10:00:00+00:00",
+     "cap": 269,
+     "booked": 33,
+     "deferred_out": 0,
+     "absorbed_from_earlier": 0
+    },
+    {
+     "hour": "2026-08-03T11:00:00+00:00",
+     "cap": 269,
+     "booked": 62,
+     "deferred_out": 0,
+     "absorbed_from_earlier": 0
+    },
+    {
+     "hour": "2026-08-03T12:00:00+00:00",
+     "cap": 269,
+     "booked": 9,
+     "deferred_out": 0,
+     "absorbed_from_earlier": 0
+    },
+    {
+     "hour": "2026-08-03T13:00:00+00:00",
+     "cap": 269,
+     "booked": 12,
+     "deferred_out": 0,
+     "absorbed_from_earlier": 0
+    },
+    {
+     "hour": "2026-08-03T14:00:00+00:00",
+     "cap": 269,
+     "booked": 10,
+     "deferred_out": 0,
+     "absorbed_from_earlier": 0
+    },
+    {
+     "hour": "2026-08-03T15:00:00+00:00",
+     "cap": 269,
+     "booked": 35,
+     "deferred_out": 0,
+     "absorbed_from_earlier": 0
+    },
+    {
+     "hour": "2026-08-03T16:00:00+00:00",
+     "cap": 269,
+     "booked": 43,
+     "deferred_out": 0,
+     "absorbed_from_earlier": 0
+    },
+    {
+     "hour": "2026-08-03T17:00:00+00:00",
+     "cap": 269,
+     "booked": 34,
+     "deferred_out": 0,
+     "absorbed_from_earlier": 0
+    },
+    {
+     "hour": "2026-08-03T18:00:00+00:00",
+     "cap": 269,
+     "booked": 38,
+     "deferred_out": 0,
+     "absorbed_from_earlier": 0
+    },
+    {
+     "hour": "2026-08-03T19:00:00+00:00",
+     "cap": 269,
+     "booked": 63,
+     "deferred_out": 0,
+     "absorbed_from_earlier": 0
+    },
+    {
+     "hour": "2026-08-03T20:00:00+00:00",
+     "cap": 269,
+     "booked": 75,
+     "deferred_out": 0,
+     "absorbed_from_earlier": 0
+    },
+    {
+     "hour": "2026-08-03T21:00:00+00:00",
+     "cap": 269,
+     "booked": 69,
+     "deferred_out": 0,
+     "absorbed_from_earlier": 0
+    },
+    {
+     "hour": "2026-08-03T22:00:00+00:00",
+     "cap": 269,
+     "booked": 83,
+     "deferred_out": 0,
+     "absorbed_from_earlier": 0
+    },
+    {
+     "hour": "2026-08-03T23:00:00+00:00",
+     "cap": 269,
+     "booked": 88,
+     "deferred_out": 0,
+     "absorbed_from_earlier": 0
+    }
+   ]
+  },
+  "figures": {
+   "total_arrivals": 2920,
+   "active_hours": 24,
+   "mean_arrivals_per_hour": 121.67,
+   "sustained_rate_per_hour": 269.0,
+   "observed_peak": 284,
+   "saturated_hours": 2,
+   "excess_arrivals": 18.0,
+   "excess_share_pct": 0.6,
+   "slotted_peak": 269,
+   "peak_reduction": 15,
+   "peak_reduction_pct": 5.3,
+   "arrivals_not_placeable_in_window": 0
+  },
+  "assumptions": [
+   {
+    "field": "arrival_source",
+    "value": "core.gate_event",
+    "reason": "core.eir has no gate documents in this window, so telemetry gate events are used instead; GATE_ARRIVAL is the arrival signal and GATE_IN the completion",
+    "source": "DERIVED"
+   },
+   {
+    "field": "gate_sustained_rate",
+    "value": 269.0,
+    "reason": "p90 of observed hourly ARRIVALS \u2014 nothing in the window records what the gate actually cleared, so demand is used as a proxy for throughput. This is the weakest of the available bases and will understate capacity if the gate was never saturated in this window. A declared TAS capacity of 10/h was found and NOT used: the declared capacity of 10/h is below the observed peak of 284/h in the same window. Observed throughput is a floor on capacity - the gate demonstrably achieved more than the declaration claims, so the declaration is treated as a stub rather than as policy. The completion series was also set aside: 4010 exceeds the physically plausible maximum of 600 \u2014 core.gate_event records more completion events than arrivals in this window, so completions do not measure gate throughput here.",
+    "source": "DERIVED"
+   },
+   {
+    "field": "arrival_source",
+    "value": "core.gate_event",
+    "reason": "the table the hourly arrival pattern was read from",
+    "source": "MEASURED"
+   }
+  ],
+  "queries": [
+   {
+    "purpose": "hourly truck arrivals at the gate (core.eir)",
+    "sql": "SELECT date_trunc('hour', e.truck_in_time) AS bucket, count(*) AS arrivals, count(DISTINCT e.truck_no) AS unique_trucks, count(*) FILTER (WHERE e.truck_out_time IS NOT NULL) AS completed, round(avg(e.tat_minutes)::numeric, 1) AS avg_tat_min FROM core.eir e WHERE e.truck_in_time >= :from_ts AND e.truck_in_time < :to_ts AND (CAST(:terminal AS text) IS NULL OR e.terminal ILIKE CAST(:terminal_like AS text)) GROUP BY date_trunc('hour', e.truck_in_time) ORDER BY bucket ASC",
+    "params": {
+     "from_ts": "2026-08-03T00:00:00+00:00",
+     "to_ts": "2026-08-04T00:00:00+00:00",
+     "terminal": null,
+     "terminal_like": null
+    },
+    "api": "GET /api/gate/hourly-profile",
+    "row_count": 0
+   },
+   {
+    "purpose": "hourly gate events (core.gate_event)",
+    "sql": "SELECT date_trunc('hour', g.ts) AS bucket, count(*) FILTER (WHERE g.event_type = 'GATE_ARRIVAL') AS arrivals, count(*) FILTER (WHERE g.event_type = 'GATE_IN') AS gate_in, count(*) FILTER (WHERE g.event_type = 'GATE_OUT') AS gate_out, count(DISTINCT g.plate) AS unique_trucks FROM core.gate_event g WHERE g.ts >= :from_ts AND g.ts < :to_ts AND (CAST(:gate_id AS text) IS NULL OR g.gate_id = CAST(:gate_id AS text)) GROUP BY date_trunc('hour', g.ts) ORDER BY bucket ASC",
+    "params": {
+     "from_ts": "2026-08-03T00:00:00+00:00",
+     "to_ts": "2026-08-04T00:00:00+00:00",
+     "gate_id": null
+    },
+    "api": "GET /api/gate/hourly-profile",
+    "row_count": 24
+   },
+   {
+    "purpose": "declared hourly gate capacity (core.tas_appointment)",
+    "sql": "SELECT date_trunc('hour', window_start) AS bucket, sum(capacity) AS slot_capacity, sum(booked) AS slot_booked, count(*) AS windows FROM core.tas_appointment WHERE window_start >= :from_ts AND window_start < :to_ts AND (CAST(:gate_id AS text) IS NULL OR gate_id = CAST(:gate_id AS text)) GROUP BY date_trunc('hour', window_start) ORDER BY bucket ASC",
+    "params": {
+     "from_ts": "2026-08-03T00:00:00+00:00",
+     "to_ts": "2026-08-04T00:00:00+00:00",
+     "gate_id": null
+    },
+    "api": "GET /api/tas/slots",
+    "row_count": 8
+   }
+  ],
+  "recommendations": [
+   {
+    "action": "APPOINTMENT_CAP",
+    "reason": "cap gate bookings at 269 trucks/hour; that removes 15 trucks from the 284-truck peak (5.3% lower)",
+    "cap_per_hour": 269,
+    "saturated_hours": 2
+   },
+   {
+    "action": "DEFER_TO_HEADROOM",
+    "reason": "18 arrivals across 2 saturated hours can be re-timed into hours that already run below the sustained rate",
+    "excess": 18
+   }
+  ],
+  "data_available": true,
+  "notes": []
+ },
+ "driver-shortage": {
+  "scenario": "driver-shortage",
+  "method": "Count trips per vehicle per day from core.eir (one Equipment Interchange Report = one gate trip), attributed to the transporter on the document. Reduce each vehicle-day to floor(trips x 0.6667). The difference is trips lost; those are containers not evacuated, accumulated across the window and reported as the backlog on 2026-08-04. Rank transporters by absolute trips lost and by trips-per-vehicle (structural exposure), and cargo flows by trips lost.",
+  "result": {
+   "window": {
+    "from": "2026-08-01",
+    "to": "2026-08-03",
+    "days": 3
+   },
+   "state_date": "2026-08-04",
+   "baseline": {
+    "trips": 5,
+    "vehicles": 2,
+    "trips_per_vehicle_day": 1.67
+   },
+   "after_shortage": {
+    "trips": 2,
+    "trips_lost": 3
+   },
+   "state_on_report_date": {
+    "date": "2026-08-04",
+    "containers_not_evacuated": 2,
+    "already_pending_in_port": 17,
+    "pending_by_mode": {
+     "ROAD": 5,
+     "UNKNOWN": 12
+    },
+    "projected_total_awaiting_evacuation": 19
+   },
+   "exposed_transporters": {
+    "by_absolute_loss": [
+     {
+      "transporter": "UNATTRIBUTED",
+      "vehicles": 2,
+      "trips": 3,
+      "reduced_trips": 1,
+      "trips_lost": 2,
+      "trips_lost_pct": 66.7,
+      "trips_per_vehicle_day": 1.5,
+      "containers": 2
+     },
+     {
+      "transporter": "TRANSTA",
+      "vehicles": 1,
+      "trips": 2,
+      "reduced_trips": 1,
+      "trips_lost": 1,
+      "trips_lost_pct": 50.0,
+      "trips_per_vehicle_day": 2.0,
+      "containers": 1
+     }
+    ],
+    "by_structural_dependence": [
+     {
+      "transporter": "TRANSTA",
+      "vehicles": 1,
+      "trips": 2,
+      "reduced_trips": 1,
+      "trips_lost": 1,
+      "trips_lost_pct": 50.0,
+      "trips_per_vehicle_day": 2.0,
+      "containers": 1
+     },
+     {
+      "transporter": "UNATTRIBUTED",
+      "vehicles": 2,
+      "trips": 3,
+      "reduced_trips": 1,
+      "trips_lost": 2,
+      "trips_lost_pct": 66.7,
+      "trips_per_vehicle_day": 1.5,
+      "containers": 2
+     }
+    ]
+   },
+   "exposed_cargo_flows": [
+    {
+     "flow": "UNSPECIFIED",
+     "facility": "DIRECT",
+     "trips": 3,
+     "vehicles": 2,
+     "trips_lost": 1,
+     "trips_lost_pct": 33.3
+    },
+    {
+     "flow": "UNSPECIFIED",
+     "facility": "CLP CFS",
+     "trips": 2,
+     "vehicles": 1,
+     "trips_lost": 1,
+     "trips_lost_pct": 50.0
+    }
+   ]
+  },
+  "figures": {
+   "baseline_trips": 5,
+   "reduced_trips": 2,
+   "trips_lost": 3,
+   "throughput_loss_pct": 60.0,
+   "vehicles_active": 2,
+   "vehicle_days": 3,
+   "mean_trips_per_vehicle_day": 1.67,
+   "containers_per_trip": 0.6,
+   "containers_not_evacuated": 2,
+   "backlog_per_day": 0.7,
+   "transporters_affected": 2,
+   "cargo_flows_affected": 2
+  },
+  "assumptions": [
+   {
+    "field": "reduction_pct",
+    "value": 0.3333,
+    "reason": "the one-third reduction in trips per vehicle per day stated in the scenario",
+    "source": "PARAMETER"
+   },
+   {
+    "field": "trip_definition",
+    "value": "one EIR = one gate trip",
+    "reason": "core.eir records a truck-in/truck-out pair per gate movement; it is the only per-trip record with a transporter attribution",
+    "source": "MEASURED"
+   },
+   {
+    "field": "rounding",
+    "value": "floor",
+    "reason": "a vehicle cannot complete a fraction of a trip; rounding down rather than to nearest avoids overstating remaining capacity",
+    "source": "ASSUMED"
+   },
+   {
+    "field": "containers_per_trip",
+    "value": 0.6,
+    "reason": "derived from this window: 3 distinct containers across 5 trips",
+    "source": "DERIVED"
+   },
+   {
+    "field": "evacuation_priority_rule",
+    "value": "1) highest containers per trip, 2) oldest dwell first, 3) divert to rail where a rake is already planned",
+    "reason": "with fewer trips available the question is which trips to keep; this is the rule the recommendations below apply, stated so it can be challenged or replaced",
+    "source": "ASSUMED"
+   }
+  ],
+  "queries": [
+   {
+    "purpose": "trips per vehicle per day by transporter (core.eir)",
+    "sql": "SELECT COALESCE(NULLIF(btrim(e.company), ''), 'UNATTRIBUTED') AS transporter, e.truck_no, e.truck_in_time::date AS trip_date, count(*) AS trips, count(DISTINCT e.container_number) FILTER ( WHERE e.container_number IS NOT NULL) AS containers, round(avg(e.tat_minutes)::numeric, 1) AS avg_tat_min FROM core.eir e WHERE e.truck_in_time >= :from_ts AND e.truck_in_time < :to_ts AND e.truck_no IS NOT NULL GROUP BY 1, 2, 3 ORDER BY 1, 2, 3",
+    "params": {
+     "from_ts": "2026-08-01T00:00:00+00:00",
+     "to_ts": "2026-08-04T00:00:00+00:00"
+    },
+    "api": "GET /api/gate-docs/eir?from_date=\u2026&to_date=\u2026",
+    "row_count": 3
+   },
+   {
+    "purpose": "trip volume by cargo flow and facility (core.eir)",
+    "sql": "SELECT COALESCE(NULLIF(btrim(e.eir_type), ''), 'UNSPECIFIED') AS flow, COALESCE(NULLIF(btrim(e.cfs_to), ''), NULLIF(btrim(e.cfs_from), ''), 'DIRECT') AS facility, count(*) AS trips, count(DISTINCT e.truck_no) AS vehicles FROM core.eir e WHERE e.truck_in_time >= :from_ts AND e.truck_in_time < :to_ts GROUP BY 1, 2 ORDER BY trips DESC",
+    "params": {
+     "from_ts": "2026-08-01T00:00:00+00:00",
+     "to_ts": "2026-08-04T00:00:00+00:00"
+    },
+    "api": "GET /api/gate-docs/eir?from_date=\u2026&to_date=\u2026",
+    "row_count": 2
+   },
+   {
+    "purpose": "unreleased containers by evacuation mode and lifecycle state",
+    "sql": "SELECT COALESCE(evacuation_mode, 'UNKNOWN') AS evacuation_mode, lifecycle_status, count(*) AS containers FROM core.cargo WHERE lifecycle_status IN ('VESSEL_DISCHARGED','PENDENCY','YARD_ASSIGNED', 'YARD_POSITION_ALLOCATED','RAKE_ASSIGNED', 'REEFER_PLANNED','SCAN_PENDING','VERIFIED') AND is_released = false GROUP BY 1, 2 ORDER BY 1, 2",
+    "params": {},
+    "api": "GET /api/cargo?status=\u2026",
+    "row_count": 5
+   }
+  ],
+  "recommendations": [
+   {
+    "action": "PRIORITISE_HIGH_YIELD_TRIPS",
+    "reason": "3 trips (60.0% of baseline) are lost across 2 transporters; allocating the remaining trips to the flows with the highest containers-per-trip preserves the most evacuation volume",
+    "trips_lost": 3,
+    "containers_at_risk": 2
+   },
+   {
+    "action": "REINFORCE_TRANSPORTER",
+    "reason": "UNATTRIBUTED loses the most trips (2 of 3); adding drivers there recovers the largest single share of throughput",
+    "transporter": "UNATTRIBUTED",
+    "trips_lost": 2
+   },
+   {
+    "action": "PROTECT_MULTI_TRIP_CYCLES",
+    "reason": "TRANSTA runs 2.0 trips per vehicle-day, so a one-third cut removes a whole cycle; double-shifting its vehicles protects more volume than adding vehicles elsewhere",
+    "transporter": "TRANSTA",
+    "trips_per_vehicle_day": 2.0
+   },
+   {
+    "action": "RESCHEDULE_FLOW",
+    "reason": "the UNSPECIFIED flow via DIRECT loses 1 trips \u2014 the largest single flow exposure",
+    "flow": "UNSPECIFIED",
+    "facility": "DIRECT"
+   }
+  ],
+  "data_available": true,
+  "notes": [
+   "vehicle availability per transporter, driver rosters and shift patterns are not in this database, so the shortage is modelled as a uniform reduction in trips per vehicle-day rather than as a count of absent drivers."
+  ]
+ },
+ "channel-closure": {
+  "scenario": "channel-closure",
+  "method": "Walk the closure hour by hour over the berths the calls occupy. A berth is working while its vessel is inside its operation window, held once the vessel has finished but cannot sail, and free otherwise. Berth-lock is the first hour with no free berth and at least one held: nothing can enter and nothing can leave to make room. On reopening the held vessels sail in the proposed order, and an alternative order is costed against the same measure.",
+  "result": {
+   "coverage": {
+    "requested": "2026-08-06T06:00:00+00:00",
+    "basis": "MEASURED",
+    "measured_through": "2026-08-06T06:00:00+00:00"
+   },
+   "closure": {
+    "from": "2026-08-06T06:00:00+00:00",
+    "to": "2026-08-06T18:00:00+00:00",
+    "hours": 12.0
+   },
+   "berth_pool": [
+    "APM01",
+    "APM02",
+    "BMCT03",
+    "BMCT05",
+    "BMCT06",
+    "CB02",
+    "CB04",
+    "CB05",
+    "CB06"
+   ],
+   "timeline": [
+    {
+     "bucket": "2026-08-06T06:00:00+00:00",
+     "working": 0,
+     "held": 0,
+     "free": 9,
+     "berth_locked": false
+    },
+    {
+     "bucket": "2026-08-06T07:00:00+00:00",
+     "working": 1,
+     "held": 0,
+     "free": 8,
+     "berth_locked": false
+    },
+    {
+     "bucket": "2026-08-06T08:00:00+00:00",
+     "working": 3,
+     "held": 0,
+     "free": 6,
+     "berth_locked": false
+    },
+    {
+     "bucket": "2026-08-06T09:00:00+00:00",
+     "working": 4,
+     "held": 0,
+     "free": 5,
+     "berth_locked": false
+    },
+    {
+     "bucket": "2026-08-06T10:00:00+00:00",
+     "working": 4,
+     "held": 0,
+     "free": 5,
+     "berth_locked": false
+    },
+    {
+     "bucket": "2026-08-06T11:00:00+00:00",
+     "working": 4,
+     "held": 0,
+     "free": 5,
+     "berth_locked": false
+    },
+    {
+     "bucket": "2026-08-06T12:00:00+00:00",
+     "working": 4,
+     "held": 0,
+     "free": 5,
+     "berth_locked": false
+    },
+    {
+     "bucket": "2026-08-06T13:00:00+00:00",
+     "working": 4,
+     "held": 0,
+     "free": 5,
+     "berth_locked": false
+    },
+    {
+     "bucket": "2026-08-06T14:00:00+00:00",
+     "working": 5,
+     "held": 0,
+     "free": 4,
+     "berth_locked": false
+    },
+    {
+     "bucket": "2026-08-06T15:00:00+00:00",
+     "working": 5,
+     "held": 0,
+     "free": 4,
+     "berth_locked": false
+    },
+    {
+     "bucket": "2026-08-06T16:00:00+00:00",
+     "working": 5,
+     "held": 0,
+     "free": 4,
+     "berth_locked": false
+    },
+    {
+     "bucket": "2026-08-06T17:00:00+00:00",
+     "working": 6,
+     "held": 0,
+     "free": 3,
+     "berth_locked": false
+    }
+   ],
+   "berth_locked_at": null,
+   "held_vessels": [
+    {
+     "vessel": "ONE RECOGNITION_AUG",
+     "voyage": "S0475_AUG",
+     "berth": "APM02",
+     "terminal": "APMT",
+     "finished_at": "2026-08-06T16:24:00+00:00",
+     "gross_moves": 100.0
+    }
+   ],
+   "sailing_order": {
+    "recommended": {
+     "policy": "LONGEST_HELD_FIRST",
+     "sequence": [
+      "ONE RECOGNITION_AUG"
+     ],
+     "total_held_hours": 1.6,
+     "clearance_hours": 1.5
+    },
+    "alternative": {
+     "policy": "LARGEST_FIRST",
+     "sequence": [
+      "ONE RECOGNITION_AUG"
+     ],
+     "total_held_hours": 1.6,
+     "clearance_hours": 1.5,
+     "cost_vs_recommended": 0.0
+    }
+   }
+  },
+  "figures": {
+   "berths_in_pool": 9,
+   "vessels_in_window": 14,
+   "berth_lock_reached": false,
+   "hours_to_berth_lock": null,
+   "berths_held_at_reopen": 0,
+   "berths_free_at_reopen": 3,
+   "vessels_held": 1,
+   "total_held_hours": 1.6,
+   "clearance_hours_after_reopen": 1.5,
+   "alternative_order_costs_hours": 0.0,
+   "berth_hours_lost": 0,
+   "peak_berth_utilisation_pct": 66.7
+  },
+  "assumptions": [
+   {
+    "field": "closure_hours",
+    "value": 12.0,
+    "reason": "the length of the channel outage under study",
+    "source": "PARAMETER"
+   },
+   {
+    "field": "transit_hours",
+    "value": 1.5,
+    "reason": "one-way channel transit between the pilot boarding ground and the berths. The corpus carries no pilotage or transit record, so this is a declared figure.",
+    "source": "ASSUMED"
+   },
+   {
+    "field": "no_early_sailing",
+    "value": true,
+    "reason": "vessels are not allowed to sail early to beat the closure; no such decision rule exists in the data and assuming one would flatter the result.",
+    "source": "ASSUMED"
+   }
+  ],
+  "queries": [
+   {
+    "purpose": "vessel calls joined to their gross-move counts",
+    "sql": "SELECT b.id AS berthing_record_id, b.terminal, b.vessel_name, b.voyage_number, b.berth_number, b.cargo_operation_start, b.cargo_operation_end, b.berthing_time, b.departure_time, b.ata, b.eta, m.id AS moves_id, m.vcn, m.discharge_moves, m.load_moves, m.restow_moves, m.gross_moves, m.cranes_deployed, m.data_origin, m.source_note FROM core.berthing_record b LEFT JOIN core.vessel_call_moves m ON m.berthing_record_id = b.id OR (m.terminal = b.terminal AND m.voyage_number = b.voyage_number AND m.vessel_name = b.vessel_name) WHERE (CAST(:terminal AS text) IS NULL OR b.terminal = CAST(:terminal AS text)) AND COALESCE(b.cargo_operation_start, b.berthing_time, b.ata, b.eta) BETWEEN :from_ts AND :to_ts ORDER BY COALESCE(b.cargo_operation_start, b.berthing_time, b.ata, b.eta) ASC, b.id ASC",
+    "params": {
+     "terminal": null,
+     "from_ts": "2026-08-06T06:00:00+00:00",
+     "to_ts": "2026-08-08T06:00:00+00:00"
+    },
+    "api": "POST /api/cargo/simulate/crane-productivity",
+    "row_count": 14
+   }
+  ],
+  "recommendations": [
+   {
+    "action": "CLOSURE_TOLERABLE",
+    "reason": "berth-lock is not reached within 12h; 3 berth(s) remain free at reopening",
+    "free_at_reopen": 3
+   },
+   {
+    "action": "SEQUENCE_OUTBOUND_CONVOY",
+    "reason": "1 vessel(s) are held at reopening; sailing longest-held first costs 1.6h against 1.6h for largest-first",
+    "vessels": 1
+   }
+  ],
+  "data_available": true,
+  "notes": []
+ },
+ "yard-feedback": {
+  "scenario": "yard-feedback",
+  "method": "Measure the daily discharge and evacuation volumes over the observed window. Cut evacuation by the stated fraction and run the yard forward day by day: occupancy += discharged - evacuated. Above the declared utilisation threshold, berth productivity falls linearly with utilisation (re-handles rise as boxes are buried), and the reduced productivity feeds back into the next day's discharge. Report where it settles and the first day it crosses the threshold.",
+  "result": {
+   "window": {
+    "from": "2026-08-01",
+    "to": "2026-08-05",
+    "days_observed": 5
+   },
+   "baseline_rates": {
+    "discharge_teu_per_day": 300.0,
+    "evacuation_teu_per_day": 480.0,
+    "rail_teu_per_day": 430.0,
+    "road_teu_per_day": 50.0
+   },
+   "yard": {
+    "capacity_teu": 3000.0,
+    "opening_teu": 2040.0,
+    "threshold": 0.85
+   },
+   "with_shortfall": [
+    {
+     "day": 1,
+     "discharge_wanted": 300.0,
+     "discharged": 300.0,
+     "discharge_blocked": 0.0,
+     "evacuated": 240.0,
+     "occupancy": 2100.0,
+     "utilisation": 0.7,
+     "yard_full": false,
+     "productivity_factor": 1.0,
+     "productivity_loss_pct": 0.0
+    },
+    {
+     "day": 2,
+     "discharge_wanted": 300.0,
+     "discharged": 300.0,
+     "discharge_blocked": 0.0,
+     "evacuated": 240.0,
+     "occupancy": 2160.0,
+     "utilisation": 0.72,
+     "yard_full": false,
+     "productivity_factor": 1.0,
+     "productivity_loss_pct": 0.0
+    },
+    {
+     "day": 3,
+     "discharge_wanted": 300.0,
+     "discharged": 300.0,
+     "discharge_blocked": 0.0,
+     "evacuated": 240.0,
+     "occupancy": 2220.0,
+     "utilisation": 0.74,
+     "yard_full": false,
+     "productivity_factor": 1.0,
+     "productivity_loss_pct": 0.0
+    },
+    {
+     "day": 4,
+     "discharge_wanted": 300.0,
+     "discharged": 300.0,
+     "discharge_blocked": 0.0,
+     "evacuated": 240.0,
+     "occupancy": 2280.0,
+     "utilisation": 0.76,
+     "yard_full": false,
+     "productivity_factor": 1.0,
+     "productivity_loss_pct": 0.0
+    },
+    {
+     "day": 5,
+     "discharge_wanted": 300.0,
+     "discharged": 300.0,
+     "discharge_blocked": 0.0,
+     "evacuated": 240.0,
+     "occupancy": 2340.0,
+     "utilisation": 0.78,
+     "yard_full": false,
+     "productivity_factor": 1.0,
+     "productivity_loss_pct": 0.0
+    },
+    {
+     "day": 6,
+     "discharge_wanted": 300.0,
+     "discharged": 300.0,
+     "discharge_blocked": 0.0,
+     "evacuated": 240.0,
+     "occupancy": 2400.0,
+     "utilisation": 0.8,
+     "yard_full": false,
+     "productivity_factor": 1.0,
+     "productivity_loss_pct": 0.0
+    },
+    {
+     "day": 7,
+     "discharge_wanted": 300.0,
+     "discharged": 300.0,
+     "discharge_blocked": 0.0,
+     "evacuated": 240.0,
+     "occupancy": 2460.0,
+     "utilisation": 0.82,
+     "yard_full": false,
+     "productivity_factor": 1.0,
+     "productivity_loss_pct": 0.0
+    },
+    {
+     "day": 8,
+     "discharge_wanted": 300.0,
+     "discharged": 300.0,
+     "discharge_blocked": 0.0,
+     "evacuated": 240.0,
+     "occupancy": 2520.0,
+     "utilisation": 0.84,
+     "yard_full": false,
+     "productivity_factor": 1.0,
+     "productivity_loss_pct": 0.0
+    },
+    {
+     "day": 9,
+     "discharge_wanted": 300.0,
+     "discharged": 300.0,
+     "discharge_blocked": 0.0,
+     "evacuated": 240.0,
+     "occupancy": 2580.0,
+     "utilisation": 0.86,
+     "yard_full": false,
+     "productivity_factor": 0.9733,
+     "productivity_loss_pct": 2.7
+    },
+    {
+     "day": 10,
+     "discharge_wanted": 292.0,
+     "discharged": 292.0,
+     "discharge_blocked": 0.0,
+     "evacuated": 240.0,
+     "occupancy": 2632.0,
+     "utilisation": 0.8773,
+     "yard_full": false,
+     "productivity_factor": 0.9271,
+     "productivity_loss_pct": 7.3
+    },
+    {
+     "day": 11,
+     "discharge_wanted": 278.1,
+     "discharged": 278.1,
+     "discharge_blocked": 0.0,
+     "evacuated": 240.0,
+     "occupancy": 2670.1,
+     "utilisation": 0.89,
+     "yard_full": false,
+     "productivity_factor": 0.8932,
+     "productivity_loss_pct": 10.7
+    },
+    {
+     "day": 12,
+     "discharge_wanted": 268.0,
+     "discharged": 268.0,
+     "discharge_blocked": 0.0,
+     "evacuated": 240.0,
+     "occupancy": 2698.1,
+     "utilisation": 0.8994,
+     "yard_full": false,
+     "productivity_factor": 0.8684,
+     "productivity_loss_pct": 13.2
+    },
+    {
+     "day": 13,
+     "discharge_wanted": 260.5,
+     "discharged": 260.5,
+     "discharge_blocked": 0.0,
+     "evacuated": 240.0,
+     "occupancy": 2718.6,
+     "utilisation": 0.9062,
+     "yard_full": false,
+     "productivity_factor": 0.8501,
+     "productivity_loss_pct": 15.0
+    },
+    {
+     "day": 14,
+     "discharge_wanted": 255.0,
+     "discharged": 255.0,
+     "discharge_blocked": 0.0,
+     "evacuated": 240.0,
+     "occupancy": 2733.6,
+     "utilisation": 0.9112,
+     "yard_full": false,
+     "productivity_factor": 0.8368,
+     "productivity_loss_pct": 16.3
+    }
+   ],
+   "without_shortfall": [
+    {
+     "day": 1,
+     "discharge_wanted": 300.0,
+     "discharged": 300.0,
+     "discharge_blocked": 0.0,
+     "evacuated": 480.0,
+     "occupancy": 1860.0,
+     "utilisation": 0.62,
+     "yard_full": false,
+     "productivity_factor": 1.0,
+     "productivity_loss_pct": 0.0
+    },
+    {
+     "day": 2,
+     "discharge_wanted": 300.0,
+     "discharged": 300.0,
+     "discharge_blocked": 0.0,
+     "evacuated": 480.0,
+     "occupancy": 1680.0,
+     "utilisation": 0.56,
+     "yard_full": false,
+     "productivity_factor": 1.0,
+     "productivity_loss_pct": 0.0
+    },
+    {
+     "day": 3,
+     "discharge_wanted": 300.0,
+     "discharged": 300.0,
+     "discharge_blocked": 0.0,
+     "evacuated": 480.0,
+     "occupancy": 1500.0,
+     "utilisation": 0.5,
+     "yard_full": false,
+     "productivity_factor": 1.0,
+     "productivity_loss_pct": 0.0
+    },
+    {
+     "day": 4,
+     "discharge_wanted": 300.0,
+     "discharged": 300.0,
+     "discharge_blocked": 0.0,
+     "evacuated": 480.0,
+     "occupancy": 1320.0,
+     "utilisation": 0.44,
+     "yard_full": false,
+     "productivity_factor": 1.0,
+     "productivity_loss_pct": 0.0
+    },
+    {
+     "day": 5,
+     "discharge_wanted": 300.0,
+     "discharged": 300.0,
+     "discharge_blocked": 0.0,
+     "evacuated": 480.0,
+     "occupancy": 1140.0,
+     "utilisation": 0.38,
+     "yard_full": false,
+     "productivity_factor": 1.0,
+     "productivity_loss_pct": 0.0
+    },
+    {
+     "day": 6,
+     "discharge_wanted": 300.0,
+     "discharged": 300.0,
+     "discharge_blocked": 0.0,
+     "evacuated": 480.0,
+     "occupancy": 960.0,
+     "utilisation": 0.32,
+     "yard_full": false,
+     "productivity_factor": 1.0,
+     "productivity_loss_pct": 0.0
+    },
+    {
+     "day": 7,
+     "discharge_wanted": 300.0,
+     "discharged": 300.0,
+     "discharge_blocked": 0.0,
+     "evacuated": 480.0,
+     "occupancy": 780.0,
+     "utilisation": 0.26,
+     "yard_full": false,
+     "productivity_factor": 1.0,
+     "productivity_loss_pct": 0.0
+    },
+    {
+     "day": 8,
+     "discharge_wanted": 300.0,
+     "discharged": 300.0,
+     "discharge_blocked": 0.0,
+     "evacuated": 480.0,
+     "occupancy": 600.0,
+     "utilisation": 0.2,
+     "yard_full": false,
+     "productivity_factor": 1.0,
+     "productivity_loss_pct": 0.0
+    },
+    {
+     "day": 9,
+     "discharge_wanted": 300.0,
+     "discharged": 300.0,
+     "discharge_blocked": 0.0,
+     "evacuated": 480.0,
+     "occupancy": 420.0,
+     "utilisation": 0.14,
+     "yard_full": false,
+     "productivity_factor": 1.0,
+     "productivity_loss_pct": 0.0
+    },
+    {
+     "day": 10,
+     "discharge_wanted": 300.0,
+     "discharged": 300.0,
+     "discharge_blocked": 0.0,
+     "evacuated": 480.0,
+     "occupancy": 240.0,
+     "utilisation": 0.08,
+     "yard_full": false,
+     "productivity_factor": 1.0,
+     "productivity_loss_pct": 0.0
+    },
+    {
+     "day": 11,
+     "discharge_wanted": 300.0,
+     "discharged": 300.0,
+     "discharge_blocked": 0.0,
+     "evacuated": 480.0,
+     "occupancy": 60.0,
+     "utilisation": 0.02,
+     "yard_full": false,
+     "productivity_factor": 1.0,
+     "productivity_loss_pct": 0.0
+    },
+    {
+     "day": 12,
+     "discharge_wanted": 300.0,
+     "discharged": 300.0,
+     "discharge_blocked": 0.0,
+     "evacuated": 480.0,
+     "occupancy": 0.0,
+     "utilisation": 0.0,
+     "yard_full": false,
+     "productivity_factor": 1.0,
+     "productivity_loss_pct": 0.0
+    },
+    {
+     "day": 13,
+     "discharge_wanted": 300.0,
+     "discharged": 300.0,
+     "discharge_blocked": 0.0,
+     "evacuated": 480.0,
+     "occupancy": 0.0,
+     "utilisation": 0.0,
+     "yard_full": false,
+     "productivity_factor": 1.0,
+     "productivity_loss_pct": 0.0
+    },
+    {
+     "day": 14,
+     "discharge_wanted": 300.0,
+     "discharged": 300.0,
+     "discharge_blocked": 0.0,
+     "evacuated": 480.0,
+     "occupancy": 0.0,
+     "utilisation": 0.0,
+     "yard_full": false,
+     "productivity_factor": 1.0,
+     "productivity_loss_pct": 0.0
+    }
+   ],
+   "tipping_day": 9,
+   "converged_at": {
+    "day": 14,
+    "discharge_wanted": 255.0,
+    "discharged": 255.0,
+    "discharge_blocked": 0.0,
+    "evacuated": 240.0,
+    "occupancy": 2733.6,
+    "utilisation": 0.9112,
+    "yard_full": false,
+    "productivity_factor": 0.8368,
+    "productivity_loss_pct": 16.3
+   },
+   "regime": "CONVERGING",
+   "yard_full_on_day": null
+  },
+  "figures": {
+   "regime": "CONVERGING",
+   "evacuation_drop_pct": 50.0,
+   "tipping_day": 9,
+   "yard_full_on_day": null,
+   "discharge_blocked_teu": 0.0,
+   "days_to_threshold": 9,
+   "final_utilisation_pct": 91.1,
+   "final_utilisation_pct_baseline": 0.0,
+   "final_productivity_loss_pct": 16.3,
+   "converged_utilisation_pct": 91.1,
+   "converged_on_day": 14,
+   "cumulative_discharge_lost_teu": 146.4,
+   "berth_productivity_at_horizon_pct_of_normal": 83.7
+  },
+  "assumptions": [
+   {
+    "field": "evacuation_drop_pct",
+    "value": 0.5,
+    "reason": "the evacuation shortfall under study",
+    "source": "PARAMETER"
+   },
+   {
+    "field": "occupancy_to_productivity_curve",
+    "value": "linear, 1.0 at or below 85% utilisation, falling to 0.60 at 100%",
+    "reason": "no dataset available here measures re-handle rates against yard utilisation, so the SHAPE of this relationship is assumed even though the volumes driving it are measured. The result should be read as a direction and a tipping point, not as a precise TEU forecast.",
+    "source": "ASSUMED"
+   },
+   {
+    "field": "nominal_discharge_teu_per_day",
+    "value": 300.0,
+    "reason": "mean daily import volume measured over 5 observed day(s)",
+    "source": "MEASURED"
+   },
+   {
+    "field": "nominal_evacuation_teu_per_day",
+    "value": 480.0,
+    "reason": "mean daily rail + road evacuation measured over 5 observed day(s)",
+    "source": "DERIVED"
+   },
+   {
+    "field": "yard_capacity_teu",
+    "value": 3000.0,
+    "reason": "no rated yard capacity exists in this database and no per-block occupancy is published, so capacity is scaled from the observed import volume. Supply yard_capacity_teu to replace this with the real figure \u2014 it moves the tipping day.",
+    "source": "ASSUMED"
+   },
+   {
+    "field": "opening_occupancy_teu",
+    "value": 2040.0,
+    "reason": "the yard is taken to start comfortably below the threshold; the corpus carries inventory snapshots but not a reconciled opening position for this window.",
+    "source": "ASSUMED"
+   }
+  ],
+  "queries": [
+   {
+    "purpose": "daily rail vs total TEU by terminal (core.perf_daily_traffic)",
+    "sql": "SELECT report_date, terminal_code, total_teus, imp_teus, exp_teus, rakes, rail_dis_teus, rail_ldg_teus, rail_total_teus FROM core.perf_daily_traffic WHERE period = 'DAY' AND report_date >= :from_date AND report_date <= :to_date AND (CAST(:terminal AS text) IS NULL OR terminal_code = CAST(:terminal AS text)) ORDER BY report_date ASC, terminal_code ASC",
+    "params": {
+     "from_date": "2026-08-01",
+     "to_date": "2026-08-05",
+     "terminal": null
+    },
+    "api": "GET /api/performance/daily/traffic",
+    "row_count": 35
+   }
+  ],
+  "recommendations": [
+   {
+    "action": "ACT_BEFORE_DAY_9",
+    "reason": "utilisation crosses 85% on day 9; before that the yard absorbs the shortfall for free, after it every further day costs berth productivity as well as yard space",
+    "tipping_day": 9
+   },
+   {
+    "action": "RESTORE_EVACUATION_BEFORE_ADDING_BERTH_CAPACITY",
+    "reason": "the loop is closed through evacuation, not through the quay: adding crane capacity while evacuation is 50% short raises discharge into a yard that cannot release it and tightens the loop",
+    "evacuation_shortfall_pct": 50.0
+   }
+  ],
+  "data_available": true,
+  "notes": [
+   "REGIME: CONVERGING. The loop is self-limiting, which is not the same as safe: it settles by throttling the berth. The cost appears as vessel turnaround, not as a yard alarm, so it will be visible in UC-1 before it is visible here."
+  ]
+ },
+ "degraded-gate": {
+  "scenario": "degraded-gate",
+  "method": "Take the observed hourly arrival profile and the rate the gate sustains (the same derivation III-A and II-A use). Inside the outage window, service falls to 40% of that rate while arrivals continue unchanged. Walk the window hour by hour carrying a queue: served = min(arrivals + queue, capacity); queue += arrivals - served. Recovery is the first hour after the outage where the queue returns to its no-outage level.",
+  "result": {
+   "window": {
+    "from": "2026-08-03T00:00:00+00:00",
+    "to": "2026-08-04T00:00:00+00:00"
+   },
+   "outage": {
+    "from": "2026-08-03T00:00:00+00:00",
+    "to": "2026-08-03T04:00:00+00:00",
+    "hours": 4.0,
+    "normal_rate": 269.0,
+    "degraded_rate": 107.6
+   },
+   "profile_source": "core.gate_event",
+   "with_outage": [
+    {
+     "bucket": "2026-08-03T00:00:00+00:00",
+     "arrivals": 227,
+     "capacity": 107.6,
+     "served": 107.6,
+     "queue": 119.4,
+     "degraded": true
+    },
+    {
+     "bucket": "2026-08-03T01:00:00+00:00",
+     "arrivals": 264,
+     "capacity": 107.6,
+     "served": 107.6,
+     "queue": 275.8,
+     "degraded": true
+    },
+    {
+     "bucket": "2026-08-03T02:00:00+00:00",
+     "arrivals": 233,
+     "capacity": 107.6,
+     "served": 107.6,
+     "queue": 401.2,
+     "degraded": true
+    },
+    {
+     "bucket": "2026-08-03T03:00:00+00:00",
+     "arrivals": 264,
+     "capacity": 107.6,
+     "served": 107.6,
+     "queue": 557.6,
+     "degraded": true
+    },
+    {
+     "bucket": "2026-08-03T04:00:00+00:00",
+     "arrivals": 269,
+     "capacity": 269.0,
+     "served": 269.0,
+     "queue": 557.6,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T05:00:00+00:00",
+     "arrivals": 257,
+     "capacity": 269.0,
+     "served": 269.0,
+     "queue": 545.6,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T06:00:00+00:00",
+     "arrivals": 284,
+     "capacity": 269.0,
+     "served": 269.0,
+     "queue": 560.6,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T07:00:00+00:00",
+     "arrivals": 272,
+     "capacity": 269.0,
+     "served": 269.0,
+     "queue": 563.6,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T08:00:00+00:00",
+     "arrivals": 186,
+     "capacity": 269.0,
+     "served": 269.0,
+     "queue": 480.6,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T09:00:00+00:00",
+     "arrivals": 10,
+     "capacity": 269.0,
+     "served": 269.0,
+     "queue": 221.6,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T10:00:00+00:00",
+     "arrivals": 33,
+     "capacity": 269.0,
+     "served": 254.6,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T11:00:00+00:00",
+     "arrivals": 62,
+     "capacity": 269.0,
+     "served": 62.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T12:00:00+00:00",
+     "arrivals": 9,
+     "capacity": 269.0,
+     "served": 9.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T13:00:00+00:00",
+     "arrivals": 12,
+     "capacity": 269.0,
+     "served": 12.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T14:00:00+00:00",
+     "arrivals": 10,
+     "capacity": 269.0,
+     "served": 10.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T15:00:00+00:00",
+     "arrivals": 35,
+     "capacity": 269.0,
+     "served": 35.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T16:00:00+00:00",
+     "arrivals": 43,
+     "capacity": 269.0,
+     "served": 43.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T17:00:00+00:00",
+     "arrivals": 34,
+     "capacity": 269.0,
+     "served": 34.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T18:00:00+00:00",
+     "arrivals": 38,
+     "capacity": 269.0,
+     "served": 38.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T19:00:00+00:00",
+     "arrivals": 63,
+     "capacity": 269.0,
+     "served": 63.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T20:00:00+00:00",
+     "arrivals": 75,
+     "capacity": 269.0,
+     "served": 75.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T21:00:00+00:00",
+     "arrivals": 69,
+     "capacity": 269.0,
+     "served": 69.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T22:00:00+00:00",
+     "arrivals": 83,
+     "capacity": 269.0,
+     "served": 83.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T23:00:00+00:00",
+     "arrivals": 88,
+     "capacity": 269.0,
+     "served": 88.0,
+     "queue": 0.0,
+     "degraded": false
+    }
+   ],
+   "without_outage": [
+    {
+     "bucket": "2026-08-03T00:00:00+00:00",
+     "arrivals": 227,
+     "capacity": 269.0,
+     "served": 227.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T01:00:00+00:00",
+     "arrivals": 264,
+     "capacity": 269.0,
+     "served": 264.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T02:00:00+00:00",
+     "arrivals": 233,
+     "capacity": 269.0,
+     "served": 233.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T03:00:00+00:00",
+     "arrivals": 264,
+     "capacity": 269.0,
+     "served": 264.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T04:00:00+00:00",
+     "arrivals": 269,
+     "capacity": 269.0,
+     "served": 269.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T05:00:00+00:00",
+     "arrivals": 257,
+     "capacity": 269.0,
+     "served": 257.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T06:00:00+00:00",
+     "arrivals": 284,
+     "capacity": 269.0,
+     "served": 269.0,
+     "queue": 15.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T07:00:00+00:00",
+     "arrivals": 272,
+     "capacity": 269.0,
+     "served": 269.0,
+     "queue": 18.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T08:00:00+00:00",
+     "arrivals": 186,
+     "capacity": 269.0,
+     "served": 204.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T09:00:00+00:00",
+     "arrivals": 10,
+     "capacity": 269.0,
+     "served": 10.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T10:00:00+00:00",
+     "arrivals": 33,
+     "capacity": 269.0,
+     "served": 33.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T11:00:00+00:00",
+     "arrivals": 62,
+     "capacity": 269.0,
+     "served": 62.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T12:00:00+00:00",
+     "arrivals": 9,
+     "capacity": 269.0,
+     "served": 9.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T13:00:00+00:00",
+     "arrivals": 12,
+     "capacity": 269.0,
+     "served": 12.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T14:00:00+00:00",
+     "arrivals": 10,
+     "capacity": 269.0,
+     "served": 10.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T15:00:00+00:00",
+     "arrivals": 35,
+     "capacity": 269.0,
+     "served": 35.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T16:00:00+00:00",
+     "arrivals": 43,
+     "capacity": 269.0,
+     "served": 43.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T17:00:00+00:00",
+     "arrivals": 34,
+     "capacity": 269.0,
+     "served": 34.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T18:00:00+00:00",
+     "arrivals": 38,
+     "capacity": 269.0,
+     "served": 38.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T19:00:00+00:00",
+     "arrivals": 63,
+     "capacity": 269.0,
+     "served": 63.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T20:00:00+00:00",
+     "arrivals": 75,
+     "capacity": 269.0,
+     "served": 75.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T21:00:00+00:00",
+     "arrivals": 69,
+     "capacity": 269.0,
+     "served": 69.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T22:00:00+00:00",
+     "arrivals": 83,
+     "capacity": 269.0,
+     "served": 83.0,
+     "queue": 0.0,
+     "degraded": false
+    },
+    {
+     "bucket": "2026-08-03T23:00:00+00:00",
+     "arrivals": 88,
+     "capacity": 269.0,
+     "served": 88.0,
+     "queue": 0.0,
+     "degraded": false
+    }
+   ],
+   "peak_queue": {
+    "bucket": "2026-08-03T07:00:00+00:00",
+    "queue": 563.6
+   },
+   "recovered_at": "2026-08-03T10:00:00+00:00"
+  },
+  "figures": {
+   "normal_sustained_rate": 269.0,
+   "degraded_rate": 107.6,
+   "outage_hours": 4.0,
+   "peak_queue_with_outage": 563.6,
+   "peak_queue_without_outage": 18.0,
+   "peak_queue_increase": 545.6,
+   "backlog_at_restore": 557.6,
+   "recovery_hours_after_restore": 6.0,
+   "total_incident_hours": 10.0,
+   "trucks_not_served_during_outage": 557.6,
+   "throughput_loss_pct": 0.0
+  },
+  "assumptions": [
+   {
+    "field": "degraded_fraction",
+    "value": 0.4,
+    "reason": "manual verification as a fraction of the automated rate. Nothing in the data records a manual gate's throughput, so this is a declared planning figure, not a measurement.",
+    "source": "PARAMETER"
+   },
+   {
+    "field": "arrivals_unchanged_during_outage",
+    "value": true,
+    "reason": "trucks already dispatched keep arriving; the model does not assume drivers learn of the outage and divert. The queue is therefore an UPPER bound.",
+    "source": "ASSUMED"
+   },
+   {
+    "field": "arrival_source",
+    "value": "core.gate_event",
+    "reason": "core.eir has no gate documents in this window, so telemetry gate events are used instead; GATE_ARRIVAL is the arrival signal and GATE_IN the completion",
+    "source": "DERIVED"
+   },
+   {
+    "field": "gate_sustained_rate",
+    "value": 269.0,
+    "reason": "p90 of observed hourly ARRIVALS \u2014 nothing in the window records what the gate actually cleared, so demand is used as a proxy for throughput. This is the weakest of the available bases and will understate capacity if the gate was never saturated in this window. A declared TAS capacity of 10/h was found and NOT used: the declared capacity of 10/h is below the observed peak of 284/h in the same window. Observed throughput is a floor on capacity - the gate demonstrably achieved more than the declaration claims, so the declaration is treated as a stub rather than as policy. The completion series was also set aside: 4010 exceeds the physically plausible maximum of 600 \u2014 core.gate_event records more completion events than arrivals in this window, so completions do not measure gate throughput here.",
+    "source": "DERIVED"
+   }
+  ],
+  "queries": [
+   {
+    "purpose": "hourly truck arrivals at the gate (core.eir)",
+    "sql": "SELECT date_trunc('hour', e.truck_in_time) AS bucket, count(*) AS arrivals, count(DISTINCT e.truck_no) AS unique_trucks, count(*) FILTER (WHERE e.truck_out_time IS NOT NULL) AS completed, round(avg(e.tat_minutes)::numeric, 1) AS avg_tat_min FROM core.eir e WHERE e.truck_in_time >= :from_ts AND e.truck_in_time < :to_ts AND (CAST(:terminal AS text) IS NULL OR e.terminal ILIKE CAST(:terminal_like AS text)) GROUP BY date_trunc('hour', e.truck_in_time) ORDER BY bucket ASC",
+    "params": {
+     "from_ts": "2026-08-03T00:00:00+00:00",
+     "to_ts": "2026-08-04T00:00:00+00:00",
+     "terminal": null,
+     "terminal_like": null
+    },
+    "api": "GET /api/gate/hourly-profile",
+    "row_count": 0
+   },
+   {
+    "purpose": "hourly gate events (core.gate_event)",
+    "sql": "SELECT date_trunc('hour', g.ts) AS bucket, count(*) FILTER (WHERE g.event_type = 'GATE_ARRIVAL') AS arrivals, count(*) FILTER (WHERE g.event_type = 'GATE_IN') AS gate_in, count(*) FILTER (WHERE g.event_type = 'GATE_OUT') AS gate_out, count(DISTINCT g.plate) AS unique_trucks FROM core.gate_event g WHERE g.ts >= :from_ts AND g.ts < :to_ts AND (CAST(:gate_id AS text) IS NULL OR g.gate_id = CAST(:gate_id AS text)) GROUP BY date_trunc('hour', g.ts) ORDER BY bucket ASC",
+    "params": {
+     "from_ts": "2026-08-03T00:00:00+00:00",
+     "to_ts": "2026-08-04T00:00:00+00:00",
+     "gate_id": null
+    },
+    "api": "GET /api/gate/hourly-profile",
+    "row_count": 24
+   },
+   {
+    "purpose": "declared hourly gate capacity (core.tas_appointment)",
+    "sql": "SELECT date_trunc('hour', window_start) AS bucket, sum(capacity) AS slot_capacity, sum(booked) AS slot_booked, count(*) AS windows FROM core.tas_appointment WHERE window_start >= :from_ts AND window_start < :to_ts AND (CAST(:gate_id AS text) IS NULL OR gate_id = CAST(:gate_id AS text)) GROUP BY date_trunc('hour', window_start) ORDER BY bucket ASC",
+    "params": {
+     "from_ts": "2026-08-03T00:00:00+00:00",
+     "to_ts": "2026-08-04T00:00:00+00:00",
+     "gate_id": null
+    },
+    "api": "GET /api/tas/slots",
+    "row_count": 8
+   }
+  ],
+  "recommendations": [
+   {
+    "action": "PRE_STAGE_MANUAL_FALLBACK",
+    "reason": "a 4h outage leaves 557.6 trucks queued at restore and takes 6.0h to clear; staffing extra manual lanes for the outage caps the backlog",
+    "backlog": 557.6
+   },
+   {
+    "action": "METER_ARRIVALS_ON_DECLARED_OUTAGE",
+    "reason": "holding arrivals at source during a planned outage converts an uncontrolled corridor queue into a managed wait off the approach roads",
+    "peak_queue": 563.6
+   }
+  ],
+  "data_available": true,
+  "notes": []
+ }
+}

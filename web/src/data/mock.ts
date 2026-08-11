@@ -46,6 +46,7 @@ import type {
   Zone,
   FastagBalance,
   FastagHealth,
+  FastagTagStatus,
   FastagTransactions,
   TollEnroute,
   TollEnrouteInput,
@@ -2255,6 +2256,41 @@ export class MockAdapter implements DataAdapter {
       vehicle_class: "4",
       vehicle_class_desc: "Car / Jeep / Van",
       model_name: null,
+    });
+  }
+
+  fastagTagStatus(ref: { rc_number?: string; tag_id?: string }): Promise<FastagTagStatus> {
+    // Two rows on purpose: a re-issued tag keeps its historic entry, so the
+    // registry legitimately returns more than one tag for a single vehicle and
+    // the screen must not present the first as "the" tag.
+    const rc = ref.rc_number || "MH12XX1234";
+    const tags = [
+      {
+        tag_id: ref.tag_id || "34161FA820328972020FB320",
+        rc_number: rc,
+        tid: "E2801105200088444B320B00",
+        vehicle_class: "VC11",
+        tag_status: "A",
+        issue_date: "2023-07-10",
+        exc_code: "00",
+        bank_id: "607417",
+        commercial_vehicle: "T",
+      },
+      {
+        tag_id: "34161FA8203289720E14EEA0",
+        rc_number: rc,
+        tag_status: "C",
+        issue_date: "2021-02-18",
+        bank_id: "607417",
+        commercial_vehicle: "T",
+      },
+    ];
+    return Promise.resolve({
+      rc_number: ref.tag_id ? null : rc,
+      tag_id: ref.tag_id ?? null,
+      count: tags.length,
+      tags,
+      correlation_id: "mock",
     });
   }
 

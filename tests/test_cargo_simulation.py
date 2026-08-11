@@ -167,6 +167,18 @@ GATE_PROFILE = [
      "avg_tat_min": 40},
 ]
 
+#: GATE_PROFILE scaled x5 (2,000 trips), for the modal-shift tests only.
+#:
+#: RAIL_DAILY carries 4,000 road TEU across the window. Against GATE_PROFILE's 400
+#: trips that implies **10 TEU per truck trip**, which no truck can carry, and the
+#: plausibility guard now rejects it. The arithmetic those tests exercise is
+#: unchanged; only the fixture is made physical. 4,000 TEU / 2,000 trips = 2.0
+#: TEU/trip, i.e. a fleet of 40ft boxes.
+GATE_PROFILE_ROAD = [{**h, "arrivals": h["arrivals"] * 5,
+                      "completed": h["completed"] * 5,
+                      "unique_trucks": h["unique_trucks"] * 5}
+                     for h in GATE_PROFILE]
+
 RAIL_DAILY = [
     {"report_date": date(2026, 8, 1), "terminal_code": "NSICT", "total_teus": 2000,
      "imp_teus": 1200, "exp_teus": 800, "rakes": 4, "rail_dis_teus": 200,
@@ -418,22 +430,27 @@ async def test_crane_productivity_skips_calls_without_an_operation_window():
 @pytest.mark.asyncio
 async def test_modal_shift_sizes_the_extra_road_load():
     """Rail 800 TEU over the window; 20% = 160 TEU shifted. Road TEU is
-    4800 - 800 = 4000 across 400 observed trips => 10 TEU/trip => 16 extra trips."""
-    repo = FakeSimRepo(rail_road_daily=RAIL_DAILY, gate_hourly_profile=GATE_PROFILE)
+    4800 - 800 = 4000 across 2,000 observed trips => 2 TEU/trip => 80 extra trips.
+
+    (Fixture changed from GATE_PROFILE's 400 trips, which implied 10 TEU per truck
+    trip — physically impossible, and now rejected by the plausibility guard. The
+    arithmetic under test is identical; only the data is made real.)"""
+    repo = FakeSimRepo(rail_road_daily=RAIL_DAILY,
+                       gate_hourly_profile=GATE_PROFILE_ROAD)
     svc = SimulationService(repository=repo)
     out = await svc.run("modal-shift", {
         "from_date": date(2026, 8, 1), "to_date": date(2026, 8, 3),
-        "shift_pct": 0.20, "sustained_rate": 100})
+        "shift_pct": 0.20, "sustained_rate": 500})
 
     f = out["figures"]
     assert f["rail_teus_in_window"] == 800.0
     assert f["shifted_teus"] == 160.0
-    assert f["baseline_trips"] == 400
-    assert f["teu_per_trip"] == 10.0
-    assert f["additional_truck_trips"] == 16
-    assert f["shifted_trips"] == 416
+    assert f["baseline_trips"] == 2000
+    assert f["teu_per_trip"] == 2.0
+    assert f["additional_truck_trips"] == 80
+    assert f["shifted_trips"] == 2080
     # The added trips are apportioned to every hour and sum exactly.
-    assert sum(h["added"] for h in out["result"]["shifted_profile"]) == 16
+    assert sum(h["added"] for h in out["result"]["shifted_profile"]) == 80
 
 
 @pytest.mark.asyncio
@@ -463,12 +480,31 @@ async def test_modal_shift_reports_absorption_when_capacity_is_ample():
 
 @pytest.mark.asyncio
 async def test_modal_shift_declares_the_teu_conversion():
-    repo = FakeSimRepo(rail_road_daily=RAIL_DAILY, gate_hourly_profile=GATE_PROFILE)
+    repo = FakeSimRepo(rail_road_daily=RAIL_DAILY,
+                       gate_hourly_profile=GATE_PROFILE_ROAD)
     out = await SimulationService(repository=repo).run("modal-shift", {
         "from_date": date(2026, 8, 1), "to_date": date(2026, 8, 3)})
     teu = next(a for a in out["assumptions"] if a["field"] == "teu_per_trip")
     assert teu["source"] == "DERIVED"
     assert any(a["field"] == "shift_arrival_shape" for a in out["assumptions"])
+
+
+@pytest.mark.asyncio
+async def test_modal_shift_rejects_an_impossible_teu_per_trip():
+    """The guard, end to end.
+
+    GATE_PROFILE's 400 trips against 4,000 road TEU implies 10 TEU per truck
+    trip. No truck carries ten TEU, so the conversion must be rejected, demoted
+    to ASSUMED, and explained — never used to size the road load, which it would
+    understate fivefold."""
+    repo = FakeSimRepo(rail_road_daily=RAIL_DAILY, gate_hourly_profile=GATE_PROFILE)
+    out = await SimulationService(repository=repo).run("modal-shift", {
+        "from_date": date(2026, 8, 1), "to_date": date(2026, 8, 3)})
+    teu = next(a for a in out["assumptions"] if a["field"] == "teu_per_trip")
+    assert teu["source"] == "ASSUMED"
+    assert teu["value"] == 1.0
+    assert "REJECTED" in teu["reason"]
+    assert any("rejected as implausible" in n for n in out["notes"])
 
 
 @pytest.mark.asyncio
@@ -543,18 +579,43 @@ async def test_gate_slotting_derives_the_sustained_rate_from_completions():
 
 @pytest.mark.asyncio
 async def test_gate_slotting_prefers_declared_tas_capacity():
-    """A policy figure beats an inference, and is labelled MEASURED."""
+    """A policy figure beats an inference, and is labelled MEASURED.
+
+    The declared capacity must exceed the observed peak (GATE_PROFILE peaks at
+    150/h) — a gate that demonstrably passed more than its declaration is not
+    running to policy, and that case is covered separately below."""
     repo = FakeSimRepo(gate_hourly_profile=GATE_PROFILE,
                        tas_hourly_capacity=[
-                           {"bucket": _ts(1, 8), "slot_capacity": 80, "slot_booked": 40,
+                           {"bucket": _ts(1, 8), "slot_capacity": 200, "slot_booked": 40,
                             "windows": 1},
-                           {"bucket": _ts(1, 9), "slot_capacity": 80, "slot_booked": 40,
+                           {"bucket": _ts(1, 9), "slot_capacity": 200, "slot_booked": 40,
                             "windows": 1}])
     out = await SimulationService(repository=repo).run("gate-slotting", {
         "from_ts": _ts(1, 0), "to_ts": _ts(2, 0)})
     rate = next(a for a in out["assumptions"] if a["field"] == "gate_sustained_rate")
     assert rate["source"] == "MEASURED"
-    assert rate["value"] == 80.0
+    assert rate["value"] == 200.0
+
+
+@pytest.mark.asyncio
+async def test_gate_slotting_rejects_a_declaration_below_the_observed_peak():
+    """The stub case, end to end.
+
+    JNPA's core.tas_appointment declares 10 trucks/hour across 16 rows while the
+    same window shows a peak of 284. Taking the declaration reported 21 of 24
+    hours saturated and 92% of trucks unplaceable. Observed throughput is a floor
+    on capacity, so the declaration must be set aside and the reason stated."""
+    repo = FakeSimRepo(gate_hourly_profile=GATE_PROFILE,
+                       tas_hourly_capacity=[
+                           {"bucket": _ts(1, 8), "slot_capacity": 10, "slot_booked": 4,
+                            "windows": 1}])
+    out = await SimulationService(repository=repo).run("gate-slotting", {
+        "from_ts": _ts(1, 0), "to_ts": _ts(2, 0)})
+    rate = next(a for a in out["assumptions"] if a["field"] == "gate_sustained_rate")
+    assert rate["source"] == "DERIVED"
+    assert rate["value"] != 10.0
+    assert "NOT used" in rate["reason"]
+    assert "floor on capacity" in rate["reason"]
 
 
 @pytest.mark.asyncio
@@ -727,7 +788,11 @@ def test_modal_shift_endpoint(client):
                     json={"from_date": "2026-08-01", "to_date": "2026-08-03",
                           "shift_pct": 0.2, "sustained_rate": 100})
     assert r.status_code == 200, r.text
-    assert r.json()["figures"]["additional_truck_trips"] == 16
+    # The shared client fixture uses GATE_PROFILE (400 trips against 4,000 road
+    # TEU = 10 TEU/trip), which the plausibility guard rejects, so the conversion
+    # falls back to 1 TEU/trip: 160 shifted TEU -> 160 trips. The unguarded figure
+    # was 16, which understated the road load by a factor of ten.
+    assert r.json()["figures"]["additional_truck_trips"] == 160
 
 
 def test_gate_slotting_endpoint(client):

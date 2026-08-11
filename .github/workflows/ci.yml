@@ -83,7 +83,7 @@ jobs:
         run: |
           $PY -m pip install --upgrade pip
           $PY -m pip install -e "shared[dev]"
-          $PY -m pip install -e "ingest/vahan_sim[dev]" -e "ingest/vahan_live[dev]"
+          $PY -m pip install -e "ingest/vahan_sim[dev]"
           $PY -m pip install -e "ingest/rfid[dev]"
           $PY -m pip install -e "ingest/trucking_app[dev]"
           # EIR / gate-slip OCR (tests/test_eir_ocr.py imports `eir_ocr`; the

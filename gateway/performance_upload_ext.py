@@ -64,6 +64,8 @@ _DDL: list[str] = [
     # corrected report REPLACED (the importer now upserts instead of skipping).
     "ALTER TABLE core.perf_upload ADD COLUMN IF NOT EXISTS file_format text",
     "ALTER TABLE core.perf_upload ADD COLUMN IF NOT EXISTS updated_count integer NOT NULL DEFAULT 0",
+    # 0120 provenance — create_upload stamps data_origin; missing column → HTTP 500.
+    "ALTER TABLE core.perf_upload ADD COLUMN IF NOT EXISTS data_origin text NOT NULL DEFAULT 'MANUAL'",
 ]
 
 

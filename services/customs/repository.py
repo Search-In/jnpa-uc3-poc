@@ -115,7 +115,11 @@ class CustomsRepository:
         Dedup is PER-ORIGIN since 0120 (UNIQUE(source_sha256, data_origin)): the same
         bytes delivered by both the JNPA API ('API') and a manual dump ('MANUAL') are
         distinct rows, so a lookup narrows to the origin it is deduping against.
-        ``data_origin`` None ⇒ hash-only lookup (byte-identical to the pre-0120 query)."""
+        ``data_origin`` None ⇒ hash-only lookup (byte-identical to the pre-0120 query).
+
+        A FAILED ledger row never satisfies the lookup: it records an attempt, not
+        imported content (its domain rows were rolled back), so treating it as a
+        duplicate would poison every retry/replay of the same bytes."""
         clause = " AND data_origin = :data_origin" if data_origin is not None else ""
         params: dict[str, Any] = {"sha": sha256}
         if data_origin is not None:
@@ -124,7 +128,8 @@ class CustomsRepository:
             res = await conn.execute(
                 text("SELECT id, module, message_type, source_file, import_status, "
                      "record_count, imported_count, error_count, created_at "
-                     f"FROM core.customs_message WHERE source_sha256 = :sha{clause}"),
+                     f"FROM core.customs_message WHERE source_sha256 = :sha{clause}"
+                     " AND import_status <> 'FAILED'"),
                 params)
             row = res.mappings().first()
         return dict(row) if row else None
@@ -718,7 +723,11 @@ class CustomsRepository:
         (manual) corpus. Dedup is per-origin (0120), so the same bytes delivered by
         both paths are kept once each."""
         existing = await self.find_message_by_sha(source_sha256, data_origin=data_origin)
-        if existing is not None:
+        if existing is not None and existing["import_status"] != "FAILED":
+            # A FAILED ledger row records the *attempt*, not the content — a
+            # retry (replay) must import, not dedup against its own failure.
+            # The ledger INSERTs upsert on (source_sha256, data_origin), so the
+            # retry replaces the FAILED row in place.
             return {"message_id": existing["id"], "module": existing["module"],
                     "import_status": "SKIPPED_DUPLICATE",
                     "record_count": existing["record_count"],
@@ -821,7 +830,7 @@ class CustomsRepository:
             imported += await self._bulk_counted(
                 conn, _IGM_CONT_INSERT, cont_rows,
                 count_sql="SELECT count(*) FROM core.igm_line_container "
-                          "WHERE igm_no = CAST(:igm AS bigint)",
+                          "WHERE igm_no = CAST(CAST(:igm AS text) AS bigint)",
                 count_params={"igm": igm_no})
         return imported
 
@@ -843,7 +852,7 @@ class CustomsRepository:
             imported += await self._bulk_counted(
                 conn, _OOC_CONT_INSERT, cont_rows,
                 count_sql="SELECT count(DISTINCT container_no) FROM core.ooc_item "
-                          "WHERE be_no = CAST(:be AS bigint)",
+                          "WHERE be_no = CAST(CAST(:be AS text) AS bigint)",
                 count_params={"be": be_no})
             item_rows = []
             for c in o.get("containers", []):
@@ -873,7 +882,7 @@ class CustomsRepository:
             imported += await self._bulk_counted(
                 conn, _SMTP_LINE_INSERT, line_rows,
                 count_sql="SELECT count(*) FROM core.smtp_container "
-                          "WHERE smtp_no = CAST(:sno AS bigint)",
+                          "WHERE smtp_no = CAST(CAST(:sno AS text) AS bigint)",
                 count_params={"sno": p.get("smtp_no")})
         return imported
 
@@ -935,6 +944,12 @@ VALUES
     (:message_type, :module, :control_number, :sender_id, :receiver_id, :message_id_code,
      :sent_ts, :primary_ref, :source_file, :source_sha256, :file_size_bytes, :record_count,
      :data_origin, 'PENDING')
+ON CONFLICT (source_sha256, data_origin) DO UPDATE SET
+    message_type = EXCLUDED.message_type, module = EXCLUDED.module,
+    control_number = EXCLUDED.control_number, sent_ts = EXCLUDED.sent_ts,
+    primary_ref = EXCLUDED.primary_ref, source_file = EXCLUDED.source_file,
+    record_count = EXCLUDED.record_count, import_status = 'PENDING',
+    error_detail = NULL, updated_at = now()
 RETURNING id
 """
 _MSG_INSERT_FAILED = """
@@ -946,6 +961,9 @@ VALUES
     (:message_type, :module, :control_number, :sender_id, :receiver_id, :message_id_code,
      :sent_ts, :primary_ref, :source_file, :source_sha256, :file_size_bytes, :record_count,
      :data_origin, 'FAILED', :error_detail)
+ON CONFLICT (source_sha256, data_origin) DO UPDATE SET
+    import_status = 'FAILED', error_detail = EXCLUDED.error_detail,
+    updated_at = now()
 RETURNING id
 """
 
@@ -968,7 +986,7 @@ _IGM_VESSEL_UPSERT = f"""
 INSERT INTO core.igm
     (message_id, data_origin, {", ".join(_IGM_VESSEL_COLMAP[c] for c in _IGM_VESSEL_COLS)})
 VALUES
-    (:message_id, :data_origin, {", ".join(('CAST(:igm_no AS bigint)' if c == 'igm_no' else f':{c}')
+    (:message_id, :data_origin, {", ".join(('CAST(CAST(:igm_no AS text) AS bigint)' if c == 'igm_no' else f':{c}')
                              for c in _IGM_VESSEL_COLS)})
 ON CONFLICT (igm_no) DO UPDATE SET
     eta = EXCLUDED.eta, entry_inward_ts = EXCLUDED.entry_inward_ts,
@@ -997,7 +1015,7 @@ _IGM_LINE_INSERT = f"""
 INSERT INTO core.igm_line
     (igm_no, data_origin, {", ".join(_IGM_LINE_COLMAP[c] for c in _IGM_LINE_COLS)})
 VALUES
-    (CAST(:igm_no AS bigint), :data_origin, {", ".join(f':{c}' for c in _IGM_LINE_COLS)})
+    (CAST(CAST(:igm_no AS text) AS bigint), :data_origin, {", ".join(f':{c}' for c in _IGM_LINE_COLS)})
 ON CONFLICT (igm_no, line_no, subline_no) DO NOTHING
 """
 _IGM_CONT_COLS = _cols(
@@ -1013,7 +1031,7 @@ _IGM_CONT_INSERT = f"""
 INSERT INTO core.igm_line_container
     (igm_no, line_no, subline_no, data_origin, {", ".join(_IGM_CONT_COLMAP[c] for c in _IGM_CONT_COLS)})
 VALUES
-    (CAST(:igm_no AS bigint), :line_no, :subline_no, :data_origin, {", ".join(f':{c}' for c in _IGM_CONT_COLS)})
+    (CAST(CAST(:igm_no AS text) AS bigint), :line_no, :subline_no, :data_origin, {", ".join(f':{c}' for c in _IGM_CONT_COLS)})
 ON CONFLICT (igm_no, line_no, subline_no, container_no) DO NOTHING
 """
 
@@ -1043,8 +1061,8 @@ _OOC_UPSERT = f"""
 INSERT INTO core.bill_of_entry_ooc
     (message_id, data_origin, {", ".join(_OOC_COLMAP[c] for c in _OOC_INS_COLS)})
 VALUES
-    (:message_id, :data_origin, {", ".join(('CAST(:bill_of_entry_no AS bigint)' if c == 'bill_of_entry_no'
-                              else 'CAST(:igm_no AS bigint)' if c == 'igm_no'
+    (:message_id, :data_origin, {", ".join(('CAST(CAST(:bill_of_entry_no AS text) AS bigint)' if c == 'bill_of_entry_no'
+                              else 'CAST(CAST(:igm_no AS text) AS bigint)' if c == 'igm_no'
                               else f':{c}') for c in _OOC_INS_COLS)})
 ON CONFLICT (be_no) DO UPDATE SET
     ooc_no = EXCLUDED.ooc_no, ooc_date = EXCLUDED.ooc_date,
@@ -1054,7 +1072,7 @@ RETURNING id
 # container placeholder row: invoice_no='' / item_sr_no=0 (the flattened level)
 _OOC_CONT_INSERT = """
 INSERT INTO core.ooc_item (be_no, container_no, invoice_no, item_sr_no, iso_valid, data_origin)
-VALUES (CAST(:bill_of_entry_no AS bigint), :container_no, '', 0, :iso_valid, :data_origin)
+VALUES (CAST(CAST(:bill_of_entry_no AS text) AS bigint), :container_no, '', 0, :iso_valid, :data_origin)
 ON CONFLICT (be_no, container_no, invoice_no, item_sr_no) DO NOTHING
 """
 _OOC_ITEM_COLS = _cols(
@@ -1068,7 +1086,7 @@ _OOC_ITEM_INSERT = f"""
 INSERT INTO core.ooc_item
     (be_no, container_no, iso_valid, data_origin, {", ".join(_OOC_ITEM_COLMAP[c] for c in _OOC_ITEM_COLS)})
 VALUES
-    (CAST(:bill_of_entry_no AS bigint), :container_no, :iso_valid, :data_origin,
+    (CAST(CAST(:bill_of_entry_no AS text) AS bigint), :container_no, :iso_valid, :data_origin,
      {", ".join(("coalesce(:invoice_number, '')" if c == 'invoice_number'
                  else 'coalesce(:item_sr_no, 0)' if c == 'item_sr_no'
                  else f':{c}') for c in _OOC_ITEM_COLS)})
@@ -1089,8 +1107,8 @@ _SMTP_UPSERT = f"""
 INSERT INTO core.smtp_permit
     (message_id, data_origin, {", ".join(_SMTP_COLMAP[c] for c in _SMTP_COLS)})
 VALUES
-    (:message_id, :data_origin, {", ".join(('CAST(:smtp_no AS bigint)' if c == 'smtp_no'
-                              else 'CAST(:igm_no AS bigint)' if c == 'igm_no'
+    (:message_id, :data_origin, {", ".join(('CAST(CAST(:smtp_no AS text) AS bigint)' if c == 'smtp_no'
+                              else 'CAST(CAST(:igm_no AS text) AS bigint)' if c == 'igm_no'
                               else f':{c}') for c in _SMTP_COLS)})
 ON CONFLICT (smtp_no) DO UPDATE SET message_id = EXCLUDED.message_id
 RETURNING id
@@ -1111,7 +1129,7 @@ INSERT INTO core.smtp_container
     (smtp_no, igm_line_no, igm_subline_no, data_origin,
      {", ".join(_SMTP_LINE_COLMAP[c] for c in _SMTP_LINE_COLS)})
 VALUES
-    (CAST(:smtp_no AS bigint), :line_no, :subline_no, :data_origin,
+    (CAST(CAST(:smtp_no AS text) AS bigint), :line_no, :subline_no, :data_origin,
      {", ".join(f':{c}' for c in _SMTP_LINE_COLS)})
 ON CONFLICT (smtp_no, container_no) DO NOTHING
 """
@@ -1131,7 +1149,7 @@ _RMS_SCAN_UPSERT = f"""
 INSERT INTO core.rms_scan_report
     (message_id, data_origin, {", ".join(_RMS_SCAN_COLMAP[c] for c in _RMS_SCAN_COLS)})
 VALUES
-    (:message_id, :data_origin, {", ".join(('CAST(:igm_no AS bigint)' if c == 'igm_no' else f':{c}')
+    (:message_id, :data_origin, {", ".join(('CAST(CAST(:igm_no AS text) AS bigint)' if c == 'igm_no' else f':{c}')
                              for c in _RMS_SCAN_COLS)})
 ON CONFLICT (igm_no) WHERE igm_no IS NOT NULL
     DO UPDATE SET selected_count = EXCLUDED.selected_count
@@ -1149,7 +1167,7 @@ _RMS_CONT_INSERT = f"""
 INSERT INTO core.rms_scan_container
     (report_id, data_origin, {", ".join(_RMS_CONT_COLMAP[c] for c in _RMS_CONT_COLS)})
 VALUES
-    (:scanlist_id, :data_origin, {", ".join(('CAST(:igm_no AS bigint)' if c == 'igm_no' else f':{c}')
+    (:scanlist_id, :data_origin, {", ".join(('CAST(CAST(:igm_no AS text) AS bigint)' if c == 'igm_no' else f':{c}')
                               for c in _RMS_CONT_COLS)})
 ON CONFLICT (report_id, sl_no) DO UPDATE SET
     container_no  = EXCLUDED.container_no,
@@ -1166,14 +1184,14 @@ ON CONFLICT (report_id, sl_no) DO UPDATE SET
 _LEO_COLS = _cols("sb_no, sb_date, site_id, rotation_no, leo_date, action")
 _LEO_INSERT = f"""
 INSERT INTO core.leo (message_id, data_origin, {", ".join(_LEO_COLS)})
-VALUES (:message_id, :data_origin, {", ".join(('CAST(:sb_no AS bigint)' if c == 'sb_no' else f':{c}')
+VALUES (:message_id, :data_origin, {", ".join(('CAST(CAST(:sb_no AS text) AS bigint)' if c == 'sb_no' else f':{c}')
                                 for c in _LEO_COLS)})
 ON CONFLICT (sb_no) DO NOTHING
 """
 _SB_COLS = _cols("sb_no, sb_date, site_id, action")
 _SB_INSERT = f"""
 INSERT INTO core.shipping_bill (message_id, data_origin, {", ".join(_SB_COLS)})
-VALUES (:message_id, :data_origin, {", ".join(('CAST(:sb_no AS bigint)' if c == 'sb_no' else f':{c}')
+VALUES (:message_id, :data_origin, {", ".join(('CAST(CAST(:sb_no AS text) AS bigint)' if c == 'sb_no' else f':{c}')
                                 for c in _SB_COLS)})
 ON CONFLICT (sb_no) DO NOTHING
 """

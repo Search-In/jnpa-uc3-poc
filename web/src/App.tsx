@@ -26,6 +26,7 @@ import CargoWhatIf from "@/screens/CargoWhatIf";
 import TruckOperations from "@/screens/TruckOperations";
 import TruckVisitDetail from "@/screens/TruckVisitDetail";
 import VehicleRegistry from "@/screens/VehicleRegistry";
+import GateLaneBoard from "@/screens/GateLaneBoard";
 import CorridorSimulation from "@/screens/CorridorSimulation";
 import ParkingManagement from "@/screens/ParkingManagement";
 import SystemHealth from "@/screens/SystemHealth";
@@ -212,6 +213,14 @@ function DashboardShell({
             element={
               <Guard path="/truck-visit">
                 <TruckVisitDetail />
+              </Guard>
+            }
+          />
+          <Route
+            path="/gate-lane-board"
+            element={
+              <Guard path="/gate-lane-board">
+                <GateLaneBoard />
               </Guard>
             }
           />

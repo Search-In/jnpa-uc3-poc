@@ -15,6 +15,7 @@ import {
   Zap,
 } from "lucide-react";
 import { getAdapter } from "@/data";
+import ChallanSimulatedBadge from "@/components/panels/ChallanSimulatedBadge";
 import type { ViolationDetectResult, ViolationEnforceResult, ViolationIncident } from "@/lib/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -715,6 +716,9 @@ export function ViolationDetectionPanel() {
               />
             </dl>
 
+            {/* UC3-030: a challan number never appears without its disclosure. */}
+            <ChallanSimulatedBadge challanNo={incident.challan_no} disclosure={incident} />
+
             {/* Lifecycle stepper — highlights the case's current state. */}
             <CaseLifecycle status={incident.status} />
 
@@ -809,6 +813,9 @@ export function ViolationDetectionPanel() {
                 />
               )}
             </dl>
+
+            {/* UC3-030: the auto-enforce path badges its challan too. */}
+            <ChallanSimulatedBadge challanNo={enforced.challan_no} disclosure={enforced} />
 
             <div className="space-y-1">
               {enforced.violations.map((v) => (

@@ -33,7 +33,8 @@ import re
 import uuid
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import (APIRouter, Body, Depends, File, Form, HTTPException, Query,
+                     Request, UploadFile)
 
 from ..logging import get_logger
 from ..metrics import REQUESTS
@@ -93,49 +94,119 @@ def _iso(row: Dict[str, Any]) -> Dict[str, Any]:
     return row
 
 
+#: Cache for :func:`_tesseract_available` (None = not yet probed).
+_TESSERACT_OK: Optional[bool] = None
+
+
 def _tesseract_available() -> bool:
-    """True when the optional real-OCR stack (pytesseract + PIL) is importable."""
+    """True when a real local OCR read can actually happen.
+
+    Importing ``pytesseract`` is NOT sufficient and checking only that was a
+    defect: pytesseract is a thin wrapper that shells out to the ``tesseract``
+    BINARY, so on a host with the Python package but no binary the import
+    succeeded, /api/ocr/health reported engine "tesseract" and active_rung "OCR",
+    and every upload then fell through to MOCK. The health endpoint was
+    advertising a real read the service could not perform — the one thing it
+    exists to tell the truth about.
+
+    So the binary is probed, not assumed. The result is cached because
+    ``get_tesseract_version`` spawns a process and /health is polled.
+    """
+    global _TESSERACT_OK
+    if _TESSERACT_OK is not None:
+        return _TESSERACT_OK
     try:
-        import pytesseract  # noqa: F401
+        import pytesseract
         from PIL import Image  # noqa: F401
-    except Exception:  # noqa: BLE001 — optional dependency
-        return False
-    return True
+
+        pytesseract.get_tesseract_version()
+    except Exception as exc:  # noqa: BLE001 — optional dependency or absent binary
+        log.info("tesseract_unavailable", error=str(exc))
+        _TESSERACT_OK = False
+    else:
+        _TESSERACT_OK = True
+    return _TESSERACT_OK
+
+
+
+#: Prefix stamped onto every identifier the MOCK rung produces.
+#:
+#: Without it the mock EIR fields were shaped exactly like the real corpus ones —
+#: ``MH43BX0417`` beside the real ``MH43BX1488``, ``MSMU1234567`` beside the real
+#: ``MSMU1908508``. A value that is indistinguishable from a real plate or
+#: container will be read as one the moment it leaves the screen it was badged
+#: on (an export, a copy-paste, a screenshot). The badge lives in the VALUE, so
+#: it travels with it.
+MOCK_VALUE_PREFIX = "MOCK-"
+
+
+def _principal(request: Optional[Request]) -> Optional[str]:
+    """The authenticated operator, for verified_by."""
+    p = getattr(getattr(request, "state", None), "principal", None)
+    for attr in ("username", "subject", "sub", "role"):
+        val = getattr(p, attr, None)
+        if val:
+            return str(val)
+    return None
+
+
+def _field_provenance(row: Dict[str, Any]) -> Dict[str, str]:
+    """Per-field origin: HUMAN_VERIFIED for operator-corrected keys, else the rung.
+
+    This is what stops a MOCK value from hiding inside a VERIFIED record: every
+    key says where it came from, individually.
+    """
+    fields = row.get("fields") or {}
+    if isinstance(fields, str):
+        try:
+            fields = json.loads(fields)
+        except Exception:  # noqa: BLE001
+            fields = {}
+    corrected = row.get("corrected_fields") or []
+    if isinstance(corrected, str):
+        try:
+            corrected = json.loads(corrected)
+        except Exception:  # noqa: BLE001
+            corrected = []
+    corrected_set = {str(k) for k in corrected} if isinstance(corrected, list) else set()
+    source = str(row.get("source") or "UNKNOWN")
+    return {k: ("HUMAN_VERIFIED" if k in corrected_set else source)
+            for k in (fields or {})}
 
 
 def _mock_fields(doc_type: str, seed: str) -> Dict[str, Any]:
-    """Deterministic, plausible fields per doc_type (stand-in for a real read).
+    """Deterministic, plausible-SHAPED fields per doc_type (stand-in for a read).
 
     Hash-derived so the same bytes always yield the same fields — never random —
-    which keeps demos reproducible and clearly distinguishable as MOCK output.
+    which keeps demos reproducible. Every identifier carries MOCK_VALUE_PREFIX so
+    it cannot be mistaken for, or matched against, a real gate document: the mock
+    values must never join to core.gate_document, core.vehicle or a Vahan record.
     """
     h = int(hashlib.sha256(seed.encode()).hexdigest(), 16)
     n6 = h % 1_000_000
+    p = MOCK_VALUE_PREFIX
     if doc_type == "LR":
         return {
-            "lr_number": f"LR-{n6:06d}",
-            "consignor": "ABC Logistics Pvt Ltd",
-            "consignee": "JNPA Terminal Operations",
-            "date": "2026-07-16",
+            "lr_number": f"{p}LR-{n6:06d}",
+            "consignor": f"{p}consignor not read",
+            "consignee": f"{p}consignee not read",
+            "date": None,
         }
     if doc_type == "INVOICE":
         return {
-            "invoice_no": f"INV-{n6:06d}",
-            "amount": round(1000 + (h % 90000) / 100.0, 2),
-            "gstin": f"27ABCDE{(h % 10000):04d}F1Z5",
+            "invoice_no": f"{p}INV-{n6:06d}",
+            "amount": None,
+            "gstin": f"{p}GSTIN-{(h % 10000):04d}",
         }
     if doc_type == "EWAYBILL":
-        return {
-            "ewb_no": f"{100000000000 + (h % 900000000000)}",
-            "valid_upto": "2026-07-20",
-        }
+        return {"ewb_no": f"{p}EWB-{n6:06d}", "valid_upto": None}
     if doc_type == "PERMIT":
-        return {"permit_no": f"PMT-{n6:06d}"}
+        return {"permit_no": f"{p}PMT-{n6:06d}"}
     if doc_type in _EIR_DOC_TYPES:
         return {
-            "EIRNo": f"{1000000 + (n6 % 9000000)}",
-            "LICNo": f"MH43BX{(n6 % 10000):04d}",
-            "ContainerNo": f"MSMU{(n6 % 10_000_000):07d}",
+            "EIRNo": f"{p}{1000000 + (n6 % 9000000)}",
+            "LICNo": f"{p}PLATE-{(n6 % 10000):04d}",
+            "ContainerNo": f"{p}CONTR-{(n6 % 10_000_000):07d}",
         }
     return {}
 
@@ -545,7 +616,11 @@ async def upload_document(
         raw_text = None
         fields = {}
         confidence = None
-        source = "MOCK"
+        # A failure is NOT a mock read. Labelling it "MOCK" claimed the mock rung
+        # had run and produced these (empty) fields, which it had not — the row
+        # then counted as mock output in every provenance rollup. NONE says what
+        # actually happened: no rung produced anything.
+        source = "NONE"
 
     row = await execute_returning(
         """INSERT INTO core.document_ocr
@@ -603,7 +678,8 @@ async def list_documents(
         clause = "WHERE doc_type = :dtype"
         params["dtype"] = doc_type.strip().upper()
     rows = await fetch_all(
-        f"""SELECT id, ts, doc_type, source_ref, confidence, status, source, fields
+        f"""SELECT id, ts, doc_type, source_ref, confidence, status, source, fields,
+                   corrected_fields, verified_by, verified_at
             FROM core.document_ocr {clause} ORDER BY ts DESC LIMIT :limit""",
         params, dsn=dsn,
     )
@@ -612,6 +688,9 @@ async def list_documents(
     for r in rows:
         item = _iso(dict(r))
         item["fields"] = _order_fields_for_response(item.get("fields"))
+        # Per-field origin travels with every row, so a MOCK value can never be
+        # read as a real one just because the row is VERIFIED.
+        item["field_provenance"] = _field_provenance(item)
         docs.append(item)
     return {"count": len(docs), "documents": docs}
 
@@ -631,17 +710,34 @@ async def get_document(doc_id: int, state: GatewayState = Depends(get_state)) ->
     REQUESTS.labels("document_ocr", "ok").inc()
     doc = _iso(dict(row))
     doc["fields"] = _order_fields_for_response(doc.get("fields"))
+    doc["field_provenance"] = _field_provenance(doc)
     return {"document": doc}
 
 
 @router.post("/documents/{doc_id}/verify")
 async def verify_document(
     doc_id: int,
+    request: Request,
     body: Dict[str, Any] = Body(default=None),
     state: GatewayState = Depends(get_state),
 ) -> dict:
     """Mark a document VERIFIED. Optional body ``{fields}`` merges operator field
-    corrections into the extracted ``fields`` jsonb. Returns the updated record."""
+    corrections into the extracted ``fields`` jsonb. Returns the updated record.
+
+    Provenance rule (UC3-041). Verification records itself; it does not rewrite
+    history. ``source`` keeps naming the EXTRACTION rung, because which engine
+    read the document is a fact that a later human action cannot change. What the
+    human did is recorded separately:
+
+      * ``corrected_fields`` lists the keys the operator overwrote — those values
+        are human-supplied, whatever ``source`` says;
+      * any key NOT in that list still comes from ``source``, so a MOCK field that
+        survived verification is still visibly a MOCK field.
+
+    Before this, a verified record kept ``source='MOCK'`` at confidence 0.75 with
+    no way to tell corrected values from mock ones, so mock output was carried
+    forward under a VERIFIED badge.
+    """
     dsn = state.cfg.postgres_dsn
     if not dsn:
         raise HTTPException(503, "database_unavailable")
@@ -652,26 +748,46 @@ async def verify_document(
     if not row:
         raise HTTPException(404, "document_not_found")
 
-    corrections = (body or {}).get("fields") if isinstance(body, dict) else None
+    body = body if isinstance(body, dict) else {}
+    corrections = body.get("fields")
+    verified_by = body.get("verified_by") or _principal(request)
+
     if isinstance(corrections, dict) and corrections:
-        # Merge operator corrections into the existing fields jsonb (right wins).
+        # Merge operator corrections into the existing fields jsonb (right wins),
+        # and union the corrected keys into corrected_fields so a second pass
+        # does not erase what a first operator supplied.
         await execute(
             """UPDATE core.document_ocr
                SET fields = COALESCE(fields, '{}'::jsonb) || CAST(:patch AS jsonb),
+                   corrected_fields = (
+                       SELECT to_jsonb(array(
+                           SELECT DISTINCT k FROM (
+                               SELECT jsonb_array_elements_text(
+                                   COALESCE(corrected_fields, '[]'::jsonb)) AS k
+                               UNION
+                               SELECT jsonb_object_keys(CAST(:patch AS jsonb))
+                           ) s ORDER BY k))),
+                   verified_by = :by,
+                   verified_at = now(),
                    status = 'VERIFIED'
                WHERE id = :id""",
-            {"patch": json.dumps(corrections), "id": doc_id}, dsn=dsn,
+            {"patch": json.dumps(corrections), "by": verified_by, "id": doc_id}, dsn=dsn,
         )
     else:
         await execute(
-            "UPDATE core.document_ocr SET status = 'VERIFIED' WHERE id = :id",
-            {"id": doc_id}, dsn=dsn,
+            """UPDATE core.document_ocr
+               SET status = 'VERIFIED', verified_by = :by, verified_at = now()
+               WHERE id = :id""",
+            {"by": verified_by, "id": doc_id}, dsn=dsn,
         )
 
     updated = await fetch_one(
         "SELECT * FROM core.document_ocr WHERE id = :id", {"id": doc_id}, dsn=dsn)
     REQUESTS.labels("document_ocr", "ok").inc()
-    return {"document": _iso(dict(updated)) if updated else None}
+    out = _iso(dict(updated)) if updated else None
+    if out is not None:
+        out["field_provenance"] = _field_provenance(out)
+    return {"document": out}
 
 
 @router.get("/health")
@@ -713,4 +829,32 @@ async def ocr_health(state: GatewayState = Depends(get_state)) -> dict:
         "upstream": upstream,
         "active_rung": active,
         "eir_doc_types": sorted(_EIR_DOC_TYPES),
+        # The rung an upload will actually take, and what it will be badged as.
+        # Stated here so an operator can tell BEFORE the demo whether a scan will
+        # produce a real read (WS2: Tesseract real conf 0.9; deterministic MOCK
+        # fallback conf 0.75 badged source: MOCK).
+        "will_produce": {
+            "source": active,
+            "real_read": active != "MOCK",
+            "expected_confidence": 0.75 if active == "MOCK" else 0.9,
+        },
+        "rungs": [
+            {"rung": 1, "source": "OCR_SERVICE",
+             "engine": "Tesseract via ingest/eir_ocr",
+             "real_read": True, "nominal_confidence": 0.9,
+             "available": bool(upstream.get("engine_ready"))},
+            {"rung": 2, "source": "OCR",
+             "engine": "in-process pytesseract",
+             "real_read": True, "nominal_confidence": 0.9,
+             "available": available},
+            {"rung": 3, "source": "MOCK",
+             "engine": "deterministic stand-in — NOT a real read",
+             "real_read": False, "nominal_confidence": 0.75,
+             "available": True,
+             "value_prefix": MOCK_VALUE_PREFIX,
+             "note": ("Every identifier the MOCK rung emits is prefixed "
+                      f"'{MOCK_VALUE_PREFIX}' so it can never be read as, or joined "
+                      "to, a real plate or container number.")},
+        ],
+        "failed_extraction_source": "NONE",
     }

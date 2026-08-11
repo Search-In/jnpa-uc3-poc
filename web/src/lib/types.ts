@@ -449,6 +449,15 @@ export interface ViolationIncident {
   gate_id?: string | null;
   alert_ids: string[];
   skipped?: string[];
+  // UC3-030: the gateway attaches the issuance disclosure to every
+  // challan-bearing response, so a client cannot render a challan number without
+  // the SIMULATED badge that qualifies it (assumption A5).
+  issuance_mode?: "SIMULATED";
+  badge?: "SIMULATED";
+  is_legal_instrument?: false;
+  authority_note?: string;
+  assumption_ref?: string;
+  disclosure?: string;
 }
 
 /** Result of the fully-automatic POST /api/violations/enforce pipeline. */
@@ -474,6 +483,15 @@ export interface ViolationEnforceResult {
   alert_ids: string[];
   skipped?: string[];
   notification_sent: boolean;
+  // UC3-030: the gateway attaches the issuance disclosure to every
+  // challan-bearing response, so a client cannot render a challan number without
+  // the SIMULATED badge that qualifies it (assumption A5).
+  issuance_mode?: "SIMULATED";
+  badge?: "SIMULATED";
+  is_legal_instrument?: false;
+  authority_note?: string;
+  assumption_ref?: string;
+  disclosure?: string;
 }
 
 /** Payload of the `violation_enforced` WS frame (real-time enforcement event). */
@@ -1364,4 +1382,393 @@ export interface LogisticsHealth {
   last_call_at: string | null;
   last_call_ok: boolean | null;
   fresh: boolean;
+}
+
+// --- UC3-021 Gate & Lane Board ---------------------------------------------
+/**
+ * One gate card. `queue_vehicles` is COUNTED by video analytics and is null when
+ * no camera observation exists — it is never derived from throughput, so a
+ * stopped gate shows a rising queue beside zero throughput (UI-068).
+ */
+export interface GateCard {
+  gate_id: string;
+  name: string | null;
+  lat: number | null;
+  lon: number | null;
+  closed_at: string | null;
+  in_count: number;
+  out_count: number;
+  throughput_60min: number;
+  avg_txn_minutes: number | null;
+  txn_samples: number;
+  queue_vehicles: number | null;
+  queue_status: "COUNTED" | "NO_OBSERVATION";
+  queue_count_method: string | null;
+  queue_camera_id: string | null;
+  queue_observed_at: string | null;
+  queue_confidence: number | null;
+  congestion_level: "LOW" | "MEDIUM" | "HIGH" | null;
+}
+
+export interface GateBoardResponse {
+  gates: GateCard[];
+  count: number;
+  window_minutes: number;
+  thresholds: { medium: number; high: number };
+  kpi: { queue_length_target: number; queue_length_baseline: number };
+  queue_provenance: {
+    source_table: string;
+    accepted_methods: string[];
+    derived_from_throughput: boolean;
+    note: string;
+  };
+}
+
+export interface GateLane {
+  lane_id: string;
+  gate_id: string;
+  lane_no: number;
+  lane_type: "IN" | "OUT" | "REVERSIBLE";
+  lane_state: "OPEN" | "CLOSED" | "MAINTENANCE";
+  boom_barrier: "UP" | "DOWN" | "UNKNOWN";
+  updated_at: string;
+}
+
+export interface GateConfirmation {
+  id: number;
+  ts: string;
+  gate_id: string;
+  plate: string | null;
+  device_id: string | null;
+  trip_id: string | null;
+  event_type: string;
+  container_number: string | null;
+  bat_lane: string | null;
+  source: string | null;
+}
+
+export interface LaneReassignPreview {
+  lane_id: string;
+  gate_id: string;
+  from_lane_type: string;
+  to_lane_type: string;
+  queue_now: number | null;
+  queue_projected: number | null;
+  queue_delta: number | null;
+  congestion_now: string | null;
+  congestion_projected: string | null;
+  open_lanes_at_gate: number;
+  added_capacity_vph: number;
+  window_minutes: number;
+  throughput_60min: number;
+  simulated: boolean;
+  method: { added_capacity_vph: number; basis: string; formula: string };
+  /** Always "HUMAN_TASK" — applying never commands gate equipment (UI-103). */
+  applies_as: string;
+  sends_equipment_command: false;
+}
+
+export interface LaneReassignTask {
+  task_id: string;
+  gate_id: string;
+  lane_id: string;
+  from_lane_type: string;
+  to_lane_type: string;
+  reason: string | null;
+  impact_preview: Record<string, unknown>;
+  status: "PENDING" | "ACKNOWLEDGED" | "DONE" | "CANCELLED";
+  assigned_to: string;
+  created_by: string | null;
+  created_at: string;
+  acknowledged_by: string | null;
+  acknowledged_at: string | null;
+  dispatched_to_equipment: false;
+}
+
+// --- UC3-027 CPP metered release -------------------------------------------
+export interface CppReleasePlan {
+  terminal_code: string;
+  gate_id: string | null;
+  gate_queue_vehicles: number;
+  clearing_rate_vph: number;
+  release_rate_vph: number;
+  hold_minutes: number;
+  congestion_level: "LOW" | "MEDIUM" | "HIGH";
+  advice_text: string;
+  mode: "METERED" | "UNIFORM";
+  simulated: boolean;
+  /** Present on freshly computed plans and re-attached to persisted ones; still
+   *  optional so a plan from an older row can never crash the board. */
+  method?: Record<string, string | number>;
+}
+
+export interface CppZone {
+  facility_id: string;
+  zone: string | null;
+  location: Record<string, unknown> | string | null;
+  capacity: number;
+  occupied: number;
+  available: number;
+  utilisation: number | null;
+  status: string | null;
+}
+
+export interface CppBoardResponse {
+  zones: CppZone[];
+  zone_count: number;
+  totals: { capacity: number; occupied: number; available: number };
+  dwell_histogram: Array<{
+    bucket: number;
+    trucks: number;
+    min_minutes: number | null;
+    max_minutes: number | null;
+  }>;
+  dwell_status: "OK" | "NO_DATA";
+  release_plans: CppReleasePlan[];
+  amenities: { status: string; note: string };
+  occupancy_source: string;
+}
+
+// --- UC3-040 Auto-LEO four-way join ----------------------------------------
+export type LeoSourceState = "MATCH" | "MISMATCH" | "MISSING";
+
+export interface AutoLeoRow {
+  container_no: string;
+  vehicle_plate: string | null;
+  leo_ready: boolean;
+  customs_flags: string[];
+  sources: Record<"eseal" | "form13" | "weighbridge" | "icegate", LeoSourceState>;
+  checks: Record<string, unknown>;
+  evidence: Record<
+    string,
+    {
+      capture_id: number;
+      captured_at: string | null;
+      status: string | null;
+      source_mode: string | null;
+      provenance: "REAL" | "SIMULATED";
+      evidence_uri: string | null;
+      payload: Record<string, unknown>;
+    }
+  >;
+  form13_document: {
+    doc_variant: string;
+    doc_ref: string | null;
+    vehicle_no: string | null;
+    custom_seal_no: string | null;
+    line_seal_no: string | null;
+    declared_wt_kg: number | null;
+    data_origin: string | null;
+  } | null;
+  anchored_to_real_document: boolean;
+  weighbridge_reroute: {
+    failed_wb_id: string;
+    alternate_wb_id: string | null;
+    customs_notified: boolean;
+    notified_at: string | null;
+  } | null;
+}
+
+export interface AutoLeoBoardResponse {
+  rows: AutoLeoRow[];
+  count: number;
+  summary: {
+    total: number;
+    leo_ready: number;
+    blocked: number;
+    anchored_to_real_document: number;
+    by_flag: Record<string, number>;
+  };
+  flags: Array<{ flag: string; meaning: string }>;
+  weight_tolerance_pct: number;
+  assumption: { ref: string; text: string };
+}
+
+// --- UC3-024 trip resolver / UC3-025 visit timeline -------------------------
+export type EvidenceLabel = "VERIFIED" | "KEY_ONLY" | "NOT_IN_CORPUS";
+
+export interface TripMatch {
+  trip_id: string;
+  doc_id: number;
+  doc_category: string;
+  doc_variant: string;
+  document_no: string | null;
+  pin_no: string | null;
+  container_no: string | null;
+  vehicle_no: string | null;
+  line_seal_no: string | null;
+  custom_seal_no: string | null;
+  bat_no: string | null;
+  terminal_code: string | null;
+  terminal_name: string | null;
+  terminal_operator: string | null;
+  transporter_name: string | null;
+  driver_name: string | null;
+  driver_licence: string | null;
+  vessel_name: string | null;
+  voyage: string | null;
+  pol: string | null;
+  pod: string | null;
+  booking_no: string | null;
+  cfs: string | null;
+  iso_code: string | null;
+  gross_weight_kg: number | null;
+  yard_position: string | null;
+  gate_no: string | null;
+  doc_ts: string | null;
+  truck_in_ts: string | null;
+  truck_out_ts: string | null;
+  image_file: string | null;
+  source_file: string | null;
+  data_origin: string | null;
+  attrs: Record<string, string>;
+  matched_by: Array<{ column: string; kind: string; value: string }>;
+  match_confidence: number;
+}
+
+export interface TripSearchResponse {
+  query: string;
+  status: "RESOLVED" | "AMBIGUOUS" | "NO_MATCH" | "INVALID_INPUT";
+  ambiguous?: boolean;
+  trips: TripMatch[];
+  count: number;
+  detected_kind: string;
+  resolved_trip_id?: string | null;
+  reason?: string | null;
+  suggestions?: Array<{
+    trip_id: string;
+    document_no: string | null;
+    container_no: string | null;
+    vehicle_no: string | null;
+    terminal_code: string | null;
+  }>;
+  searchable_keys: Array<{ kind: string; label: string; example: string }>;
+}
+
+export interface TimelineStep {
+  key: string;
+  label: string;
+  ts: string | null;
+  evidence: EvidenceLabel;
+  source: string | null;
+  detail: string | null;
+  dwell_minutes: number | null;
+}
+
+export interface TripDetail extends TripMatch {
+  timeline: TimelineStep[];
+  timeline_summary: {
+    total_steps: number;
+    verified: number;
+    key_only: number;
+    not_in_corpus: number;
+    in_gate_minutes: number | null;
+    note: string;
+  };
+  evidence_labels: Record<EvidenceLabel, string>;
+  documents: Array<{
+    trip_id: string;
+    doc_id: number;
+    doc_category: string;
+    doc_variant: string;
+    document_no: string | null;
+    pin_no: string | null;
+    container_no: string | null;
+    vehicle_no: string | null;
+    terminal_code: string | null;
+    doc_ts: string | null;
+    image_file: string | null;
+    data_origin: string | null;
+  }>;
+  share_path: string;
+}
+
+// --- UC3-036 carbon method + idle delta ------------------------------------
+export interface CarbonFactor {
+  vehicle_class: string;
+  value: number;
+  unit: string;
+  source: string;
+  derivation: string;
+}
+
+export interface CarbonMethodBlock {
+  metric: string;
+  unit: string;
+  formula: string;
+  assumption_ref: string;
+  assumption_text: string;
+  activity_data: { input: string; provenance: string; note: string };
+  constants?: Array<{
+    key: string;
+    value: number;
+    unit: string;
+    source: string;
+    basis: string;
+  }>;
+  factors: CarbonFactor[];
+  sources: Record<string, string>;
+}
+
+export interface CarbonMethodResponse {
+  assumption_ref: string;
+  assumption_text: string;
+  idle: CarbonMethodBlock;
+  moving: CarbonMethodBlock;
+  sources: Record<string, string>;
+  factors_are_published: boolean;
+  activity_data_is_simulated: boolean;
+}
+
+export interface CarbonIdleDelta {
+  scenario: string | null;
+  vehicle_class: string;
+  unit: string;
+  baseline: { idle_minutes: number; idle_co2e_kg: number; label: string };
+  scenario_run: { idle_minutes: number; idle_co2e_kg: number };
+  delta_kg: number;
+  delta_pct: number | null;
+  improvement: boolean;
+  idle_factor_gco2e_per_min: number;
+  simulated: boolean;
+  method: CarbonMethodBlock;
+}
+
+// --- UC3-030 e-Challan disclosure ------------------------------------------
+/** Attached by the gateway to every challan-bearing payload (assumption A5). */
+export interface ChallanDisclosure {
+  issuance_mode: "SIMULATED";
+  badge: "SIMULATED";
+  is_legal_instrument: false;
+  authority_note: string;
+  assumption_ref: string;
+  disclosure: string;
+}
+
+// --- UC3-041 OCR engine health ---------------------------------------------
+export interface OcrHealth {
+  engine: string;
+  configured: boolean;
+  upstream: {
+    url: string | null;
+    reachable: boolean;
+    status?: string;
+    engine_ready?: boolean;
+    tesseract_version?: string;
+    error?: string;
+  };
+  active_rung: "OCR_SERVICE" | "OCR" | "MOCK";
+  eir_doc_types: string[];
+  will_produce: { source: string; real_read: boolean; expected_confidence: number };
+  rungs: Array<{
+    rung: number;
+    source: string;
+    engine: string;
+    real_read: boolean;
+    nominal_confidence: number;
+    available: boolean;
+    value_prefix?: string;
+    note?: string;
+  }>;
+  failed_extraction_source: string;
 }

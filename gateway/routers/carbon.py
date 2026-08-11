@@ -24,7 +24,7 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Body, Depends, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from ..logging import get_logger
 from ..metrics import REQUESTS, UPSTREAM_LATENCY
@@ -129,6 +129,81 @@ async def rollup(state: GatewayState = Depends(get_state)) -> dict:
     roll = calc.aoi_rollup(calc.seed_aoi_fleet())
     REQUESTS.labels("carbon", "ok").inc()
     return {"decision_path": "SYNTHETIC", **roll}
+
+
+@router.get("/method")
+async def method() -> dict:
+    """The full calculation method: every factor, its source, its assumption ref.
+
+    UC3-036 requires that an evaluator can go from the headline CO2e to the
+    factor, the published source behind it and the assumption entry in two
+    clicks. That is only possible if the factors travel WITH their provenance, so
+    this endpoint is the single source the method panel renders — the dashboard
+    no longer keeps its own copy of the numbers to drift out of step with.
+    """
+    from carbon import factors  # type: ignore
+
+    REQUESTS.labels("carbon", "ok").inc()
+    return factors.method()
+
+
+@router.post("/idle-delta")
+async def idle_delta(body: Dict[str, Any] = Body(default={})) -> dict:
+    """Idle-CO2e for a scenario against its do-nothing baseline (EC-7).
+
+    Both arms are computed with the SAME published factors, so the delta is a
+    difference in idle MINUTES, not in method. The caller supplies the two idle
+    totals the scenario produced; nothing here invents an activity figure, and a
+    request that omits them gets a 422 rather than a plausible number.
+
+    Every figure returned is tagged ``simulated: true``: idle time comes from the
+    twin's simulation, because no fleet-transporter fuel API exists pre-award.
+    """
+    from carbon import calculator, factors  # type: ignore
+
+    vc = str(body.get("vehicle_class") or factors.DEFAULT_CLASS).upper()
+    baseline_min = body.get("baseline_idle_minutes")
+    scenario_min = body.get("scenario_idle_minutes")
+    if baseline_min is None or scenario_min is None:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "idle_minutes_required",
+                    "detail": ("baseline_idle_minutes and scenario_idle_minutes are "
+                               "required — the delta is a difference in measured idle "
+                               "time and is never inferred."),
+                    "example": {"baseline_idle_minutes": 3582,
+                                "scenario_idle_minutes": 2687,
+                                "vehicle_class": "HGV"}})
+    try:
+        baseline_min = float(baseline_min)
+        scenario_min = float(scenario_min)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422,
+                            detail={"error": "idle_minutes_not_numeric"})
+    if baseline_min < 0 or scenario_min < 0:
+        raise HTTPException(status_code=422,
+                            detail={"error": "idle_minutes_negative"})
+
+    baseline_kg = calculator.idle_emissions_kg(baseline_min, vc)
+    scenario_kg = calculator.idle_emissions_kg(scenario_min, vc)
+    delta_kg = round(scenario_kg - baseline_kg, 3)
+    pct = round(delta_kg / baseline_kg * 100.0, 2) if baseline_kg else None
+
+    REQUESTS.labels("carbon", "ok").inc()
+    return {
+        "scenario": body.get("scenario") or None,
+        "vehicle_class": vc,
+        "unit": "kgCO2e",
+        "baseline": {"idle_minutes": baseline_min, "idle_co2e_kg": baseline_kg,
+                     "label": "do-nothing"},
+        "scenario_run": {"idle_minutes": scenario_min, "idle_co2e_kg": scenario_kg},
+        "delta_kg": delta_kg,
+        "delta_pct": pct,
+        "improvement": delta_kg < 0,
+        "idle_factor_gco2e_per_min": factors.idle_minute_factor(vc),
+        "simulated": True,
+        "method": factors.idle_method(),
+    }
 
 
 @router.post("/estimate")

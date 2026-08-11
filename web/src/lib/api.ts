@@ -1541,7 +1541,7 @@ export const api = {
     );
   },
   ocrDocument: (id: number) => http<any>(`/api/ocr/documents/${id}`),
-  ocrHealth: () => http<any>("/api/ocr/health"),
+  ocrHealth: () => http<import("./types").OcrHealth>("/api/ocr/health"),
   ocrUpload: (file: File, docType: string, sourceRef?: string) => {
     const fd = new FormData();
     fd.append("file", file, file.name);
@@ -1855,6 +1855,110 @@ export const api = {
     Object.entries(params).forEach(([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)));
     return http<GateHourlyProfile>(`/api/gate/hourly-profile?${qs}`);
   },
+
+  // --- UC3-021 Gate & Lane Board -------------------------------------------
+  // The queue on these cards is COUNTED by video analytics; the gateway returns
+  // queue_vehicles: null (queue_status "NO_OBSERVATION") when no camera has seen
+  // the gate, rather than substituting a throughput estimate.
+  gateBoard: (windowMinutes = 60) =>
+    http<import("./types").GateBoardResponse>(
+      `/api/gate-board/gates?window_minutes=${windowMinutes}`,
+    ),
+  gateBoardLanes: (gateId?: string) =>
+    http<{ lanes: import("./types").GateLane[]; count: number }>(
+      `/api/gate-board/lanes${gateId ? `?gate_id=${encodeURIComponent(gateId)}` : ""}`,
+    ),
+  gateBoardTicker: (limit = 25) =>
+    http<{ confirmations: import("./types").GateConfirmation[]; count: number }>(
+      `/api/gate-board/ticker?limit=${limit}`,
+    ),
+  /** Impact simulation only — writes nothing, commands nothing. */
+  laneReassignPreview: (laneId: string, toLaneType: string) =>
+    http<import("./types").LaneReassignPreview>(
+      `/api/gate-board/lanes/${encodeURIComponent(laneId)}/preview`,
+      { method: "POST", body: JSON.stringify({ to_lane_type: toLaneType }) },
+    ),
+  /** Raises a task for the gate supervisor. Never actuates gate equipment. */
+  laneReassignApply: (laneId: string, toLaneType: string, reason?: string) =>
+    http<{
+      task: import("./types").LaneReassignTask;
+      preview: import("./types").LaneReassignPreview;
+      lane_state_changed: false;
+      sends_equipment_command: false;
+      note: string;
+    }>(`/api/gate-board/lanes/${encodeURIComponent(laneId)}/reassign`, {
+      method: "POST",
+      body: JSON.stringify({ to_lane_type: toLaneType, reason }),
+    }),
+  laneTasks: (status?: string, limit = 50) =>
+    http<{ tasks: import("./types").LaneReassignTask[]; count: number }>(
+      `/api/gate-board/tasks?limit=${limit}${status ? `&status=${status}` : ""}`,
+    ),
+  laneTaskAck: (taskId: string) =>
+    http<import("./types").LaneReassignTask>(
+      `/api/gate-board/tasks/${encodeURIComponent(taskId)}/ack`,
+      { method: "POST" },
+    ),
+
+  // --- UC3-027 CPP metered release (flow F-06) -----------------------------
+  cppBoard: () => http<import("./types").CppBoardResponse>("/api/cpp/board"),
+  /** METERED throttles only the congested terminal; UNIFORM is the do-nothing arm. */
+  cppRecompute: (mode: "METERED" | "UNIFORM" = "METERED", persist = true) =>
+    http<{
+      mode: string;
+      plans: import("./types").CppReleasePlan[];
+      count: number;
+      persisted: number;
+      recompute_budget_seconds: number;
+      simulated: boolean;
+      note: string;
+    }>("/api/cpp/release/recompute", {
+      method: "POST",
+      body: JSON.stringify({ mode, persist }),
+    }),
+  cppAdvice: (terminal?: string) =>
+    http<{
+      advice: Array<{
+        terminal_code: string;
+        text: string;
+        hold_minutes: number;
+        gate_queue_vehicles: number;
+        clearing_rate_vph: number;
+        simulated: boolean;
+      }>;
+      count: number;
+    }>(`/api/cpp/advice${terminal ? `?terminal=${encodeURIComponent(terminal)}` : ""}`),
+
+  // --- UC3-040 Auto-LEO four-way join --------------------------------------
+  autoLeoBoard: (limit = 50, sourceMode?: string) =>
+    http<import("./types").AutoLeoBoardResponse>(
+      `/api/auto-leo/board?limit=${limit}${sourceMode ? `&source_mode=${sourceMode}` : ""}`,
+    ),
+  autoLeoContainer: (containerNo: string) =>
+    http<import("./types").AutoLeoRow>(
+      `/api/auto-leo/container/${encodeURIComponent(containerNo)}`,
+    ),
+
+  // --- UC3-024 trip resolver / UC3-025 visit timeline ----------------------
+  // One box, five key kinds, one trip. The resolver never picks between
+  // candidates: several matches come back as status "AMBIGUOUS".
+  tripSearch: (q: string) =>
+    http<import("./types").TripSearchResponse>(`/api/trip/search?q=${encodeURIComponent(q)}`),
+  trip: (tripId: string) =>
+    http<import("./types").TripDetail>(`/api/trip/${encodeURIComponent(tripId)}`),
+
+  // --- UC3-036 carbon method + idle delta ----------------------------------
+  carbonMethod: () => http<import("./types").CarbonMethodResponse>("/api/carbon/method"),
+  carbonIdleDelta: (body: {
+    scenario?: string;
+    baseline_idle_minutes: number;
+    scenario_idle_minutes: number;
+    vehicle_class?: string;
+  }) =>
+    http<import("./types").CarbonIdleDelta>("/api/carbon/idle-delta", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 };
 
 // --- What-If simulation types ------------------------------------------------

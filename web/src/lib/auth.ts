@@ -78,6 +78,10 @@ export const SCREEN_ROLES: Record<string, Role[]> = {
   // T-04 Truck Visit Detail (real gate documents + original scans) — same
   // audience and same gateway policy as /api/gate-docs.
   "/truck-visit": [...CONTROL_ROOM, "CUSTOMS"],
+  // T-02 Gate & Lane Board — gate operations. Reads are open to the same
+  // audience as the other gate screens; the WRITES (lane reassignment, release
+  // recompute) are control-room-only, enforced in gateway/auth.py.
+  "/gate-lane-board": [...CONTROL_ROOM, "CUSTOMS"],
   "/vehicle-registry": [...CONTROL_ROOM, "CUSTOMS"],
   "/corridor-simulation": [...CONTROL_ROOM, "CUSTOMS"],
   // Shipping Lines (IAL/EAL/EDO) — mirrors gateway/auth.py /api/shipping-lines policy.

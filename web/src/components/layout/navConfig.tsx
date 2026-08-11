@@ -12,6 +12,7 @@
 
 import type { LucideIcon } from "lucide-react";
 import {
+  Gauge,
   LayoutDashboard,
   Truck,
   Radio,
@@ -87,7 +88,11 @@ export const NAV_SECTIONS: NavSection[] = [
         id: "traffic",
         i18nKey: "navGroup.traffic",
         icon: Truck,
-        children: [leaf("/live", "nav.live", Radio), leaf("/advisory", "nav.advisory", Route)],
+        children: [
+          leaf("/live", "nav.live", Radio),
+          leaf("/gate-lane-board", "nav.gateLaneBoard", Gauge),
+          leaf("/advisory", "nav.advisory", Route),
+        ],
       },
       leaf("/alerts", "nav.alerts", BellRing),
       leaf("/parking", "nav.parking", SquareParking),

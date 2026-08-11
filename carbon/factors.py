@@ -98,7 +98,157 @@ def known_classes() -> tuple[str, ...]:
     return (HGV, RIGID, LGV, REEFER)
 
 
+
+
+# ---------------------------------------------------------------------------
+# Machine-readable method descriptor (UC3-036).
+#
+# The prose above documents the basis for a reader of this file; the dashboard
+# needs the SAME facts as data so the method panel can put each factor next to
+# its source and its assumption reference. Duplicating them in the frontend was
+# how the two drifted apart, so the panel reads this instead: one number, one
+# place, rendered wherever it is needed.
+#
+# The ticket's bar is that an evaluator can go from the headline CO2e to the
+# factor, its source and the assumption in two clicks. That is only possible if
+# every factor CARRIES its provenance, which is what these entries do.
+# ---------------------------------------------------------------------------
+
+#: The assumption-register entry covering the carbon method (docs/ASSUMPTIONS.md
+#: "Carbon (C6)"): factors are published constants, activity data is simulated.
+CARBON_ASSUMPTION_REF = "A-06"
+CARBON_ASSUMPTION_TEXT = (
+    "Emission factors are published IPCC / GHG-Protocol / DEFRA / GLEC road-freight "
+    "factors. They are applied to SIMULATED activity data: no fleet-transporter fuel "
+    "or telematics API exists pre-award, so idle minutes and distances come from the "
+    "twin's simulation. The calculation frame is production-real and swaps to fleet "
+    "APIs post-award; every figure derived from it is tagged simulated."
+)
+
+#: Full citation per source key, so a factor's "source" is resolvable, not a hint.
+FACTOR_SOURCES: dict[str, str] = {
+    "IPCC_2006_V2_CH3": (
+        "IPCC 2006 Guidelines for National GHG Inventories, Vol. 2 (Energy), "
+        "Ch. 3 Mobile Combustion — diesel road-freight CO2e intensity."),
+    "DEFRA_GHG_CONVERSION": (
+        "UK DEFRA / DESNZ GHG Conversion Factors for Company Reporting — "
+        "HGV / rigid / van tonne-km bands and refrigeration uplift."),
+    "GLEC_FRAMEWORK": (
+        "GLEC Framework (Smart Freight Centre) — reefer/refrigeration uplift and "
+        "idle/auxiliary-load treatment."),
+    "GHG_PROTOCOL_SCOPE3": (
+        "GHG Protocol Corporate Value Chain (Scope 3) Standard, Category 4/9 — "
+        "transportation & distribution emission-factor methodology."),
+    "EPA_SMARTWAY_IDLING": (
+        "EPA SmartWay / DEFRA idling figures — a diesel HGV idles at roughly "
+        "2-4 litres of diesel per hour."),
+}
+
+
+def idle_method() -> dict:
+    """The idle-CO2e method, fully disclosed: formula, factors, sources, assumption.
+
+    Idle emissions are the figure UC3-036 headlines, so this is the block the
+    method panel renders. Each factor names the source key that justifies it and
+    shows the arithmetic that produced it.
+    """
+    return {
+        "metric": "idle_co2e",
+        "unit": "kgCO2e",
+        "formula": "idle_co2e_kg = idle_minutes x idle_factor(vehicle_class) / 1000",
+        "assumption_ref": CARBON_ASSUMPTION_REF,
+        "assumption_text": CARBON_ASSUMPTION_TEXT,
+        "activity_data": {
+            "input": "idle_minutes",
+            "provenance": "SIMULATED",
+            "note": ("Idle time comes from the twin's CPP/gate-queue simulation. No "
+                     "fleet-transporter fuel or telematics API exists pre-award."),
+        },
+        "constants": [
+            {"key": "DIESEL_GCO2E_PER_LITRE",
+             "value": DIESEL_GCO2E_PER_LITRE,
+             "unit": "gCO2e/litre",
+             "source": "IPCC_2006_V2_CH3",
+             "basis": "~2.68 kgCO2e per litre of diesel, well-to-wheel."},
+        ],
+        "factors": [
+            {"vehicle_class": HGV,
+             "value": GCO2E_PER_IDLE_MINUTE[HGV],
+             "unit": "gCO2e/idle-minute",
+             "source": "EPA_SMARTWAY_IDLING",
+             "derivation": "3.0 L/h diesel x 2680 gCO2e/L / 60 min = 134 gCO2e/min"},
+            {"vehicle_class": RIGID,
+             "value": GCO2E_PER_IDLE_MINUTE[RIGID],
+             "unit": "gCO2e/idle-minute",
+             "source": "EPA_SMARTWAY_IDLING",
+             "derivation": "Same tractor-idle basis as HGV."},
+            {"vehicle_class": LGV,
+             "value": GCO2E_PER_IDLE_MINUTE[LGV],
+             "unit": "gCO2e/idle-minute",
+             "source": "DEFRA_GHG_CONVERSION",
+             "derivation": "Smaller diesel engine, ~1.34 L/h x 2680 / 60 = 60 gCO2e/min"},
+            {"vehicle_class": REEFER,
+             "value": GCO2E_PER_IDLE_MINUTE[REEFER],
+             "unit": "gCO2e/idle-minute",
+             "source": "GLEC_FRAMEWORK",
+             "derivation": ("Tractor idle 134 + refrigeration-unit auxiliary load "
+                            "~90 = 224 gCO2e/min")},
+        ],
+        "sources": FACTOR_SOURCES,
+    }
+
+
+def moving_method() -> dict:
+    """The moving-emissions method, disclosed on the same terms as idle."""
+    return {
+        "metric": "moving_co2e",
+        "unit": "kgCO2e",
+        "formula": "moving_co2e_kg = distance_km x payload_t x tonne_km_factor / 1000",
+        "assumption_ref": CARBON_ASSUMPTION_REF,
+        "assumption_text": CARBON_ASSUMPTION_TEXT,
+        "activity_data": {
+            "input": "distance_km, payload_t",
+            "provenance": "SIMULATED",
+            "note": "Trip distances come from the corridor simulation.",
+        },
+        "factors": [
+            {"vehicle_class": HGV, "value": GCO2E_PER_TONNE_KM[HGV],
+             "unit": "gCO2e/tonne-km", "source": "DEFRA_GHG_CONVERSION",
+             "derivation": "Articulated-HGV / IPCC heavy-diesel band (~55-70)."},
+            {"vehicle_class": RIGID, "value": GCO2E_PER_TONNE_KM[RIGID],
+             "unit": "gCO2e/tonne-km", "source": "DEFRA_GHG_CONVERSION",
+             "derivation": "Rigid-HGV band; lower average payload utilisation."},
+            {"vehicle_class": LGV, "value": GCO2E_PER_TONNE_KM[LGV],
+             "unit": "gCO2e/tonne-km", "source": "DEFRA_GHG_CONVERSION",
+             "derivation": "Van / light-commercial band; small payloads."},
+            {"vehicle_class": REEFER, "value": GCO2E_PER_TONNE_KM[REEFER],
+             "unit": "gCO2e/tonne-km", "source": "GLEC_FRAMEWORK",
+             "derivation": "HGV base 62 + ~25% refrigeration uplift = 78."},
+        ],
+        "sources": FACTOR_SOURCES,
+    }
+
+
+def method() -> dict:
+    """Both methods plus the shared assumption — the whole method panel payload."""
+    return {
+        "assumption_ref": CARBON_ASSUMPTION_REF,
+        "assumption_text": CARBON_ASSUMPTION_TEXT,
+        "idle": idle_method(),
+        "moving": moving_method(),
+        "sources": FACTOR_SOURCES,
+        "factors_are_published": True,
+        "activity_data_is_simulated": True,
+    }
+
+
 __all__ = [
+    "CARBON_ASSUMPTION_REF",
+    "CARBON_ASSUMPTION_TEXT",
+    "FACTOR_SOURCES",
+    "idle_method",
+    "moving_method",
+    "method",
     "HGV",
     "LGV",
     "REEFER",

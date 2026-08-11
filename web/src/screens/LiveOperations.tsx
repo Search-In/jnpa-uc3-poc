@@ -113,9 +113,15 @@ export default function LiveOperations() {
     queryKey: ["trucks", "live-map"],
     queryFn: () => getAdapter().trucks(undefined, 500),
   });
-  const queuedQ = useQuery({
-    queryKey: ["trucks", "AT_GATE_QUEUE"],
-    queryFn: () => getAdapter().trucks("AT_GATE_QUEUE", 500),
+  // Gate queue: the SAME counted figure the Gate & Lane Board renders
+  // (core.camera_ai_count via /api/gate-board/gates). This tile used to count
+  // trucks the simulator had put in AT_GATE_QUEUE state, which gave a different
+  // number for the same gate than the board did — and, being derived from the
+  // truck feed rather than a camera, it collapsed when a gate stopped instead of
+  // rising (the exact behaviour UI-068 tests for). One source, one number.
+  const gateBoardQ = useQuery({
+    queryKey: ["gate-board"],
+    queryFn: () => api.gateBoard(60),
   });
   const parkingQ = useQuery({
     queryKey: ["parking-availability"],
@@ -167,9 +173,11 @@ export default function LiveOperations() {
   const gates: Gate[] = gatesQ.data ?? [];
   const snapshots: TrafficSnapshot[] = snapsQ.data ?? [];
 
-  const queueByGate = new Map<string, number>();
-  for (const t of queuedQ.data ?? []) {
-    if (t.gate_id) queueByGate.set(t.gate_id, (queueByGate.get(t.gate_id) ?? 0) + 1);
+  // null (not 0) when no camera observed that gate — an unobserved gate and an
+  // empty one must stay distinguishable.
+  const queueByGate = new Map<string, number | null>();
+  for (const g of gateBoardQ.data?.gates ?? []) {
+    queueByGate.set(g.gate_id, g.queue_vehicles);
   }
 
   // --- Simulator-driven map highlighting -----------------------------------
@@ -330,7 +338,7 @@ export default function LiveOperations() {
                   </span>
                 </div>
                 <div className="text-[11px] text-muted-foreground">
-                  {t("liveOps.queue")} {queueByGate.get(g.id) ?? 0} · {t("liveOps.target")}{" "}
+                  {t("liveOps.queue")} {queueByGate.get(g.id) ?? "—"} · {t("liveOps.target")}{" "}
                   {g.target_vph}/h
                 </div>
               </CardContent>

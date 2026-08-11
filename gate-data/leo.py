@@ -36,6 +36,11 @@ FLAG_WEIGHT_MISMATCH = "WEIGHT_MISMATCH"
 FLAG_LEO_MISSING = "LEO_MISSING"
 FLAG_ID_MISMATCH = "ID_MISMATCH"
 FLAG_RECORDS_MISSING = "RECORDS_MISSING"
+#: X4 — the weighbridge failed, so there is no weight to reconcile at all. This
+#: is NOT the same condition as WEIGHT_MISMATCH (a weight that disagrees): a
+#: missing weight blocks the LEO for a different reason and is remedied by
+#: rerouting the truck to an alternate weighbridge and notifying customs.
+FLAG_WEIGHT_MISSING = "WEIGHT_MISSING"
 
 # Map each flag to an Alert severity for the Customs feed.
 _FLAG_SEVERITY = {
@@ -44,7 +49,22 @@ _FLAG_SEVERITY = {
     FLAG_LEO_MISSING: "warning",
     FLAG_ID_MISMATCH: "critical",
     FLAG_RECORDS_MISSING: "critical",
+    FLAG_WEIGHT_MISSING: "warning",
 }
+
+# --- per-source join state ---------------------------------------------------
+# Each of the four evidence streams reports its own state, so the board can say
+# WHICH stream failed rather than only that the LEO is blocked. These are the
+# three states a source can be in, and they are never collapsed into a boolean:
+#   MATCH    — the record is present and agrees with the join key / tolerance
+#   MISMATCH — the record is present but disagrees
+#   MISSING  — no record was captured at all
+SOURCE_MATCH = "MATCH"
+SOURCE_MISMATCH = "MISMATCH"
+SOURCE_MISSING = "MISSING"
+
+#: The four evidence streams joined per export truck (tender UC3-R5).
+SOURCES = ("eseal", "form13", "weighbridge", "icegate")
 
 _cfg = GateConfig.from_env()
 
@@ -58,6 +78,9 @@ class AutoLeoResult:
     leo_ready: bool
     checks: Dict[str, Any] = field(default_factory=dict)
     customs_flags: List[str] = field(default_factory=list)
+    #: Per-source join state: {"eseal": "MATCH", "weighbridge": "MISSING", ...}.
+    #: Additive — existing consumers that only read ``checks`` are unaffected.
+    sources: Dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -93,55 +116,98 @@ def reconcile(
             leo_ready=False,
             checks={"records_present": False},
             customs_flags=[FLAG_RECORDS_MISSING],
+            sources={s: SOURCE_MISSING for s in SOURCES},
         )
 
-    eseal = rec.eseal
-    form13 = rec.form13
-    weighbridge = rec.weighbridge
-    icegate = rec.icegate
+    # A stream may be absent for this container: the weighbridge failed (X4), or
+    # ICEGATE has not filed yet. Absent is NOT the same as disagreeing, and it is
+    # never treated as a pass — each is its own state and its own flag.
+    eseal = getattr(rec, "eseal", None)
+    form13 = getattr(rec, "form13", None)
+    weighbridge = getattr(rec, "weighbridge", None)
+    icegate = getattr(rec, "icegate", None)
+
+    present = {
+        "eseal": eseal is not None,
+        "form13": form13 is not None,
+        "weighbridge": weighbridge is not None,
+        "icegate": icegate is not None,
+    }
 
     # --- Container / vehicle identity match ---------------------------------
-    # Every source record must agree on the container number, and the
-    # weighbridge's vehicle plate is the haulage identity we carry forward. The
-    # join is correct only when all four records reference the same container.
-    id_match = (
-        eseal.container_no == container_no
-        and form13.container_no == container_no
-        and weighbridge.container_no == container_no
-        and icegate.container_no == container_no
-    )
-    vehicle_plate = weighbridge.vehicle_plate
+    # Every PRESENT source must agree on the container number. A stream that was
+    # never captured cannot disagree, so it is excluded from the identity test
+    # and reported as MISSING instead — otherwise an absent record would be
+    # indistinguishable from a wrong one.
+    id_parts = {name: getattr(r, "container_no", None)
+                for name, r in (("eseal", eseal), ("form13", form13),
+                                ("weighbridge", weighbridge), ("icegate", icegate))
+                if r is not None}
+    mismatched = {n: v for n, v in id_parts.items() if v != container_no}
+    id_match = not mismatched
+    vehicle_plate = getattr(weighbridge, "vehicle_plate", None)
 
     # --- Individual checks ---------------------------------------------------
-    eseal_ok = not eseal.tamper_flag
-    discrepancy_pct = _weight_discrepancy_pct(weighbridge.measured_wt_kg, form13.gross_wt_kg)
-    weight_ok = discrepancy_pct <= tol
-    leo_present = icegate.leo_status == "GRANTED"
+    eseal_ok = (not eseal.tamper_flag) if eseal is not None else False
+
+    # Weight reconciliation needs BOTH the declared (Form 13) and the measured
+    # (weighbridge) figure. With either absent there is no discrepancy to compute
+    # and none is invented: the result is a missing weight, not a passing one.
+    can_weigh = weighbridge is not None and form13 is not None
+    discrepancy_pct = (
+        _weight_discrepancy_pct(weighbridge.measured_wt_kg, form13.gross_wt_kg)
+        if can_weigh else None
+    )
+    weight_ok = (discrepancy_pct is not None and discrepancy_pct <= tol)
+    leo_present = (icegate.leo_status == "GRANTED") if icegate is not None else False
 
     checks: Dict[str, Any] = {
         "id_match": id_match,
-        "eseal_present": True,
-        "eseal_tamper_flag": eseal.tamper_flag,
+        "id_mismatched_sources": sorted(mismatched),
+        "eseal_present": present["eseal"],
+        "eseal_tamper_flag": getattr(eseal, "tamper_flag", None),
         "eseal_ok": eseal_ok,
-        "form13_present": True,
-        "weighbridge_present": True,
-        "form13_gross_wt_kg": form13.gross_wt_kg,
-        "weighbridge_measured_wt_kg": weighbridge.measured_wt_kg,
-        "weight_discrepancy_pct": round(discrepancy_pct, 2),
+        "form13_present": present["form13"],
+        "weighbridge_present": present["weighbridge"],
+        "form13_gross_wt_kg": getattr(form13, "gross_wt_kg", None),
+        "weighbridge_measured_wt_kg": getattr(weighbridge, "measured_wt_kg", None),
+        "weight_discrepancy_pct": round(discrepancy_pct, 2) if discrepancy_pct is not None else None,
         "weight_tolerance_pct": tol,
         "weight_ok": weight_ok,
-        "icegate_present": True,
-        "icegate_leo_status": icegate.leo_status,
+        "icegate_present": present["icegate"],
+        "icegate_leo_status": getattr(icegate, "leo_status", None),
         "leo_present": leo_present,
+    }
+
+    # --- Per-source join state ----------------------------------------------
+    def _state(name: str, ok: bool) -> str:
+        if not present[name]:
+            return SOURCE_MISSING
+        if name in mismatched:
+            return SOURCE_MISMATCH
+        return SOURCE_MATCH if ok else SOURCE_MISMATCH
+
+    sources = {
+        "eseal": _state("eseal", eseal_ok),
+        # Form 13 is the declaration the others are checked against; present and
+        # on the right container is all it can be asked to be.
+        "form13": _state("form13", True),
+        "weighbridge": _state("weighbridge", weight_ok),
+        "icegate": _state("icegate", leo_present),
     }
 
     # --- Customs flags -------------------------------------------------------
     customs_flags: List[str] = []
     if not id_match:
         customs_flags.append(FLAG_ID_MISMATCH)
-    if not eseal_ok:
+    if eseal is None:
+        customs_flags.append(FLAG_RECORDS_MISSING)
+    elif not eseal_ok:
         customs_flags.append(FLAG_ESEAL_TAMPER)
-    if not weight_ok:
+    if not can_weigh:
+        # X4: no weight to reconcile. Distinct from a weight that disagrees.
+        customs_flags.append(FLAG_WEIGHT_MISSING)
+    elif not weight_ok:
         customs_flags.append(FLAG_WEIGHT_MISMATCH)
     if not leo_present:
         customs_flags.append(FLAG_LEO_MISSING)
@@ -154,6 +220,7 @@ def reconcile(
         leo_ready=leo_ready,
         checks=checks,
         customs_flags=customs_flags,
+        sources=sources,
     )
 
 
@@ -196,6 +263,14 @@ def customs_alerts(result: AutoLeoResult) -> List[dict]:
             )
         elif flag == FLAG_LEO_MISSING:
             payload["icegate_leo_status"] = result.checks.get("icegate_leo_status")
+        elif flag == FLAG_WEIGHT_MISSING:
+            # X4: the remedy is operational, so the alert carries it. Customs is
+            # notified because an export leaving without a verified weight is a
+            # customs matter, not just a yard one.
+            payload["weighbridge_present"] = result.checks.get("weighbridge_present")
+            payload["form13_present"] = result.checks.get("form13_present")
+            payload["remedy"] = "REROUTE_TO_ALTERNATE_WEIGHBRIDGE"
+            payload["customs_notified"] = True
 
         alert = Alert(
             kind="CUSTOMS_FLAG",

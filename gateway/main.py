@@ -100,6 +100,9 @@ from .routers import (
     driver_jobs,
     edi_vessel,
     export_lifecycle,
+    auto_leo,
+    trip_search,
+    gate_board,
     gate_documents,
     jnpa_api,
     ldb,
@@ -758,6 +761,9 @@ app.include_router(cfs_ecy.router)           # CFS-ECY CODECO gate movements (mo
 app.include_router(dq.router)                # Data Quality ledger over core.dq_issue (read-only)
 app.include_router(vehicle_registry.router)   # UC3-004 vehicle->transporter registry (MIXED provenance)
 app.include_router(corridor_sim.router)      # UC3-005 frozen NH-348 20k simulation (SIMULATED only)
+app.include_router(gate_board.router)        # UC3-021 gate & lane board + UC3-027 CPP metered release
+app.include_router(auto_leo.router)          # UC3-040 Auto-LEO four-way join board
+app.include_router(trip_search.router)       # UC3-024 trip resolver + UC3-025 visit timeline
 app.include_router(customs.router)           # Customs docs (module 5: IGM/OOC/SMTP/RMS/LEO/SB)
 app.include_router(gate_documents.router)    # UC-III gate documents (EIR / PIN ticket / Form-13 + TAT)
 app.include_router(container_job.router)     # UC-III job spine: assignment + gate/yard/scan events

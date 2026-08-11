@@ -1,5 +1,16 @@
 // T-04 — Truck Visit Detail.
 //
+// This screen owns TWO tickets, because both are about one visit and the visit
+// context already lives here:
+//
+//   UC3-024 — the search box resolves a truck plate, a container number, an
+//     e-seal id, a Form 13 e-gate number or a PIN code, all to the SAME visit,
+//     with the match confidence shown. It was truck-number-only before. A
+//     separate "tracking" screen would have meant two boxes searching the same
+//     12 documents and two places to land on the same record.
+//   UC3-025 — the checkpoint timeline for the selected document, with a
+//     per-step evidence label instead of a fabricated time.
+//
 // Search a tractor, get every REAL gate document it produced across terminals,
 // in one chronological timeline; select one to read the parsed fields beside the
 // original scanned slip. The documents come from core.gate_document
@@ -27,7 +38,11 @@ import { useQuery } from "@tanstack/react-query";
 import { ExternalLink, Search } from "lucide-react";
 
 import { api, type GateSourceDoc } from "@/lib/api";
+import { useIncomingSearch } from "@/lib/searchStore";
 import { cn, fmtDateTimeIST } from "@/lib/utils";
+import { StatusChip } from "@/components/ui/dtccc";
+import CheckpointTimeline from "@/components/panels/CheckpointTimeline";
+import type { TripSearchResponse } from "@/lib/types";
 
 const CATEGORY_LABEL: Record<string, string> = {
   EIR: "EIR",
@@ -397,15 +412,132 @@ function VisitTimeline({
   );
 }
 
+/**
+ * What the search key resolved to (UC3-024).
+ *
+ * Three outcomes, all visible rather than collapsed into one: a single trip with
+ * its match confidence, several candidates the operator must choose between, or
+ * nothing. The resolver never picks between candidates — selecting the newest
+ * would be indistinguishable from a correct answer while being wrong.
+ */
+function ResolutionNote({
+  truck,
+  result,
+  loading,
+  onPick,
+}: {
+  truck: string;
+  result?: TripSearchResponse;
+  loading?: boolean;
+  onPick: (docId: number, vehicleNo: string | null) => void;
+}) {
+  if (loading) {
+    return <span className="text-[11px] text-muted-foreground">Resolving…</span>;
+  }
+  if (!result) {
+    return truck ? (
+      <span className="text-[11px] text-muted-foreground">
+        Showing <span className="font-mono text-foreground">{truck}</span>
+      </span>
+    ) : null;
+  }
+
+  if (result.status === "AMBIGUOUS") {
+    return (
+      <div className="min-w-0 basis-full lg:basis-auto">
+        <p className="text-[11px] text-muted-foreground">
+          <StatusChip label="AMBIGUOUS" tone="warn" /> {result.reason}
+        </p>
+        <div className="mt-1 flex flex-wrap gap-1.5">
+          {result.trips.map((t) => (
+            <button
+              key={t.trip_id}
+              type="button"
+              onClick={() => onPick(t.doc_id, t.vehicle_no)}
+              className="rounded-full border border-border px-2 py-0.5 text-[10px] hover:bg-muted"
+            >
+              <span className="font-mono">{t.trip_id}</span> · {t.terminal_code ?? "—"} ·{" "}
+              {t.container_no ?? t.vehicle_no ?? "—"}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (result.status === "NO_MATCH" || result.status === "INVALID_INPUT") {
+    return (
+      <span className="text-[11px] text-muted-foreground">
+        <StatusChip label="NO MATCH" tone="neutral" /> {result.reason}
+      </span>
+    );
+  }
+
+  const t = result.trips[0];
+  if (!t) return null;
+  return (
+    <span className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+      Showing <span className="font-mono text-foreground">{truck}</span>
+      <StatusChip
+        label={`match ${t.match_confidence.toFixed(2)}`}
+        tone={t.match_confidence >= 0.99 ? "ok" : "warn"}
+      />
+      {t.matched_by.length > 0 && (
+        <span className="text-[10px]">via {t.matched_by.map((m) => m.kind).join(", ")}</span>
+      )}
+    </span>
+  );
+}
+
 export default function TruckVisitDetail() {
-  const [input, setInput] = useState(EXAMPLE_TRUCK);
-  const [truck, setTruck] = useState(EXAMPLE_TRUCK);
+  // The header omnibox hands off here for vehicle/container queries; an explicit
+  // ?q= (deep link, shared URL) is always honoured.
+  const incoming = useIncomingSearch(["vehicle", "container", "gateDoc"]);
+  const [input, setInput] = useState(incoming || EXAMPLE_TRUCK);
+  // `lookup` is whatever the operator typed; `truck` is the tractor whose
+  // documents are listed. They differ whenever the lookup key was a container,
+  // an e-seal or a document number — the resolver turns that key into a visit,
+  // and the visit names the tractor.
+  const [lookup, setLookup] = useState(incoming || EXAMPLE_TRUCK);
+  const [truck, setTruck] = useState(incoming || EXAMPLE_TRUCK);
   const [selected, setSelected] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (incoming && incoming !== lookup) {
+      setInput(incoming);
+      setLookup(incoming);
+    }
+  }, [incoming]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // UC3-024 — one box, five key kinds, one visit. Never guesses between
+  // candidates: several matches come back AMBIGUOUS and the operator chooses.
+  const resolveQ = useQuery({
+    queryKey: ["trip-search", lookup],
+    queryFn: () => api.tripSearch(lookup),
+    enabled: lookup.trim().length > 2,
+  });
+
+  // A single resolved trip selects its own document and pins the tractor. An
+  // ambiguous result deliberately changes nothing until the operator picks.
+  useEffect(() => {
+    const r = resolveQ.data;
+    if (r?.status !== "RESOLVED" || !r.trips.length) return;
+    const t = r.trips[0];
+    if (t.vehicle_no) setTruck(norm(t.vehicle_no));
+    setSelected(t.doc_id);
+  }, [resolveQ.data]);
 
   const query = useQuery({
     queryKey: ["gate-source-docs", truck],
     queryFn: () => api.gateSourceDocs({ vehicle: truck, limit: 200 }),
     enabled: truck.length > 0,
+  });
+
+  // UC3-025 — the checkpoint timeline for whichever document is selected.
+  const tripQ = useQuery({
+    queryKey: ["trip", selected],
+    queryFn: () => api.trip(`GD-${selected}`),
+    enabled: selected != null,
   });
 
   const docs = useMemo(() => query.data?.items ?? [], [query.data]);
@@ -457,7 +589,7 @@ export default function TruckVisitDetail() {
               className="flex items-stretch overflow-hidden rounded-lg border border-border bg-background focus-within:ring-2 focus-within:ring-ring"
               onSubmit={(e) => {
                 e.preventDefault();
-                setTruck(norm(input));
+                setLookup(input.trim());
               }}
             >
               <span className="flex items-center pl-2.5 text-muted-foreground" aria-hidden>
@@ -467,9 +599,9 @@ export default function TruckVisitDetail() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 spellCheck={false}
-                aria-label="Truck number"
-                placeholder={`Search truck number (e.g. ${EXAMPLE_TRUCK})`}
-                className="w-56 bg-transparent px-2 py-1.5 font-mono text-sm outline-none placeholder:font-sans placeholder:text-muted-foreground"
+                aria-label="Truck plate, container, e-seal, Form 13 number or PIN"
+                placeholder="Plate · container · e-seal · Form 13 no"
+                className="w-64 bg-transparent px-2 py-1.5 font-mono text-sm outline-none placeholder:font-sans placeholder:text-muted-foreground"
               />
               <button
                 type="submit"
@@ -479,13 +611,19 @@ export default function TruckVisitDetail() {
               </button>
             </form>
 
-            {/* Which tractor the results actually belong to — the input may have
-                been edited since the last submit. */}
-            {truck && (
-              <span className="text-[11px] text-muted-foreground">
-                Showing <span className="font-mono text-foreground">{truck}</span>
-              </span>
-            )}
+            {/* How the key was resolved. The confidence is shown rather than kept
+                internal: a container or e-seal is unique in the corpus and
+                resolves at 1.00, while a plate names a TRACTOR rather than a
+                trip and so resolves lower even when it matches once. */}
+            <ResolutionNote
+              truck={truck}
+              result={resolveQ.data}
+              loading={resolveQ.isLoading}
+              onPick={(doc_id, vehicle_no) => {
+                if (vehicle_no) setTruck(norm(vehicle_no));
+                setSelected(doc_id);
+              }}
+            />
 
             {hasDocs && (
               <div className="flex flex-wrap items-stretch gap-2">
@@ -605,6 +743,21 @@ export default function TruckVisitDetail() {
                 </header>
                 <div className="min-h-0 flex-1 overflow-y-auto p-3">
                   <ParsedPane doc={current} />
+
+                  {/* UC3-025 — the visit's checkpoint timeline, in the pane that
+                      already holds this document's parsed fields. It reads the
+                      SAME document the operator selected, so the timeline and the
+                      fields can never describe different visits. */}
+                  <section className="mt-3 rounded-lg border border-border p-3">
+                    <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      Checkpoint timeline
+                    </h3>
+                    <CheckpointTimeline
+                      trip={tripQ.data}
+                      loading={tripQ.isLoading}
+                      error={(tripQ.error as Error) ?? null}
+                    />
+                  </section>
                 </div>
               </section>
             )}

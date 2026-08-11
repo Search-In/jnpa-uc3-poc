@@ -15,6 +15,9 @@ import { Shapes, MapPinned, LogIn, TriangleAlert, Cpu, Flame, Route, Gauge } fro
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api } from "@/lib/api";
 import CorridorHeatmapPanel from "@/components/panels/CorridorHeatmapPanel";
+import { SvAnalysisPicker } from "@/components/panels/sv/SvAnalysisPicker";
+import { SvPersonZonePanel } from "@/components/panels/sv/SvIncidentPanels";
+import { SvFaceEventsPanel } from "@/components/panels/sv/SvFacePanels";
 import { getAdapter } from "@/data";
 import { Card } from "@/components/ui/card";
 import { ArcgisMap } from "@/components/map/ArcgisMap";
@@ -66,6 +69,9 @@ export default function GeoAnalytics({ defaultTab = "zones" }: { defaultTab?: Ta
   const [tab, setTabState] = useState<TabKey>(
     urlTab && TAB_KEYS.includes(urlTab) ? urlTab : defaultTab,
   );
+  // SecureVision answers per-analysis (it publishes no incident history), so the
+  // AI Events tab picks which analysed clip it is showing.
+  const [svAnalysis, setSvAnalysis] = useState<string | null>(null);
   useEffect(() => {
     if (urlTab && TAB_KEYS.includes(urlTab) && urlTab !== tab) setTabState(urlTab);
   }, [urlTab]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -218,9 +224,21 @@ export default function GeoAnalytics({ defaultTab = "zones" }: { defaultTab?: Ta
           </Card>
         )}
         {tab === "ai" && (
-          <Card className="overflow-hidden">
-            <AiTable rows={aiQ.data?.events ?? []} status={aiQ} onRetry={() => aiQ.refetch()} />
-          </Card>
+          <div className="space-y-3">
+            <Card className="overflow-hidden">
+              <AiTable rows={aiQ.data?.events ?? []} status={aiQ} onRetry={() => aiQ.refetch()} />
+            </Card>
+            {/* SecureVision restricted-zone detections. Kept BELOW the JNPA AI
+                event table and separately badged: SecureVision zones are the
+                vendor's own and are NOT joined to core.zone (the vendor exposes
+                no zone API), so rendering them as the same rows would assert a
+                link that does not exist. */}
+            <Card className="p-3">
+              <SvAnalysisPicker value={svAnalysis} onChange={setSvAnalysis} />
+            </Card>
+            <SvPersonZonePanel analysisId={svAnalysis} />
+            <SvFaceEventsPanel limit={100} />
+          </div>
         )}
         {tab === "corridor" && <CorridorHeatmapPanel />}
         {tab === "heatmap" && (

@@ -81,3 +81,23 @@ export function useVehicleNumbers(): VehicleNumbers {
     isLoading: q.isLoading,
   };
 }
+
+/**
+ * How many vehicles the "Vehicle (N available)" label should claim.
+ *
+ * `availableTotal` is the DATABASE's answer (ACTIVE master vehicles with no open
+ * container job, GET /api/vehicles/available -> available_total). It is used in
+ * preference to the page length because the page is capped by `limit` and the
+ * fleet total is not the available total.
+ *
+ * `busySinceFetch` is what this client noticed became busy after the dropdown
+ * was loaded (an open job that appeared in the meantime), so the label degrades
+ * gracefully rather than promising a truck POST /api/jobs would now refuse.
+ */
+export function assignableCount(
+  availableTotal: number | undefined,
+  listed: number,
+  busySinceFetch = 0,
+): number {
+  return Math.max(0, (availableTotal ?? listed) - busySinceFetch);
+}

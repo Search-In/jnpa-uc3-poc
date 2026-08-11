@@ -107,6 +107,7 @@ from .routers import (
     gate_board,
     gate_documents,
     jnpa_api,
+    gatishakti,
     ldb,
     logistics,
     marine_calls,
@@ -128,6 +129,7 @@ from .routers import (
     rail,
     reefer,
     rms_tas,
+    securevision,
     shipping_lines,
     transporters,
     vehicle_registry,
@@ -249,7 +251,7 @@ async def _production_startup_gate(state: "GatewayState") -> None:
 async def _lifespan(app: FastAPI):
     state = GatewayState(cfg)
     app.state.gw = state
-    log.info("gateway_starting", port=cfg.port, surepass_enabled=cfg.surepass_enabled)
+    log.info("gateway_starting", port=cfg.port, ulip_live_enabled=cfg.ulip_live_enabled)
 
     # FAIL FAST: a missing Postgres/MinIO in production aborts the boot.
     await _production_startup_gate(state)
@@ -588,6 +590,21 @@ async def _lifespan(app: FastAPI):
         log.info("jnpa_sync_skipped",
                  reason="JNPA_PORTDATA_CLIENT_KEY unset or JNPA_SYNC_ENABLED=false")
 
+    # FASTag toll accumulator (async task) — mandatory for usable toll history:
+    # ULIP's FASTAG/01 retains only 72 h per vehicle, so crossings must be swept
+    # up continuously or they are gone. Starts ONLY when a ULIP credential is
+    # configured (same posture as the sync loop above), so TestClient runs and
+    # credential-free deployments stay task-free.
+    fastag_task = None
+    if getattr(cfg, "ulip_live_enabled", False):
+        from services.fastag.poller import fastag_poll_loop
+        fastag_task = asyncio.create_task(fastag_poll_loop(state, stop),
+                                          name="fastag-poll")
+        log.info("fastag_poll_scheduled",
+                 interval_s=getattr(cfg, "fastag_poll_interval_s", 3600))
+    else:
+        log.info("fastag_poll_skipped", reason="ULIP_LIVE_ENABLED is off")
+
     try:
         yield
     finally:
@@ -605,6 +622,12 @@ async def _lifespan(app: FastAPI):
             jnpa_task.cancel()
             try:
                 await jnpa_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+        if fastag_task is not None:
+            fastag_task.cancel()
+            try:
+                await fastag_task
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
         await state.aclose()
@@ -777,6 +800,7 @@ app.include_router(gate_documents.router)    # UC-III gate documents (EIR / PIN 
 app.include_router(container_job.router)     # UC-III job spine: assignment + gate/yard/scan events
 app.include_router(driver_jobs.router)       # DRIVER-scoped job surface for the mobile PWA
 app.include_router(export_lifecycle.router)  # export leg: booking -> Form13 -> VGM -> LEO -> COPRAR -> loaded
+app.include_router(securevision.router)       # SecureVision AI video analytics + faces (proxied vendor, /api/sv/*)
 app.include_router(shipping_lines.router)     # Shipping Lines (module 4: IAL/EAL/EDO, read-only + import)
 app.include_router(berthing.router)          # Berthing Reports (module 7: per-terminal vessel calls + upload)
 app.include_router(marine_calls.router)         # UC-I Marine vessel-call spine (module: marine, read-only)
@@ -802,6 +826,7 @@ app.include_router(weather.router)           # Open-Meteo weather + marine (LIVE
 app.include_router(air_quality.router)       # OpenAQ air quality (LIVE→CACHED→DATABASE→SYNTHETIC)
 app.include_router(bhuvan.router)            # Bhuvan WMS geospatial layer (ISRO/NRSC, control-plane only)
 app.include_router(logistics.router)         # ULIP logistics intelligence (LIVE→CACHED→DATABASE→FALLBACK)
+app.include_router(gatishakti.router)        # GatiShakti reference data (toll plazas, road network)
 app.include_router(jnpa_api.router)          # JNPA Port-Data API sync (dt.jnpa.in → upload services)
 app.include_router(export_chain.router)      # export-lifecycle reads (Form 11, COPRAR, COARRI, synth)
 app.include_router(rail.router)              # Rail feeds (FOIS / Form 11 / CTO — read path for the 0119 tables)
@@ -829,7 +854,7 @@ async def healthz(response: Response) -> dict:
         "status": "ready" if ready else "not_ready",
         "service": "jnpa-gateway",
         "mode": mode_name(),
-        "surepass_enabled": cfg.surepass_enabled,
+        "ulip_live_enabled": cfg.ulip_live_enabled,
         "ws_clients": state.ws.client_count if state is not None else 0,
         "checks": checks,
     }

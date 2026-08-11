@@ -163,29 +163,6 @@ def test_sim_invalid_and_miss(sim_client):
 
 
 # ---------------------------------------------------------------------------
-# Live adapter — 503 when token absent
-# ---------------------------------------------------------------------------
-def test_live_returns_503_without_token(monkeypatch):
-    monkeypatch.setenv("SUREPASS_API_TOKEN", "")
-    monkeypatch.setenv("POSTGRES_DSN", "postgresql+asyncpg://x:x@127.0.0.1:1/none")
-    from jnpa_shared.config import get_settings
-    get_settings.cache_clear()
-    import importlib
-    import vahan_live.config as cfgmod
-    importlib.reload(cfgmod)
-    import vahan_live.app as appmod
-    importlib.reload(appmod)
-
-    assert appmod.cfg.enabled is False
-    with TestClient(appmod.app) as client:
-        for path in ("/vahan/rc/MH04AB1234", "/sarathi/dl/MH0420110012345",
-                     "/fastag/balance/MH04AB1234"):
-            r = client.get(path)
-            assert r.status_code == 503
-            assert r.json() == {"error": "live_disabled"}
-
-
-# ---------------------------------------------------------------------------
 # Vehicle-master writeback — needs Postgres (skipped if unreachable)
 # ---------------------------------------------------------------------------
 @pytest.mark.skipif(_pg_host_dsn() is None,

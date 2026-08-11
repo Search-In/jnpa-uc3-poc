@@ -125,6 +125,31 @@ class ContainerJobRepository:
             "SELECT container_number, lifecycle_status, customs_status, is_released "
             "FROM core.cargo WHERE container_number = :c", {"c": container_number})
 
+    async def customs_note(self, container_number: str) -> Optional[str]:
+        """The remark customs recorded when it stopped this container, or None.
+
+        Read only when an assignment is already being refused, from the two
+        places the existing code writes such a remark — the UC-III scanner
+        (core.scan_event.remarks on a SCAN_HOLD, which is what flips the cargo row
+        to UNDER_INSPECTION in service.record_scan) and the cargo module's
+        verification (core.cargo_scan_verification.remarks with verified=false).
+        Newest wins. Nothing is synthesised: no remark on record returns None and
+        the caller says only "Flagged by customs"."""
+        row = await self._one(
+            """
+            SELECT remarks, ts FROM (
+                SELECT remarks, scanned_at AS ts FROM core.scan_event
+                 WHERE container_number = :cn AND result = 'SCAN_HOLD'
+                UNION ALL
+                SELECT remarks, created_at AS ts FROM core.cargo_scan_verification
+                 WHERE container_number = :cn AND verified = false
+            ) r
+            WHERE NULLIF(TRIM(COALESCE(remarks, '')), '') IS NOT NULL
+            ORDER BY ts DESC LIMIT 1
+            """, {"cn": container_number})
+        note = (row or {}).get("remarks")
+        return str(note).strip() if note else None
+
     async def document_counts(self, container_number: str) -> dict:
         """How many gate documents of each type reference this container.
 

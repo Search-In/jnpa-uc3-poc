@@ -49,6 +49,7 @@ from typing import Any, Optional
 from .base import (SOURCE_DERIVED, SOURCE_MEASURED, SOURCE_PARAMETER,
                    SimulationResult, hours_between, pct)
 from .berth_cascade import DEFAULT_HORIZON_HOURS, cascade
+from .plausibility import BERTH_MOVES_PER_HOUR, in_band, is_degenerate
 
 SCENARIO = "crane-productivity"
 DEFAULT_REDUCTION = 0.25
@@ -157,6 +158,28 @@ async def run(repo: Any, params: dict) -> SimulationResult:
         res.result = {"calls": calls, "calls_without_moves":
                       [c["vessel_name"] for c in no_moves]}
         return res
+
+    # A real fleet has spread. Identical productivity to the decimal across three
+    # or more calls means the move counts are placeholders, not measurements —
+    # JNPA's RDS returns exactly 10.0 for min, max and mean, against a corpus
+    # median of 58.16 and a range of 23-165. The arithmetic below is unaffected
+    # (the turnaround identity depends only on the reduction fraction), but the
+    # productivity FIGURES must not be presented as characterising the fleet.
+    fleet_series = [c["moves_per_hour"] for c in derivable]
+    if is_degenerate(fleet_series):
+        res.note(
+            f"every one of the {len(derivable)} derivable calls returns exactly "
+            f"{fleet_series[0]:g} moves per hour. A real fleet varies; an identical "
+            "figure across calls means core.vessel_call_moves holds placeholder "
+            "counts for this window, not measured ones. The turnaround arithmetic "
+            "below still holds (it depends only on the reduction fraction and the "
+            "hours worked), but the productivity figures do not characterise the "
+            "fleet and must not be quoted as if they did.")
+    else:
+        band = in_band("moves_per_hour", max(fleet_series), BERTH_MOVES_PER_HOUR)
+        if not band:
+            res.note(f"berth productivity outside the plausible band: {band.reason}. "
+                     "Check the move counts before quoting these figures.")
 
     derived_origin = [c for c in derivable if c["moves_data_origin"] == "DERIVED"]
     if derived_origin:

@@ -489,36 +489,6 @@ services:
       - jnpa
 
   # --------------------------------------------------------------------------
-  # Vahan live adapter — proxies the same surface to Surepass's commercial KYC
-  # API. FastAPI on host 8202. Returns 503 {"error":"live_disabled"} unless
-  # SUREPASS_API_TOKEN is set; never falls back to the simulator (that is the
-  # orchestrator's job, Prompt 4).
-  # --------------------------------------------------------------------------
-  vahan-live:
-    build:
-      context: .
-      dockerfile: ingest/vahan_live/Dockerfile
-    image: jnpa/vahan-live:0.1.0
-    container_name: jnpa-vahan-live
-    restart: unless-stopped
-    environment:
-      PYTHONPATH: /app/ingest
-      POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN must be set (AWS RDS jnpa_schema_v3) - no local-postgres fallback}
-      VAHAN_BASE_URL: http://vahan-live:8202
-      VAHAN_SERVICE_NAME: vahan
-      VAHAN_SERVICE_KIND: live
-      SUREPASS_API_TOKEN: ${SUREPASS_API_TOKEN:-}
-      PORT: "8202"
-      LOG_LEVEL: ${VAHAN_LOG_LEVEL:-INFO}
-      TZ: Etc/UTC
-    ports:
-      - "8202:8202"
-    volumes:
-      - ./ingest/vahan_live:/app/ingest/vahan_live:ro
-    networks:
-      - jnpa
-
-  # --------------------------------------------------------------------------
   # RFID emulator / consumer / correlator (UC-III Sub-Criterion 1C).
   # One image (jnpa/rfid-ingest), three services picked via `command:`.
   # Build context is the repo root so the Dockerfile can COPY the shared lib.
@@ -980,7 +950,6 @@ services:
       # Upstream services (jnpa network names).
       GATEWAY_ANPR_URL: ${GATEWAY_ANPR_URL:-http://anpr:8301}
       GATEWAY_VAHAN_SIM_URL: ${GATEWAY_VAHAN_SIM_URL:-http://vahan-sim:8201}
-      GATEWAY_VAHAN_LIVE_URL: ${GATEWAY_VAHAN_LIVE_URL:-http://vahan-live:8202}
       GATEWAY_TRUCK_URL: ${GATEWAY_TRUCK_URL:-http://truck-sim:8240}
       GATEWAY_CONGESTION_URL: ${GATEWAY_CONGESTION_URL:-http://congestion:8311}
       GATEWAY_ANOMALY_URL: ${GATEWAY_ANOMALY_URL:-http://anomaly:8321}
@@ -1024,7 +993,6 @@ services:
       FASTAG_ULIP_TIMEOUT_S: ${FASTAG_ULIP_TIMEOUT_S:-10}
       FASTAG_ULIP_RETRIES: ${FASTAG_ULIP_RETRIES:-2}
       # Surepass token drives the LIVE_PRIMARY vahan rung (empty -> LIVE_FALLBACK).
-      SUREPASS_API_TOKEN: ${SUREPASS_API_TOKEN:-}
       # Open-Meteo Weather + Marine (/api/weather). Free public APIs — no account,
       # no API key. Empty -> the client's public defaults (api.open-meteo.com /
       # marine-api.open-meteo.com); set to point at a proxy or self-hosted stack.
@@ -1093,6 +1061,28 @@ services:
       ULIP_TOKEN_TTL_S: ${ULIP_TOKEN_TTL_S:-1800}
       ULIP_FASTAG_API: ${ULIP_FASTAG_API:-}
       ULIP_LDB_API: ${ULIP_LDB_API:-}
+      # --- SecureVision AI surveillance platform (/api/sv/*) ---------------
+      # Credentials are BACKEND-ONLY: never a VITE_ variable, never called from
+      # the browser, never stored in localStorage. SecureVision authenticates at
+      # /api/auth/login — the SAME relative path as this application's own
+      # sign-in — so the browser must never reach it directly; the gateway logs
+      # in with this service account and proxies under /api/sv/*.
+      # No credential -> every /api/sv surface answers a clean NOT_CONFIGURED
+      # and no existing JNPA screen is affected.
+      SECUREVISION_BASE_URL: ${SECUREVISION_BASE_URL:-https://svapidev.phylon.in}
+      SECUREVISION_USERNAME: ${SECUREVISION_USERNAME:-}
+      SECUREVISION_PASSWORD: ${SECUREVISION_PASSWORD:-}
+      SECUREVISION_TIMEOUT_S: ${SECUREVISION_TIMEOUT_S:-15}
+      SECUREVISION_UPLOAD_TIMEOUT_S: ${SECUREVISION_UPLOAD_TIMEOUT_S:-180}
+      SECUREVISION_RETRIES: ${SECUREVISION_RETRIES:-2}
+      SECUREVISION_TOKEN_TTL_S: ${SECUREVISION_TOKEN_TTL_S:-1800}
+      SECUREVISION_STREAM_TICKET_TTL_S: ${SECUREVISION_STREAM_TICKET_TTL_S:-120}
+      # Explicit SecureVision -> JNPA camera mapping, e.g.
+      #   {"CAM-01":"CAM-NSICT-ENT","CAM-02":"CAM-COR-01"}
+      # SecureVision publishes no camera-registry API, so this mapping is the
+      # ONLY join between the two registries. Unmapped codes are reported as
+      # "Camera mapping unavailable" — never guessed onto a similar-looking name.
+      SECUREVISION_CAMERA_MAP: ${SECUREVISION_CAMERA_MAP:-}
       # Logistics Data Bank / NLDS adapter behind /api/ldb/*. The SOLE definition
       # of this pair — do not re-declare it in this mapping (duplicate YAML keys
       # make `docker compose` refuse to parse the file at all).

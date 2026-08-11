@@ -72,6 +72,17 @@ STATUS_OFFLINE = "OFFLINE"
 # ISO-6346 container number: 3 owner letters + category letter + 7 digits.
 _CONTAINER_RE = re.compile(r"^[A-Z]{3}[UJZ]\d{7}$")
 
+# …but LDB does not enforce the category letter. ULIP's own LDB integration
+# document uses ``NSST1234570`` as its worked example, whose 4th character is
+# ``T`` — so the strict pattern classifies it as a VEHICLE and the tracking
+# call goes to FASTAG/01 instead of LDB/01. That fails *silently*: the answer
+# comes back LIVE with zero events, which reads as "this container is not
+# being tracked" rather than "we asked the wrong API". Any 4 letters followed
+# by 7 digits is treated as a container; the strict form above still wins
+# where it matches, and nothing else has this shape (plates are never
+# 4-letters-then-7-digits).
+_CONTAINER_LOOSE_RE = re.compile(r"^[A-Z]{4}\d{7}$")
+
 # A reference is IN_TRANSIT when its newest event is younger than this.
 _IN_TRANSIT_WINDOW_S = 24 * 3600
 
@@ -88,8 +99,15 @@ def cache_key_summary() -> str:
 
 
 def classify_ref(ref_id: str) -> str:
-    """VEHICLE or CONTAINER for one reference id (ISO-6346 -> CONTAINER)."""
-    return (REF_TYPE_CONTAINER if _CONTAINER_RE.match(ref_id.strip().upper())
+    """VEHICLE or CONTAINER for one reference id (ISO-6346 -> CONTAINER).
+
+    Picking the wrong type sends the lookup to the wrong ULIP API and answers
+    "no data" instead of erroring, so the loose form is deliberately accepted
+    (see :data:`_CONTAINER_LOOSE_RE`).
+    """
+    ref = ref_id.strip().upper()
+    return (REF_TYPE_CONTAINER
+            if _CONTAINER_RE.match(ref) or _CONTAINER_LOOSE_RE.match(ref)
             else REF_TYPE_VEHICLE)
 
 
@@ -371,7 +389,11 @@ class LogisticsService:
             "ref_type": ref_type,
             "tracking_status": _tracking_status(
                 newest["event_ts"] if newest else None, len(events)),
-            "last_event": newest["event_type"] if newest else None,
+            # Prefer LDB's own milestone name over the canonical bucket —
+            # "PORT OUT" tells an operator something; "CONTAINER_MOVEMENT" does
+            # not.
+            "last_event": (newest.get("event_label") or newest["event_type"]
+                           if newest else None),
             "last_location": newest["location"] if newest else None,
             "last_event_ts": newest["event_ts"] if newest else None,
             "event_count": len(events),
@@ -475,6 +497,24 @@ def _iso_or_none(value: Any) -> Optional[str]:
     return value if isinstance(value, str) else None
 
 
+def _detail_label(event: Dict[str, Any]) -> Optional[str]:
+    """LDB's own milestone name out of the preserved raw row."""
+    detail = event.get("detail")
+    if isinstance(detail, str):
+        try:
+            import json as _json
+            detail = _json.loads(detail)
+        except ValueError:
+            return None
+    if not isinstance(detail, dict):
+        return None
+    for key in ("eventname", "eventName", "event", "activity"):
+        value = detail.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def _public_event(event: Dict[str, Any]) -> Dict[str, Any]:
     """The client-facing event shape (raw upstream detail stays server-side
     in the DB/audit tables — the API returns only the normalised fields)."""
@@ -482,6 +522,11 @@ def _public_event(event: Dict[str, Any]) -> Dict[str, Any]:
         "ref_type": event.get("ref_type"),
         "ref_id": event.get("ref_id"),
         "event_type": event.get("event_type"),
+        # The DATABASE rung has no event_label column, but the raw upstream row
+        # is kept in ``detail``, and LDB's milestone name is in there — so a
+        # replayed trail keeps its PORT IN / GATE OUT labels instead of
+        # degrading to thirteen identical CONTAINER_MOVEMENT rows.
+        "event_label": event.get("event_label") or _detail_label(event),
         "event_ts": _iso_or_none(event.get("event_ts")),
         "location": event.get("location"),
         "latitude": _float_or_none(event.get("latitude")),

@@ -26,6 +26,7 @@ import type {
   ParkingFacility,
   ParkingSummary,
 } from "@/lib/types";
+import type { SvEnrollInput } from "@/lib/securevision";
 import type {
   CarbonEmissionRecord,
   CongestionMetrics,
@@ -210,19 +211,30 @@ export class LiveAdapter implements DataAdapter {
       `/api/identity/enrollments/${encodeURIComponent(driverId)}/reenroll`,
       { reason: reason ?? "re-enrollment requested" },
     );
+  // sendJson, not postJson: the gateway rejects a double assignment with a 409
+  // whose detail names the driver already holding the truck. postJson threw that
+  // away and showed "409 Conflict (/api/identity/drivers)", which tells the
+  // operator nothing about what to do next.
   createDriverProfile = (input: CreateDriverInput) =>
-    postJson<{ created: boolean; driver_id: string; status: string }>(
+    sendJson<{ created: boolean; driver_id: string; status: string }>(
+      "POST",
       "/api/identity/drivers",
       input,
     );
+  // "Which truck can I give this DRIVER?" — /api/identity/available-vehicles,
+  // which subtracts trucks already held by an active driver or an open
+  // enrollment. NOT /api/vehicles/available: since the BUG-1 fix that route
+  // answers "which truck can take this JOB?" and deliberately keeps
+  // driver-bound trucks in its list, so using it here offered vehicles the
+  // create endpoint then refused with a 409 (and it is what the mock adapter
+  // has always modelled — see mock.availableVehicles).
   availableVehicles = async (q?: string, limit = 50): Promise<AvailableVehicle[]> => {
     const params = new URLSearchParams();
     if (q) params.set("q", q);
     params.set("limit", String(limit));
-    // Vehicle Master is now the authoritative dropdown source (no truck-sim read).
     return (
       await getJson<{ vehicles: AvailableVehicle[] }>(
-        `/api/vehicles/available?${params.toString()}`,
+        `/api/identity/available-vehicles?${params.toString()}`,
       )
     ).vehicles;
   };
@@ -276,6 +288,7 @@ export class LiveAdapter implements DataAdapter {
 
   // --- FASTag (ULIP) — /api/fastag/* ---
   fastagBalance = (rcNumber: string) => api.fastagBalance(rcNumber);
+  fastagTagStatus = (ref: { rc_number?: string; tag_id?: string }) => api.fastagTagStatus(ref);
   fastagTransactions = (rcNumber: string) => api.fastagTransactions(rcNumber);
   tollEnroute = (body: import("@/lib/types").TollEnrouteInput) => api.tollEnroute(body);
   fastagHealth = () => api.fastagHealth();
@@ -388,5 +401,32 @@ export class LiveAdapter implements DataAdapter {
     } catch {
       return null;
     }
+  };
+
+  // --- SecureVision (proxied vendor) ---------------------------------------
+  // Thin pass-throughs: the gateway already normalised the vendor payloads, so
+  // there is deliberately no parsing here to drift from the backend's.
+  svHealth = () => api.svHealth();
+  svAnalyses = (limit?: number) => api.svAnalyses(limit);
+  svUploadVideo = (file: File, cameraCode: string) => api.svUploadVideo(file, cameraCode);
+  svIncident = (analysisId: string, code: "i01" | "i02" | "i09" | "i12", strong?: boolean) =>
+    api.svIncident(analysisId, code, strong);
+  svIncidentPersons = (analysisId: string) => api.svIncidentPersons(analysisId);
+  svIncidentAll = (analysisId: string, strong?: boolean) => api.svIncidentAll(analysisId, strong);
+  svDeleteAnalysis = async (analysisId: string) => {
+    await api.svDeleteAnalysis(analysisId);
+  };
+  svStreamTicket = (analysisId: string) => api.svStreamTicket(analysisId);
+  svFaces = async () => (await api.svFaces()).persons;
+  svFaceEvents = async (params?: { limit?: number; authorized?: boolean }) =>
+    (await api.svFaceEvents(params)).events;
+  svFaceStatus = () => api.svFaceStatus();
+  svEnrollFace = (input: SvEnrollInput) => api.svEnrollFace(input);
+  svUpdateFace = (
+    personPk: number,
+    patch: { name?: string; role?: string; department?: string; is_active?: boolean },
+  ) => api.svUpdateFace(personPk, patch);
+  svDeleteFace = async (personPk: number) => {
+    await api.svDeleteFace(personPk);
   };
 }

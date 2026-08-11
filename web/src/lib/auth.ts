@@ -88,6 +88,10 @@ export const SCREEN_ROLES: Record<string, Role[]> = {
   "/shipping-lines": [...CONTROL_ROOM, "CUSTOMS"],
   // Berthing Reports (module 7) — mirrors gateway/auth.py /api/berthing policy.
   "/berthing": [...CONTROL_ROOM, "CUSTOMS"],
+  // SecureVision Video Analytics workbench — mirrors gateway/auth.py's
+  // /api/sv policy (control room + customs). Never DRIVER/TRANSPORTER: this
+  // surface uploads clips and reads AI detections about people and vehicles.
+  "/video-analytics": [...CONTROL_ROOM, "CUSTOMS"],
   "/health": CONTROL_ROOM,
   // Cargo What-If — mirrors the gateway policy for /api/cargo writes
   // (gateway/auth.py _METHOD_POLICY: control room + customs). The simulate

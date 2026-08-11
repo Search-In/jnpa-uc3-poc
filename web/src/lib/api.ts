@@ -393,6 +393,36 @@ export const api = {
       body: JSON.stringify(body),
     }),
   fastagHealth: () => http<import("./types").FastagHealth>("/api/fastag/health"),
+  // NETC tag registry (ULIP FASTAG/02). Supply EXACTLY ONE of rcNumber /
+  // tagId — the upstream rejects both together (respCode 239). A vehicle can
+  // hold several tags (re-issues), so `tags` is a list.
+  fastagTagStatus: (body: { rc_number?: string; tag_id?: string }) =>
+    http<import("./types").FastagTagStatus>("/api/fastag/tag-status", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  // --- GatiShakti reference data — /api/gatishakti/* ---
+  // Backend-only reference master data (NHAI toll plazas, road network).
+  // Served from core.gs_*; `refresh` is what re-pulls it from ULIP.
+  gatishaktiHealth: () => http<any>("/api/gatishakti/health"),
+  gatishaktiTollPlazas: (stateId = "27", limit = 500) =>
+    http<import("./types").GatiShaktiRows>(
+      `/api/gatishakti/toll-plazas?state_id=${encodeURIComponent(stateId)}&limit=${limit}`,
+    ),
+  gatishaktiRoads: (params?: { state_id?: string; nh_no?: string; limit?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.state_id) q.set("state_id", params.state_id);
+    if (params?.nh_no) q.set("nh_no", params.nh_no);
+    if (params?.limit) q.set("limit", String(params.limit));
+    return http<import("./types").GatiShaktiRows>(
+      `/api/gatishakti/roads${q.toString() ? `?${q}` : ""}`,
+    );
+  },
+  gatishaktiRoadPoints: (stateId = "27", limit = 1000) =>
+    http<import("./types").GatiShaktiRows>(
+      `/api/gatishakti/road-points?state_id=${encodeURIComponent(stateId)}&limit=${limit}`,
+    ),
 
   // --- Terminal Appointment System (TFC-1) ---
   tasSlots: (gateId?: string) =>
@@ -579,6 +609,17 @@ export const api = {
     http<import("./types").Vehicle360>(`/api/vahan/vehicle-360/${encodeURIComponent(plate)}`),
   driverIntel: (key: string) =>
     http<import("./types").DriverIntel>(`/api/vahan/driver-intel/${encodeURIComponent(key)}`),
+  // Alternate-key RC lookups (ULIP VAHAN/02 and /03). ULIP-only — the
+  // simulator is keyed by plate — so these 503 when ULIP_LIVE_ENABLED is off
+  // and 404 on a miss rather than falling back to a different vehicle.
+  vahanByChassis: (chassisNumber: string) =>
+    http<{ chassis: string; decision_path: string; record: Record<string, unknown> }>(
+      `/api/vahan/chassis/${encodeURIComponent(chassisNumber)}`,
+    ),
+  vahanByEngine: (engineNumber: string) =>
+    http<{ engine: string; decision_path: string; record: Record<string, unknown> }>(
+      `/api/vahan/engine/${encodeURIComponent(engineNumber)}`,
+    ),
   dlLookup: (dl: string) =>
     http<{ dl: string; decision_path?: string; status?: string; record?: Record<string, unknown> }>(
       `/api/vahan/dl/${encodeURIComponent(dl)}`,
@@ -1131,7 +1172,10 @@ export const api = {
   availableVehicles: (q?: string, limit = 50) => {
     const qs = new URLSearchParams({ limit: String(limit) });
     if (q) qs.set("q", q);
-    return http<{ vehicles: AvailableVehicle[]; count: number }>(
+    // `count` is this page's length (capped by `limit`); `available_total` is how
+    // many vehicles the DATABASE says are assignable right now — that is the
+    // number the "Vehicle (N available)" label must show.
+    return http<{ vehicles: AvailableVehicle[]; count: number; available_total: number }>(
       `/api/vehicles/available?${qs.toString()}`,
     );
   },
@@ -2098,6 +2142,83 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+
+  // --- SecureVision (proxied vendor: /api/sv/*) ----------------------------
+  // The browser NEVER talks to svapidev.phylon.in and never holds a vendor
+  // token: SecureVision authenticates at /api/auth/login — the same relative
+  // path this app's own sign-in uses — so the gateway owns that exchange and
+  // exposes everything under /api/sv/* behind the EXISTING JNPA bearer.
+  svHealth: () => http<import("./securevision").SvHealth>("/api/sv/health"),
+  svCameraMap: () =>
+    http<{
+      configured: boolean;
+      count: number;
+      cameras: import("./securevision").SvCameraMapping[];
+    }>("/api/sv/cameras"),
+  svAnalyses: (limit = 50) =>
+    http<import("./securevision").SvAnalysisList>(`/api/sv/analyses?limit=${limit}`),
+  svUploadVideo: (file: File, cameraCode: string) => {
+    const f = new FormData();
+    f.append("file", file);
+    f.append("camera_code", cameraCode);
+    return postForm<import("./securevision").SvAnalysis>("/api/sv/analytics/video/upload", f);
+  },
+  /** One single-envelope analyzer: i01 | i02 | i09 | i12. */
+  svIncident: (analysisId: string, code: "i01" | "i02" | "i09" | "i12", strong = false) =>
+    http<import("./securevision").SvIncident>(
+      `/api/sv/analytics/incident/${code}?analysis_id=${encodeURIComponent(analysisId)}&strong=${strong}`,
+    ),
+  /** I-07 answers one verdict per person, so it has its own shape. */
+  svIncidentPersons: (analysisId: string) =>
+    http<import("./securevision").SvPersonResult>(
+      `/api/sv/analytics/incident/i07?analysis_id=${encodeURIComponent(analysisId)}`,
+    ),
+  svIncidentAll: (analysisId: string, strong = false) =>
+    http<import("./securevision").SvCombinedReport>(
+      `/api/sv/analytics/incident/all?analysis_id=${encodeURIComponent(analysisId)}&strong=${strong}`,
+    ),
+  svDeleteAnalysis: (analysisId: string) =>
+    http<void>(`/api/sv/analytics/video/${encodeURIComponent(analysisId)}`, { method: "DELETE" }),
+  /** Mints the short-lived credential the MJPEG <img> carries in its URL — an
+   *  <img> cannot send an Authorization header (same reason /api/ws takes a
+   *  ?token=). The vendor's own token never leaves the gateway. */
+  svStreamTicket: (analysisId: string) =>
+    http<import("./securevision").SvStreamTicket>(
+      `/api/sv/analytics/video/${encodeURIComponent(analysisId)}/stream-ticket`,
+      { method: "POST" },
+    ),
+  svFaces: () =>
+    http<{ persons: import("./securevision").SvPerson[]; count: number }>("/api/sv/faces"),
+  svFaceEvents: (params?: { limit?: number; authorized?: boolean }) => {
+    const q = new URLSearchParams();
+    if (params?.limit != null) q.set("limit", String(params.limit));
+    if (params?.authorized != null) q.set("authorized", String(params.authorized));
+    const qs = q.toString();
+    return http<{ events: import("./securevision").SvFaceEvent[]; count: number }>(
+      `/api/sv/faces/events${qs ? `?${qs}` : ""}`,
+    );
+  },
+  svFaceStatus: () => http<import("./securevision").SvFaceModelStatus>("/api/sv/faces/status"),
+  svEnrollFace: (input: import("./securevision").SvEnrollInput) => {
+    const f = new FormData();
+    f.append("person_id", input.person_id);
+    f.append("name", input.name);
+    if (input.role) f.append("role", input.role);
+    if (input.department) f.append("department", input.department);
+    // Repeated "files" parts: SecureVision averages several photos into one
+    // more robust embedding.
+    input.photos.forEach((photo, i) => f.append("files", photo, `face_${i + 1}.jpg`));
+    return postForm<import("./securevision").SvPerson>("/api/sv/faces", f);
+  },
+  svUpdateFace: (
+    personPk: number,
+    patch: { name?: string; role?: string; department?: string; is_active?: boolean },
+  ) =>
+    http<import("./securevision").SvPerson>(`/api/sv/faces/${personPk}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  svDeleteFace: (personPk: number) => http<void>(`/api/sv/faces/${personPk}`, { method: "DELETE" }),
 };
 
 // --- What-If simulation types ------------------------------------------------
@@ -2138,7 +2259,9 @@ export interface SimulationResult {
   scenario: string;
   method: string;
   result: Record<string, any>;
-  figures: Record<string, number | string | null>;
+  // Booleans are part of this contract: channel-closure reports
+  // `berth_lock_reached` and modal-shift `gate_absorbs_load` as figures.
+  figures: Record<string, number | string | boolean | null>;
   assumptions: SimAssumption[];
   queries: SimQueryTrace[];
   recommendations: SimRecommendation[];

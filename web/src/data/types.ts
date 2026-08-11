@@ -26,6 +26,7 @@ import type {
   EmptyAllocation,
   FastagBalance,
   FastagHealth,
+  FastagTagStatus,
   FastagTransactions,
   FaultControlResult,
   FaultState,
@@ -197,6 +198,20 @@ export interface CarbonEmissionRecord {
   created_at?: string;
 }
 
+import type {
+  SvAnalysis,
+  SvAnalysisList,
+  SvCombinedReport,
+  SvEnrollInput,
+  SvFaceEvent,
+  SvFaceModelStatus,
+  SvHealth,
+  SvIncident,
+  SvPerson,
+  SvPersonResult,
+  SvStreamTicket,
+} from "@/lib/securevision";
+
 export interface DataAdapter {
   readonly mode: DataMode;
 
@@ -311,6 +326,9 @@ export interface DataAdapter {
   // --- FASTag (ULIP) — /api/fastag/* ---
   fastagBalance(rcNumber: string): Promise<FastagBalance>;
   fastagTransactions(rcNumber: string): Promise<FastagTransactions>;
+  // FASTAG/02 — the NETC tag registry. One row per tag ever issued against the
+  // reference, so a re-issued vehicle legitimately returns several.
+  fastagTagStatus(ref: { rc_number?: string; tag_id?: string }): Promise<FastagTagStatus>;
   tollEnroute(body: TollEnrouteInput): Promise<TollEnroute>;
   fastagHealth(): Promise<FastagHealth>;
 
@@ -325,4 +343,30 @@ export interface DataAdapter {
 
   // --- Follow-the-Box cross-twin container journey ---
   containerJourney(containerNo: string): Promise<ContainerJourney | null>;
+
+  // --- SecureVision (proxied vendor: /api/sv/*) ----------------------------
+  // Reads go through the adapter like every other surface, so the Mock build
+  // stays runnable offline and the contract test covers them. The vendor
+  // credential lives only in the gateway.
+  svHealth(): Promise<SvHealth>;
+  svAnalyses(limit?: number): Promise<SvAnalysisList>;
+  svUploadVideo(file: File, cameraCode: string): Promise<SvAnalysis>;
+  svIncident(
+    analysisId: string,
+    code: "i01" | "i02" | "i09" | "i12",
+    strong?: boolean,
+  ): Promise<SvIncident>;
+  svIncidentPersons(analysisId: string): Promise<SvPersonResult>;
+  svIncidentAll(analysisId: string, strong?: boolean): Promise<SvCombinedReport>;
+  svDeleteAnalysis(analysisId: string): Promise<void>;
+  svStreamTicket(analysisId: string): Promise<SvStreamTicket>;
+  svFaces(): Promise<SvPerson[]>;
+  svFaceEvents(params?: { limit?: number; authorized?: boolean }): Promise<SvFaceEvent[]>;
+  svFaceStatus(): Promise<SvFaceModelStatus>;
+  svEnrollFace(input: SvEnrollInput): Promise<SvPerson>;
+  svUpdateFace(
+    personPk: number,
+    patch: { name?: string; role?: string; department?: string; is_active?: boolean },
+  ): Promise<SvPerson>;
+  svDeleteFace(personPk: number): Promise<void>;
 }

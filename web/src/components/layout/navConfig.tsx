@@ -32,6 +32,7 @@ import {
   SlidersHorizontal,
   Workflow,
   BarChart3,
+  Video,
   Anchor,
   Boxes,
   Ship,
@@ -131,6 +132,10 @@ export const NAV_SECTIONS: NavSection[] = [
       leaf("/fastag", "nav.fastag", CreditCard),
       leaf("/berthing", "nav.berthing", Anchor),
       leaf("/performance", "nav.performance", BarChart3),
+      // SecureVision AI clip analysis. Named "Video Analytics", NOT "live CCTV
+      // AI": the supplied vendor API analyses uploaded clips and documents no
+      // continuous-ingestion endpoint.
+      leaf("/video-analytics", "nav.videoAnalytics", Video),
       leaf("/reports", "nav.reports", FileText),
     ],
   },

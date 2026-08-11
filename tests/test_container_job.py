@@ -79,6 +79,8 @@ class FakeRepo:
         self.movements: list[dict] = []
         self.scans: list[dict] = []
         self.cargo_status_writes: list[tuple[str, str]] = []
+        # Stand-in for core.cargo_scan_verification.remarks (verified=false).
+        self.customs_notes: dict[str, str] = {}
         self.scanners = [
             {"machine_code": "D-INNSA1RSDT01", "machine_class": "DRIVE_THROUGH",
              "machine_type": "D", "location_code": "INNSA1RSDT01", "active": True},
@@ -126,6 +128,16 @@ class FakeRepo:
         self.documents[cn] = {"form13": 1, "pin": 0, "eir": 0}
 
     async def cargo_exists(self, cn): return self.cargo.get(cn)
+
+    async def customs_note(self, cn):
+        """Newest non-blank remark from a SCAN_HOLD / failed verification, else None
+        (mirrors the UNION query in the real repository)."""
+        holds = [x for x in self.scans
+                 if x.get("container_number") == cn and x.get("result") == "SCAN_HOLD"
+                 and (x.get("remarks") or "").strip()]
+        if holds:
+            return str(holds[-1]["remarks"]).strip()
+        return self.customs_notes.get(cn)
 
     async def document_counts(self, cn):
         counts = dict(self.documents.get(cn) or {"form13": 0, "pin": 0, "eir": 0})
@@ -894,3 +906,103 @@ def test_combined_pagination_is_contiguous(client, repo, released):
         seen += [(i["container_number"], bool(i.get("pending_handover"))) for i in page["items"]]
     assert len(seen) == total == len(set(seen))
     assert [p for _, p in seen] == [True, True, True, False]
+
+
+# ============================================ customs gate on job assignment
+# core.cargo.customs_status is CHECKed to PENDING / CLEARED / HELD /
+# UNDER_INSPECTION — there is no FLAGGED value in the schema. "Flagged by
+# customs" is the operator wording for the dispositions the cargo module already
+# defines as blocking (CUSTOMS_BLOCKS_RELEASE = HELD | UNDER_INSPECTION), which
+# this gate imports rather than restating. PENDING means customs has said
+# nothing yet and must NOT block a dispatch.
+from services.container_job.service import (  # noqa: E402
+    CUSTOMS_FLAGGED,
+    CUSTOMS_FLAGGED_MESSAGE,
+)
+
+_ASSIGN = {"container_number": "MRKU5014206", "vehicle_id": "TRK-000001",
+           "driver_id": "DRV-1", "driver_licence": "UP6420140008203",
+           "move_type": "IMPORT_PICK"}
+
+
+def _set_customs(repo: FakeRepo, status: str) -> None:
+    repo.cargo["MRKU5014206"]["customs_status"] = status
+
+
+def test_flagged_set_is_the_cargo_modules_definition_not_a_new_status():
+    from services.cargo.service import CUSTOMS_BLOCKS_RELEASE
+
+    assert CUSTOMS_FLAGGED is CUSTOMS_BLOCKS_RELEASE == {"HELD", "UNDER_INSPECTION"}
+    assert "PENDING" not in CUSTOMS_FLAGGED and "CLEARED" not in CUSTOMS_FLAGGED
+
+
+@pytest.mark.parametrize("status", ["PENDING", "CLEARED"])
+def test_customs_pending_or_cleared_allows_assignment(client, repo, status):
+    _set_customs(repo, status)
+    r = client.post("/api/jobs", json=_ASSIGN)
+    assert r.status_code == 201, r.text
+    checks = {c["check"]: c for c in r.json()["checks"]}
+    assert checks["customs"]["ok"] is True
+    assert checks["customs"]["customs_status"] == status
+    # every pre-existing gate still ran
+    assert {"container", "gate_document", "vehicle", "vehicle_availability"} <= set(checks)
+
+
+@pytest.mark.parametrize("status", sorted(CUSTOMS_FLAGGED))
+def test_customs_flagged_blocks_assignment_and_creates_no_job(client, repo, status):
+    _set_customs(repo, status)
+    r = client.post("/api/jobs", json=_ASSIGN)
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert detail["error"] == "customs_flagged"
+    assert CUSTOMS_FLAGGED_MESSAGE in detail["detail"]
+    assert detail["customs_status"] == status
+    assert repo.jobs == {}  # nothing was written
+
+
+def test_flagged_with_a_note_returns_the_recorded_remark(client, repo):
+    _set_customs(repo, "UNDER_INSPECTION")
+    repo.scans.append({"container_number": "MRKU5014206", "result": "SCAN_HOLD",
+                       "remarks": "Density anomaly in upper tier"})
+    detail = client.post("/api/jobs", json=_ASSIGN).json()["detail"]
+    assert detail["customs_note"] == "Density anomaly in upper tier"
+    assert detail["detail"] == f"{CUSTOMS_FLAGGED_MESSAGE}: Density anomaly in upper tier"
+
+
+def test_flagged_without_a_note_says_only_flagged_by_customs(client, repo):
+    _set_customs(repo, "HELD")
+    detail = client.post("/api/jobs", json=_ASSIGN).json()["detail"]
+    assert detail["customs_note"] is None
+    assert detail["detail"] == CUSTOMS_FLAGGED_MESSAGE  # nothing invented
+
+
+def test_validate_reports_the_same_customs_refusal_as_assign(client, repo):
+    """The dry-run and the write must agree, so the UI can block before submit."""
+    _set_customs(repo, "HELD")
+    r = client.post("/api/jobs/validate", json=_ASSIGN)
+    assert r.status_code == 400
+    assert r.json()["detail"]["error"] == "customs_flagged"
+
+
+def test_customs_gate_does_not_displace_the_existing_validations(client, repo):
+    """Regression: the pre-existing refusals must still fire with their own codes."""
+    _set_customs(repo, "PENDING")
+    # 1. gate document
+    repo.documents["MRKU5014206"] = {"form13": 0, "pin": 0, "eir": 0}
+    assert client.post("/api/jobs", json=_ASSIGN).json()["detail"]["error"] == "no_gate_document"
+    repo.documents["MRKU5014206"] = {"form13": 1, "pin": 0, "eir": 0}
+    # 2. driver / PDP
+    # EMPTY_PICK: not in DRIVER_REQUIRED_MOVE_TYPES, so the PDP rule is what
+    # answers rather than the earlier driver_required input rule.
+    bad = {**_ASSIGN, "move_type": "EMPTY_PICK", "driver_id": None,
+           "driver_licence": "RJ1920060721778"}
+    assert client.post("/api/jobs", json=bad).json()["detail"]["error"] == "pdp_inactive"
+    # 3. vehicle already occupied
+    assert client.post("/api/jobs", json=_ASSIGN).status_code == 201
+    second = {**_ASSIGN, "container_number": "MSCU1234566"}
+    repo.cargo["MSCU1234566"] = {"container_number": "MSCU1234566",
+                                 "lifecycle_status": "RELEASED",
+                                 "customs_status": "CLEARED", "is_released": True}
+    repo.documents["MSCU1234566"] = {"form13": 1, "pin": 0, "eir": 0}
+    assert client.post("/api/jobs", json=second).json()["detail"]["error"] \
+        == "vehicle_already_assigned"

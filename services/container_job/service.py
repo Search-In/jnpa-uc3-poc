@@ -21,6 +21,7 @@ from time import perf_counter
 from typing import Any, Dict, Mapping, Optional
 
 from jnpa_shared.iso6346 import is_valid_container_no
+from services.cargo.service import CUSTOMS_BLOCKS_RELEASE
 from jnpa_shared.logging import get_logger
 
 from .repository import ContainerJobRepository, JobConflict
@@ -52,6 +53,19 @@ MOVE_TYPES = ("IMPORT_PICK", "EXPORT_DROP", "EMPTY_PICK", "EMPTY_DROP")
 # whose CHECK constraint would reject it) — it exists only on the read surface so
 # a released box is visible on the UC-III console before a job exists.
 PENDING_ASSIGNMENT = "PENDING_ASSIGNMENT"
+
+# "Flagged by customs" is not a status of its own — core.cargo.customs_status is
+# CHECKed to PENDING / CLEARED / HELD / UNDER_INSPECTION and nothing else. The
+# dispositions that mean customs has stopped this box are already defined ONCE,
+# in the cargo module, as the set that forbids a release; a truck may not be
+# dispatched against a box customs is holding or examining for exactly the same
+# reason, so this gate imports that definition rather than restating it.
+#
+# PENDING is deliberately NOT in it: it means customs has said nothing yet, which
+# is the state of most of the corpus. Assignment stays open on PENDING.
+CUSTOMS_FLAGGED = CUSTOMS_BLOCKS_RELEASE
+
+CUSTOMS_FLAGGED_MESSAGE = "Flagged by customs"
 
 # BUG-4: move types that may NOT be dispatched without an identified driver.
 # An import pick-up leaves the terminal with a laden box against a PIN/Form-13,
@@ -195,6 +209,21 @@ class ContainerJobService:
             checks.append({"check": "container", "ok": True,
                            "detail": "known to cargo lifecycle",
                            "lifecycle_status": cargo.get("lifecycle_status")})
+
+            # --- customs: a flagged box may not be dispatched at all
+            customs_status = str(cargo.get("customs_status") or "").upper()
+            if customs_status in CUSTOMS_FLAGGED:
+                # The note is fetched only on the refusal path, so the happy path
+                # costs nothing. Absent remark -> no note, never a guessed reason.
+                note = await self._repo.customs_note(cn)
+                raise ValidationFailed(
+                    "customs_flagged",
+                    f"{CUSTOMS_FLAGGED_MESSAGE}: {note}" if note else CUSTOMS_FLAGGED_MESSAGE,
+                    customs_status=customs_status, customs_note=note,
+                    container_number=cn)
+            checks.append({"check": "customs", "ok": True,
+                           "detail": f"customs_status={customs_status or 'UNKNOWN'}",
+                           "customs_status": customs_status})
 
             # A truck is not dispatched against a box with no paperwork: at least
             # one of the three client gate documents must already reference it.

@@ -142,6 +142,51 @@ def _unwrap(raw: Any) -> Mapping[str, Any]:
     raise TypeError(f"expected object payload, got {type(raw).__name__}")
 
 
+def _walk(node: Any):
+    """Depth-first over every Mapping inside an arbitrarily nested payload."""
+    if isinstance(node, Mapping):
+        yield node
+        for value in node.values():
+            yield from _walk(value)
+    elif isinstance(node, (list, tuple)):
+        for value in node:
+            yield from _walk(value)
+
+
+def _adapt_fastag01(raw: Any) -> Mapping[str, Any]:
+    """Real ULIP ``FASTAG/01`` envelope -> the flat batch the DTO validates.
+
+    NETC nests the crossings at
+    ``response[].response.vehicle.vehltxnList.txn[]`` — a LIST at the top
+    ``response`` key, which :func:`_unwrap` cannot see through. Left to itself
+    the DTO would then validate an envelope with no ``transactions`` key and
+    report a perfectly successful batch of ZERO crossings, silently losing
+    every toll read. Locating the ``txn`` array explicitly is what prevents
+    that false success.
+
+    An unknown vehicle (``vehicle.errCode`` 740) legitimately carries no
+    ``txn`` array and maps to an empty batch — that is a real "no crossings in
+    the last 72 hours" answer, not a failure.
+    """
+    if not isinstance(raw, Mapping):
+        raise TypeError(f"expected object payload, got {type(raw).__name__}")
+    txns: list = []
+    for node in _walk(raw):
+        candidate = node.get("txn")
+        if isinstance(candidate, list):
+            txns = [t for t in candidate if isinstance(t, Mapping)]
+            break
+    batch: dict[str, Any] = {"transactions": txns}
+    # The plate/tag live on each crossing rather than the envelope; lift the
+    # first so the batch validator can back-fill rows that omit them.
+    if txns:
+        first = txns[0]
+        for src, dst in (("vehicleRegNo", "rcNumber"), ("tagId", "tagId")):
+            if first.get(src) not in (None, ""):
+                batch[dst] = first[src]
+    return batch
+
+
 # ---------------------------------------------------------------------------
 # A) Toll Enroute
 # ---------------------------------------------------------------------------
@@ -251,7 +296,12 @@ def map_fastag_transactions(raw: Any, *, client_id: Optional[str] = None) -> dic
     the raw string is what persists.
     """
     try:
-        data = _unwrap(raw)
+        # A real ULIP FASTAG/01 answer (``txn`` array nested under a LIST-valued
+        # ``response``) needs the explicit adapter; anything already flat — the
+        # demo provider, recorded fixtures — goes through _unwrap unchanged.
+        data = (_adapt_fastag01(raw)
+                if isinstance(raw, Mapping) and isinstance(raw.get("response"), list)
+                else _unwrap(raw))
         dto = FastagTransactionBatch.model_validate(data)
         unmapped = _collect_unmapped(dto)
         rows = [_map_txn_item(item, client_id=client_id) for item in dto.transactions]
@@ -261,8 +311,51 @@ def map_fastag_transactions(raw: Any, *, client_id: Optional[str] = None) -> dic
         return _fail("transaction", client_id, f"{type(exc).__name__}: {exc!s}")
 
 
+# ---------------------------------------------------------------------------
+# D) Tag status (FASTAG/02)
+# ---------------------------------------------------------------------------
+def map_fastag_tag_status(raw: Any, *, client_id: Optional[str] = None) -> dict[str, Any]:
+    """ULIP ``FASTAG/02`` JSON -> the tag registry rows for one reference.
+
+    FASTAG/02 models each tag as a list of ``{"name","value"}`` pairs, and a
+    vehicle legitimately carries SEVERAL tags (re-issues keep the old rows), so
+    the answer is a list ordered as ULIP sent it.
+
+    This API has no DB table of its own — it is a read-through status lookup —
+    so the envelope carries ``db: []`` and the service layer is never asked to
+    persist it. ``TAGSTATUS`` is normalised through the same
+    :func:`_normalize_tag_status` the balance mapper uses, so a tag reads the
+    same whichever surface fetched it.
+    """
+    try:
+        from integrations.ulip.schemas import UlipEnvelope, normalize_tag_status
+
+        tags = normalize_tag_status(UlipEnvelope.model_validate(raw))
+        rows = [
+            {
+                "tag_id": t.get("tagid"),
+                "rc_number": t.get("regnumber"),
+                "tid": t.get("tid"),
+                "vehicle_class": t.get("vehicleclass"),
+                "tag_status": _normalize_tag_status(t.get("tagstatus"),
+                                                    client_id=client_id),
+                "issue_date": t.get("issuedate"),
+                "exc_code": t.get("exccode"),
+                "bank_id": t.get("bankid"),
+                "commercial_vehicle": t.get("comvehicle"),
+            }
+            for t in tags
+        ]
+        _emit("tag_status", client_id, "success", [])
+        return {"status": "success", "dto": None, "db": [], "tags": rows,
+                "unmapped_fields": []}
+    except Exception as exc:  # noqa: BLE001 — malformed vendor data
+        return _fail("tag_status", client_id, f"{type(exc).__name__}: {exc!s}")
+
+
 __all__ = [
     "map_toll_enroute",
     "map_fastag_balance",
     "map_fastag_transactions",
+    "map_fastag_tag_status",
 ]

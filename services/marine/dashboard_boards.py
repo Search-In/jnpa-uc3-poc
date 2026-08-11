@@ -313,33 +313,45 @@ class DashboardBoardsService:
             ),
             _kpi_card(
                 key="AVG_TAT",
-                name="Average Vessel Turnaround",
+                name="Average Vessel TAT",
                 value=tat,
                 unit="h",
                 n=int(stats.get("departed") or 0),
-                definition="Mean hours alongside (ATD − ATA) for completed calls",
-                basis="core.vessel_call factual timestamps",
+                definition="mean(ATD − ATA) for completed calls",
+                basis="core.vessel_call factual timestamps (ATA / ATD)",
+                baseline_source=(
+                    "jnport.gov.in Operating Performance Profile 27.36 h "
+                    "pilot-to-pilot FY 2025-26"
+                ),
                 note="" if tat is not None else (
                     "not measurable — no completed calls with both ATA and ATD"),
             ),
             _kpi_card(
                 key="JIT_PCT",
-                name="Just-In-Time Arrivals",
+                name="JIT",
                 value=None,
                 unit="%",
                 n=0,
                 definition="Share of arrivals within ±60 min of the recommended slot",
                 basis="requires berthing-plan slot comparison — not computed here",
+                baseline_source=(
+                    "no published JNPA baseline — figure is a simulated delta "
+                    "under assumption A-01"
+                ),
                 note="not measurable — JIT needs plan-slot linkage at anchor",
             ),
             _kpi_card(
                 key="FORECAST_ACC",
-                name="Forecast Accuracy",
+                name="Accuracy of Prediction",
                 value=None,
                 unit="%",
                 n=0,
                 definition="Share of arrivals within ±4 h of declared ETA",
                 basis="berthing-report ETA vs ATA",
+                baseline_source=(
+                    "no published JNPA baseline — figure is a simulated delta "
+                    "under assumption A-01"
+                ),
                 note="see Prediction vs Actual panel for rolling MAE",
             ),
             _kpi_card(

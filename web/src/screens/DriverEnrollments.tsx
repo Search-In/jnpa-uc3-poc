@@ -43,8 +43,17 @@ import {
 import { STATUS } from "@/lib/tokens";
 import { fmtDateTimeIST } from "@/lib/utils";
 import { useVehicleNumbers, vehicleLabel } from "@/lib/vehicles";
+import { SvSitePersonnelPanel } from "@/components/panels/sv/SvFacePanels";
 
 const FILTERS = ["PENDING", "ACTIVE", "REJECTED", "ALL"] as const;
+
+/** Outer tabs. Drivers (this screen's original subject, unchanged) and Site
+ *  Personnel — the SecureVision gallery for restricted-zone recognition. They
+ *  are DIFFERENT populations in DIFFERENT systems and are deliberately not
+ *  merged: /api/identity stays authoritative for drivers, and nothing is
+ *  dual-written. This screen hosts both because it already carries the
+ *  customs+admin role policy and the DPDP-audited enrolment idiom. */
+type PopulationKey = "drivers" | "personnel";
 type Filter = (typeof FILTERS)[number];
 
 function statusTone(status?: string): Tone {
@@ -66,6 +75,7 @@ export default function DriverEnrollments() {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const [filter, setFilter] = useState<Filter>("PENDING");
+  const [population, setPopulation] = useState<PopulationKey>("drivers");
   const [openId, setOpenId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   // Bridge from Driver Master: /enrollments?create=1&name=&license= opens the
@@ -232,7 +242,24 @@ export default function DriverEnrollments() {
         </StatGrid>
       </div>
 
-      <div className="px-4 py-3">
+      <div className="px-4 pt-3">
+        <SegmentedTabs
+          value={population}
+          onChange={setPopulation}
+          tabs={[
+            { key: "drivers", label: t("enrollments.tabDrivers", "Driver Enrollment") },
+            { key: "personnel", label: t("enrollments.tabPersonnel", "Site Personnel") },
+          ]}
+        />
+      </div>
+
+      {population === "personnel" && (
+        <div className="px-4 py-3">
+          <SvSitePersonnelPanel />
+        </div>
+      )}
+
+      <div className="px-4 py-3" hidden={population !== "drivers"}>
         <SegmentedTabs
           value={filter}
           onChange={setFilter}
@@ -321,6 +348,7 @@ function CreateDriverForm({
   initialLicense?: string;
 }) {
   const { t } = useTranslation();
+  const qc = useQueryClient();
   const [name, setName] = useState(initialName || "");
   const [license, setLicense] = useState(initialLicense || "");
   const [mobile, setMobile] = useState("");
@@ -348,6 +376,12 @@ function CreateDriverForm({
         emergency_contact: emergency.trim() || undefined,
       }),
     onSuccess: onCreated,
+    // A 409 means the truck was taken between this dropdown being fetched and
+    // the submit (another admin, or a driver enrolling from the PWA). Refetch
+    // the list so the stale option disappears instead of failing again.
+    onError: () => {
+      qc.invalidateQueries({ queryKey: ["available-vehicles"] });
+    },
   });
 
   const canSubmit = name.trim().length > 0 && /^TRK-\d{6}$/.test(vehicle) && !create.isPending;

@@ -1,6 +1,6 @@
 """FastAPI app: Vahan (RC) / Sarathi (DL) / FASTag (NETC) schema-faithful simulator.
 
-Exposes the same surface the live Surepass adapter (`ingest/vahan_live`) does,
+Exposes the RC/DL/FASTag surface the gateway's LIVE_FALLBACK rung consumes,
 so the rest of the JNPA UC-III system is API-correct against either:
 
     GET  /vahan/rc/{plate}        -> VahanRecord  (mirrors Parivahan RC schema)

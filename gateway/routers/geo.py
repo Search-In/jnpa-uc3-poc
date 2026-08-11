@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 
@@ -469,8 +469,17 @@ async def notify_zone_occupancy(
     Fan-out reuses what already exists and NOTHING else: core.alert (via
     ``persist_alert``) + the ``alert`` WS frame the Notification Center/Bell
     already consume, plus the ADMIN mailer seam (``ADMIN_ALERT_EMAILS``, the
-    same list the congestion alert uses). Drivers are NOT emailed — they keep
-    their existing app/push notifications, untouched by this endpoint.
+    same list the congestion alert uses).
+
+    The vehicle's OWN driver is notified through the shared dispatcher
+    (``notifications.dispatch_alert``) the violations / AI-event consoles already
+    use: the paired PWA device is resolved from the plate and the advisory goes
+    out over WebPush + FCM. The WS ``alert`` frame is ADDRESSED to that device,
+    so it reaches the control room and that ONE driver instead of every connected
+    PWA — previously the payload was stamped ``audience: broadcast``, which made
+    every driver's app treat one vehicle's zone alert as their own. Drivers are
+    still NOT emailed. With no paired device nothing is pushed and the frame stays
+    unaddressed, which is the previous behaviour exactly.
     Deliberately writes no core.notification row — the Bell reads alerts, not
     that table, so a delivery row would be new persistence for no consumer.
     """
@@ -517,6 +526,18 @@ async def notify_zone_occupancy(
     principal = getattr(getattr(request, "state", None), "principal", None)
     actor = f"{principal.role}:{principal.sub}" if principal is not None else "operator"
 
+    # Resolve the vehicle's paired PWA device BEFORE the payload is built, so the
+    # advisory can be addressed to that driver and both return paths can report
+    # the same delivery shape. Best-effort: an unpaired vehicle resolves to None
+    # and every driver-facing leg below no-ops.
+    device_id: Optional[str] = None
+    try:
+        from . import push
+
+        device_id = await push.resolve_device(state, vehicle_id=vehicle_id)
+    except Exception as exc:  # noqa: BLE001 — resolution must never block the trigger
+        log.debug("zone_trigger_device_resolve_failed", vehicle_id=vehicle_id, error=str(exc))
+
     alert_id = str(uuid.uuid5(
         _ZONE_TRIGGER_NS,
         f"zone-trigger|{vehicle_id}|{zone_id}|{occupancy['entry_time']}",
@@ -535,10 +556,14 @@ async def notify_zone_occupancy(
         "triggered_by": actor,
         "triggered_at": datetime.now(timezone.utc).isoformat(),
         "source": "geo-zone-trigger",
-        # Corridor-wide marker the PWA needs so it never mistakes an unaddressed
-        # frame for a personal advisory (same convention as congestion alerts).
-        "audience": "broadcast",
+        # Addressing marker the PWA reads (mobile-pwa/src/lib/addressing.ts):
+        # "driver" + device_id = personal, so ONLY that driver's app raises it.
+        # Without a paired device we keep the historical unaddressed broadcast so
+        # the control room still receives the frame.
+        "audience": "driver" if device_id else "broadcast",
     }
+    if device_id:
+        payload["device_id"] = device_id
     alert = Alert(id=uuid.UUID(alert_id), kind=_ZONE_TRIGGER_KIND, severity="warning",
                   plate=vehicle_id, payload=payload)
 
@@ -561,6 +586,10 @@ async def notify_zone_occupancy(
                     "vehicle_id": vehicle_id, "zone_id": zone_id,
                     "entry_time": occupancy["entry_time"],
                     "email": {"attempted": False, "delivered": False},
+                    # Already triggered for this occupancy: the driver was pushed
+                    # on the first click and is deliberately not pushed again.
+                    "driver": {"device_resolved": bool(device_id),
+                               "webpush": False, "fcm": False},
                 }
         except HTTPException:
             raise
@@ -575,16 +604,22 @@ async def notify_zone_occupancy(
             log.warning("zone_trigger_persist_failed", alert_id=alert_id, error=str(exc))
 
     # 4) WS broadcast — the frame the Notification Center + Bell already consume.
+    #    Addressed when the vehicle has a paired device: ws.broadcast() then
+    #    delivers to the control room AND that driver's socket only. device_id=None
+    #    keeps the original unaddressed fan-out, so the dashboard is unaffected
+    #    either way.
     try:
-        await state.ws.broadcast("alert", alert.model_dump(mode="json"))
+        await state.ws.broadcast(
+            "alert", alert.model_dump(mode="json"), device_id=device_id,
+        )
     except Exception as exc:  # noqa: BLE001
         log.warning("zone_trigger_broadcast_failed", alert_id=alert_id, error=str(exc))
 
     # 5) ADMIN email only, through the same seam + the same ADMIN_ALERT_EMAILS
     #    list the congestion alert already uses. Drivers are deliberately NOT
-    #    mailed here — they are served by the existing app/push notifications,
-    #    which this endpoint does not touch. No admin address configured =>
-    #    nothing is sent and the alert still reaches the Notification Center.
+    #    mailed — they are reached over WebPush/FCM in step 6 instead. No admin
+    #    address configured => nothing is sent and the alert still reaches the
+    #    Notification Center.
     from .. import mailer
 
     recipients = mailer.admin_recipients()
@@ -593,6 +628,39 @@ async def notify_zone_occupancy(
         mail = await mailer.notify_zone_trigger(alert_id, payload, recipients)
     except Exception as exc:  # noqa: BLE001
         log.warning("zone_trigger_email_failed", alert_id=alert_id, error=str(exc))
+
+    # 6) Push the advisory to THAT driver's device over WebPush + FCM, through the
+    #    same dispatcher the violations / AI-event consoles use. ws=False: step 4
+    #    already emitted the (addressed) ``alert`` frame and must not duplicate it.
+    #    Best-effort — an unpaired vehicle is a no-op and the alert still reaches
+    #    the control room.
+    driver_push: Optional[Dict[str, bool]] = None
+    if device_id:
+        try:
+            from .. import notifications
+
+            zone_label = payload["zone_name"]
+            result = await notifications.dispatch_alert(
+                state, device_id,
+                kind=_ZONE_TRIGGER_KIND,
+                title=("Restricted zone alert"
+                       if payload["alert_type"] == "RESTRICTED_ENTRY"
+                       else "Zone alert"),
+                body=(f"{vehicle_id} is flagged in {zone_label}. "
+                      "Please follow the control room's instructions."),
+                # NotifyCategory is a closed union in mobile-pwa/src/lib/notify.ts;
+                # "compliance" is the member a zone violation belongs to (an
+                # unknown value would render an undefined icon).
+                category="compliance", href="#/profile",
+                extra={"alert_id": alert_id, "zone_id": zone_id,
+                       "zone_name": zone_label, "plate": vehicle_id,
+                       "alert_type": payload["alert_type"]},
+                ws=False,
+            )
+            driver_push = result.as_dict() if result else None
+        except Exception as exc:  # noqa: BLE001 — device push is non-critical
+            log.warning("zone_trigger_driver_push_failed",
+                        alert_id=alert_id, error=str(exc))
 
     REQUESTS.labels("geofence_events", "ok").inc()
     return {
@@ -603,4 +671,9 @@ async def notify_zone_occupancy(
         "entry_time": occupancy["entry_time"],
         "email": {"attempted": bool(recipients),
                   "delivered": bool(mail and mail.get("delivered"))},
+        "driver": {
+            "device_resolved": bool(device_id),
+            "webpush": bool(driver_push and driver_push.get("webpush")),
+            "fcm": bool(driver_push and driver_push.get("fcm")),
+        },
     }

@@ -49,13 +49,19 @@ async function http<T>(
   let res: Response;
   try {
     res = await fetch(path, {
+      // `init` is spread FIRST (method, body, …). It must not come after
+      // `headers`: when a caller passes its own `headers` object that key
+      // overwrites the merged one below wholesale, dropping Authorization and
+      // x-data-mode — which surfaced as a 401 "missing bearer token" on the one
+      // call that sets its own headers (geoNotifyZone). Caller headers still win
+      // per-key, because init.headers is spread last INSIDE the merged object.
+      ...init,
       headers: {
         "content-type": "application/json",
         ...authHeader,
         ...dataModeHeader,
         ...(init?.headers || {}),
       },
-      ...init,
       signal: timeoutSignal(timeoutMs, init?.signal),
     });
   } catch (err) {
@@ -514,6 +520,10 @@ export const api = {
       zone_id: string;
       entry_time: string;
       email: { attempted: boolean; delivered: boolean };
+      // Per-transport outcome of the push to the vehicle's own driver.
+      // device_resolved:false = the vehicle has no paired PWA device, so only
+      // the control room was notified.
+      driver: { device_resolved: boolean; webpush: boolean; fcm: boolean };
     }>("/api/geo/zones/notify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

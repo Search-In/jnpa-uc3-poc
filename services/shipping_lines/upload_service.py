@@ -66,7 +66,8 @@ class ShippingLinesUploadService:
         header, rows = P.read_rows_from_bytes(content, filename)
         if list_type == "EDO" and P.is_codeco_xml_upload(header):
             return self._parse_xml_edo(content, filename), True
-        return P.parse(list_type, header, rows), False
+        return P.parse(list_type, header, rows,
+                       terminal=P.derive_terminal(filename)), False
 
     def _parse_raw_codeco_xml(self, content: bytes) -> "P.ParseResult":
         """One bare CODECO XML document → canonical delivery-order rows."""

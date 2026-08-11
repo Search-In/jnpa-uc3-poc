@@ -470,12 +470,14 @@ export default function CargoWhatIf() {
               <WhatIfAnswer
                 result={result}
                 title={active ? `${active}` : undefined}
-                chart={result.data_available ? (
-                  <div className="flex flex-col gap-3">
-                    <BeforeAfterChart result={result} />
-                    <ScenarioDetail result={result} />
-                  </div>
-                ) : undefined}
+                chart={
+                  result.data_available ? (
+                    <div className="flex flex-col gap-3">
+                      <BeforeAfterChart result={result} />
+                      <ScenarioDetail result={result} />
+                    </div>
+                  ) : undefined
+                }
                 evidence={
                   <div className="flex flex-col gap-3">
                     <AssumptionsPanel assumptions={result.assumptions} />
@@ -488,9 +490,11 @@ export default function CargoWhatIf() {
                   verdict: "rounded-lg border border-slate-200 bg-white p-4",
                   headline: "text-lg font-semibold leading-snug text-slate-900",
                   detail: "mt-1 text-sm text-slate-600",
-                  banner: "rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900",
+                  banner:
+                    "rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900",
                   section: "flex flex-col gap-2",
-                  actions: "flex flex-col gap-2 rounded-lg border border-slate-200 bg-white p-4 text-sm",
+                  actions:
+                    "flex flex-col gap-2 rounded-lg border border-slate-200 bg-white p-4 text-sm",
                   action: "leading-snug text-slate-700",
                   evidence: "rounded-lg border border-slate-200 bg-white p-4",
                   summary: "cursor-pointer text-sm font-medium text-slate-700",
@@ -551,7 +555,6 @@ export default function CargoWhatIf() {
                 )}
               </div>
             </div>
-
           </>
         )}
       </div>

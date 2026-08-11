@@ -70,14 +70,31 @@ export interface WhatIfAnswerProps {
    */
   evidence?: ReactNode;
   /** Per-app class hooks; every one is optional. */
-  classNames?: Partial<Record<
-    "root" | "verdict" | "headline" | "detail" | "banner" | "section" |
-    "actions" | "action" | "evidence" | "summary" | "table" | "chip", string>>;
+  classNames?: Partial<
+    Record<
+      | "root"
+      | "verdict"
+      | "headline"
+      | "detail"
+      | "banner"
+      | "section"
+      | "actions"
+      | "action"
+      | "evidence"
+      | "summary"
+      | "table"
+      | "chip",
+      string
+    >
+  >;
 }
 
 /** Turn `peak_queue_with_outage` into `Peak queue with outage`. */
 function humanise(key: string): string {
-  const s = key.replace(/_/g, " ").replace(/\bpct\b/g, "%").trim();
+  const s = key
+    .replace(/_/g, " ")
+    .replace(/\bpct\b/g, "%")
+    .trim();
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
@@ -91,7 +108,11 @@ function formatValue(v: unknown): string {
 }
 
 export default function WhatIfAnswer({
-  result, chart, title, evidence, classNames = {},
+  result,
+  chart,
+  title,
+  evidence,
+  classNames = {},
 }: WhatIfAnswerProps): JSX.Element {
   const [openEvidence, setOpenEvidence] = useState(false);
   const verdict = verdictFor(result);
@@ -102,36 +123,41 @@ export default function WhatIfAnswer({
   const declared = result.assumptions.filter((a) => shouldChip(a.source));
 
   return (
-    <section className={cx("root")} data-scenario={result.scenario}
-             data-tone={verdict.tone} aria-label={title ?? result.scenario}>
-
+    <section
+      className={cx("root")}
+      data-scenario={result.scenario}
+      data-tone={verdict.tone}
+      aria-label={title ?? result.scenario}
+    >
       {/* 1 — the verdict */}
       <div className={cx("verdict")} data-tone={verdict.tone}>
         {title ? <p className={cx("detail")}>{title}</p> : null}
-        <p className={cx("headline")} role="status">{verdict.headline}</p>
+        <p className={cx("headline")} role="status">
+          {verdict.headline}
+        </p>
         {verdict.detail ? <p className={cx("detail")}>{verdict.detail}</p> : null}
       </div>
 
       {/* The coverage banner sits under the verdict, not in a footnote: a figure
           for a day beyond the data must not be read as a measurement. */}
       {coverage ? (
-        <p className={cx("banner")} data-kind="projected">{coverage}</p>
+        <p className={cx("banner")} data-kind="projected">
+          {coverage}
+        </p>
       ) : null}
 
       {/* A failed query is not an empty result. Say so before anything else is
           read, because the two are indistinguishable by row count. */}
       {failedQueries.length > 0 ? (
         <p className={cx("banner")} data-kind="error">
-          {failedQueries.length === 1 ? "A query" : `${failedQueries.length} queries`}{" "}
-          behind this answer failed to run. The figures below are incomplete — this
-          is not "no data for this period".
+          {failedQueries.length === 1 ? "A query" : `${failedQueries.length} queries`} behind this
+          answer failed to run. The figures below are incomplete — this is not "no data for this
+          period".
         </p>
       ) : null}
 
       {/* 2 — the picture */}
-      {result.data_available && chart ? (
-        <div className={cx("section")}>{chart}</div>
-      ) : null}
+      {result.data_available && chart ? <div className={cx("section")}>{chart}</div> : null}
 
       {/* 3 — what to do */}
       {result.data_available && result.recommendations.length > 0 ? (
@@ -146,8 +172,11 @@ export default function WhatIfAnswer({
       ) : null}
 
       {/* 4 — the working, closed by default */}
-      <details className={cx("evidence")} open={openEvidence}
-               onToggle={(e) => setOpenEvidence((e.target as HTMLDetailsElement).open)}>
+      <details
+        className={cx("evidence")}
+        open={openEvidence}
+        onToggle={(e) => setOpenEvidence((e.target as HTMLDetailsElement).open)}
+      >
         <summary className={cx("summary")}>
           Show the working — method, {result.assumptions.length} assumption
           {result.assumptions.length === 1 ? "" : "s"}, {result.queries.length} quer
@@ -161,78 +190,93 @@ export default function WhatIfAnswer({
         </div>
 
         {evidence ?? (
-        <>
-        {/* Default evidence rendering, used when the host app has not supplied
+          <>
+            {/* Default evidence rendering, used when the host app has not supplied
             its own panels. */}
 
-        {result.assumptions.length > 0 ? (
-          <div className={cx("section")}>
-            <h4>What we assumed</h4>
-            <table className={cx("table")}>
-              <thead>
-                <tr><th scope="col">Input</th><th scope="col">Value</th><th scope="col">Why</th></tr>
-              </thead>
-              <tbody>
-                {result.assumptions.map((a, i) => (
-                  <tr key={`${a.field}-${i}`}>
-                    <td>
-                      {humanise(a.field)}
-                      {shouldChip(a.source) ? (
-                        <span className={cx("chip")} data-source={a.source}>
-                          {a.source === "ASSUMED" ? "assumed" : "you set this"}
-                        </span>
-                      ) : null}
-                    </td>
-                    <td>{formatValue(a.value)}</td>
-                    <td>{a.reason}</td>
-                  </tr>
+            {result.assumptions.length > 0 ? (
+              <div className={cx("section")}>
+                <h4>What we assumed</h4>
+                <table className={cx("table")}>
+                  <thead>
+                    <tr>
+                      <th scope="col">Input</th>
+                      <th scope="col">Value</th>
+                      <th scope="col">Why</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.assumptions.map((a, i) => (
+                      <tr key={`${a.field}-${i}`}>
+                        <td>
+                          {humanise(a.field)}
+                          {shouldChip(a.source) ? (
+                            <span className={cx("chip")} data-source={a.source}>
+                              {a.source === "ASSUMED" ? "assumed" : "you set this"}
+                            </span>
+                          ) : null}
+                        </td>
+                        <td>{formatValue(a.value)}</td>
+                        <td>{a.reason}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+
+            {Object.keys(result.figures).length > 0 ? (
+              <div className={cx("section")}>
+                <h4>Every figure</h4>
+                <table className={cx("table")}>
+                  <tbody>
+                    {Object.entries(result.figures).map(([k, v]) => (
+                      <tr key={k}>
+                        <th scope="row">{humanise(k)}</th>
+                        <td>{formatValue(v)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+
+            {result.queries.length > 0 ? (
+              <div className={cx("section")}>
+                <h4>Where the data came from</h4>
+                {result.queries.map((q, i) => (
+                  <details key={`${q.purpose}-${i}`} open={Boolean(q.error)}>
+                    <summary>
+                      {q.purpose}
+                      {q.row_count !== undefined ? ` — ${q.row_count} rows` : ""}
+                      {q.error ? " — FAILED" : ""}
+                    </summary>
+                    {q.api ? (
+                      <p>
+                        <code>{q.api}</code>
+                      </p>
+                    ) : null}
+                    {q.error ? <p role="alert">{q.error}</p> : null}
+                    <pre>{q.sql}</pre>
+                    {Object.keys(q.params).length > 0 ? (
+                      <pre>{JSON.stringify(q.params, null, 1)}</pre>
+                    ) : null}
+                  </details>
                 ))}
-              </tbody>
-            </table>
-          </div>
-        ) : null}
+              </div>
+            ) : null}
 
-        {Object.keys(result.figures).length > 0 ? (
-          <div className={cx("section")}>
-            <h4>Every figure</h4>
-            <table className={cx("table")}>
-              <tbody>
-                {Object.entries(result.figures).map(([k, v]) => (
-                  <tr key={k}><th scope="row">{humanise(k)}</th><td>{formatValue(v)}</td></tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : null}
-
-        {result.queries.length > 0 ? (
-          <div className={cx("section")}>
-            <h4>Where the data came from</h4>
-            {result.queries.map((q, i) => (
-              <details key={`${q.purpose}-${i}`} open={Boolean(q.error)}>
-                <summary>
-                  {q.purpose}
-                  {q.row_count !== undefined ? ` — ${q.row_count} rows` : ""}
-                  {q.error ? " — FAILED" : ""}
-                </summary>
-                {q.api ? <p><code>{q.api}</code></p> : null}
-                {q.error ? <p role="alert">{q.error}</p> : null}
-                <pre>{q.sql}</pre>
-                {Object.keys(q.params).length > 0 ? (
-                  <pre>{JSON.stringify(q.params, null, 1)}</pre>
-                ) : null}
-              </details>
-            ))}
-          </div>
-        ) : null}
-
-        {result.notes.length > 0 ? (
-          <div className={cx("section")}>
-            <h4>Notes</h4>
-            <ul>{result.notes.map((nt, i) => <li key={i}>{nt}</li>)}</ul>
-          </div>
-        ) : null}
-        </>
+            {result.notes.length > 0 ? (
+              <div className={cx("section")}>
+                <h4>Notes</h4>
+                <ul>
+                  {result.notes.map((nt, i) => (
+                    <li key={i}>{nt}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </>
         )}
       </details>
     </section>

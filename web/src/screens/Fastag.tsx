@@ -46,14 +46,7 @@ import type {
 } from "@/lib/types";
 
 const VEHICLE_TYPES = ["CAR", "LMV", "LGV", "HGV", "TRUCK", "BUS", "MAV", "MMV", "2W", "3W"];
-type TabKey =
-  | "balance"
-  | "tags"
-  | "transactions"
-  | "journey"
-  | "enroute"
-  | "history"
-  | "health";
+type TabKey = "balance" | "tags" | "transactions" | "journey" | "enroute" | "history" | "health";
 
 function friendlyError(e: unknown): string {
   const msg = e instanceof Error ? e.message : String(e);
@@ -302,9 +295,7 @@ export default function Fastag() {
             }
             tone="info"
             loading={tagsQ.isLoading}
-            sub={
-              tagsQ.data && tagsQ.data.count > 0 ? `${tagsQ.data.count} issued` : undefined
-            }
+            sub={tagsQ.data && tagsQ.data.count > 0 ? `${tagsQ.data.count} issued` : undefined}
           />
           <StatCard icon={Route} label="Toll Enroute" value="Plan" tone="neutral" />
           <StatCard
@@ -403,9 +394,9 @@ function BalanceView({ rc, balanceQ }: { rc: string; balanceQ: any }) {
           <div className="rounded-md border border-border bg-muted/40 px-3 py-2.5 text-[13px]">
             <div className="font-medium">Wallet balance is not published by ULIP.</div>
             <p className="mt-1 text-muted-foreground">
-              None of the granted ULIP APIs returns a FASTag wallet balance — FASTAG/01
-              returns toll crossings and FASTAG/02 the tag registry. This panel replays a
-              stored snapshot when one exists; there is none for this vehicle
+              None of the granted ULIP APIs returns a FASTag wallet balance — FASTAG/01 returns toll
+              crossings and FASTAG/02 the tag registry. This panel replays a stored snapshot when
+              one exists; there is none for this vehicle
               {b.source ? ` (${b.source})` : ""}. Tag validity is on the{" "}
               <span className="font-medium">Tag Status</span> tab, and toll activity on{" "}
               <span className="font-medium">Transactions</span>.
@@ -450,9 +441,7 @@ const TAG_COLUMNS: Column<FastagTagRow & { __k?: number }>[] = [
   {
     key: "status",
     header: "Status",
-    render: (t) => (
-      <StatusChip label={tagStatusLabel(t.tag_status)} tone={tagTone(t.tag_status)} />
-    ),
+    render: (t) => <StatusChip label={tagStatusLabel(t.tag_status)} tone={tagTone(t.tag_status)} />,
   },
   { key: "rc", header: "Registered To", render: (t) => t.rc_number ?? "—" },
   { key: "class", header: "Class", render: (t) => t.vehicle_class ?? "—" },
@@ -460,7 +449,11 @@ const TAG_COLUMNS: Column<FastagTagRow & { __k?: number }>[] = [
     key: "com",
     header: "Commercial",
     render: (t) =>
-      t.commercial_vehicle == null ? "—" : /^(t|true|y|yes)$/i.test(t.commercial_vehicle) ? "Yes" : "No",
+      t.commercial_vehicle == null
+        ? "—"
+        : /^(t|true|y|yes)$/i.test(t.commercial_vehicle)
+          ? "Yes"
+          : "No",
   },
   { key: "bank", header: "Bank ID", className: "font-mono", render: (t) => t.bank_id ?? "—" },
   { key: "issued", header: "Issued", render: (t) => t.issue_date ?? "—" },
@@ -522,7 +515,9 @@ function TagStatusView({ rc, tagsQ }: { rc: string; tagsQ: any }) {
 
       {!rc && !tagId ? (
         <Card className="p-0">
-          <EmptyState>Enter an RC number above, or a tag id here, to see the NETC tag registry.</EmptyState>
+          <EmptyState>
+            Enter an RC number above, or a tag id here, to see the NETC tag registry.
+          </EmptyState>
         </Card>
       ) : (
         <Card className="overflow-hidden">

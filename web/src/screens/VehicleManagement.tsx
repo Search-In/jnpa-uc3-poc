@@ -712,17 +712,38 @@ function Field({ k, v, mono }: { k: string; v?: React.ReactNode; mono?: boolean 
 
 type LookupKey = "plate" | "chassis" | "engine";
 
-const LOOKUPS: { key: LookupKey; label: string; icon: typeof Search; api: string;
-                 placeholder: string; hint: string }[] = [
-  { key: "plate", label: "Registration", icon: Search, api: "VAHAN/04",
+const LOOKUPS: {
+  key: LookupKey;
+  label: string;
+  icon: typeof Search;
+  api: string;
+  placeholder: string;
+  hint: string;
+}[] = [
+  {
+    key: "plate",
+    label: "Registration",
+    icon: Search,
+    api: "VAHAN/04",
     placeholder: "MH12AB1234",
-    hint: "The everyday key. Falls back through the vehicle ladder when ULIP misses." },
-  { key: "chassis", label: "Chassis", icon: Fingerprint, api: "VAHAN/02",
+    hint: "The everyday key. Falls back through the vehicle ladder when ULIP misses.",
+  },
+  {
+    key: "chassis",
+    label: "Chassis",
+    icon: Fingerprint,
+    api: "VAHAN/02",
     placeholder: "MAT partial or full chassis number",
-    hint: "Use when the plate is unreadable or disputed. ULIP-only — no fallback." },
-  { key: "engine", label: "Engine", icon: Cog, api: "VAHAN/03",
+    hint: "Use when the plate is unreadable or disputed. ULIP-only — no fallback.",
+  },
+  {
+    key: "engine",
+    label: "Engine",
+    icon: Cog,
+    api: "VAHAN/03",
     placeholder: "Engine number",
-    hint: "Cross-check against the chassis result; a disagreement warrants inspection." },
+    hint: "Cross-check against the chassis result; a disagreement warrants inspection.",
+  },
 ];
 
 function lookupError(e: unknown): string {
@@ -730,7 +751,8 @@ function lookupError(e: unknown): string {
   if (/\b404\b/.test(msg)) return "VAHAN has no vehicle registered against this number.";
   if (/\b503\b/.test(msg))
     return "Live VAHAN lookups are turned off. Chassis and engine searches are served only by ULIP, which is currently disabled.";
-  if (/\b422\b|\b400\b/.test(msg)) return "That number does not look valid — check it and try again.";
+  if (/\b422\b|\b400\b/.test(msg))
+    return "That number does not look valid — check it and try again.";
   if (/\b40[13]\b/.test(msg)) return "You don't have permission to run VAHAN lookups.";
   if (/failed to fetch|networkerror|load failed/i.test(msg))
     return "Could not reach the gateway — check that the backend is running.";
@@ -763,8 +785,10 @@ function RcLookupPanel() {
       if (query!.kind === "chassis") return api.vahanByChassis(v);
       if (query!.kind === "engine") return api.vahanByEngine(v);
       const intel = await api.vehicleIntel(v);
-      return { record: intel as unknown as Record<string, unknown>,
-               decision_path: (intel as any)?.decision_path ?? (intel as any)?.path };
+      return {
+        record: intel as unknown as Record<string, unknown>,
+        decision_path: (intel as any)?.decision_path ?? (intel as any)?.path,
+      };
     },
     enabled: !!query?.value,
     retry: false,
@@ -780,9 +804,7 @@ function RcLookupPanel() {
         ? ((record as any).record as Record<string, unknown>)
         : record;
     if (!r) return [];
-    return Object.entries(r).filter(
-      ([, v]) => v != null && v !== "" && typeof v !== "object",
-    );
+    return Object.entries(r).filter(([, v]) => v != null && v !== "" && typeof v !== "object");
   }, [record]);
 
   function run() {
@@ -842,10 +864,9 @@ function RcLookupPanel() {
           <div className="rounded-md border border-border bg-muted/40 px-3 py-2.5 text-[13px]">
             <div className="font-medium">Live VAHAN lookups are unavailable in demo mode.</div>
             <p className="mt-1 text-muted-foreground">
-              These three searches query the national vehicle register through ULIP
-              ({LOOKUPS.map((l) => l.api).join(", ")}). There is no simulated source
-              behind them, so they answer only against a live gateway with the ULIP
-              integration enabled.
+              These three searches query the national vehicle register through ULIP (
+              {LOOKUPS.map((l) => l.api).join(", ")}). There is no simulated source behind them, so
+              they answer only against a live gateway with the ULIP integration enabled.
             </p>
           </div>
         </Card>
@@ -878,9 +899,7 @@ function RcLookupPanel() {
       {query && !q.isLoading && !q.isError && (
         <Card className="p-0">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2.5">
-            <h3 className="text-sm font-semibold">
-              Registration Certificate · {query.value}
-            </h3>
+            <h3 className="text-sm font-semibold">Registration Certificate · {query.value}</h3>
             <div className="flex items-center gap-1.5">
               <StatusChip label={active.api} tone="info" />
               {(q.data as any)?.decision_path && (
@@ -906,9 +925,9 @@ function RcLookupPanel() {
             </div>
           )}
           <div className="border-t border-border px-4 py-2.5 text-[11px] text-muted-foreground">
-            VAHAN masks the owner name, addresses, mobile number, chassis and engine
-            numbers for all users. A masked value is stored exactly as received and is
-            never re-masked or used as a lookup key.
+            VAHAN masks the owner name, addresses, mobile number, chassis and engine numbers for all
+            users. A masked value is stored exactly as received and is never re-masked or used as a
+            lookup key.
           </div>
         </Card>
       )}

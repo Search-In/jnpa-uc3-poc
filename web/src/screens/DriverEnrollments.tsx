@@ -321,6 +321,7 @@ function CreateDriverForm({
   initialLicense?: string;
 }) {
   const { t } = useTranslation();
+  const qc = useQueryClient();
   const [name, setName] = useState(initialName || "");
   const [license, setLicense] = useState(initialLicense || "");
   const [mobile, setMobile] = useState("");
@@ -348,6 +349,12 @@ function CreateDriverForm({
         emergency_contact: emergency.trim() || undefined,
       }),
     onSuccess: onCreated,
+    // A 409 means the truck was taken between this dropdown being fetched and
+    // the submit (another admin, or a driver enrolling from the PWA). Refetch
+    // the list so the stale option disappears instead of failing again.
+    onError: () => {
+      qc.invalidateQueries({ queryKey: ["available-vehicles"] });
+    },
   });
 
   const canSubmit = name.trim().length > 0 && /^TRK-\d{6}$/.test(vehicle) && !create.isPending;

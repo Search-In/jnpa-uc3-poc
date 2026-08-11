@@ -34,8 +34,9 @@ import { Button } from "@/components/ui/button";
 import { EmptyState, ErrorState, LoadingState } from "@/components/ui/misc";
 
 import { api, apiError } from "../../lib/api";
+import { customsBlock, type CustomsBlock } from "../../lib/customs";
 import type { ContainerJob, JobAssignInput, JobCheck } from "../../lib/api";
-import { vehicleLabel } from "../../lib/vehicles";
+import { assignableCount, vehicleLabel } from "../../lib/vehicles";
 
 // The move types the backend accepts (services/container_job/service.py MOVE_TYPES).
 const MOVE_TYPES = [
@@ -81,6 +82,10 @@ export default function JobAssignPanel({
   const [moveType, setMoveType] = useState<string>(MOVE_TYPES[0].value);
   const [rows, setRows] = useState<CheckRow[] | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  // Set from a `customs_flagged` rejection. The backend stays the enforcement
+  // point; this only stops the operator re-submitting an assignment customs has
+  // already refused, and shows the reason customs actually recorded.
+  const [customs, setCustoms] = useState<CustomsBlock | null>(null);
 
   const vehiclesQ = useQuery({
     queryKey: ["uc3-available-vehicles"],
@@ -112,6 +117,15 @@ export default function JobAssignPanel({
   const allVehicles = vehiclesQ.data?.vehicles ?? [];
   const vehicles = allVehicles.filter((v) => !busyVehicles.has(v.vehicle_id));
   const busyCount = allVehicles.length - vehicles.length;
+  // The count comes from the DB (vehicles ACTIVE with no open job), not from the
+  // page length — the page is capped by `limit`, and the fleet total is not the
+  // available total. `busyCount` is what this client noticed became busy after
+  // the dropdown was fetched, so it is subtracted rather than assumed to be 0.
+  const availableCount = assignableCount(
+    vehiclesQ.data?.available_total,
+    vehicles.length,
+    busyCount,
+  );
   const drivers = useMemo(() => driversQ.data?.drivers ?? [], [driversQ.data]);
 
   const selectedVehicle = useMemo(
@@ -132,7 +146,15 @@ export default function JobAssignPanel({
 
   const cn = container.trim().toUpperCase();
   const driverRequired = DRIVER_REQUIRED_MOVE_TYPES.has(moveType);
-  const ready = cn.length > 0 && vehicleId !== NONE && (!driverRequired || driverId !== NONE);
+  // A container customs has flagged cannot be assigned; the button stays out of
+  // reach until the operator changes container. `customsFor` pins the block to
+  // the container it was raised for, so typing a different one clears it.
+  const customsBlocked = Boolean(customs && customs.container === cn);
+  const ready =
+    cn.length > 0 &&
+    vehicleId !== NONE &&
+    (!driverRequired || driverId !== NONE) &&
+    !customsBlocked;
 
   const payload = (): JobAssignInput => ({
     container_number: cn,
@@ -146,6 +168,7 @@ export default function JobAssignPanel({
   const onReject = (err: unknown) => {
     const e = apiError(err);
     setFailure(e.detail);
+    setCustoms(customsBlock(e));
     setRows([
       {
         key: "rejected",
@@ -160,6 +183,7 @@ export default function JobAssignPanel({
     mutationFn: () => api.jobValidate(payload()),
     onMutate: () => {
       setFailure(null);
+      setCustoms(null);
       setRows(null);
     },
     onSuccess: (res) => setRows(toRows(res.checks ?? [])),
@@ -170,6 +194,7 @@ export default function JobAssignPanel({
     mutationFn: () => api.jobAssign(payload()),
     onMutate: () => {
       setFailure(null);
+      setCustoms(null);
       setRows(null);
     },
     onSuccess: (res: { job: ContainerJob; checks: JobCheck[] }) => {
@@ -276,7 +301,7 @@ export default function JobAssignPanel({
               Vehicle{" "}
               {vehiclesQ.isSuccess ? (
                 <span className="text-muted-foreground/70">
-                  ({vehicles.length} available
+                  ({availableCount} available
                   {busyCount > 0 ? `, ${busyCount} on an open job` : ""})
                 </span>
               ) : null}
@@ -378,7 +403,22 @@ export default function JobAssignPanel({
             role="status"
             className="divide-y divide-border rounded-md border border-border bg-background"
           >
-            {failure ? (
+            {customs ? (
+              <div
+                role="alert"
+                className="flex flex-col gap-1 border-l-2 border-destructive px-3 py-2 text-xs"
+              >
+                <div className="flex items-center gap-2">
+                  <ShieldAlert className="h-3.5 w-3.5 shrink-0 text-destructive" aria-hidden />
+                  <span className="font-medium text-foreground">{customs.message}</span>
+                </div>
+                {/* Only what customs recorded — no reason is invented when the
+                    remark is absent. */}
+                {customs.note ? (
+                  <span className="pl-5 text-muted-foreground">Customs note: {customs.note}</span>
+                ) : null}
+              </div>
+            ) : failure ? (
               <div className="flex items-center gap-2 px-3 py-2 text-xs">
                 <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" aria-hidden />
                 <span className="font-medium text-foreground">Assignment refused</span>

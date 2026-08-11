@@ -34,6 +34,20 @@ SOURCE_PWA = "PWA"      # driver self-submitted from the mobile app
 SOURCE_ADMIN = "ADMIN"  # created by a Control-Room admin on the enrollment page
 
 
+class VehicleAlreadyEnrolled(RuntimeError):
+    """A second open enrollment was attempted on a vehicle that already has one.
+
+    Raised by :func:`submit` when ``uq_driver_enrol_vehicle_open`` (migration
+    0139) rejects the write. It exists as a TYPE rather than a generic DB error
+    because ``submit`` deliberately falls back to the in-memory store on any DB
+    failure — without this, a conflict would be logged as an outage and answered
+    with a phantom success. Routers translate it to a 409."""
+
+    def __init__(self, vehicle_no: str) -> None:
+        super().__init__(f"vehicle {vehicle_no} already has an open enrollment")
+        self.vehicle_no = vehicle_no
+
+
 def normalize_vehicle_no(vehicle_no: Optional[str]) -> str:
     """Canonical form used for vehicle matching + the one-active-driver-per-vehicle
     constraint. UPPER + trimmed so ``trk-000001`` and ``TRK-000001 `` collide."""
@@ -69,6 +83,17 @@ CREATE TABLE IF NOT EXISTS core.driver_enrollment (
 );
 CREATE INDEX IF NOT EXISTS idx_driver_enrol_status
     ON core.driver_enrollment (status, submitted_at DESC);
+-- One OPEN enrollment per vehicle — the driver_enrollment counterpart of
+-- uq_drivers_vehicle_active below (migration 0139). Without it the
+-- vehicle_assignment_conflict() check in POST /api/identity/drivers is a
+-- read-then-write race: two admins could both pass it and both claim the same
+-- truck, with the clash only surfacing at approval. The predicate must stay in
+-- lockstep with _OPEN_ENROL_STATES and normalize_vehicle_no().
+CREATE UNIQUE INDEX IF NOT EXISTS uq_driver_enrol_vehicle_open
+    ON core.driver_enrollment (UPPER(TRIM(vehicle_no)))
+    WHERE status IN ('PENDING', 'REENROLL')
+      AND vehicle_no IS NOT NULL
+      AND TRIM(vehicle_no) <> '';
 ALTER TABLE core.driver_enrollment ADD COLUMN IF NOT EXISTS created_by text;
 ALTER TABLE core.driver_enrollment ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'PWA';
 CREATE TABLE IF NOT EXISTS core.enrollment_audit (
@@ -321,8 +346,23 @@ async def submit(dsn: str, *, driver_id: str, name: str, license_no: str = "",
             )
             await audit(dsn, driver_id, "SUBMITTED", actor=submit_actor, detail=audit_detail)
             return await get(dsn, driver_id) or {}
+        except VehicleAlreadyEnrolled:
+            raise
         except Exception as exc:  # noqa: BLE001
+            # A unique-index rejection is a BUSINESS conflict, not a DB outage:
+            # falling through to the memory store would report success for a
+            # write the database refused. Surface it to the caller instead.
+            if "uq_driver_enrol_vehicle_open" in str(exc):
+                raise VehicleAlreadyEnrolled(vehicle_no) from exc
             log.warning("enrollment_submit_db_failed_using_memory", error=str(exc))
+    norm = normalize_vehicle_no(vehicle_no)
+    if norm and any(e.get("status") in _OPEN_ENROL_STATES
+                    and normalize_vehicle_no(e.get("vehicle_no")) == norm
+                    and e.get("driver_id") != driver_id
+                    for e in _MEM.values()):
+        # Mirrors uq_driver_enrol_vehicle_open. Re-submitting for the SAME driver
+        # is still an overwrite, exactly as the ON CONFLICT (driver_id) branch is.
+        raise VehicleAlreadyEnrolled(vehicle_no)
     rec = {
         "driver_id": driver_id, "name": name, "license_no": license_no,
         "mobile": mobile, "vehicle_no": vehicle_no, "aadhaar_masked": aadhaar_masked,

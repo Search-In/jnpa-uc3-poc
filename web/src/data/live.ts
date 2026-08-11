@@ -210,19 +210,30 @@ export class LiveAdapter implements DataAdapter {
       `/api/identity/enrollments/${encodeURIComponent(driverId)}/reenroll`,
       { reason: reason ?? "re-enrollment requested" },
     );
+  // sendJson, not postJson: the gateway rejects a double assignment with a 409
+  // whose detail names the driver already holding the truck. postJson threw that
+  // away and showed "409 Conflict (/api/identity/drivers)", which tells the
+  // operator nothing about what to do next.
   createDriverProfile = (input: CreateDriverInput) =>
-    postJson<{ created: boolean; driver_id: string; status: string }>(
+    sendJson<{ created: boolean; driver_id: string; status: string }>(
+      "POST",
       "/api/identity/drivers",
       input,
     );
+  // "Which truck can I give this DRIVER?" — /api/identity/available-vehicles,
+  // which subtracts trucks already held by an active driver or an open
+  // enrollment. NOT /api/vehicles/available: since the BUG-1 fix that route
+  // answers "which truck can take this JOB?" and deliberately keeps
+  // driver-bound trucks in its list, so using it here offered vehicles the
+  // create endpoint then refused with a 409 (and it is what the mock adapter
+  // has always modelled — see mock.availableVehicles).
   availableVehicles = async (q?: string, limit = 50): Promise<AvailableVehicle[]> => {
     const params = new URLSearchParams();
     if (q) params.set("q", q);
     params.set("limit", String(limit));
-    // Vehicle Master is now the authoritative dropdown source (no truck-sim read).
     return (
       await getJson<{ vehicles: AvailableVehicle[] }>(
-        `/api/vehicles/available?${params.toString()}`,
+        `/api/identity/available-vehicles?${params.toString()}`,
       )
     ).vehicles;
   };

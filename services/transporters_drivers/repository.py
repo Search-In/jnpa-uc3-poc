@@ -70,7 +70,10 @@ class TransportersDriversRepository:
         failures the caller records + folds into the PARTIAL decision)."""
         data_origin = _data_origin(uploaded_by)
         existing = await self.find_file_by_sha(source_sha256, data_origin)
-        if existing is not None:
+        if existing is not None and existing["import_status"] != "FAILED":
+            # A FAILED ledger row records the *attempt*, not the content — a
+            # retry (replay) must import, not dedup against its own failure.
+            # The ledger INSERTs upsert on (source_sha256, data_origin).
             return {"file_id": existing["id"], "import_status": "SKIPPED_DUPLICATE",
                     "record_count": existing["record_count"],
                     "imported_count": existing["imported_count"],
@@ -299,6 +302,12 @@ INSERT INTO core.td_import_file
 VALUES
     (:entity_type, :physical_format, :source_file, :source_sha256, :file_size_bytes,
      :record_count, 'PENDING', :uploaded_by, :source, :data_origin)
+ON CONFLICT (source_sha256, data_origin) DO UPDATE SET
+    entity_type = EXCLUDED.entity_type, physical_format = EXCLUDED.physical_format,
+    source_file = EXCLUDED.source_file, file_size_bytes = EXCLUDED.file_size_bytes,
+    record_count = EXCLUDED.record_count, import_status = 'PENDING',
+    error_detail = NULL, updated_at = now()
+WHERE td_import_file.import_status = 'FAILED'
 RETURNING id
 """
 
@@ -309,6 +318,10 @@ INSERT INTO core.td_import_file
 VALUES
     (:entity_type, :physical_format, :source_file, :source_sha256, :file_size_bytes,
      :record_count, 'FAILED', :error_detail, :uploaded_by, :source, :data_origin)
+ON CONFLICT (source_sha256, data_origin) DO UPDATE SET
+    import_status = 'FAILED', error_detail = EXCLUDED.error_detail,
+    updated_at = now()
+WHERE td_import_file.import_status = 'FAILED'
 RETURNING id
 """
 

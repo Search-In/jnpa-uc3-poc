@@ -1036,7 +1036,7 @@ export const api = {
       ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
     );
     return http<{
-      items: ContainerJob[];
+      items: JobListItem[];
       total: number;
       limit: number;
       offset: number;
@@ -1051,7 +1051,7 @@ export const api = {
       ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
     );
     return http<{
-      items: ContainerJob[];
+      items: PendingHandoverEntry[];
       total: number;
       limit: number;
       offset: number;
@@ -2439,12 +2439,11 @@ export type JobStatus =
   | "COMPLETED"
   | "CANCELLED";
 export interface ContainerJob {
-  // null on handover-queue entries (see `pending_handover` below).
-  id: number | null;
+  id: number;
   container_number: string | null;
   group_code: string | null;
   transporter_id: number | null;
-  vehicle_id: string | null;
+  vehicle_id: string;
   vehicle_no: string | null;
   driver_id: string | null;
   driver_licence: string | null;
@@ -2460,18 +2459,28 @@ export interface ContainerJob {
   completed_at: string | null;
   cancelled_reason: string | null;
   notes: string | null;
-  // Present only on handover-queue entries (GET /api/jobs?include_pending=true
-  // and GET /api/jobs/pending-handover): a container UC-II has RELEASED that no
-  // truck has been dispatched against yet, so `id` and `vehicle_id` are null and
-  // `status` is PENDING_ASSIGNMENT. These are the INPUT to POST /api/jobs, never
-  // an open job — route a click into the assignment panel, not the stepper.
-  pending_handover?: boolean;
-  lifecycle_status?: string | null;
-  customs_status?: string | null;
-  yard_block?: string | null;
-  vessel_name?: string | null;
-  released_at?: string | null;
+  /** Never true on a dispatched job — the discriminant against PendingHandoverEntry. */
+  pending_handover?: false;
 }
+// A container UC-II has RELEASED that no truck has been dispatched against yet
+// (GET /api/jobs?include_pending=true, GET /api/jobs/pending-handover). It is a
+// queue entry, NOT a job: there is no job row behind it, so `id` and
+// `vehicle_id` are null and the status is one core.container_job_assignment
+// would reject. It is the INPUT to POST /api/jobs — a click on one belongs in
+// the assignment panel, never in the job stepper.
+export interface PendingHandoverEntry
+  extends Omit<ContainerJob, "id" | "vehicle_id" | "pending_handover"> {
+  id: null;
+  vehicle_id: null;
+  pending_handover: true;
+  lifecycle_status: string | null;
+  customs_status: string | null;
+  yard_block: string | null;
+  vessel_name: string | null;
+  released_at: string | null;
+}
+/** What GET /api/jobs returns when include_pending is on: jobs + queue entries. */
+export type JobListItem = ContainerJob | PendingHandoverEntry;
 export interface JobEvent {
   id: number;
   event: string;

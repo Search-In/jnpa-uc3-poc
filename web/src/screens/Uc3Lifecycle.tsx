@@ -72,6 +72,7 @@ const STEPS = [
 type StepKey = (typeof STEPS)[number]["key"];
 
 const STATUS_RANK: Record<JobStatus, number> = {
+  PENDING_ASSIGNMENT: 0,
   CANCELLED: 0,
   ASSIGNED: 1,
   ACCEPTED: 2,
@@ -83,6 +84,7 @@ const STATUS_RANK: Record<JobStatus, number> = {
 };
 
 function statusTone(s: JobStatus): Tone {
+  if (s === "PENDING_ASSIGNMENT") return "warn";
   if (s === "COMPLETED") return "ok";
   if (s === "CANCELLED") return "critical";
   if (s === "ASSIGNED") return "neutral";
@@ -108,7 +110,16 @@ export default function Uc3Lifecycle() {
 
   const jobsQ = useQuery({
     queryKey: ["uc3-jobs", term],
-    queryFn: () => api.jobs(term ? { container: term.toUpperCase(), limit: 50 } : { limit: 50 }),
+    // include_pending: a container UC-II has RELEASED but that no truck has been
+    // dispatched against yet has no job row (core.container_job_assignment needs
+    // a vehicle + driver + gate document), so without this the released box is
+    // invisible on this console. The queue entries carry pending_handover: true.
+    queryFn: () =>
+      api.jobs(
+        term
+          ? { container: term.toUpperCase(), include_pending: true, limit: 50 }
+          : { include_pending: true, limit: 50 },
+      ),
     placeholderData: keepPreviousData,
   });
 
@@ -278,11 +289,15 @@ export default function Uc3Lifecycle() {
     return null;
   }, [job, scanQ.data]);
 
-  const jobs = jobsQ.data?.items ?? [];
+  const items = jobsQ.data?.items ?? [];
+  // Handover-queue entries are NOT jobs: they are released containers waiting for
+  // one, so they are counted (and rendered) separately from dispatched work.
+  const pending = items.filter((j) => j.pending_handover);
+  const jobs = items.filter((j) => !j.pending_handover);
   const openJobs = jobs.filter((j) => j.status !== "COMPLETED" && j.status !== "CANCELLED").length;
 
   const TABS: { key: Tab; label: string; icon: typeof Workflow; count?: number }[] = [
-    { key: "lifecycle", label: "Container Journey", icon: Workflow, count: jobs.length },
+    { key: "lifecycle", label: "Container Journey", icon: Workflow, count: items.length },
     { key: "documents", label: "Documents", icon: FileText },
     { key: "chains", label: "ECY → CFS Chains", icon: Link2 },
     { key: "upload", label: "Data Upload", icon: UploadCloud },
@@ -312,6 +327,13 @@ export default function Uc3Lifecycle() {
                 label="Completed"
                 value={jobs.filter((j) => j.status === "COMPLETED").length}
                 tone="ok"
+              />
+              <StatCard
+                icon={Inbox}
+                label="Awaiting dispatch"
+                value={pending.length}
+                tone={pending.length ? "warn" : "neutral"}
+                sub="released by UC-II"
               />
               <StatCard
                 icon={ScanLine}
@@ -351,7 +373,7 @@ export default function Uc3Lifecycle() {
                   <LoadingState />
                 ) : jobsQ.isError ? (
                   <ErrorState onRetry={() => jobsQ.refetch()} />
-                ) : jobs.length === 0 ? (
+                ) : items.length === 0 ? (
                   <EmptyState>
                     <div className="flex flex-col items-center gap-2">
                       <Inbox className="h-6 w-6 text-muted-foreground" aria-hidden />
@@ -373,13 +395,23 @@ export default function Uc3Lifecycle() {
                   </EmptyState>
                 ) : (
                   <ul className="max-h-[26rem] divide-y divide-border overflow-y-auto lg:max-h-[32rem]">
-                    {jobs.map((j: ContainerJob) => {
-                      const active = selectedJob === j.id;
+                    {items.map((j: ContainerJob) => {
+                      const isPending = Boolean(j.pending_handover);
+                      const active = !isPending && selectedJob === j.id;
                       return (
-                        <li key={j.id}>
+                        <li key={isPending ? `pending:${j.container_number}` : `job:${j.id}`}>
                           <button
                             type="button"
                             onClick={() => {
+                              // A queue entry has no job to open: it feeds the
+                              // assignment panel above, which is where the job
+                              // record is created (POST /api/jobs).
+                              if (isPending) {
+                                setSelectedJob(null);
+                                setOpenStep(null);
+                                setTerm(j.container_number ?? "");
+                                return;
+                              }
                               setSelectedJob(j.id);
                               setOpenStep(null);
                             }}
@@ -393,10 +425,15 @@ export default function Uc3Lifecycle() {
                               <span className="truncate font-mono text-[13px] font-medium text-foreground">
                                 {j.container_number || j.group_code || `Job #${j.id}`}
                               </span>
-                              <StatusChip label={j.status} tone={statusTone(j.status)} />
+                              <StatusChip
+                                label={isPending ? "RELEASED · NEEDS TRUCK" : j.status}
+                                tone={statusTone(j.status)}
+                              />
                             </div>
                             <span className="truncate text-[11px] text-muted-foreground">
-                              {j.vehicle_no || j.vehicle_id} · {j.move_type.replace("_", " ")}
+                              {isPending
+                                ? `${j.yard_block ?? "yard —"} · ${j.vehicle_no ?? "no truck"} · assign to start`
+                                : `${j.vehicle_no || j.vehicle_id} · ${j.move_type.replace("_", " ")}`}
                             </span>
                           </button>
                         </li>

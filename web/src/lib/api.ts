@@ -1026,6 +1026,8 @@ export const api = {
     driver_id?: string;
     status?: string;
     open_only?: boolean;
+    /** Prefix the page with the UC-II -> UC-III handover queue (released, no truck yet). */
+    include_pending?: boolean;
     limit?: number;
     offset?: number;
   }) => {
@@ -1042,6 +1044,20 @@ export const api = {
     }>(`/api/jobs${qs.toString() ? `?${qs}` : ""}`);
   },
   job: (jobId: number) => http<ContainerJob & { events: JobEvent[] }>(`/api/jobs/${jobId}`),
+  // The handover queue on its own: containers UC-II released that still need a truck.
+  pendingHandover: (params?: { container?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{
+      items: ContainerJob[];
+      total: number;
+      limit: number;
+      offset: number;
+      count: number;
+    }>(`/api/jobs/pending-handover${qs.toString() ? `?${qs}` : ""}`);
+  },
   jobValidate: (body: JobAssignInput) =>
     http<{ ok: boolean; checks: JobCheck[]; vehicle: any; permit: any }>("/api/jobs/validate", {
       method: "POST",
@@ -2413,6 +2429,7 @@ export interface GateDocTat {
 }
 
 export type JobStatus =
+  | "PENDING_ASSIGNMENT"
   | "ASSIGNED"
   | "ACCEPTED"
   | "AT_GATE"
@@ -2422,11 +2439,12 @@ export type JobStatus =
   | "COMPLETED"
   | "CANCELLED";
 export interface ContainerJob {
-  id: number;
+  // null on handover-queue entries (see `pending_handover` below).
+  id: number | null;
   container_number: string | null;
   group_code: string | null;
   transporter_id: number | null;
-  vehicle_id: string;
+  vehicle_id: string | null;
   vehicle_no: string | null;
   driver_id: string | null;
   driver_licence: string | null;
@@ -2442,6 +2460,17 @@ export interface ContainerJob {
   completed_at: string | null;
   cancelled_reason: string | null;
   notes: string | null;
+  // Present only on handover-queue entries (GET /api/jobs?include_pending=true
+  // and GET /api/jobs/pending-handover): a container UC-II has RELEASED that no
+  // truck has been dispatched against yet, so `id` and `vehicle_id` are null and
+  // `status` is PENDING_ASSIGNMENT. These are the INPUT to POST /api/jobs, never
+  // an open job — route a click into the assignment panel, not the stepper.
+  pending_handover?: boolean;
+  lifecycle_status?: string | null;
+  customs_status?: string | null;
+  yard_block?: string | null;
+  vessel_name?: string | null;
+  released_at?: string | null;
 }
 export interface JobEvent {
   id: number;

@@ -46,6 +46,13 @@ TRANSITIONS: Dict[str, frozenset[str]] = {
 
 MOVE_TYPES = ("IMPORT_PICK", "EXPORT_DROP", "EMPTY_PICK", "EMPTY_DROP")
 
+# Pseudo-status for the UC-II -> UC-III handover queue: a container UC-II has
+# RELEASED that no truck has been dispatched against yet. It is NOT a job status
+# (nothing with this value is ever written to core.container_job_assignment,
+# whose CHECK constraint would reject it) — it exists only on the read surface so
+# a released box is visible on the UC-III console before a job exists.
+PENDING_ASSIGNMENT = "PENDING_ASSIGNMENT"
+
 # BUG-4: move types that may NOT be dispatched without an identified driver.
 # An import pick-up leaves the terminal with a laden box against a PIN/Form-13,
 # so the trip must be attributable to a person, not just a plate. Every job
@@ -572,11 +579,94 @@ class ContainerJobService:
         job["events"] = await self._events(job_id)
         return job
 
-    async def list_jobs(self, *, filters, limit: int, offset: int) -> Dict[str, Any]:
-        rows = await self._repo.list_jobs(filters=filters, limit=limit, offset=offset)
-        total = await self._repo.count_jobs(filters=filters)
-        return {"items": rows, "total": total, "limit": limit, "offset": offset,
-                "count": len(rows)}
+    async def list_jobs(self, *, filters, limit: int, offset: int,
+                        include_pending: bool = False) -> Dict[str, Any]:
+        """List job assignments, optionally preceded by the UC-II -> UC-III
+        handover queue.
+
+        ``include_pending`` is opt-in and defaults off, so every existing consumer
+        (driver PWA, availability checks, reports) keeps seeing dispatched jobs
+        only. The UC-III Container Operations console turns it on: a container
+        that UC-II RELEASED but which no truck has been dispatched against had no
+        representation anywhere on the UC-III read surface, so a released box was
+        invisible until an operator happened to type its number into the assign
+        panel. The queue entries are derived from core.cargo, carry
+        ``pending_handover: true`` and ``id: null``, and are ordered first because
+        they are the actionable half of the list.
+        """
+        pending_total = 0
+        pending: list[dict] = []
+        if include_pending and self._pending_applies(filters):
+            pending_total = await self._repo.count_pending_handover(filters=filters)
+            if offset < pending_total:
+                pending = [self._as_pending_item(r) for r in
+                           await self._repo.list_pending_handover(
+                               filters=filters, limit=limit, offset=offset)]
+
+        job_offset = max(0, offset - pending_total)
+        job_limit = max(0, limit - len(pending))
+        rows = (await self._repo.list_jobs(filters=filters, limit=job_limit, offset=job_offset)
+                if job_limit else [])
+        total = await self._repo.count_jobs(filters=filters) + pending_total
+        items = pending + list(rows)
+        return {"items": items, "total": total, "limit": limit, "offset": offset,
+                "count": len(items)}
+
+    @staticmethod
+    def _pending_applies(filters) -> bool:
+        """The handover queue answers "which released box still needs a truck?".
+        A query already scoped to a truck, a driver, a job status or open jobs is
+        asking about dispatched work, so the queue must stay out of it."""
+        return not any(filters.get(k) for k in
+                       ("vehicle_id", "vehicle_plate", "driver_id", "status", "open_only"))
+
+    @staticmethod
+    def _as_pending_item(row: Mapping[str, Any]) -> Dict[str, Any]:
+        """Shape a released-cargo row like a job row so one list can render both.
+        ``id`` is null and ``status`` is PENDING_ASSIGNMENT precisely because no
+        job exists yet — the consumer must route these into the assignment flow
+        (POST /api/jobs), never treat them as an open job."""
+        return {
+            "id": None,
+            "pending_handover": True,
+            "container_number": row.get("container_number"),
+            "group_code": None,
+            "transporter_id": None,
+            "vehicle_id": None,
+            # The truck UC-II recorded on the cargo row, as a dispatch HINT for
+            # the operator — the binding is only real once a job is assigned.
+            "vehicle_no": row.get("vehicle_number"),
+            "driver_id": None,
+            "driver_licence": None,
+            "move_type": "IMPORT_PICK",
+            "document_type": None,
+            "document_reference": None,
+            "terminal": None,
+            "gate": None,
+            "status": PENDING_ASSIGNMENT,
+            "lifecycle_status": row.get("lifecycle_status"),
+            "customs_status": row.get("customs_status"),
+            "yard_block": row.get("yard_block"),
+            "vessel_name": row.get("vessel_name"),
+            "released_at": row.get("updated_at"),
+            "assigned_by": None,
+            "assigned_at": None,
+            "accepted_at": None,
+            "completed_at": None,
+            "cancelled_reason": None,
+            "notes": None,
+        }
+
+    async def pending_handover(self, *, container_number: Optional[str] = None,
+                               limit: int = 50, offset: int = 0) -> Dict[str, Any]:
+        """The handover queue on its own (released, no open job) — the same rows
+        GET /api/jobs?include_pending=true prefixes its page with."""
+        filters = {"container_number": container_number}
+        rows = await self._repo.list_pending_handover(filters=filters, limit=limit, offset=offset)
+        total = await self._repo.count_pending_handover(filters=filters)
+        items = [self._as_pending_item(r) for r in rows]
+        return {"items": items, "total": total, "limit": limit, "offset": offset,
+                "count": len(items)}
 
     async def vehicles_with_open_jobs(self) -> set:
         """Vehicle IDs holding a non-terminal job — the real "truck is busy" set

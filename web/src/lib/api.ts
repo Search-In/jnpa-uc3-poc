@@ -1026,6 +1026,8 @@ export const api = {
     driver_id?: string;
     status?: string;
     open_only?: boolean;
+    /** Prefix the page with the UC-II -> UC-III handover queue (released, no truck yet). */
+    include_pending?: boolean;
     limit?: number;
     offset?: number;
   }) => {
@@ -1034,7 +1036,7 @@ export const api = {
       ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
     );
     return http<{
-      items: ContainerJob[];
+      items: JobListItem[];
       total: number;
       limit: number;
       offset: number;
@@ -1042,6 +1044,20 @@ export const api = {
     }>(`/api/jobs${qs.toString() ? `?${qs}` : ""}`);
   },
   job: (jobId: number) => http<ContainerJob & { events: JobEvent[] }>(`/api/jobs/${jobId}`),
+  // The handover queue on its own: containers UC-II released that still need a truck.
+  pendingHandover: (params?: { container?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<{
+      items: PendingHandoverEntry[];
+      total: number;
+      limit: number;
+      offset: number;
+      count: number;
+    }>(`/api/jobs/pending-handover${qs.toString() ? `?${qs}` : ""}`);
+  },
   jobValidate: (body: JobAssignInput) =>
     http<{ ok: boolean; checks: JobCheck[]; vehicle: any; permit: any }>("/api/jobs/validate", {
       method: "POST",
@@ -1900,6 +1916,31 @@ export const api = {
       { method: "POST" },
     ),
 
+  // --- UC3-020 corridor congestion heatmap ---------------------------------
+  // offset_minutes is the slider: -360 … 0 … +120. The server clamps it and says
+  // so, so a caller cannot get a 12-hour forecast dressed as a 15-minute one.
+  corridorHeatmap: (offsetMinutes = 0) =>
+    http<import("./types").CorridorHeatmapResponse>(
+      `/api/corridor-heatmap?offset_minutes=${offsetMinutes}`,
+    ),
+
+  // --- UC3-023 camera degraded mode (EC-6) ---------------------------------
+  // Reads each camera's ACTUAL cascade rung, including a rung forced through
+  // /api/control/fault — never a UI-only status.
+  gateDegradedMode: () =>
+    http<import("./types").DegradedModeResponse>("/api/gate-board/degraded-mode"),
+  /** The project's existing fault console; the drill uses it, not a new mechanism. */
+  injectFault: (domain: string, rung: string) =>
+    http<Record<string, unknown>>(`/api/control/fault/${domain}`, {
+      method: "POST",
+      body: JSON.stringify({ rung }),
+    }),
+  clearFault: (domain: string) =>
+    http<{ cleared: string; reconciliation?: Record<string, unknown> }>(
+      `/api/control/fault/${domain}`,
+      { method: "DELETE" },
+    ),
+
   // --- UC3-027 CPP metered release (flow F-06) -----------------------------
   cppBoard: () => http<import("./types").CppBoardResponse>("/api/cpp/board"),
   /** METERED throttles only the congested terminal; UNIFORM is the do-nothing arm. */
@@ -1946,6 +1987,67 @@ export const api = {
     http<import("./types").TripSearchResponse>(`/api/trip/search?q=${encodeURIComponent(q)}`),
   trip: (tripId: string) =>
     http<import("./types").TripDetail>(`/api/trip/${encodeURIComponent(tripId)}`),
+
+  // --- UC3-035 dual turnaround definitions ---------------------------------
+  // Returns BOTH arms; there is deliberately no parameter to ask for one
+  // (UI-122: neither may be displayed alone anywhere in the product).
+  kpiDualTat: () => http<import("./types").DualTatResponse>("/api/kpi/dual-tat"),
+  /** Daily average, median, P90 and peak-hour ratio, all computed in the DB. */
+  kpiDistribution: (windowHours = 24) =>
+    http<import("./types").KpiDistributionResponse>(
+      `/api/kpi/distribution?window_hours=${windowHours}`,
+    ),
+
+  // --- UC3-028 violation queue / UC3-029 hash-chained audit ----------------
+  // Filtering is server-side: a queue that only filters what it already
+  // downloaded stops being correct past the first page.
+  violationQueue: (opts: { status?: string; kind?: string; plate?: string } = {}) => {
+    const q = new URLSearchParams();
+    if (opts.status) q.set("status", opts.status);
+    if (opts.kind) q.set("kind", opts.kind);
+    if (opts.plate) q.set("plate", opts.plate);
+    const qs = q.toString();
+    return http<import("./types").ViolationQueueResponse>(
+      `/api/violations/cases${qs ? `?${qs}` : ""}`,
+    );
+  },
+  /** Fires every rung the dwell has earned (N/2N/3N). Idempotent per rung. */
+  violationEscalate: (
+    caseId: string,
+    body: {
+      dwell_minutes: number;
+      zone_id?: string;
+      n_minutes?: number;
+    },
+  ) =>
+    http<import("./types").EscalateResult>(
+      `/api/violations/cases/${encodeURIComponent(caseId)}/escalate`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  violationNotifications: (caseId: string) =>
+    http<import("./types").CaseNotifications>(
+      `/api/violations/cases/${encodeURIComponent(caseId)}/notifications`,
+    ),
+  violationFieldVerification: (caseId: string, zoneId?: string) =>
+    http<{ task: import("./types").FieldVerificationTask; note: string }>(
+      `/api/violations/cases/${encodeURIComponent(caseId)}/field-verification`,
+      { method: "POST", body: JSON.stringify({ zone_id: zoneId }) },
+    ),
+  violationCase: (caseId: string) =>
+    http<import("./types").ViolationCaseBundle>(
+      `/api/violations/cases/${encodeURIComponent(caseId)}`,
+    ),
+  /** Recomputes the append-only chain server-side; reports the first broken link. */
+  violationVerifyChain: (caseId: string) =>
+    http<import("./types").ChainVerification>(
+      `/api/violations/cases/${encodeURIComponent(caseId)}/verify-chain`,
+    ),
+  /** Illegal hops are rejected by the server with 409 — the error is surfaced. */
+  violationTransition: (caseId: string, toStatus: string, paymentRef?: string) =>
+    http<Record<string, unknown>>(
+      `/api/violations/cases/${encodeURIComponent(caseId)}/transition`,
+      { method: "POST", body: JSON.stringify({ to_status: toStatus, payment_ref: paymentRef }) },
+    ),
 
   // --- UC3-036 carbon method + idle delta ----------------------------------
   carbonMethod: () => http<import("./types").CarbonMethodResponse>("/api/carbon/method"),
@@ -2327,6 +2429,7 @@ export interface GateDocTat {
 }
 
 export type JobStatus =
+  | "PENDING_ASSIGNMENT"
   | "ASSIGNED"
   | "ACCEPTED"
   | "AT_GATE"
@@ -2356,7 +2459,30 @@ export interface ContainerJob {
   completed_at: string | null;
   cancelled_reason: string | null;
   notes: string | null;
+  /** Never true on a dispatched job — the discriminant against PendingHandoverEntry. */
+  pending_handover?: false;
 }
+// A container UC-II has RELEASED that no truck has been dispatched against yet
+// (GET /api/jobs?include_pending=true, GET /api/jobs/pending-handover). It is a
+// queue entry, NOT a job: there is no job row behind it, so `id` and
+// `vehicle_id` are null and the status is one core.container_job_assignment
+// would reject. It is the INPUT to POST /api/jobs — a click on one belongs in
+// the assignment panel, never in the job stepper.
+export interface PendingHandoverEntry extends Omit<
+  ContainerJob,
+  "id" | "vehicle_id" | "pending_handover"
+> {
+  id: null;
+  vehicle_id: null;
+  pending_handover: true;
+  lifecycle_status: string | null;
+  customs_status: string | null;
+  yard_block: string | null;
+  vessel_name: string | null;
+  released_at: string | null;
+}
+/** What GET /api/jobs returns when include_pending is on: jobs + queue entries. */
+export type JobListItem = ContainerJob | PendingHandoverEntry;
 export interface JobEvent {
   id: number;
   event: string;

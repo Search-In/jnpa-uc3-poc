@@ -41,6 +41,7 @@ import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { IdentityPanel } from "@/components/panels/IdentityPanel";
 import { ViolationDetectionPanel } from "@/components/panels/ViolationDetectionPanel";
+import ViolationQueuePanel from "@/components/panels/ViolationQueuePanel";
 import {
   PageContainer,
   PageHeader,
@@ -330,7 +331,15 @@ function EnforcementReports() {
             </Card>
           </div>
         )}
-        {tab === "violations" && <ViolationsTab catalogQ={catalogQ} incidents={incidents} />}
+        {tab === "violations" && (
+          <div className="flex min-w-0 flex-col gap-3">
+            {/* UC3-028 queue + UC3-029 hash-chained audit. They sit above the
+                existing catalogue/detection view because working a filed case is
+                the primary task on this tab; filing one is the secondary. */}
+            <ViolationQueuePanel />
+            <ViolationsTab catalogQ={catalogQ} incidents={incidents} />
+          </div>
+        )}
         {tab === "challans" && (
           <Card className="overflow-hidden">
             <ChallansTable incidents={withChallan} onSelect={setSelected} />

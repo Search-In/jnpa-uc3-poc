@@ -208,9 +208,14 @@ test.describe("UC3-024 / UC3-025 on Truck Visit Detail", () => {
     const w = watch(page);
     await page.goto("/truck-visit?q=NYKU4768188");
 
-    // Wait for resolution to settle on the GTI visit before reading its
-    // timeline — until then the pane still shows the previously selected doc.
-    await expect(page.locator('[aria-current="true"]').first()).toContainText("GTI");
+    // This test is about the timeline's EVIDENCE LABELS, so it selects the GTI
+    // visit explicitly rather than racing the resolver's refetch. (The resolver
+    // landing on this document is covered by the resolution tests above.)
+    await page
+      .getByRole("button", { name: /NYKU4768188/ })
+      .first()
+      .click();
+    await expect(page.getByText(/In-gate time/).first()).toContainText("82");
     await expect(page.getByText("Checkpoint timeline").first()).toBeVisible();
     // The hero visit's real gate times, and the honest gaps between them.
     await expect(page.getByText("Recognition portal (ANPR arch)").first()).toBeVisible();

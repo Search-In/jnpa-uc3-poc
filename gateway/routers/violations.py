@@ -41,7 +41,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
-from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import (APIRouter, Body, Depends, File, Form, HTTPException, Query,
+                     Request, UploadFile)
 
 from .. import enforcement
 from ..fallback import AnprPath, SourceState
@@ -716,6 +717,54 @@ async def enforce(
     }
 
 
+@router.get("/cases")
+async def list_cases(
+    status: Optional[str] = Query(None, description="DETECTED | REVIEWED | ... | CLOSED"),
+    kind: Optional[str] = Query(None, description="violation kind, e.g. NO_PARKING"),
+    plate: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    state: GatewayState = Depends(get_state),
+) -> dict:
+    """The enforcement QUEUE (UC3-028).
+
+    One row per case with its violation kinds, severity, status, timestamps and
+    evidence hash. Filtering is server-side so the queue stays correct past the
+    first page. Returns an explicit empty list — never a fabricated case — when
+    nothing matches.
+    """
+    dsn = state.cfg.postgres_dsn
+    if not dsn:
+        raise HTTPException(status_code=503, detail={"error": "case_store_unavailable"})
+    try:
+        await enforcement.ensure_schema(dsn)
+        rows = await enforcement.list_cases(
+            dsn, status=status, kind=kind, plate=plate, limit=limit)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("violations_list_failed", error=str(exc))
+        raise HTTPException(status_code=503, detail={"error": "case_store_unavailable"})
+
+    cases = [enforcement._iso(dict(r)) for r in rows]
+    counts: Dict[str, int] = {}
+    for c in cases:
+        counts[c["status"]] = counts.get(c["status"], 0) + 1
+    REQUESTS.labels("violations", "ok").inc()
+    return {
+        "cases": cases,
+        "count": len(cases),
+        "by_status": counts,
+        "lifecycle": list(enforcement.CASE_STATES) + ["DISPUTED"],
+        "violation_types": [v["kind"] for v in _violation_catalog()],
+        # UC3-028: evidence is written once and referenced by its SHA-256, so the
+        # queue states the rule rather than leaving it implicit.
+        "evidence_policy": {
+            "hash": "sha256",
+            "note": ("Evidence is written once to object storage and referenced by "
+                     "its SHA-256. A case row carries the hash, so a swapped frame "
+                     "no longer matches the case."),
+        },
+    }
+
+
 @router.get("/cases/{case_id}")
 async def get_case(case_id: str, state: GatewayState = Depends(get_state)) -> dict:
     """Full case view: case + violation rows + challan + hash-chained audit."""
@@ -730,6 +779,96 @@ async def get_case(case_id: str, state: GatewayState = Depends(get_state)) -> di
         raise HTTPException(status_code=404, detail={"error": "case_not_found"})
     REQUESTS.labels("violations", "ok").inc()
     return bundle
+
+
+def _escalation_service(state: GatewayState):
+    from services.enforcement_escalation import EscalationService
+
+    return EscalationService(dsn=state.cfg.postgres_dsn)
+
+
+@router.post("/cases/{case_id}/escalate")
+async def escalate(
+    case_id: str,
+    body: Dict[str, Any] = Body(default={}),
+    state: GatewayState = Depends(get_state),
+) -> dict:
+    """Fire every escalation rung this case has earned (UC3-028, UI-114).
+
+    N / 2N / 3N, where N is the zone's configured first-alert minute. Idempotent:
+    a rung that already fired is reported in ``rungs_already_fired`` and produces
+    no second notice.
+
+    ``elapsed_ms`` is MEASURED on the server for the F-08 10-second budget — a
+    latency claim without a measurement is not evidence.
+    """
+    dwell = body.get("dwell_minutes")
+    if dwell is None:
+        raise HTTPException(status_code=422, detail={
+            "error": "dwell_minutes_required",
+            "detail": ("The ladder fires on dwell time; it is never inferred. "
+                       "Supply the observed dwell in minutes."),
+        })
+    try:
+        dwell = float(dwell)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail={"error": "dwell_minutes_not_numeric"})
+    if dwell < 0:
+        raise HTTPException(status_code=422, detail={"error": "dwell_minutes_negative"})
+
+    bundle = await enforcement.get_case_bundle(state.cfg.postgres_dsn, case_id)
+    if not bundle:
+        raise HTTPException(status_code=404, detail={"error": "case_not_found"})
+
+    svc = _escalation_service(state)
+    out = await svc.evaluate(
+        case_id=case_id,
+        plate=(bundle.get("case") or {}).get("vehicle_number"),
+        dwell_minutes=dwell,
+        n_minutes=body.get("n_minutes"),
+        zone_id=body.get("zone_id"),
+    )
+    REQUESTS.labels("violations", "ok").inc()
+    return out
+
+
+@router.get("/cases/{case_id}/notifications")
+async def case_notifications(case_id: str,
+                             state: GatewayState = Depends(get_state)) -> dict:
+    """The escalation ladder and every per-channel delivery for a case."""
+    svc = _escalation_service(state)
+    out = await svc.case_notifications(case_id)
+    field_task = await svc._repo.field_task_for(case_id)  # noqa: SLF001 — same package
+    REQUESTS.labels("violations", "ok").inc()
+    return {**out, "field_verification_task": field_task}
+
+
+@router.post("/cases/{case_id}/field-verification")
+async def field_verification(
+    case_id: str,
+    body: Dict[str, Any] = Body(default={}),
+    state: GatewayState = Depends(get_state),
+) -> dict:
+    """Raise a marshal task for an unreadable plate (EC-5).
+
+    Guessing the plate would notify the wrong owner, so an unreadable read goes
+    to a human with the photo evidence attached instead.
+    """
+    bundle = await enforcement.get_case_bundle(state.cfg.postgres_dsn, case_id)
+    if not bundle:
+        raise HTTPException(status_code=404, detail={"error": "case_not_found"})
+    case = bundle.get("case") or {}
+    svc = _escalation_service(state)
+    task = await svc.raise_field_verification(
+        case_id=case_id,
+        evidence_url=body.get("evidence_url") or case.get("evidence_url"),
+        evidence_sha256=body.get("evidence_sha256") or case.get("evidence_sha256"),
+        zone_id=body.get("zone_id"),
+    )
+    REQUESTS.labels("violations", "ok").inc()
+    return {"task": task,
+            "note": ("The plate could not be read, so no owner can be notified. A "
+                     "traffic marshal verifies in the field with the evidence photo.")}
 
 
 @router.get("/cases/{case_id}/verify-chain")

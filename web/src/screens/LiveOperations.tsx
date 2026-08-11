@@ -12,6 +12,9 @@ import type { Gate, TrafficSnapshot, TruckDevice, VehicleIntel } from "@/lib/typ
 import { ArcgisMap } from "@/components/map/ArcgisMap";
 import { Card, CardContent } from "@/components/ui/card";
 import { ThroughputChart } from "@/components/ThroughputChart";
+import PanelBoundary from "@/components/ui/PanelBoundary";
+import DualTatCard from "@/components/panels/DualTatCard";
+import KpiDistributionPanel from "@/components/panels/KpiDistributionPanel";
 import { KpiStrip } from "@/components/panels/KpiStrip";
 import { CarbonTile } from "@/components/panels/CarbonTile";
 import { WeatherTile } from "@/components/panels/WeatherTile";
@@ -42,12 +45,23 @@ import { useAlertFocus } from "@/lib/alertFocus";
 import { useMapSettings } from "@/lib/mapSettings";
 import { fmtEta } from "@/lib/utils";
 
-function stateTone(state: string): Tone {
+// `state` is declared `string` on TruckDevice but the gateway returns null for
+// devices whose state has not been classified yet — every one of the 400 live
+// devices, as it turns out. These two helpers ran `.startsWith` / `.toLowerCase`
+// straight on it, so one unclassified truck threw inside VehicleRail's map and,
+// with no error boundary above it, blanked the whole of /live.
+//
+// Both now take `string | null | undefined` and render an explicit "Unknown"
+// rather than inventing a state: a truck whose state the backend could not
+// determine is not "moving", and saying so would be a fabricated status.
+function stateTone(state: string | null | undefined): Tone {
+  if (!state) return "neutral";
   if (state === "AT_GATE_QUEUE") return "warn";
   if (state === "MOVING" || state.startsWith("EN_ROUTE") || state === "ENROUTE") return "ok";
   return "info";
 }
-function humanizeState(s: string): string {
+function humanizeState(s: string | null | undefined): string {
+  if (!s) return "Unknown";
   return s
     .toLowerCase()
     .split(/[_\s]+/)
@@ -229,8 +243,13 @@ export default function LiveOperations() {
   const [selected, setSelected] = useState<TruckDevice | null>(null);
 
   const allTrucks = trucksQ.data ?? [];
+  // Devices with no classified state must not put a null into the filter list —
+  // it would render an empty option that silently selects nothing.
   const stateOptions = useMemo(
-    () => ["all", ...Array.from(new Set(allTrucks.map((v) => v.state)))],
+    () => [
+      "all",
+      ...Array.from(new Set(allTrucks.map((v) => v.state).filter((s): s is string => !!s))),
+    ],
     [allTrucks],
   );
   const gateOptions = useMemo(
@@ -313,7 +332,21 @@ export default function LiveOperations() {
           <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             {t("liveOps.corridorKpis")}
           </h2>
-          <KpiStrip />
+          {/* Each panel is boundaried separately: before this, one throwing card
+              took the entire screen down (see PanelBoundary). */}
+          <PanelBoundary name="Corridor KPIs">
+            <KpiStrip />
+          </PanelBoundary>
+          {/* UC3-035 / UI-122: the two turnaround definitions render as a pair
+              beside the KPI strip. The strip's single tat_inside_port figure is
+              one definition; this card is what stops it being read as "the" TAT. */}
+          <PanelBoundary name="Turn Around Time Inside Port">
+            <DualTatCard />
+          </PanelBoundary>
+          {/* UC3-035: daily average / median / P90 / peak-hour ratio for the same KPIs. */}
+          <PanelBoundary name="KPI distribution">
+            <KpiDistributionPanel />
+          </PanelBoundary>
         </div>
 
         {/* Gate throughput + queue tiles. */}
@@ -371,23 +404,27 @@ export default function LiveOperations() {
 
         {/* Split layout: filters + vehicle list | large live map. */}
         <div className="grid grid-cols-1 gap-3 px-4 py-3 lg:grid-cols-[300px_1fr]">
-          <VehicleRail
-            trucks={filteredTrucks}
-            total={allTrucks.length}
-            isLoading={trucksQ.isLoading}
-            isError={trucksQ.isError}
-            onRetry={() => trucksQ.refetch()}
-            fState={fState}
-            setFState={setFState}
-            fGate={fGate}
-            setFGate={setFGate}
-            search={vsearch}
-            setSearch={setVsearch}
-            stateOptions={stateOptions}
-            gateOptions={gateOptions}
-            selected={selected}
-            onSelect={setSelected}
-          />
+          {/* The rail is what actually crashed the page: it maps over live
+              devices, and one unclassified state threw inside that map. */}
+          <PanelBoundary name="Vehicle list">
+            <VehicleRail
+              trucks={filteredTrucks}
+              total={allTrucks.length}
+              isLoading={trucksQ.isLoading}
+              isError={trucksQ.isError}
+              onRetry={() => trucksQ.refetch()}
+              fState={fState}
+              setFState={setFState}
+              fGate={fGate}
+              setFGate={setFGate}
+              search={vsearch}
+              setSearch={setVsearch}
+              stateOptions={stateOptions}
+              gateOptions={gateOptions}
+              selected={selected}
+              onSelect={setSelected}
+            />
+          </PanelBoundary>
           <div className="relative min-h-[520px] overflow-hidden rounded-lg border border-border">
             <ArcgisMap
               basemap={basemap}

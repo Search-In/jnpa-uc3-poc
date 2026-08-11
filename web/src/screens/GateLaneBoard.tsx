@@ -30,9 +30,11 @@ import {
   Gauge,
   Radio,
   ShieldAlert,
+  Video,
 } from "lucide-react";
 
 import { api } from "@/lib/api";
+import CameraDegradedPanel from "@/components/panels/CameraDegradedPanel";
 import { fmtDateTimeIST } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
 import {
@@ -48,7 +50,7 @@ import {
 } from "@/components/ui/dtccc";
 import type { GateCard, GateConfirmation, GateLane, LaneReassignPreview } from "@/lib/types";
 
-type TabKey = "gates" | "lanes" | "ticker" | "tasks";
+type TabKey = "gates" | "lanes" | "cameras" | "ticker" | "tasks";
 
 /** Board refresh cadence. The spec's board refresh is 10 s. */
 const REFRESH_MS = 10_000;
@@ -487,6 +489,10 @@ export default function GateLaneBoard() {
           tabs={[
             { key: "gates", label: "Gate cards", icon: Gauge },
             { key: "lanes", label: "Lanes", icon: DoorOpen },
+            // UC3-023 EC-6: the camera-outage ladder lands on the board that owns
+            // gate operations, because the consequence of a dead camera is a
+            // slower gate and a worse queue.
+            { key: "cameras", label: "Camera Health", icon: Video },
             { key: "ticker", label: "Confirmations", icon: Radio },
             { key: "tasks", label: "Tasks", icon: ClipboardList },
           ]}
@@ -524,6 +530,8 @@ export default function GateLaneBoard() {
             emptyLabel="No lanes configured."
           />
         )}
+
+        {tab === "cameras" && <CameraDegradedPanel />}
 
         {tab === "ticker" && (
           <DataTable<GateConfirmation>

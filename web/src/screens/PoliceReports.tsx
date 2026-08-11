@@ -17,6 +17,7 @@ import {
   ShieldAlert,
   Cpu,
   Leaf,
+  Video,
   ScanFace,
   FileDown,
   ExternalLink,
@@ -59,6 +60,8 @@ import Accidents from "@/screens/Accidents";
 import { EmptyState } from "@/components/ui/misc";
 import { severityColour } from "@/lib/palette";
 import { STATUS } from "@/lib/tokens";
+import { SvAnalysisPicker } from "@/components/panels/sv/SvAnalysisPicker";
+import { SvCombinedReportPanel } from "@/components/panels/sv/SvIncidentPanels";
 import { fmtDateTimeIST } from "@/lib/utils";
 
 async function exportPolicePdf(params: Record<string, string | undefined>) {
@@ -75,7 +78,7 @@ const GATES = ["G-NSICT", "G-JNPCT", "G-NSIGT", "G-BMCT"];
 const SEVERITIES = ["info", "warning", "critical", "REPORT_TO_POLICE"];
 const KIND_COLOURS = [STATUS.critical, STATUS.warning, STATUS.info, STATUS.ok, "#CC79A7"];
 
-type TabKey = "traffic" | "police" | "violations" | "challans" | "customs" | "carbon";
+type TabKey = "traffic" | "police" | "violations" | "challans" | "customs" | "carbon" | "ai_video";
 
 function sevTone(sev: string): Tone {
   if (sev === "critical" || sev === "REPORT_TO_POLICE") return "critical";
@@ -122,6 +125,8 @@ function EnforcementReports() {
   const incomingSearch = useIncomingSearch(["case", "vehicle"]);
   const qc = useQueryClient();
   const [tab, setTab] = useState<TabKey>("police");
+  // SecureVision answers per-analysis; the picker seeds the newest clip.
+  const [svAnalysis, setSvAnalysis] = useState<string | null>(null);
   const [kind, setKind] = useState("");
   const [gate, setGate] = useState("");
   const [severity, setSeverity] = useState("");
@@ -301,6 +306,7 @@ function EnforcementReports() {
               count: customsQ.data?.alerts?.length,
             },
             { key: "carbon", label: "Carbon", icon: Leaf },
+            { key: "ai_video", label: "AI Video Analysis", icon: Video },
           ]}
         />
 
@@ -355,6 +361,18 @@ function EnforcementReports() {
           </Card>
         )}
         {tab === "carbon" && <CarbonTab carbonQ={carbonQ} />}
+        {/* SecureVision combined incident report. It belongs on Reports because
+            this screen already owns summary + drill-down + export; it is a
+            SEPARATE tab because the narrative is AI-written and must never be
+            filed alongside the enforcement records as an equivalent fact. */}
+        {tab === "ai_video" && (
+          <div className="space-y-3">
+            <Card className="p-3">
+              <SvAnalysisPicker value={svAnalysis} onChange={setSvAnalysis} />
+            </Card>
+            <SvCombinedReportPanel analysisId={svAnalysis} />
+          </div>
+        )}
       </div>
 
       <IncidentDialog incident={selected} onClose={() => setSelected(null)} />

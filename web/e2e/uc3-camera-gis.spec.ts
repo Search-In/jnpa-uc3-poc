@@ -191,3 +191,29 @@ test.describe("UC3-020 corridor congestion heatmap (GeoAnalytics)", () => {
     });
   }
 });
+
+// --- SecureVision integration (additive) -------------------------------------
+// The assertions here are about the integration's PROMISES, not its data: the
+// workbench must load, it must describe itself as clip analysis rather than live
+// CCTV, and the existing Camera AI tabs must keep working beside the new one.
+
+test("Video Analytics workbench loads and does not claim live CCTV", async ({ page }) => {
+  await page.goto("/video-analytics");
+  await expect(page.getByRole("heading", { name: "Video Analytics" })).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(page.getByText(/uploaded camera clips/i)).toBeVisible();
+  // The integration must never advertise a capability the vendor API lacks.
+  await expect(page.getByText(/live cctv/i)).toHaveCount(0);
+});
+
+test("Camera AI keeps its existing tabs and gains a SecureVision tab", async ({ page }) => {
+  await page.goto("/gate-customs");
+  // NOTE: Customs & Gate does not read ?tab= from the URL (pre-existing — the
+  // /camera-ai redirect in App.tsx lands on Gate Captures), so the host tab is
+  // clicked rather than deep-linked.
+  await page.getByRole("button", { name: "Camera AI" }).click();
+  for (const tab of ["Counting", "Trailers", "Containers", "SecureVision AI"]) {
+    await expect(page.getByRole("button", { name: tab })).toBeVisible({ timeout: 30_000 });
+  }
+});

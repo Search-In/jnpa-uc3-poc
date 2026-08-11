@@ -45,6 +45,7 @@ import {
   type Tone,
 } from "@/components/ui/dtccc";
 import Integrations from "@/screens/Integrations";
+import { SvFaceModelCard } from "@/components/panels/sv/SvFacePanels";
 import NvrIntegration from "@/screens/NvrIntegration";
 import { STATUS } from "@/lib/tokens";
 import { relativeAge, fmtDateTimeIST } from "@/lib/utils";
@@ -317,6 +318,12 @@ export default function SystemHealth() {
 
       {tab === "integrations" && (
         <div className="px-4 pt-3">
+          {/* SecureVision posture sits with the other vendor integrations: it is
+              a proxied third party whose outage must be legible here rather than
+              as a broken panel somewhere else. */}
+          <div className="pb-3">
+            <SvFaceModelCard />
+          </div>
           <Embedded>
             <Integrations />
           </Embedded>

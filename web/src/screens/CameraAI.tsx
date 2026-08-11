@@ -30,9 +30,14 @@ import {
   type Tone,
 } from "@/components/ui/dtccc";
 import { STATUS } from "@/lib/tokens";
+import { SvAnalysisPicker } from "@/components/panels/sv/SvAnalysisPicker";
+import {
+  SvPlateContainerPanel,
+  SvVehicleCountPanel,
+} from "@/components/panels/sv/SvIncidentPanels";
 import { fmtDateTimeIST } from "@/lib/utils";
 
-type TabKey = "counting" | "trailers" | "containers";
+type TabKey = "counting" | "trailers" | "containers" | "securevision";
 
 // Live screens refresh on a ~10s cadence.
 const POLL_MS = 10_000;
@@ -56,6 +61,9 @@ function pct(conf?: number | null): string {
 export default function CameraAI() {
   const qc = useQueryClient();
   const [tab, setTab] = useState<TabKey>("counting");
+  // SecureVision answers per-analysis (it has no incident history), so this tab
+  // needs the operator to pick which analysed clip they are looking at.
+  const [svAnalysis, setSvAnalysis] = useState<string | null>(null);
 
   const dashQ = useQuery({
     queryKey: ["camera-dashboard"],
@@ -201,6 +209,7 @@ export default function CameraAI() {
             { key: "counting", label: "Counting", icon: Users, count: counts.length },
             { key: "trailers", label: "Trailers", icon: Truck, count: trailers.length },
             { key: "containers", label: "Containers", icon: Container, count: containers.length },
+            { key: "securevision", label: "SecureVision AI", icon: ScanLine },
           ]}
         />
 
@@ -222,6 +231,19 @@ export default function CameraAI() {
               onRetry={() => containersQ.refetch()}
             />
           </Card>
+        )}
+        {/* SecureVision AI — a SEPARATE tab, not merged into the RDS-backed
+            edge-camera tables above. The edge pipeline and SecureVision are two
+            independent producers of the same kind of fact, and an operator has
+            to be able to tell which one said what. */}
+        {tab === "securevision" && (
+          <div className="space-y-3">
+            <Card className="p-3">
+              <SvAnalysisPicker value={svAnalysis} onChange={setSvAnalysis} />
+            </Card>
+            <SvPlateContainerPanel analysisId={svAnalysis} />
+            <SvVehicleCountPanel analysisId={svAnalysis} />
+          </div>
         )}
       </div>
     </PageContainer>

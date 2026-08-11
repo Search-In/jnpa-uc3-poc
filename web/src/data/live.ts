@@ -26,6 +26,7 @@ import type {
   ParkingFacility,
   ParkingSummary,
 } from "@/lib/types";
+import type { SvEnrollInput } from "@/lib/securevision";
 import type {
   CarbonEmissionRecord,
   CongestionMetrics,
@@ -400,5 +401,32 @@ export class LiveAdapter implements DataAdapter {
     } catch {
       return null;
     }
+  };
+
+  // --- SecureVision (proxied vendor) ---------------------------------------
+  // Thin pass-throughs: the gateway already normalised the vendor payloads, so
+  // there is deliberately no parsing here to drift from the backend's.
+  svHealth = () => api.svHealth();
+  svAnalyses = (limit?: number) => api.svAnalyses(limit);
+  svUploadVideo = (file: File, cameraCode: string) => api.svUploadVideo(file, cameraCode);
+  svIncident = (analysisId: string, code: "i01" | "i02" | "i09" | "i12", strong?: boolean) =>
+    api.svIncident(analysisId, code, strong);
+  svIncidentPersons = (analysisId: string) => api.svIncidentPersons(analysisId);
+  svIncidentAll = (analysisId: string, strong?: boolean) => api.svIncidentAll(analysisId, strong);
+  svDeleteAnalysis = async (analysisId: string) => {
+    await api.svDeleteAnalysis(analysisId);
+  };
+  svStreamTicket = (analysisId: string) => api.svStreamTicket(analysisId);
+  svFaces = async () => (await api.svFaces()).persons;
+  svFaceEvents = async (params?: { limit?: number; authorized?: boolean }) =>
+    (await api.svFaceEvents(params)).events;
+  svFaceStatus = () => api.svFaceStatus();
+  svEnrollFace = (input: SvEnrollInput) => api.svEnrollFace(input);
+  svUpdateFace = (
+    personPk: number,
+    patch: { name?: string; role?: string; department?: string; is_active?: boolean },
+  ) => api.svUpdateFace(personPk, patch);
+  svDeleteFace = async (personPk: number) => {
+    await api.svDeleteFace(personPk);
   };
 }

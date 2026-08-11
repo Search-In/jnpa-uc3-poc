@@ -54,6 +54,7 @@ import {
 } from "@/components/ui/dtccc";
 import { EmptyState, LoadingState, ErrorState, Spinner } from "@/components/ui/misc";
 import { cn, fmtDateTimeIST, relativeAge } from "@/lib/utils";
+import { SvVehicleIntelPanel } from "@/components/panels/sv/SvVehicleIntelPanel";
 import type { TruckDevice, DriverIntel } from "@/lib/types";
 
 type Mode = "vehicle" | "driver" | "doubletrip" | "cameraai" | "driveranalytics";
@@ -760,6 +761,11 @@ function VehicleProfile({ plate }: { plate: string }) {
           </ul>
         )}
       </SectionCard>
+
+      {/* SecureVision AI intelligence for THIS vehicle — the primary
+          vehicle-facing destination for the video-analytics integration. Sits
+          with the vehicle's other evidence rather than on a screen of its own. */}
+      <SvVehicleIntelPanel plate={vehicleNumber} />
 
       {/* Record tabs */}
       <VehicleRecords

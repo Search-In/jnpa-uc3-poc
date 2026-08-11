@@ -28,6 +28,9 @@ test("primary navigation reaches every screen", async ({ page }) => {
     "Driver Advisory",
     "Geo Analytics",
     "Reports & Enforcement",
+    // SecureVision clip-analysis workbench — the one screen the video-analytics
+    // integration adds. Included here so a broken route fails the nav contract.
+    "Video Analytics",
     "System Health",
     "What-If Console",
     "Live Operations",

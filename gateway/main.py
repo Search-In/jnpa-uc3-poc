@@ -128,6 +128,7 @@ from .routers import (
     rail,
     reefer,
     rms_tas,
+    securevision,
     shipping_lines,
     transporters,
     vehicle_registry,
@@ -793,6 +794,7 @@ app.include_router(gate_documents.router)    # UC-III gate documents (EIR / PIN 
 app.include_router(container_job.router)     # UC-III job spine: assignment + gate/yard/scan events
 app.include_router(driver_jobs.router)       # DRIVER-scoped job surface for the mobile PWA
 app.include_router(export_lifecycle.router)  # export leg: booking -> Form13 -> VGM -> LEO -> COPRAR -> loaded
+app.include_router(securevision.router)       # SecureVision AI video analytics + faces (proxied vendor, /api/sv/*)
 app.include_router(shipping_lines.router)     # Shipping Lines (module 4: IAL/EAL/EDO, read-only + import)
 app.include_router(berthing.router)          # Berthing Reports (module 7: per-terminal vessel calls + upload)
 app.include_router(marine_calls.router)         # UC-I Marine vessel-call spine (module: marine, read-only)

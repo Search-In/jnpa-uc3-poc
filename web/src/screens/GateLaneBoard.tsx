@@ -35,6 +35,8 @@ import {
 
 import { api } from "@/lib/api";
 import CameraDegradedPanel from "@/components/panels/CameraDegradedPanel";
+import { SvAnalysisPicker } from "@/components/panels/sv/SvAnalysisPicker";
+import { SvTamperPanel } from "@/components/panels/sv/SvIncidentPanels";
 import { fmtDateTimeIST } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
 import {
@@ -341,6 +343,8 @@ function ReassignPanel({ lanes }: { lanes: GateLane[] }) {
 
 export default function GateLaneBoard() {
   const [tab, setTab] = useState<TabKey>("gates");
+  // SecureVision answers per-analysis; the picker seeds the newest clip.
+  const [svAnalysis, setSvAnalysis] = useState<string | null>(null);
 
   const boardQ = useQuery({
     queryKey: ["gate-board"],
@@ -531,7 +535,19 @@ export default function GateLaneBoard() {
           />
         )}
 
-        {tab === "cameras" && <CameraDegradedPanel />}
+        {tab === "cameras" && (
+          <div className="space-y-3">
+            <CameraDegradedPanel />
+            {/* SecureVision's tamper verdict is shown BESIDE the ANPR cascade
+                rung above, never merged into it. A camera can read LIVE on the
+                ANPR ladder and still fail the AI tamper check — collapsing the
+                two would overwrite a measured state with a vendor opinion. */}
+            <Card className="p-3">
+              <SvAnalysisPicker value={svAnalysis} onChange={setSvAnalysis} />
+            </Card>
+            <SvTamperPanel analysisId={svAnalysis} />
+          </div>
+        )}
 
         {tab === "ticker" && (
           <DataTable<GateConfirmation>

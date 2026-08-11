@@ -188,6 +188,12 @@ _POLICY: tuple[tuple[str, frozenset[str]], ...] = (
     # Vehicle Intelligence Identity/Detection (singular /api/vehicle) — same
     # audience as the Intelligence screen (control room + police + customs).
     ("/api/vehicle/", CONTROL_ROOM | {Role.TRAFFIC_POLICE.value, Role.CUSTOMS.value}),
+    # SecureVision AI video analytics + face recognition (proxied vendor —
+    # integrations/securevision). Same audience as the Camera-AI / gate surfaces
+    # it feeds: control room + customs. Writes are narrowed further by the method
+    # overlay below, and face administration is narrowed again inside the router
+    # to customs+admin, mirroring /api/identity.
+    ("/api/sv", CONTROL_ROOM | {Role.CUSTOMS.value}),
     ("/api/control", CONTROL_ROOM),
     ("/api/scenarios", CONTROL_ROOM),
     ("/api/scenario", CONTROL_ROOM),
@@ -220,6 +226,19 @@ _PUBLIC: tuple[str, ...] = (
 )
 
 
+# Exactly-matched public paths, for the one case a prefix cannot express: a
+# route that must be reachable without a bearer while its SIBLINGS on the same
+# prefix must not be. The SecureVision MJPEG replay is served into an <img> tag,
+# which cannot send an Authorization header (the same constraint that made
+# /api/evidence public), but /api/analytics/video/upload and the DELETE beside it
+# must stay authenticated — so a prefix entry in _PUBLIC would be far too wide.
+# The stream carries its own credential instead: a short-lived, single-analysis
+# ticket minted by an authenticated call (services/securevision/tickets.py).
+_PUBLIC_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^/api/sv/analytics/video/[^/]+/stream$"),
+)
+
+
 def roles_for_path(path: str) -> frozenset[str]:
     """The set of roles permitted to call ``path`` (longest-prefix match)."""
     best: frozenset[str] | None = None
@@ -245,6 +264,9 @@ _METHOD_POLICY: tuple[tuple[str, frozenset[str], frozenset[str]], ...] = (
     ("/api/workflows", _WRITE, CONTROL_ROOM),
     ("/api/accidents", _WRITE, CONTROL_ROOM | {Role.TRAFFIC_POLICE.value}),
     ("/api/camera-ai", _WRITE, CONTROL_ROOM),
+    # SecureVision writes (clip upload, analysis delete, face enrol/edit/remove)
+    # are control-room + customs; the router narrows face administration further.
+    ("/api/sv", _WRITE, CONTROL_ROOM | {Role.CUSTOMS.value}),
     ("/api/ai", _WRITE, CONTROL_ROOM),
     ("/api/nvr", _WRITE, CONTROL_ROOM),
     ("/api/ldb", _WRITE, CONTROL_ROOM | {Role.CUSTOMS.value}),
@@ -412,7 +434,8 @@ class _TokenBucket:
 
 # --------------------------------------------------------------------------- middleware
 def _is_public(path: str) -> bool:
-    return any(path == p or path.startswith(p + "/") or path == p for p in _PUBLIC)
+    return (any(path == p or path.startswith(p + "/") or path == p for p in _PUBLIC)
+            or any(pat.match(path) for pat in _PUBLIC_PATTERNS))
 
 
 def _internal_token() -> str:

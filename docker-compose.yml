@@ -1061,6 +1061,28 @@ services:
       ULIP_TOKEN_TTL_S: ${ULIP_TOKEN_TTL_S:-1800}
       ULIP_FASTAG_API: ${ULIP_FASTAG_API:-}
       ULIP_LDB_API: ${ULIP_LDB_API:-}
+      # --- SecureVision AI surveillance platform (/api/sv/*) ---------------
+      # Credentials are BACKEND-ONLY: never a VITE_ variable, never called from
+      # the browser, never stored in localStorage. SecureVision authenticates at
+      # /api/auth/login — the SAME relative path as this application's own
+      # sign-in — so the browser must never reach it directly; the gateway logs
+      # in with this service account and proxies under /api/sv/*.
+      # No credential -> every /api/sv surface answers a clean NOT_CONFIGURED
+      # and no existing JNPA screen is affected.
+      SECUREVISION_BASE_URL: ${SECUREVISION_BASE_URL:-https://svapidev.phylon.in}
+      SECUREVISION_USERNAME: ${SECUREVISION_USERNAME:-}
+      SECUREVISION_PASSWORD: ${SECUREVISION_PASSWORD:-}
+      SECUREVISION_TIMEOUT_S: ${SECUREVISION_TIMEOUT_S:-15}
+      SECUREVISION_UPLOAD_TIMEOUT_S: ${SECUREVISION_UPLOAD_TIMEOUT_S:-180}
+      SECUREVISION_RETRIES: ${SECUREVISION_RETRIES:-2}
+      SECUREVISION_TOKEN_TTL_S: ${SECUREVISION_TOKEN_TTL_S:-1800}
+      SECUREVISION_STREAM_TICKET_TTL_S: ${SECUREVISION_STREAM_TICKET_TTL_S:-120}
+      # Explicit SecureVision -> JNPA camera mapping, e.g.
+      #   {"CAM-01":"CAM-NSICT-ENT","CAM-02":"CAM-COR-01"}
+      # SecureVision publishes no camera-registry API, so this mapping is the
+      # ONLY join between the two registries. Unmapped codes are reported as
+      # "Camera mapping unavailable" — never guessed onto a similar-looking name.
+      SECUREVISION_CAMERA_MAP: ${SECUREVISION_CAMERA_MAP:-}
       # Logistics Data Bank / NLDS adapter behind /api/ldb/*. The SOLE definition
       # of this pair — do not re-declare it in this mapping (duplicate YAML keys
       # make `docker compose` refuse to parse the file at all).

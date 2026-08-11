@@ -184,4 +184,104 @@ describe("DataAdapter contract — MockAdapter", () => {
     expect(summary.total_capacity).toBe(facilities.reduce((s, f) => s + f.capacity, 0));
     expect(summary.total_available).toBe(facilities.reduce((s, f) => s + f.available, 0));
   });
+  // --- SecureVision -------------------------------------------------------
+  // The vendor surface is part of the adapter contract like everything else, so
+  // the mock build stays runnable with no SecureVision credential and the two
+  // adapters cannot drift in shape.
+
+  it("svHealth() reports posture without pretending to be live", async () => {
+    const h = await a.svHealth();
+    expect(h.integration).toBe("securevision");
+    expect(["LIVE", "UNAVAILABLE", "NOT_CONFIGURED"]).toContain(h.status);
+    // Clip analytics, not live CCTV — the mode is part of the contract.
+    expect(h.mode).toBe("UPLOAD_CLIP_ANALYTICS");
+    // Nothing is persisted on our side; the flag must say so.
+    expect(h.persistence).toBe("NONE");
+  });
+
+  it("svAnalyses() is explicitly session-scoped, never a history", async () => {
+    const list = await a.svAnalyses();
+    expect(list.persisted).toBe(false);
+    expect(Array.isArray(list.analyses)).toBe(true);
+    for (const an of list.analyses) {
+      expect(typeof an.analysis_id).toBe("string");
+      expect(an.persisted).toBe(false);
+    }
+  });
+
+  it("svIncident() returns the per-analyzer blocks the screens read", async () => {
+    const i01 = await a.svIncident("A1", "i01");
+    expect(i01.incident_code).toBe("i01");
+    expect(i01.source).toBe("SECUREVISION");
+    expect(typeof i01.plate?.plate).toBe("string");
+
+    const i02 = await a.svIncident("A1", "i02");
+    expect(Array.isArray(i02.counts)).toBe(true);
+    expect(i02.total_count).toBe((i02.counts ?? []).reduce((sum, c) => sum + (c.count ?? 0), 0));
+
+    const i09 = await a.svIncident("A1", "i09");
+    expect(["MATCH", "REVIEW", "UNKNOWN"]).toContain(i09.container?.agreement);
+
+    const i12 = await a.svIncident("A1", "i12");
+    expect(typeof i12.tamper?.tamper_state).toBe("string");
+  });
+
+  it("svIncidentPersons() carries all THREE verdicts and never invents names", async () => {
+    const r = await a.svIncidentPersons("A1");
+    expect(r.incident_code).toBe("i07");
+    const statuses = r.persons.map((p) => p.person_status);
+    expect(statuses).toContain("AUTHORIZED");
+    expect(statuses).toContain("UNAUTHORIZED");
+    expect(statuses).toContain("UNVERIFIED");
+    for (const p of r.persons) {
+      expect(["AUTHORIZED", "UNAUTHORIZED", "UNVERIFIED"]).toContain(p.person_status);
+      // An unidentified person must not carry an identity.
+      if (p.person_status !== "AUTHORIZED") expect(p.person_name).toBeNull();
+    }
+  });
+
+  it("svIncidentAll() marks the narrative as AI-generated", async () => {
+    const r = await a.svIncidentAll("A1");
+    expect(r.narrative_provenance).toBe("AI_GENERATED");
+    expect(r.ai_generated).toBe(true);
+    expect(typeof r.combined_description).toBe("string");
+  });
+
+  it("svStreamTicket() returns a scoped stream URL", async () => {
+    const t = await a.svStreamTicket("A1");
+    expect(t.analysis_id).toBe("A1");
+    expect(t.stream_url).toContain("/api/sv/analytics/video/A1/stream");
+    expect(t.expires_in).toBeGreaterThan(0);
+  });
+
+  it("face surfaces round-trip without exposing vendor filesystem paths", async () => {
+    const people = await a.svFaces();
+    expect(Array.isArray(people)).toBe(true);
+    for (const p of people) {
+      expect(p).not.toHaveProperty("snapshot_path");
+    }
+    const events = await a.svFaceEvents();
+    for (const e of events) {
+      expect(["AUTHORIZED", "UNAUTHORIZED", "UNVERIFIED"]).toContain(e.person_status);
+      expect(e.snapshot_available).toBe(false);
+    }
+    const status = await a.svFaceStatus();
+    expect(typeof status.model_ready).toBe("boolean");
+    // The enrolled roster is personal data — only a count is ever exposed.
+    expect(status).not.toHaveProperty("authorized_names");
+
+    const enrolled = await a.svEnrollFace({ person_id: "EMP-9", name: "Test", photos: [] });
+    expect(enrolled.person_id).toBe("EMP-9");
+    const updated = await a.svUpdateFace(12, { is_active: false });
+    expect(updated.is_active).toBe(false);
+  });
+
+  it("mock SecureVision fixtures are labelled DEMO so they cannot pass as real", async () => {
+    const list = await a.svAnalyses();
+    expect(list.analyses[0].analysis_id).toContain("DEMO");
+    const report = await a.svIncidentAll("A1");
+    expect(report.combined_description).toContain("[DEMO]");
+    const people = await a.svFaces();
+    expect(people[0].person_id).toContain("DEMO");
+  });
 });

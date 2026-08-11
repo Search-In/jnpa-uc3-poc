@@ -55,7 +55,7 @@ _TABLES: dict[str, tuple[str, str, tuple[str, ...], tuple[str, ...]]] = {
                 "yard_usable_capacity_teus", "yard_occupancy_pct", "gate_in_teus",
                 "gate_out_teus", "gate_total_teus", "reefer_total_slots",
                 "reefer_occupied_slots", "reefer_available_slots")),
-    "vessels": ("perf_daily_vessels", "uq_perf_daily_vessel",
+    "vessels": ("perf_daily_vessel", "uq_perf_daily_vessel",
                 ("report_date", "terminal_code", "berth_no", "via_no"),
                 ("vessel_name", "cargo_commodity", "berthed_on", "expected_completion")),
     "monthly": ("perf_monthly_teu", "uq_perf_monthly_teu",

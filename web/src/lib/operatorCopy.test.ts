@@ -38,13 +38,20 @@ const OPERATOR_SCREENS = [
 
 const BANNED = [
   "PoC demonstration baseline",
+  "PoC",
   "docs/ASSUMPTIONS.md",
   "ASSUMPTIONS.md",
-  "corpus events",
+  "corpus",
   "G6/G9",
   "REAL measured turnarounds",
+  "GROUND-TRUTH",
+  "Ground-truth",
+  "Method:",
+  "Baseline source:",
+  "Internal reference baseline",
   "truck_out_ts",
   "truck_in_ts",
+  "gate_document",
 ];
 
 /** Drop // line comments and block comments — rationale is allowed in source. */
@@ -59,17 +66,55 @@ describe("operator screens carry no internal wording", () => {
     expect(found, `${file} renders internal wording: ${found.join(", ")}`).toEqual([]);
   });
 
-  it("the turnaround card no longer prints the internal spec id as a chip", () => {
+  // Live Operations shows operational figures only. The dual-TAT payload still
+  // CARRIES the engineering metadata for other clients (reports, audit,
+  // diagnostics) — the card simply must not read any of it.
+  const dualTat = stripComments(
+    readFileSync(resolve(SRC, "components/panels/DualTatCard.tsx"), "utf8"),
+  );
+
+  it.each([
+    ["method", "arm.method"],
+    ["baseline source", "arm.baseline_source"],
+    ["render-rule note", "render_rule.note"],
+    ["internal spec id", "render_rule.ref"],
+    ["ground-truth markers", "ground_truth_markers"],
+    ["ground-truth note", "ground_truth_note"],
+    ["REAL provenance badge", "m.provenance"],
+    ["source-document id", "source_document"],
+    ["marker container id", "m.container_no"],
+  ])("the turnaround card does not render the %s", (_label, token) => {
+    expect(dualTat).not.toContain(token);
+  });
+
+  it("the turnaround card has no ground-truth section left at all", () => {
+    expect(dualTat).not.toMatch(/[Gg]round-truth/);
+    expect(dualTat).not.toContain("Method:");
+    expect(dualTat).not.toContain("Baseline source:");
+  });
+
+  it("the turnaround card still renders the operational figures", () => {
+    // The point of the removal is presentation, not amputation: name, value,
+    // unit, target and baseline must all still be on screen for BOTH arms.
+    expect(dualTat).toContain("arm.label");
+    expect(dualTat).toContain("arm.definition");
+    expect(dualTat).toContain("arm.unit");
+    expect(dualTat).toContain("arm.target");
+    expect(dualTat).toContain("arm.baseline ??");
+    expect(dualTat).toContain("<Arm arm={d.pair.terminal}");
+    expect(dualTat).toContain("<Arm arm={d.pair.driver}");
+  });
+
+  it("the KPI distribution panel renders no engineering explanation", () => {
     const code = stripComments(
-      readFileSync(resolve(SRC, "components/panels/DualTatCard.tsx"), "utf8"),
+      readFileSync(resolve(SRC, "components/panels/KpiDistributionPanel.tsx"), "utf8"),
     );
-    // render_rule.ref stays in the payload as machine metadata; the card must
-    // not print it.
-    expect(code).not.toContain("render_rule.ref");
-    // …but the card still renders the operator-facing method/baseline text the
-    // API supplies: sanitised, not stripped.
-    expect(code).toContain("arm.method");
-    expect(code).toContain("arm.baseline_source");
+    expect(code).not.toContain("skew_warning");
+    expect(code).not.toContain("q.data?.note");
+    // …while the figures themselves are untouched.
+    expect(code).toContain("d.target");
+    expect(code).toContain("d.baseline");
+    expect(code).toContain("d.p90");
   });
 });
 

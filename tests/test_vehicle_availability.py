@@ -174,3 +174,53 @@ def test_the_predicate_matches_the_registration_as_well_as_the_vehicle_id():
     sql, _ = fleet._open_job_predicate()
     assert "j.vehicle_id = core.vehicle.vehicle_id" in sql
     assert "vehicle_no" in sql                # the truck, not just the record
+
+
+@pytest.mark.asyncio
+async def test_a_busy_truck_is_not_offered_when_only_its_RECORD_id_is_known():
+    """The regression this file previously missed: the caller's busy set names the
+    Vehicle ID and NOTHING else, because the job row it was built from carries no
+    registration of its own (3 of the 13 rows in the live spine are like that on
+    the driver side). The truck is still busy — its twin record must not stand in
+    for it, and the plate must not be searchable back into the list."""
+    busy = await _register("MH04QA9911")
+    vid2 = await fleet.next_vehicle_id(DSN)
+    await fleet.add_vehicle(DSN, vehicle_id=vid2, vehicle_number="MH04 QA 9911",
+                            status=fleet.ACTIVE, created_by="test")
+    await _register("MH04AB1234")
+
+    occupied = {busy}                       # the RECORD, not the registration
+    rows = await fleet.list_assignable(DSN, occupied=occupied)
+    assert [r["vehicle_number"] for r in rows] == ["MH04AB1234"]
+    assert await fleet.count_assignable(DSN, occupied=occupied) == 1
+    assert await fleet.list_assignable(DSN, q="MH04QA9911", occupied=occupied) == []
+    assert await fleet.list_assignable(DSN, q="MH04 QA 9911", occupied=occupied) == []
+    assert await fleet.count_assignable(DSN, q="MH04QA9911", occupied=occupied) == 0
+
+
+@pytest.mark.asyncio
+async def test_count_equals_the_unique_vehicles_returned():
+    """Acceptance 9: the "N available" label and the list are one answer. Every
+    truck is duplicated and a third of them are busy, so a count taken before the
+    de-duplication or before the exclusion cannot agree with the list."""
+    plates = [f"MH04AB{n:04d}" for n in range(9)]
+    ids = [await _register(p) for p in plates]
+    for p in plates:                        # a twin record for every truck
+        vid = await fleet.next_vehicle_id(DSN)
+        await fleet.add_vehicle(DSN, vehicle_id=vid, vehicle_number=p.replace("MH04", "MH04 "),
+                                status=fleet.ACTIVE, created_by="test")
+    occupied = set(ids[:3])
+    rows = await fleet.list_assignable(DSN, limit=500, occupied=occupied)
+    identities = {fleet._plate_identity(r["vehicle_number"]) for r in rows}
+    assert len(rows) == len(identities) == 6
+    assert await fleet.count_assignable(DSN, occupied=occupied) == len(rows)
+
+
+def test_the_predicate_resolves_the_job_id_through_the_master():
+    """A job that names only a Vehicle ID still occupies the TRUCK: the id is
+    resolved to a registration through core.vehicle, so the twin record of a busy
+    truck is excluded even when the job row carries no plate."""
+    sql, _ = fleet._open_job_predicate()
+    assert "FROM core.vehicle mv" in sql
+    assert "mv.vehicle_id = j.vehicle_id" in sql
+    assert "mv.vehicle_no" in sql

@@ -12,21 +12,25 @@
 //                  experiences, including the plaza hold the terminal figure
 //                  never sees.
 //
-// A single "TAT" number is therefore not a simplification but the wrong answer,
-// and a reader cannot tell which of the two they are looking at. S4 puts it
-// plainly: the GAP between them is itself the reportable finding, so this card
-// shows the gap as a first-class figure rather than leaving it to be inferred.
+// WHAT THIS CARD RENDERS, AND WHAT IT DOES NOT. Live Operations is a
+// control-room surface: it shows the KPI name, its current value, its target
+// and its baseline, and nothing else. The /api/kpi/dual-tat payload also
+// carries engineering metadata — how each arm is derived (`method`), where the
+// baseline came from (`baseline_source`), the internal render-rule note and ref,
+// and the individual ground-truth marker records with their source-document and
+// container identifiers. Those fields REMAIN in the API for the clients that
+// need them (reports, audit, diagnostics); they are deliberately NOT read here.
+// An operator on shift acts on the number and its target — provenance and
+// derivation are not part of that decision, and printing them on the wallboard
+// puts internal identifiers in front of an audience that cannot act on them.
 //
-// The ground-truth markers are the only REAL measured turnarounds in the corpus
-// — two GTI visits by MH43BX1488, computed from the truck-in/truck-out times
-// printed on the slips. They are plotted as reference markers and never mixed
-// into the aggregate, because two visits are evidence, not a baseline.
+// Nothing about the measurement changes: the values, targets and baselines
+// rendered below are exactly what the endpoint computes.
 import { useQuery } from "@tanstack/react-query";
 import { Timer } from "lucide-react";
 
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
-import { StatusChip } from "@/components/ui/dtccc";
 import type { DualTatArm } from "@/lib/types";
 
 function Arm({ arm, value }: { arm: DualTatArm; value: number | null }) {
@@ -52,12 +56,6 @@ function Arm({ arm, value }: { arm: DualTatArm; value: number | null }) {
           </dd>
         </div>
       </dl>
-      <p className="mt-1 break-words text-[10px] leading-snug text-muted-foreground">
-        <span className="font-medium">Method:</span> {arm.method}
-      </p>
-      <p className="mt-0.5 break-words text-[10px] leading-snug text-muted-foreground">
-        <span className="font-medium">Baseline source:</span> {arm.baseline_source}
-      </p>
     </div>
   );
 }
@@ -70,9 +68,10 @@ export default function DualTatCard() {
   });
 
   const d = q.data;
-  // The measured aggregate is not yet wired to a live driver-leg feed (the plaza
-  // legs have no corpus events), so the arms render their targets/baselines and
-  // the REAL markers rather than a fabricated current value.
+  // No live driver-leg aggregate is wired up yet, so both arms render their
+  // target and baseline with no current value rather than a fabricated one.
+  // `null` renders as an em-dash below — never as a zero, which would read as a
+  // measured turnaround of nothing.
   const terminalValue: number | null = null;
   const driverValue: number | null = null;
 
@@ -83,7 +82,6 @@ export default function DualTatCard() {
           <Timer className="h-4 w-4 shrink-0" aria-hidden />
           Turn Around Time Inside Port
         </h3>
-        {d && <StatusChip label="Shown as a pair" tone="info" />}
       </div>
 
       {q.isLoading && (
@@ -103,43 +101,6 @@ export default function DualTatCard() {
           <div className="mt-2 flex flex-col gap-2 sm:flex-row">
             <Arm arm={d.pair.terminal} value={terminalValue} />
             <Arm arm={d.pair.driver} value={driverValue} />
-          </div>
-
-          <p className="mt-2 rounded-md border border-border bg-muted/30 p-2 text-[10px] leading-snug text-muted-foreground">
-            {d.render_rule.note}
-          </p>
-
-          <div className="mt-2 min-w-0">
-            <h4 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-              Ground-truth markers
-            </h4>
-            {d.ground_truth_markers.length === 0 ? (
-              <p className="mt-1 text-[11px] text-muted-foreground">{d.ground_truth_note}</p>
-            ) : (
-              <>
-                <ul className="mt-1 flex flex-col gap-1">
-                  {d.ground_truth_markers.map((m) => (
-                    <li
-                      key={m.source_document}
-                      className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px]"
-                    >
-                      <StatusChip label={m.provenance} tone="ok" />
-                      <span className="font-semibold tabular-nums">{m.tat_minutes} min</span>
-                      <span className="font-mono text-[10px]">{m.vehicle_no}</span>
-                      <span className="text-muted-foreground">
-                        {m.terminal_code} · {m.container_no}
-                      </span>
-                      <span className="font-mono text-[10px] text-muted-foreground">
-                        {m.source_document}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-                <p className="mt-1 text-[10px] leading-snug text-muted-foreground">
-                  {d.ground_truth_note}
-                </p>
-              </>
-            )}
           </div>
         </>
       )}

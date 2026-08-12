@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getAdapter } from "@/data";
@@ -25,6 +25,14 @@ import {
 import { DecisionPathBadge } from "@/components/DecisionPathBadge";
 import { fmtEta } from "@/lib/utils";
 import { gateIdColour } from "@/lib/tokens";
+import {
+  deriveQueueState,
+  gateDepth,
+  queueDepthByGate,
+  recordAnswer,
+  withLastKnownGood,
+  type LastKnownGoodQueue,
+} from "@/lib/gateQueue";
 import { weatherCondition, weatherHumidityPct, weatherRainMm } from "@/lib/weather";
 import {
   congestionTone,
@@ -67,7 +75,12 @@ export default function DriverAdvisory() {
   const qc = useQueryClient();
   const queued = useQuery({
     queryKey: ["trucks", "AT_GATE_QUEUE", "advisory"],
-    queryFn: () => getAdapter().trucks("AT_GATE_QUEUE", 500),
+    // The ENVELOPE, not just the rows: `degraded` / `state_filter_supported` /
+    // `hint` are what separate "nobody is queueing" from "the queue feed is
+    // down". Dropping them (the old `.trucks()` read) is what made an
+    // unreachable truck-sim render as the flat "No trucks currently in a gate
+    // queue" — a claim about the port the gateway never made. See lib/gateQueue.
+    queryFn: () => getAdapter().trucksEnvelope("AT_GATE_QUEUE", 500),
     // Serve the last queue instantly on remount / tab return instead of a fresh
     // spinner-guarded fetch: the gateway memoises this list for a few seconds
     // anyway, so a sub-10 s refetch cannot say anything new. On refetch the
@@ -76,7 +89,22 @@ export default function DriverAdvisory() {
     placeholderData: keepPreviousData,
   });
 
-  const devices = queued.data ?? [];
+  // One classification of the queue source drives every surface below: the
+  // cards, the table and the empty/degraded/unavailable states.
+  const fresh = deriveQueueState({
+    isLoading: queued.isLoading,
+    isError: queued.isError,
+    envelope: queued.data,
+  });
+  // A poll that misses must not erase a queue that was correct seconds ago (the
+  // intermittent "Gate-queue feed unavailable" on a page that had 3 trucks).
+  // The baseline only ever advances on an ANSWERED result, and only forward in
+  // time, so a slow response landing after a newer one cannot win. See
+  // lib/gateQueue.ts.
+  const lastGood = useRef<LastKnownGoodQueue | null>(null);
+  lastGood.current = recordAnswer(lastGood.current, fresh, queued.dataUpdatedAt);
+  const queueState = withLastKnownGood(fresh, lastGood.current, Date.now());
+  const devices = queueState.devices;
 
   // --- Accident Route Advisory (additive) ---------------------------------
   // Reuse the existing accidents API to surface ACTIVE (REPORTED /
@@ -123,8 +151,7 @@ export default function DriverAdvisory() {
   });
 
   // Queue depth per gate -> the recommendation steers toward the shortest queue.
-  const depth = new Map<string, number>();
-  for (const t of devices) if (t.gate_id) depth.set(t.gate_id, (depth.get(t.gate_id) ?? 0) + 1);
+  const depth = queueDepthByGate(devices);
   const recommendFor = (current?: string | null) => {
     const ranked = GATES.filter((g) => g !== current).sort(
       (a, b) => (depth.get(a) ?? 0) - (depth.get(b) ?? 0),
@@ -154,20 +181,44 @@ export default function DriverAdvisory() {
           <StatCard
             icon={DoorOpen}
             label={t("advisory.queuedTrucks")}
-            value={devices.length}
-            tone={devices.length > 40 ? "warn" : "info"}
+            value={queueState.count ?? "—"}
+            tone={
+              queueState.count === null
+                ? "neutral"
+                : queueState.count > 40
+                  ? "warn"
+                  : queueState.degraded
+                    ? "warn"
+                    : "info"
+            }
+            sub={
+              queueState.status === "stale"
+                ? t("advisory.refreshFailed")
+                : queueState.degraded
+                  ? t("advisory.sourceDegraded")
+                  : undefined
+            }
             loading={queued.isLoading}
           />
-          {GATES.map((g) => (
-            <StatCard
-              key={g}
-              label={g.replace("G-", "")}
-              value={depth.get(g) ?? 0}
-              tone={g === busiest && (depth.get(g) ?? 0) > 0 ? "warn" : "ok"}
-              sub={g === busiest && (depth.get(g) ?? 0) > 0 ? "busiest" : "queue depth"}
-              loading={queued.isLoading}
-            />
-          ))}
+          {GATES.map((g) => {
+            const d = gateDepth(queueState, g);
+            return (
+              <StatCard
+                key={g}
+                label={g.replace("G-", "")}
+                value={d ?? "—"}
+                tone={d === null ? "neutral" : g === busiest && d > 0 ? "warn" : "ok"}
+                sub={
+                  d === null
+                    ? t("advisory.noReading")
+                    : g === busiest && d > 0
+                      ? "busiest"
+                      : "queue depth"
+                }
+                loading={queued.isLoading}
+              />
+            );
+          })}
         </StatGrid>
       </div>
 
@@ -183,21 +234,45 @@ export default function DriverAdvisory() {
             className="ml-auto"
           />
         </div>
-        {queued.isError && devices.length === 0 ? (
+        {queueState.status === "error" ? (
           <Card>
             <ErrorState
               onRetry={() => void queued.refetch()}
               detail={(queued.error as Error)?.message}
             />
           </Card>
-        ) : queued.isLoading ? (
+        ) : queueState.status === "loading" ? (
           <QueueSkeleton />
-        ) : devices.length === 0 ? (
+        ) : queueState.status === "unavailable" ? (
+          /* The queue SOURCE could not be read. Saying "no trucks are queueing"
+             here would report a measurement that was never taken. */
+          <Card>
+            <div className="flex flex-col items-center gap-2 p-8 text-center">
+              <AlertTriangle className="h-6 w-6 text-severity-warning" aria-hidden />
+              <p className="text-sm font-medium text-foreground">
+                {t("advisory.queueUnavailable")}
+              </p>
+              <p className="max-w-xl text-xs text-muted-foreground">{queueState.detail}</p>
+              <Button variant="outline" size="sm" onClick={() => void queued.refetch()}>
+                {t("common.retry", "Retry")}
+              </Button>
+            </div>
+          </Card>
+        ) : queueState.status === "empty" ? (
           <Card>
             <EmptyState>{t("advisory.emptyQueue")}</EmptyState>
           </Card>
         ) : (
           <Card data-guided-id="advisory-queue" className="overflow-hidden">
+            {(queueState.status === "degraded" || queueState.status === "stale") &&
+              queueState.detail && (
+                <p
+                  role="status"
+                  className="border-b border-border bg-severity-warning/10 px-4 py-2 text-xs text-foreground"
+                >
+                  {queueState.detail}
+                </p>
+              )}
             <CardContent className="p-0">
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">

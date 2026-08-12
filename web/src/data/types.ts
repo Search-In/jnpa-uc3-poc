@@ -7,6 +7,7 @@
 // camera/Vahan/ULIP/AI APIs out of the UI entirely and lets `npm run dev` run
 // the full dashboard with no backend.
 
+import type { TruckListEnvelope } from "@/lib/gateQueue";
 import type {
   Alert,
   AutoLeoResult,
@@ -225,6 +226,13 @@ export interface DataAdapter {
     horizon?: number,
   ): Promise<{ decision_path: string; predictions: Record<string, number> }>;
   trucks(state?: string, limit?: number): Promise<TruckDevice[]>;
+  /**
+   * The same read as `trucks()` but keeping the gateway's fallback-ladder
+   * envelope (degraded / decision_path / state_filter_supported / hint). The
+   * Driver-Advisory queue uses it so an unreachable queue source is reported as
+   * unavailable instead of being rendered as an empty queue. See lib/gateQueue.
+   */
+  trucksEnvelope(state?: string, limit?: number): Promise<TruckListEnvelope>;
   reroute(
     deviceId: string,
     body: { gate_id?: string; lat?: number; lon?: number; force_state?: string },
@@ -349,7 +357,7 @@ export interface DataAdapter {
   // stays runnable offline and the contract test covers them. The vendor
   // credential lives only in the gateway.
   svHealth(): Promise<SvHealth>;
-  svAnalyses(limit?: number): Promise<SvAnalysisList>;
+  svAnalyses(limit?: number, offset?: number): Promise<SvAnalysisList>;
   svUploadVideo(file: File, cameraCode: string): Promise<SvAnalysis>;
   svIncident(
     analysisId: string,

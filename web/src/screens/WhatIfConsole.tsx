@@ -38,6 +38,16 @@ import {
   GitCompare,
 } from "lucide-react";
 import { tourStore } from "@/whatif/tourStore";
+import {
+  IDLE_RUN,
+  isBusy,
+  previewRun,
+  resetRun,
+  runFailed,
+  runStarted,
+  startRun,
+  type WhatIfRunState,
+} from "@/whatif/runState";
 import { getScript } from "@/whatif/scenarioScripts";
 import { ReactiveGuidePanel } from "@/components/panels/ReactiveGuidePanel";
 
@@ -98,18 +108,27 @@ export default function WhatIfConsole() {
   const { scenario, setScenario, reset: resetBanner } = useScenario();
   const { scenarioSteps } = useSocket();
   const [guided, setGuided] = useState(true);
-  const [activeHandle, setActiveHandle] = useState<string | null>(
-    () => tourStore.getState().handleId,
-  );
-  const [activeRunner, setActiveRunner] = useState<string | null>(() => {
-    const sid = tourStore.getState().scenarioId;
-    return sid ? (getScript(sid)?.runner ?? null) : null;
+  // ONE value owns the run lifecycle (see whatif/runState.ts) — a handle can
+  // never outlive the scenario it belongs to, and every failure path settles.
+  const [runState, setRunState] = useState<WhatIfRunState>(() => {
+    // Returning to the console mid-tour restores the run the tour is following.
+    const { scenarioId: sid, handleId } = tourStore.getState();
+    if (!sid) return IDLE_RUN;
+    return {
+      scenarioId: sid,
+      runner: getScript(sid)?.runner ?? null,
+      handleId,
+      status: handleId ? "running" : "idle",
+      error: null,
+    };
   });
+  const activeHandle = runState.handleId;
+  const activeRunner = runState.runner;
 
   const run = useMutation({
     mutationFn: (s: (typeof SCENARIOS)[number]) => getAdapter().runScenario(s.runner, s.params),
   });
-  const resetRun = useMutation({
+  const resetScenarioRun = useMutation({
     mutationFn: () => getAdapter().resetScenario(activeRunner!, activeHandle ?? undefined),
   });
 
@@ -132,16 +151,36 @@ export default function WhatIfConsole() {
   const traceId = steps.find((s) => s.trace_id)?.trace_id ?? undefined;
 
   async function trigger(s: (typeof SCENARIOS)[number]) {
+    // Guard the double-submit: one run at a time, and the button is disabled
+    // while a submit is in flight (below) so this is belt-and-braces.
+    if (isBusy(runState)) return;
+    // Tear the PREVIOUS run down before starting a new one: stop its guided tour
+    // (otherwise the old script keeps driving the view and its coach-mark state
+    // outlives the run) and drop its handle, so the timeline/steps below cannot
+    // show run #1's output under run #2.
+    tourStore.stopScenario();
+    setRunState((prev) => startRun(prev, s));
     setScenario(s.id);
-    setActiveRunner(s.runner);
-    const res = await run.mutateAsync(s);
-    setActiveHandle(res.handle_id);
-    if (guided) tourStore.startScenario(s.id, res.handle_id);
+    try {
+      const res = await run.mutateAsync(s);
+      setRunState((prev) => runStarted(prev, res.handle_id));
+      if (guided) tourStore.startScenario(s.id, res.handle_id);
+    } catch (err) {
+      // A failed submit must settle like any other terminal state — never leave
+      // the console "starting" forever, and never leave the previous run's
+      // handle attached to it.
+      setRunState((prev) => runFailed(prev, (err as Error)?.message ?? "Scenario run failed"));
+      resetBanner();
+    }
   }
   async function onReset() {
     tourStore.stopScenario();
-    if (activeRunner) await resetRun.mutateAsync();
-    resetBanner();
+    try {
+      if (activeRunner) await resetScenarioRun.mutateAsync();
+    } finally {
+      setRunState(resetRun());
+      resetBanner();
+    }
   }
 
   const handlesQ = useQuery({
@@ -150,8 +189,7 @@ export default function WhatIfConsole() {
   });
   function previewHandle(h: { handle_id: string; name: string }) {
     tourStore.stopScenario();
-    setActiveRunner(h.name);
-    setActiveHandle(h.handle_id);
+    setRunState(previewRun(h.name, h.handle_id));
   }
 
   const allHandles = handlesQ.data?.handles ?? [];
@@ -179,10 +217,10 @@ export default function WhatIfConsole() {
             </button>
             <button
               onClick={onReset}
-              disabled={resetRun.isPending || !activeRunner}
+              disabled={resetScenarioRun.isPending || !activeRunner}
               className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-muted disabled:opacity-40"
             >
-              {resetRun.isPending ? <Spinner /> : <RotateCcw className="h-3.5 w-3.5" />}{" "}
+              {resetScenarioRun.isPending ? <Spinner /> : <RotateCcw className="h-3.5 w-3.5" />}{" "}
               {t("whatIf.resetToBaseline")}
             </button>
           </div>
@@ -225,7 +263,7 @@ export default function WhatIfConsole() {
       >
         <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
           {SCENARIOS.map((s) => {
-            const active = scenario === s.id && !!activeHandle;
+            const active = runState.scenarioId === s.id && !!activeHandle;
             return (
               <Card key={s.id} className={`p-3 ${active ? "border-primary" : ""}`}>
                 <div className="mb-2 flex items-center justify-between">
@@ -245,17 +283,24 @@ export default function WhatIfConsole() {
                   ))}
                 </div>
                 <button
-                  onClick={() => trigger(s)}
-                  disabled={run.isPending}
+                  onClick={() => void trigger(s)}
+                  disabled={isBusy(runState)}
                   className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-[13px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                 >
-                  {run.isPending && run.variables?.id === s.id ? (
+                  {isBusy(runState) && runState.scenarioId === s.id ? (
                     <Spinner className="text-primary-foreground" />
                   ) : (
                     <Play className="h-3.5 w-3.5" />
                   )}
                   {t("whatIf.run", { id: s.id })}
                 </button>
+                {/* A failed submit is reported on the card that owns it — the
+                    run no longer fails silently into a console that just stops. */}
+                {runState.status === "failed" && runState.scenarioId === s.id && (
+                  <p className="mt-2 text-[11px] text-severity-critical" role="alert">
+                    {runState.error}
+                  </p>
+                )}
               </Card>
             );
           })}
@@ -288,7 +333,7 @@ export default function WhatIfConsole() {
               </thead>
               <tbody className="divide-y divide-border">
                 {SCENARIOS.map((s) => {
-                  const active = scenario === s.id && !!activeHandle;
+                  const active = runState.scenarioId === s.id && !!activeHandle;
                   const [k, v] = Object.entries(s.params)[0];
                   return (
                     <tr key={s.id}>

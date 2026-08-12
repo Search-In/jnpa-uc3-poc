@@ -13,9 +13,12 @@
 //   * It is not live CCTV. The supplied SecureVision API analyses UPLOADED
 //     CLIPS; there is no documented continuous-ingestion endpoint. The screen is
 //     named and worded accordingly.
-//   * It is not a history. SecureVision publishes no incident-history API and
-//     nothing is persisted to RDS, so the analysis list is explicitly
-//     session-scoped rather than presented as a searchable archive.
+//   * Its RESULTS are not a history. SecureVision publishes no incident-history
+//     API, so detections are always fetched per analysis. The LIST of analyses
+//     this system performed is our own record and IS durable
+//     (core.video_analysis, migration 0143): it survives gateway/container/worker
+//     restarts and is paged here. Only operational metadata is stored — no face,
+//     biometric or person-recognition data.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -50,7 +53,7 @@ import { api } from "@/lib/api";
 import { STATUS } from "@/lib/tokens";
 import { fmtDateTimeIST } from "@/lib/utils";
 import { svErrorMessage, type SvAnalysis } from "@/lib/securevision";
-import { svKeys, useSvAnalyses, useSvHealth } from "@/hooks/useSecureVision";
+import { SV_PAGE_SIZE, svKeys, useSvAnalyses, useSvHealth } from "@/hooks/useSecureVision";
 import {
   SvCombinedReportPanel,
   SvPersonZonePanel,
@@ -71,8 +74,11 @@ export default function VideoAnalytics() {
   const [selected, setSelected] = useState<string | null>(params.get("analysis"));
 
   const healthQ = useSvHealth();
-  const analysesQ = useSvAnalyses();
+  const [page, setPage] = useState(0);
+  const analysesQ = useSvAnalyses(true, SV_PAGE_SIZE, page * SV_PAGE_SIZE);
   const analyses = analysesQ.data?.analyses ?? [];
+  const total = analysesQ.data?.total ?? analyses.length;
+  const pageCount = Math.max(1, Math.ceil(total / SV_PAGE_SIZE));
   const analysisId = selected ?? analyses[0]?.analysis_id ?? null;
   const current = analyses.find((a) => a.analysis_id === analysisId) ?? null;
 
@@ -122,6 +128,11 @@ export default function VideoAnalytics() {
           error={analysesQ.error}
           onRetry={() => void analysesQ.refetch()}
           note={analysesQ.data?.note}
+          degraded={analysesQ.data?.degraded === true}
+          total={total}
+          page={page}
+          pageCount={pageCount}
+          onPage={setPage}
         />
 
         {analysisId && current && (
@@ -293,6 +304,11 @@ function AnalysisList({
   error,
   onRetry,
   note,
+  degraded,
+  total,
+  page,
+  pageCount,
+  onPage,
 }: {
   analyses: SvAnalysis[];
   selected: string | null;
@@ -301,10 +317,17 @@ function AnalysisList({
   error: unknown;
   onRetry: () => void;
   note?: string;
+  /** The durable history could not be read — this page is incomplete. */
+  degraded: boolean;
+  total: number;
+  page: number;
+  pageCount: number;
+  onPage: (next: number) => void;
 }) {
   const qc = useQueryClient();
   const remove = useMutation({
     mutationFn: (id: string) => getAdapter().svDeleteAnalysis(id),
+    // Prefix invalidation: every page of the history refetches, not just one.
     onSuccess: () => void qc.invalidateQueries({ queryKey: svKeys.analyses }),
   });
 
@@ -370,14 +393,23 @@ function AnalysisList({
 
   return (
     <Card className="p-3">
-      <div className="mb-2 flex items-center gap-2">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
         <FileVideo className="h-4 w-4 text-muted-foreground" />
-        <h3 className="text-sm font-semibold">Analyses</h3>
+        <h3 className="text-sm font-semibold">Analysis history</h3>
+        <StatusChip label={`${total} total`} tone="info" />
         <SvSourceBadge />
-        <span className="text-[10.5px] text-muted-foreground">
-          {note ?? "Session-scoped — SecureVision publishes no incident history."}
-        </span>
+        <span className="text-[10.5px] text-muted-foreground">{note}</span>
       </div>
+      {/* An unreadable archive is never presented as an empty one. */}
+      {degraded && (
+        <p
+          role="status"
+          className="mb-2 rounded-md border border-severity-warning/40 bg-severity-warning/10 px-2.5 py-1.5 text-[11px] text-foreground"
+        >
+          The history store could not be read, so only the analyses this gateway process performed
+          are listed. The full history is not shown.
+        </p>
+      )}
       <DataTable
         columns={columns}
         rows={analyses}
@@ -386,9 +418,32 @@ function AnalysisList({
         onRetry={onRetry}
         onRowClick={(a) => onSelect(a.analysis_id)}
         isRowActive={(a) => a.analysis_id === selected}
-        emptyLabel="No clip analysed yet in this session."
-        pageSize={5}
+        emptyLabel="No clip has been analysed yet."
+        pageSize={SV_PAGE_SIZE}
       />
+      {pageCount > 1 && (
+        <div className="mt-2 flex items-center justify-end gap-2 text-[11px] text-muted-foreground">
+          <span>
+            Page {page + 1} of {pageCount}
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={page === 0}
+            onClick={() => onPage(Math.max(0, page - 1))}
+          >
+            Newer
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={page + 1 >= pageCount}
+            onClick={() => onPage(page + 1)}
+          >
+            Older
+          </Button>
+        </div>
+      )}
     </Card>
   );
 }

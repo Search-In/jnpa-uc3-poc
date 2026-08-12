@@ -159,7 +159,15 @@ export interface SvAnalysis {
   zones_loaded: number | null;
   uploaded_by: string | null;
   uploaded_at: string;
-  /** Always false: nothing is written to RDS (see services/securevision). */
+  /** Outcome of the detection pass. */
+  status?: string | null;
+  /** Wall-clock cost of the detection pass, when recorded. */
+  processing_ms?: number | null;
+  /**
+   * True when the row came from the durable history (core.video_analysis).
+   * False means it was served from the gateway's process cache — the durable
+   * store was unreachable or is not configured.
+   */
   persisted: boolean;
   camera?: SvCamera;
   /** zones_loaded === 0 -> zone-based I-07 cannot fire for this clip. */
@@ -169,8 +177,21 @@ export interface SvAnalysis {
 
 export interface SvAnalysisList {
   analyses: SvAnalysis[];
+  /** Rows on THIS page. */
   count: number;
+  /** Rows in the whole history (all pages). Absent on older gateways. */
+  total?: number;
+  limit?: number;
+  offset?: number;
+  /** True when the durable history answered. */
   persisted: boolean;
+  /**
+   * True when the durable history could NOT be read and the process cache
+   * answered instead — the list is incomplete, and the UI must say so rather
+   * than presenting it as the full archive.
+   */
+  degraded?: boolean;
+  source?: string;
   note: string;
 }
 

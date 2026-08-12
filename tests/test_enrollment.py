@@ -314,3 +314,67 @@ def test_pwa_self_enrolment_on_a_taken_vehicle_is_409_not_500(client):
     assert r.status_code in (200, 409)
     if r.status_code == 409:
         assert r.json()["detail"]["error"] == "vehicle_already_assigned"
+
+
+# ---------------------------------------------------------------------------
+# GET /api/identity/drivers/available — the Assign-Job driver dropdown source.
+#
+# Distinct from GET /api/identity/drivers (the enrolled roster, which must keep
+# listing everyone for the verification gallery). The availability rules
+# themselves are covered in tests/test_driver_availability.py; these assert the
+# ROUTE: that it exists, that it applies the busy set, that `q` cannot reach past
+# it, and that the roster beside it is left alone.
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def _roster():
+    """Three ACTIVE master drivers, as approval leaves them."""
+    for did, name in (("DRV-AV1", "Aakash"), ("DRV-AV2", "Rahul"), ("DRV-AV3", "Suresh")):
+        enr._MEM_DRIVERS[did] = {"driver_id": did, "name": name, "license_no": None,
+                                 "vehicle_no": None, "vehicle_no_norm": None,
+                                 "status": "ACTIVE", "photo_url": None}
+    yield
+    for did in ("DRV-AV1", "DRV-AV2", "DRV-AV3"):
+        enr._MEM_DRIVERS.pop(did, None)
+
+
+def _busy(monkeypatch, ids: set) -> None:
+    """Pin the occupied set the route reads (the job spine has no DB here)."""
+    import gateway.routers.identity as idmod
+
+    async def _fake(dsn):
+        return ids
+
+    monkeypatch.setattr(idmod, "_open_job_drivers", _fake)
+
+
+def test_available_drivers_route_omits_the_occupied_one(client, _roster, monkeypatch):
+    _busy(monkeypatch, {"DRV-AV1"})                       # Aakash is on a job
+    body = client.get("/api/identity/drivers/available").json()
+    names = [d["name"] for d in body["drivers"]]
+    assert "Aakash" not in names
+    assert {"Rahul", "Suresh"} <= set(names)
+    # `available_total` is the free count, not the roster size
+    assert body["available_total"] == len(
+        [d for d in enr._MEM_DRIVERS.values()
+         if d.get("status") == "ACTIVE" and d["driver_id"] != "DRV-AV1"])
+
+
+def test_searching_the_occupied_driver_through_the_route_returns_nothing(client, _roster,
+                                                                         monkeypatch):
+    """Acceptance 2: ?q=Aakash on an occupied driver is an empty list, not a hit
+    the client is expected to drop."""
+    _busy(monkeypatch, {"DRV-AV1"})
+    body = client.get("/api/identity/drivers/available", params={"q": "Aakash"}).json()
+    assert body["drivers"] == [] and body["count"] == 0 and body["available_total"] == 0
+    # the same search finds them once the job is terminal
+    _busy(monkeypatch, set())
+    body = client.get("/api/identity/drivers/available", params={"q": "Aakash"}).json()
+    assert [d["name"] for d in body["drivers"]] == ["Aakash"]
+
+
+def test_the_enrolled_roster_beside_it_is_unchanged(client, _roster, monkeypatch):
+    """The verification gallery must still be able to recognise a driver who is
+    out on a job, so /drivers keeps listing them."""
+    _busy(monkeypatch, {"DRV-AV1"})
+    roster = [d["name"] for d in client.get("/api/identity/drivers").json()["drivers"]]
+    assert "Aakash" in roster

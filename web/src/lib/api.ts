@@ -1152,7 +1152,22 @@ export const api = {
       `/api/vehicles/available?${qs.toString()}`,
     );
   },
+  /** The full enrolled roster (occupied or not) — verification gallery, not Assign Job. */
   activeDrivers: () => http<{ drivers: ActiveDriver[]; count: number }>("/api/identity/drivers"),
+
+  /**
+   * Drivers who can take a NEW job: ACTIVE and holding no open container job.
+   * The exclusion is a SQL NOT EXISTS on core.container_job_assignment, so an
+   * occupied driver is absent from the page AND unfindable by `q` — the client
+   * never receives them to filter. Counterpart of `availableVehicles`.
+   */
+  availableDrivers: (q?: string, limit = 50) => {
+    const qs = new URLSearchParams({ limit: String(limit) });
+    if (q) qs.set("q", q);
+    return http<{ drivers: ActiveDriver[]; count: number; available_total: number }>(
+      `/api/identity/drivers/available?${qs.toString()}`,
+    );
+  },
 
   gateEventCreate: (body: {
     event_type: string;

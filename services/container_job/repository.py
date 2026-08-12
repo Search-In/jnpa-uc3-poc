@@ -114,6 +114,18 @@ class ContainerJobRepository:
             "WHERE vehicle_id = :v AND status NOT IN ('COMPLETED','CANCELLED') LIMIT 1",
             {"v": vehicle_id})
 
+    async def open_job_for_driver(self, driver_id: str) -> Optional[dict]:
+        """The non-terminal job this driver already holds, or None.
+
+        Same rule as :meth:`open_job_for_vehicle`: occupancy is the job's STATE,
+        not the presence of a driver_id — a COMPLETED or CANCELLED job keeps its
+        driver_id and must free the person again."""
+        return await self._one(
+            "SELECT id, container_number, vehicle_id, status "
+            "FROM core.container_job_assignment "
+            "WHERE driver_id = :d AND status NOT IN ('COMPLETED','CANCELLED') LIMIT 1",
+            {"d": driver_id})
+
     async def open_job_for_container(self, container_number: str) -> Optional[dict]:
         return await self._one(
             "SELECT id, vehicle_id, status FROM core.container_job_assignment "
@@ -128,13 +140,23 @@ class ContainerJobRepository:
     async def customs_note(self, container_number: str) -> Optional[str]:
         """The remark customs recorded when it stopped this container, or None.
 
-        Read only when an assignment is already being refused, from the two
-        places the existing code writes such a remark — the UC-III scanner
-        (core.scan_event.remarks on a SCAN_HOLD, which is what flips the cargo row
-        to UNDER_INSPECTION in service.record_scan) and the cargo module's
-        verification (core.cargo_scan_verification.remarks with verified=false).
+        Read only when an assignment is already being refused, from the three
+        places the existing code writes such a remark:
+
+          * the UC-III scanner — core.scan_event.remarks on a SCAN_HOLD, which is
+            what flips the cargo row to UNDER_INSPECTION in service.record_scan;
+          * the cargo module's verification — core.cargo_scan_verification.remarks
+            with verified=false;
+          * the CUSTOMS module itself — core.cargo_notification.message, which is
+            where services.customs.reconcile_cargo writes its reason ("selected by
+            RMS for customs scanning") when it moves a box to UNDER_INSPECTION.
+            That path is how most real holds arise and it writes no scan remark,
+            so a refusal used to report customs_note = null for precisely the
+            containers customs had flagged itself.
+
         Newest wins. Nothing is synthesised: no remark on record returns None and
-        the caller says only "Flagged by customs"."""
+        the caller says only "Flagged by Customs". Resolved notifications are
+        skipped — a closed alert is not the reason the box is still held."""
         row = await self._one(
             """
             SELECT remarks, ts FROM (
@@ -143,6 +165,10 @@ class ContainerJobRepository:
                 UNION ALL
                 SELECT remarks, created_at AS ts FROM core.cargo_scan_verification
                  WHERE container_number = :cn AND verified = false
+                UNION ALL
+                SELECT message AS remarks, created_at AS ts FROM core.cargo_notification
+                 WHERE container_number = :cn AND notification_type LIKE 'CUSTOMS%'
+                   AND status <> 'RESOLVED'
             ) r
             WHERE NULLIF(TRIM(COALESCE(remarks, '')), '') IS NOT NULL
             ORDER BY ts DESC LIMIT 1
@@ -169,13 +195,38 @@ class ContainerJobRepository:
         return out
 
     # ------------------------------------------------------------------ create
-    async def create_job(self, rec: Mapping[str, Any]) -> dict:
-        """Insert the assignment + its ASSIGNED history row in one transaction."""
+    async def create_job(self, rec: Mapping[str, Any], *,
+                         blocked_customs: frozenset[str] = frozenset()) -> dict:
+        """Insert the assignment + its ASSIGNED history row in one transaction.
+
+        ``blocked_customs`` re-evaluates the customs disposition INSIDE that
+        transaction, against the cargo row locked ``FOR SHARE``. The service has
+        already checked it, but that read committed before this one opens: a
+        customs hold landing in between (POST /api/scan/events writing SCAN_HOLD,
+        or /api/customs/reconcile flipping the box to UNDER_INSPECTION) would
+        otherwise be overtaken by an assignment that passed a stale check. The
+        lock is the same discipline services.cargo already applies to release
+        (CargoRepository.transition_lifecycle's ``blocked_customs``); FOR SHARE
+        rather than FOR UPDATE because this transaction only reads the cargo row,
+        and it is enough — every customs writer takes a stronger lock and so
+        waits for this INSERT to commit or roll back.
+
+        Raises :class:`CustomsFlagged` on a flagged container, before the INSERT
+        runs, so nothing is persisted."""
         params = {c: rec.get(c) for c in _JOB_COLS}
         cols = ", ".join(_JOB_COLS)
         vals = ", ".join(f":{c}" for c in _JOB_COLS)
+        cn = (rec.get("container_number") or "").strip().upper() or None
         try:
             async with get_engine(self._dsn).begin() as conn:
+                if cn and blocked_customs:
+                    cargo = (await conn.execute(text(
+                        "SELECT customs_status FROM core.cargo "
+                        "WHERE container_number = :c FOR SHARE"),
+                        {"c": cn})).mappings().first()
+                    cs = str((cargo or {}).get("customs_status") or "").upper()
+                    if cs in blocked_customs:
+                        raise CustomsFlagged(cn, cs)
                 row = (await conn.execute(text(
                     f"INSERT INTO core.container_job_assignment ({cols}) "
                     f"VALUES ({vals}) RETURNING *"), params)).mappings().first()
@@ -196,6 +247,9 @@ class ContainerJobRepository:
             if "uq_job_open_container" in msg:
                 raise JobConflict("container_already_assigned",
                                   "container already has an open job") from exc
+            if "uq_job_open_driver" in msg:
+                raise JobConflict("driver_already_assigned",
+                                  "driver already holds an open job") from exc
             raise
 
     # -------------------------------------------------------------- transition
@@ -359,6 +413,19 @@ class ContainerJobRepository:
             "WHERE status NOT IN ('COMPLETED','CANCELLED') AND vehicle_id IS NOT NULL")
         return {r["vehicle_id"] for r in rows if r.get("vehicle_id")}
 
+    async def drivers_with_open_jobs(self) -> set[str]:
+        """Driver IDs currently holding a job that is neither COMPLETED nor
+        CANCELLED — i.e. genuinely busy.
+
+        The driver-side twin of :meth:`vehicles_with_open_jobs`. Only the
+        in-memory identity backend (which has no job table to join against) needs
+        it; the Postgres path filters with the correlated NOT EXISTS in
+        gateway.enrollment so the LIMIT applies to genuinely free drivers."""
+        rows = await self._rows(
+            "SELECT DISTINCT driver_id FROM core.container_job_assignment "
+            "WHERE status NOT IN ('COMPLETED','CANCELLED') AND driver_id IS NOT NULL")
+        return {r["driver_id"] for r in rows if r.get("driver_id")}
+
     async def latest_job_for_container(self, container_number: str) -> Optional[dict]:
         return await self._one(
             "SELECT * FROM core.container_job_assignment WHERE container_number = :c "
@@ -513,6 +580,25 @@ class JobConflict(Exception):
         super().__init__(detail)
         self.code = code
         self.detail = detail
+
+
+class CustomsFlagged(Exception):
+    """core.cargo says customs has stopped this container — raised from inside the
+    assignment transaction, under the cargo row lock.
+
+    Carries the facts only. The service owns the note lookup and the operator
+    wording, so the locked re-check and the pre-flight check answer the caller
+    with one identical ``customs_flagged`` body.
+
+    Distinct from :class:`JobConflict`, which the router answers 409 with no
+    customs context: this is the same refusal as the pre-flight one and must
+    reach the operator as such."""
+
+    def __init__(self, container_number: str, customs_status: Optional[str]) -> None:
+        self.container_number = container_number
+        self.customs_status = (customs_status or "").upper()
+        super().__init__(f"customs blocks assignment for {container_number}: "
+                         f"customs_status={self.customs_status or 'UNKNOWN'}")
 
 
 _EVENT_INSERT = """

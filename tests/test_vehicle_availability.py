@@ -114,3 +114,22 @@ async def test_count_is_not_capped_by_the_page_limit():
     assert len(page) == 5
     assert await fleet.count_assignable(DSN, occupied=occupied) == 20
     assert not {r["vehicle_id"] for r in page} & occupied
+
+
+@pytest.mark.asyncio
+async def test_searching_an_occupied_vehicle_by_plate_returns_nothing():
+    """The ticket's example: MH04QA9911 is on a job; MH04AB1234 and MH04CD5678
+    are not. Asking for the busy plate by name returns nothing — the search runs
+    INSIDE the availability rule, not after it."""
+    busy = await _register("MH04QA9911")
+    await _register("MH04AB1234")
+    await _register("MH04CD5678")
+
+    free = await fleet.list_assignable(DSN, occupied={busy})
+    assert sorted(r["vehicle_number"] for r in free) == ["MH04AB1234", "MH04CD5678"]
+
+    assert await fleet.list_assignable(DSN, q="MH04QA9911", occupied={busy}) == []
+    assert await fleet.count_assignable(DSN, q="MH04QA9911", occupied={busy}) == 0
+    # …and the same search finds it once the job is terminal
+    found = await fleet.list_assignable(DSN, q="MH04QA9911", occupied=set())
+    assert [r["vehicle_number"] for r in found] == ["MH04QA9911"]

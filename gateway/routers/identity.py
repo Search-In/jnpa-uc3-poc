@@ -468,9 +468,52 @@ async def enrollment_detail(driver_id: str,
     return rec
 
 
+# Kept distinct from GET /drivers rather than folded into it as a flag: the two
+# answer different questions, and the roster below has consumers that must keep
+# seeing occupied drivers. Declared first so a future /drivers/{driver_id} route
+# cannot shadow this literal path.
+@router.get("/drivers/available")
+async def available_drivers(q: Optional[str] = Query(default=None),
+                            limit: int = Query(default=50, ge=1, le=500),
+                            state: GatewayState = Depends(get_state)) -> dict:
+    """ACTIVE master drivers free to take a NEW container job — the Control-Room
+    'assign driver' dropdown source, and the exact counterpart of
+    ``GET /api/vehicles/available``.
+
+    Deliberately NOT the same as ``GET /drivers`` below, which is the enrolled
+    identity roster the verification gallery reads and must keep listing everyone:
+
+        /drivers            "who is enrolled?"        -> every ACTIVE driver
+        /drivers/available  "who can take this job?"  -> ACTIVE drivers with no
+                            open core.container_job_assignment row
+
+    "Free" is computed IN THE DATABASE (enrollment.list_assignable_drivers:
+    ACTIVE driver with NOT EXISTS an open job), never by subtracting a set in
+    Python and never by the client — so the LIMIT applies to genuinely
+    assignable drivers, ``q`` searches only among them (an occupied driver is not
+    findable by name), and a job opened by anyone, anywhere, is reflected
+    immediately. COMPLETED / CANCELLED jobs do not occupy a driver."""
+    dsn = state.cfg.postgres_dsn
+    # `occupied` is the in-memory backend's substitute for the SQL join (it has
+    # no job table); the Postgres path ignores it and asks the database.
+    occupied = await _open_job_drivers(dsn)
+    drivers = await enrollment.list_assignable_drivers(dsn, q=q, limit=limit,
+                                                       occupied=occupied)
+    total = await enrollment.count_assignable_drivers(dsn, q=q, occupied=occupied)
+    REQUESTS.labels("identity", "ok").inc()
+    # `count` is rows in this page; `available_total` is how many drivers are
+    # assignable in the master, which is what the "Driver (N available)" label
+    # must show — len(page) is capped by `limit`.
+    return {"drivers": drivers, "count": len(drivers), "available_total": total}
+
+
 @router.get("/drivers")
 async def list_drivers(state: GatewayState = Depends(get_state)) -> dict:
-    """Active master drivers (core.driver_identity) — the canonical enrolled identities."""
+    """Active master drivers (core.driver_identity) — the canonical enrolled identities.
+
+    The full enrolled roster, occupied or not. The Assign-Job dropdown must use
+    ``GET /drivers/available`` instead; this one still backs the verification
+    gallery, which has to be able to recognise a driver who is out on a job."""
     items = await enrollment.list_active_drivers(state.cfg.postgres_dsn)
     REQUESTS.labels("identity", "ok").inc()
     return {"drivers": items, "count": len(items)}
@@ -494,6 +537,23 @@ class CreateDriverBody(BaseModel):
     mobile: Optional[str] = None
     emergency_contact: Optional[str] = None
     driver_id: Optional[str] = None  # optional; auto-generated when absent
+
+
+async def _open_job_drivers(dsn: Optional[str]) -> set:
+    """Driver IDs holding a non-terminal container job.
+
+    Mirrors gateway/routers/vehicles.py::_open_job_vehicles, including its
+    best-effort stance: if the job spine is unreachable we return an empty set
+    rather than 500 the dropdown. The cost of being wrong is a driver offered who
+    is already busy — and POST /api/jobs still rejects them with
+    ``driver_already_assigned``, so the invariant is never actually breached."""
+    try:
+        from services.container_job import ContainerJobService
+
+        return await ContainerJobService(dsn=dsn or None).drivers_with_open_jobs()
+    except Exception as exc:  # noqa: BLE001 — availability must not hard-fail
+        log.warning("identity.open_jobs_lookup_failed", extra={"error": str(exc)})
+        return set()
 
 
 async def _vehicle_exists(state: GatewayState, vehicle_id: str) -> bool:

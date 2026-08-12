@@ -39,39 +39,9 @@ import {
 } from "lucide-react";
 import { tourStore } from "@/whatif/tourStore";
 import { getScript } from "@/whatif/scenarioScripts";
+import { SCENARIOS } from "@/whatif/scenarioRunners";
 import { ReactiveGuidePanel } from "@/components/panels/ReactiveGuidePanel";
 
-const SCENARIOS: { id: ScenarioId; runner: string; blurb: string; params: Record<string, any> }[] =
-  [
-    {
-      id: "TFC-1",
-      runner: "tfc1",
-      blurb:
-        "Close G-NSICT; forecaster predicts spillover; trucks auto-re-route; TAS slots rescheduled.",
-      params: { gate_id: "G-NSICT", duration_minutes: 120 },
-    },
-    {
-      id: "TFC-2",
-      runner: "tfc2",
-      blurb:
-        "Inject a wrong-way track at Karal Phata; anomaly fires; e-Challan issued with evidence.",
-      params: { camera_id: "C-KARAL-EXIT" },
-    },
-    {
-      id: "TFC-3",
-      runner: "tfc3",
-      blurb:
-        "UC-II DPD release spike (2.5×) → corridor demand surge; forecaster build-up; gate-slot reissue.",
-      params: { dpd_release_spike: 2.5 },
-    },
-    {
-      id: "MONSOON-FRIDAY",
-      runner: "monsoon_friday",
-      blurb:
-        "Heavy Rain — cascades to driver & fuel shortage + reactive recommendations. Monsoon rain + Friday peak → congestion → demand surge → gate queue → reroute → carbon impact.",
-      params: { gate_id: "G-NSICT", rain_intensity: "heavy", demand_trucks: 120 },
-    },
-  ];
 
 // Display-only theme labels that make the requested scenario themes
 // discoverable in the UI. These NEVER change the backend `runner` name or the

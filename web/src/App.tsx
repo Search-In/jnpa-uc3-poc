@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
-import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { Shell } from "@/components/layout/Shell";
 import { useScenario } from "@/hooks/ScenarioContext";
+import { getScript } from "@/whatif/scenarioScripts";
+import { useDeepLinkedScenario } from "@/whatif/useDeepLinkedScenario";
 import {
   authEnabled,
   canSeeScreen,
@@ -53,6 +55,32 @@ import { GuidedTour } from "@/whatif/GuidedTour";
 function Guard({ path, children }: { path: string; children: React.ReactNode }) {
   if (canSeeScreen(path)) return <>{children}</>;
   return <Navigate to="/live" replace />;
+}
+
+
+/**
+ * Where "/" actually lands.
+ *
+ * It was `<Navigate to="/command-center" replace />`, which does two unhelpful things to a
+ * deep link: it DROPS THE QUERY STRING (react-router's Navigate carries only what you give
+ * it), so `/?scenario=MONSOON-FRIDAY` became a bare `/command-center` with the parameter
+ * gone from the address bar; and it lands on the command centre regardless, which is not
+ * where the scenario being linked to actually begins.
+ *
+ * So: carry the search through, and when the link names a scenario we can narrate, open on
+ * the page that scenario's FIRST STEP points at. Following a hand-off from UC-2 should put
+ * the operator where the story resumes, not somewhere they then have to navigate from.
+ *
+ * The scenario itself is already captured by ScenarioProvider at first render, so this is
+ * purely about the landing route and the URL staying honest about what was requested.
+ */
+function RootLanding() {
+  const { search } = useLocation();
+  const requested = new URLSearchParams(search).get("scenario");
+  const script = requested ? getScript(requested) : undefined;
+  // The first step's own page, else the command centre as before.
+  const to = script?.steps[0]?.target.page ?? "/command-center";
+  return <Navigate to={{ pathname: to, search }} replace />;
 }
 
 export default function App() {
@@ -132,11 +160,15 @@ function DashboardShell({
   reset: () => void;
   navigate: (to: string) => void;
 }) {
+  // A cross-twin hand-off (`?scenario=…` from UC-2) starts the run + the narration here,
+  // INSIDE the authed tree — so a sign-in between the link and the dashboard cannot lose
+  // it, and no run is triggered for someone who never got past the login screen.
+  useDeepLinkedScenario();
   return (
     <Shell onResetBaseline={reset} resetDisabled={scenario === "none"}>
       <main className="min-h-0 flex-1 overflow-hidden" style={{ height: "100%" }}>
         <Routes>
-          <Route path="/" element={<Navigate to="/command-center" replace />} />
+          <Route path="/" element={<RootLanding />} />
           <Route
             path="/command-center"
             element={

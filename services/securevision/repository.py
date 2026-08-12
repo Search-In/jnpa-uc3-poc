@@ -19,6 +19,7 @@ in-process cache. A write that fails never fails the upload.
 """
 from __future__ import annotations
 
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import text
@@ -34,6 +35,51 @@ _COLUMNS = (
     "filename, frames_sampled, detection_pass_count, zones_loaded, status, "
     "processing_ms, source, uploaded_by, uploaded_at, deleted_at"
 )
+
+
+def _as_utc_datetime(value: Any) -> Optional[datetime]:
+    """Coerce ``uploaded_at`` into the tz-aware datetime a timestamptz bind needs.
+
+    asyncpg binds parameters by PYTHON type, and the upload path hands over an
+    ISO-8601 STRING: :mod:`services.securevision.analyses` stamps every entry
+    with ``datetime.now(utc).isoformat()``, and the history service forwards
+    that entry here verbatim. The driver then refuses it —
+
+        invalid input for query argument $13: '2026-08-12T20:25:06.601876+00:00'
+        expected a datetime.date or datetime.datetime instance, got 'str'
+
+    — and because :meth:`VideoAnalysisRepository.record` is best-effort, the
+    upload still answered 201 while nothing reached ``core.video_analysis``. The
+    ``CAST(... AS timestamptz)`` in the SQL cannot save it: the failure happens
+    in the driver's own parameter encoding, before Postgres sees the statement.
+
+    Both shapes are accepted so no caller has to know which one it holds, and
+    the instant is preserved: an aware value is converted to UTC, a naive one is
+    read AS UTC (everything upstream stamps UTC). A missing or unreadable value
+    returns None, and the INSERT's COALESCE falls back to the database's own
+    ``now()`` — an analysis with an unreadable timestamp is still worth keeping.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return (value.astimezone(timezone.utc) if value.tzinfo
+                else value.replace(tzinfo=timezone.utc))
+    if isinstance(value, date):  # a bare date is midnight UTC
+        return datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            log.warning("video_analysis.uploaded_at_unparsed", value=raw)
+            return None
+        return (parsed.astimezone(timezone.utc) if parsed.tzinfo
+                else parsed.replace(tzinfo=timezone.utc))
+    log.warning("video_analysis.uploaded_at_unsupported",
+                type=type(value).__name__)
+    return None
 
 
 def _row(record: Any) -> Dict[str, Any]:
@@ -100,7 +146,9 @@ class VideoAnalysisRepository:
             "processing_ms": entry.get("processing_ms"),
             "source": entry.get("source") or "securevision",
             "uploaded_by": entry.get("uploaded_by"),
-            "uploaded_at": entry.get("uploaded_at"),
+            # asyncpg needs a real datetime here, not the ISO string the
+            # in-process cache stamps. None -> the SQL's COALESCE(..., now()).
+            "uploaded_at": _as_utc_datetime(entry.get("uploaded_at")),
         }
         try:
             async with get_engine(self._dsn).begin() as conn:

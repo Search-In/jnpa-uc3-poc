@@ -249,3 +249,232 @@ def test_the_migration_defines_no_person_or_biometric_column():
     for line in body.splitlines():
         column = line.strip().split(" ")[0]
         assert not _FORBIDDEN_FIELD.search(column), f"forbidden column: {column}"
+
+
+# ------------------------------------------------- uploaded_at / asyncpg bind
+# Production defect: POST /api/sv/analytics/video/upload answered 201 while the
+# INSERT died inside the best-effort except with
+#
+#   asyncpg.exceptions.DataError: invalid input for query argument $13:
+#   '2026-08-12T20:25:06.601876+00:00'
+#   expected a datetime.date or datetime.datetime instance, got 'str'
+#
+# The in-process cache stamps uploaded_at as an ISO STRING and the history
+# service forwards that entry to the repository unchanged; asyncpg binds by
+# Python type, so every upload was silently lost. A fake repository cannot catch
+# this — the assertions below run the REAL repository against an engine that
+# reproduces the driver's type check.
+from datetime import date as date_type  # noqa: E402
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+from services.securevision import repository as sv_repo  # noqa: E402
+from services.securevision.repository import (  # noqa: E402
+    VideoAnalysisRepository,
+    _as_utc_datetime,
+)
+
+_DSN = "postgresql+asyncpg://stub/stub"
+
+
+class StrictAsyncpgEngine:
+    """Engine stand-in that rejects a bind asyncpg would reject.
+
+    Mirrors the driver's parameter encoding: a timestamptz argument must be a
+    real ``datetime``/``date``, never a string. Because
+    ``VideoAnalysisRepository.record`` swallows write errors by design, a
+    ``record()`` that returns True IS the proof that the bind was acceptable.
+    """
+
+    def __init__(self) -> None:
+        self.statements: List[str] = []
+        self.params: List[Dict[str, Any]] = []
+
+    # engine.begin() -> async context manager yielding a connection
+    def begin(self) -> "StrictAsyncpgEngine":
+        return self
+
+    async def __aenter__(self) -> "StrictAsyncpgEngine":
+        return self
+
+    async def __aexit__(self, *exc: Any) -> bool:
+        return False
+
+    async def execute(self, statement: Any, params: Optional[Dict[str, Any]] = None):
+        params = params or {}
+        for key in ("uploaded_at", "deleted_at"):
+            value = params.get(key)
+            if value is not None and not isinstance(value, (datetime, date_type)):
+                raise TypeError(
+                    f"invalid input for query argument {key!r}: {value!r} "
+                    "expected a datetime.date or datetime.datetime instance, "
+                    f"got {type(value).__name__!r}")
+        self.statements.append(str(statement))
+        self.params.append(dict(params))
+        return None
+
+
+@pytest.fixture()
+def engine(monkeypatch) -> StrictAsyncpgEngine:
+    stub = StrictAsyncpgEngine()
+    monkeypatch.setattr(sv_repo, "get_engine", lambda dsn: stub)
+    return stub
+
+
+def _entry(analysis_id: str, **over: Any) -> Dict[str, Any]:
+    entry: Dict[str, Any] = {
+        "analysis_id": analysis_id,
+        "securevision_camera_code": "CAM-01",
+        "jnpa_camera_id": "CAM-COR-01",
+        "camera_mapped": True,
+        "filename": f"{analysis_id}.mp4",
+        "frames_sampled": 120,
+        "detection_pass_count": 1,
+        "zones_loaded": 3,
+        "status": "COMPLETED",
+        "processing_ms": 4200,
+        "source": "securevision",
+        "uploaded_by": "DTCCC_ADMIN",
+    }
+    entry.update(over)
+    return entry
+
+
+def test_iso_string_uploaded_at_persists(engine):
+    """The exact shape the upload path produces — the reported failure."""
+    repo = VideoAnalysisRepository(dsn=_DSN)
+
+    ok = _run(repo.record(_entry("iso1111122223333",
+                                 uploaded_at="2026-08-12T20:25:06.601876+00:00")))
+
+    assert ok is True                       # the write was NOT swallowed
+    bound = engine.params[0]["uploaded_at"]
+    assert isinstance(bound, datetime)      # a datetime reached the driver…
+    assert bound.tzinfo is not None         # …carrying its zone…
+    assert bound == datetime(2026, 8, 12, 20, 25, 6, 601876, tzinfo=timezone.utc)
+
+
+def test_timezone_aware_datetime_uploaded_at_persists(engine):
+    """Callers that already hold a datetime keep working, unconverted in value."""
+    repo = VideoAnalysisRepository(dsn=_DSN)
+    ist = timezone(timedelta(hours=5, minutes=30))          # Asia/Kolkata
+    stamped = datetime(2026, 8, 13, 1, 55, 6, tzinfo=ist)
+
+    ok = _run(repo.record(_entry("dt11111122223333", uploaded_at=stamped)))
+
+    assert ok is True
+    bound = engine.params[0]["uploaded_at"]
+    assert isinstance(bound, datetime)
+    # Normalised to UTC, but the same INSTANT — no silent shift of the clip time.
+    assert bound.utcoffset() == timedelta(0)
+    assert bound == stamped
+
+
+def test_naive_datetime_is_read_as_utc(engine):
+    """Everything upstream stamps UTC, so a naive value is UTC — not local time."""
+    repo = VideoAnalysisRepository(dsn=_DSN)
+
+    ok = _run(repo.record(_entry("naive11122223333",
+                                 uploaded_at=datetime(2026, 8, 12, 20, 25, 6))))
+
+    assert ok is True
+    assert engine.params[0]["uploaded_at"] == datetime(
+        2026, 8, 12, 20, 25, 6, tzinfo=timezone.utc)
+
+
+def test_missing_uploaded_at_leaves_the_database_default_in_charge(engine):
+    """None must stay None so the INSERT's COALESCE(..., now()) applies."""
+    repo = VideoAnalysisRepository(dsn=_DSN)
+
+    assert _run(repo.record(_entry("null1111122223333", uploaded_at=None))) is True
+    # …and a caller that omits the key entirely behaves identically.
+    absent = _entry("miss1111122223333")
+    absent.pop("uploaded_at", None)
+    assert _run(repo.record(absent)) is True
+
+    assert engine.params[0]["uploaded_at"] is None
+    assert engine.params[1]["uploaded_at"] is None
+    # The fallback is the DATABASE's clock, not a value invented here.
+    assert "COALESCE(CAST(:uploaded_at AS timestamptz), now())" in engine.statements[0]
+
+
+def test_an_unreadable_timestamp_falls_back_to_now_instead_of_losing_the_row(engine):
+    """A timestamp we cannot parse is not worth dropping the whole analysis for."""
+    repo = VideoAnalysisRepository(dsn=_DSN)
+
+    assert _run(repo.record(_entry("junk1111122223333",
+                                   uploaded_at="not-a-timestamp"))) is True
+    assert engine.params[0]["uploaded_at"] is None
+
+
+def test_reupload_of_an_existing_analysis_id_still_upserts(engine):
+    """ON CONFLICT (analysis_id) behaviour is unchanged by the coercion."""
+    repo = VideoAnalysisRepository(dsn=_DSN)
+
+    first = _run(repo.record(_entry("dupe1111122223333", status="COMPLETED",
+                                    uploaded_at="2026-08-12T20:25:06+00:00")))
+    second = _run(repo.record(_entry("dupe1111122223333", status="FAILED",
+                                     uploaded_at=datetime(2026, 8, 12, 21, 0,
+                                                          tzinfo=timezone.utc))))
+
+    assert first is True and second is True
+    sql = engine.statements[1]
+    assert "ON CONFLICT (analysis_id) DO UPDATE SET" in sql
+    assert "uploaded_at              = EXCLUDED.uploaded_at" in sql
+    assert "deleted_at               = NULL" in sql          # a re-upload undeletes
+    assert engine.params[1]["status"] == "FAILED"
+    assert isinstance(engine.params[1]["uploaded_at"], datetime)
+
+
+def test_no_personal_field_reaches_the_insert_parameters(engine):
+    """The coercion did not widen what is written: operational metadata only."""
+    repo = VideoAnalysisRepository(dsn=_DSN)
+
+    _run(repo.record(_entry(
+        "priv1111122223333",
+        uploaded_at="2026-08-12T20:25:06+00:00",
+        face_embedding=[0.1, 0.2], person_name="A. Person",
+        face_similarity=0.94, photo_b64="ZmFrZQ==", image_url="s3://clip.jpg",
+    )))
+
+    bound = engine.params[0]
+    assert [k for k in bound if _FORBIDDEN_FIELD.search(k)] == []
+    assert set(bound) == {
+        "analysis_id", "sv_code", "jnpa_camera_id", "camera_mapped", "filename",
+        "frames_sampled", "detection_pass_count", "zones_loaded", "status",
+        "processing_ms", "source", "uploaded_by", "uploaded_at",
+    }
+    # Not merely absent from the params — absent from the statement too.
+    assert [k for k in ("face", "embedding", "person", "similarity", "photo",
+                        "image") if k in engine.statements[0].lower()] == []
+
+
+def test_the_upload_path_end_to_end_persists_through_the_real_repository(engine):
+    """The production path: cache stamps an ISO string -> history -> repository.
+
+    Regression for the 201-with-no-row report — before the fix this recorded
+    `video_analysis.record_failed` and answered `persisted: false`.
+    """
+    history = VideoAnalysisHistory(repository=VideoAnalysisRepository(dsn=_DSN))
+
+    entry = _run(history.record(
+        "e2e11111122223333",
+        securevision_camera_code="CAM-01", jnpa_camera_id="CAM-COR-01",
+        filename="clip.mp4", frames_sampled=120, detection_pass_count=1,
+        zones_loaded=3, uploaded_by="DTCCC_ADMIN", status="COMPLETED",
+        processing_ms=4200, source="securevision"))
+
+    assert entry["persisted"] is True
+    # The cache still reports the ISO string to the API (contract unchanged)…
+    assert isinstance(entry["uploaded_at"], str)
+    # …while the driver got a datetime.
+    assert isinstance(engine.params[0]["uploaded_at"], datetime)
+
+
+def test_coercion_helper_accepts_both_shapes_and_passes_none_through():
+    assert _as_utc_datetime(None) is None
+    assert _as_utc_datetime("") is None
+    aware = datetime(2026, 8, 12, 20, 25, 6, tzinfo=timezone.utc)
+    assert _as_utc_datetime(aware) == aware
+    assert _as_utc_datetime("2026-08-12T20:25:06Z") == aware      # trailing Z
+    assert _as_utc_datetime("2026-08-12T20:25:06+00:00") == aware
+    assert _as_utc_datetime(1234) is None                          # not a date

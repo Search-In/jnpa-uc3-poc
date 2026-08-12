@@ -41,6 +41,7 @@ affects any other JNPA surface.
 from __future__ import annotations
 
 import os
+from time import perf_counter
 from typing import Any, Dict, List, Optional
 
 from fastapi import (
@@ -75,6 +76,7 @@ from integrations.securevision import (
     SecureVisionUnprocessable,
 )
 from services.securevision import analyses, cameras, normalize, tickets
+from services.securevision.history import VideoAnalysisHistory
 
 from ..auth import CONTROL_ROOM, Role
 from ..dpdp import audit_identity_access, enforce_dpdp
@@ -121,6 +123,28 @@ def reset_client() -> None:
     """Drop the cached client (tests)."""
     global _client
     _client = None
+
+
+_history: Optional[VideoAnalysisHistory] = None
+
+
+def get_history(request: Request) -> VideoAnalysisHistory:
+    """The Video Analytics history service, bound to the gateway's RDS DSN.
+
+    Durable (core.video_analysis) with the in-process registry as the degraded
+    rung — see services/securevision/history.py.
+    """
+    global _history
+    if _history is None:
+        cfg = getattr(getattr(request.app.state, "gw", None), "cfg", None)
+        _history = VideoAnalysisHistory(dsn=getattr(cfg, "postgres_dsn", None) or None)
+    return _history
+
+
+def reset_history() -> None:
+    """Drop the cached history service (tests)."""
+    global _history
+    _history = None
 
 
 # --------------------------------------------------------------------- guards
@@ -285,8 +309,10 @@ async def sv_health() -> Dict[str, Any]:
         "base_url": client.base_url,
         "camera_map_configured": bool(cameras.camera_map()),
         "camera_map_entries": len(cameras.camera_map()),
-        # Recorded posture, surfaced so the UI never implies otherwise.
-        "persistence": "NONE",
+        # Recorded posture, surfaced so the UI never implies otherwise. Upload
+        # METADATA is now durable (core.video_analysis); detection results and
+        # any person/face payload remain unstored.
+        "persistence": "ANALYSIS_METADATA",
         "analyses_in_session": len(analyses.recent(limit=analyses.MAX_ANALYSES)),
         "stream_tickets_outstanding": tickets.outstanding(),
         "mode": "UPLOAD_CLIP_ANALYTICS",
@@ -332,17 +358,30 @@ async def sv_cameras() -> Dict[str, Any]:
 
 
 # ------------------------------------------------------------------ analyses
-@router.get("/analyses", summary="Analyses uploaded through this gateway process")
-async def sv_analyses(limit: int = Query(default=50, ge=1, le=200)) -> Dict[str, Any]:
-    rows = analyses.recent(limit=limit)
-    return {
-        "analyses": rows,
-        "count": len(rows),
-        # Loud and machine-readable: this is session state, not a history store.
-        "persisted": False,
-        "note": "Session-scoped. SecureVision publishes no incident-history API "
-                "and nothing is persisted to RDS.",
-    }
+@router.get("/analyses", summary="Video Analytics history (newest first, paginated)")
+async def sv_analyses(request: Request,
+                      limit: int = Query(default=50, ge=1, le=200),
+                      offset: int = Query(default=0, ge=0),
+                      camera_id: Optional[str] = Query(default=None,
+                                                       description="filter to one JNPA camera"),
+                      ) -> Dict[str, Any]:
+    """The durable history of clips analysed through this deployment.
+
+    Backed by ``core.video_analysis`` (migration 0143), so it survives gateway,
+    container and worker restarts. The response keeps its original keys
+    (``analyses``/``count``/``persisted``/``note``) and adds pagination
+    (``total``/``limit``/``offset``) plus ``degraded``, which is true when the
+    durable store could not be read and the process cache answered instead —
+    an unreadable archive is never reported as an empty one.
+
+    Detection RESULTS are not stored: they are fetched from SecureVision per
+    analysis, and person/face payloads are persisted nowhere.
+    """
+    history = get_history(request)
+    payload = await history.recent(limit=limit, offset=offset,
+                                   jnpa_camera_id=camera_id)
+    REQUESTS.labels("securevision", "ok").inc()
+    return payload
 
 
 @router.post("/analytics/video/upload", status_code=status.HTTP_201_CREATED,
@@ -379,6 +418,9 @@ async def sv_upload_video(
     content = await _read_upload(file, allowed_types=_VIDEO_CONTENT_TYPES,
                                  kind="video")
     client = get_client()
+    # Wall-clock cost of the detection pass — an operational figure the history
+    # keeps so a slow camera/clip is visible after the fact.
+    _t0 = perf_counter()
     try:
         result = await client.upload_video(
             content, filename=file.filename,
@@ -391,7 +433,7 @@ async def sv_upload_video(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY,
                             detail={"error": "securevision_invalid_response",
                                     "detail": "Upload answered without an analysis_id."})
-    entry = analyses.record(
+    entry = await get_history(request).record(
         result.analysis_id,
         securevision_camera_code=result.camera_code or resolved,
         jnpa_camera_id=cameras.to_jnpa(result.camera_code or resolved),
@@ -400,6 +442,9 @@ async def sv_upload_video(
         detection_pass_count=result.detection_pass_count,
         zones_loaded=result.zones_loaded,
         uploaded_by=_actor(request),
+        status="COMPLETED",
+        processing_ms=int((perf_counter() - _t0) * 1000),
+        source=normalize.SOURCE,
     )
     REQUESTS.labels("securevision", "ok").inc()
     log.info("securevision_upload_ok", analysis_id=result.analysis_id,
@@ -432,7 +477,9 @@ async def sv_delete_analysis(
         pass
     except SecureVisionError as exc:
         raise _fail(exc) from exc
-    analyses.forget(analysis_id)
+    # Soft-delete: the vendor-side analysis is gone, but the record that it
+    # existed and was deleted stays in the history.
+    await get_history(request).forget(analysis_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

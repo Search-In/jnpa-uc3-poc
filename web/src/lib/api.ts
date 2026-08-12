@@ -243,8 +243,12 @@ export const api = {
     http<{ decision_path: string; predictions: Record<string, number> }>(
       `/api/traffic/predict?horizon_min=${horizon}`,
     ),
+  // The FULL envelope: `devices` plus the fallback-ladder posture
+  // (`degraded`, `decision_path`, `state_filter_supported`, `hint`). Callers
+  // that only need rows use adapter.trucks(); the Driver-Advisory queue needs
+  // the posture to tell "nobody is queueing" from "the queue feed is down".
   trucks: (state?: string, limit = 300) =>
-    http<{ devices: import("./types").TruckDevice[]; count: number }>(
+    http<import("./gateQueue").TruckListEnvelope>(
       `/api/trucks?limit=${limit}${state ? `&state=${state}` : ""}`,
     ),
   reroute: (
@@ -2190,8 +2194,10 @@ export const api = {
       count: number;
       cameras: import("./securevision").SvCameraMapping[];
     }>("/api/sv/cameras"),
-  svAnalyses: (limit = 50) =>
-    http<import("./securevision").SvAnalysisList>(`/api/sv/analyses?limit=${limit}`),
+  svAnalyses: (limit = 50, offset = 0) =>
+    http<import("./securevision").SvAnalysisList>(
+      `/api/sv/analyses?limit=${limit}&offset=${offset}`,
+    ),
   svUploadVideo: (file: File, cameraCode: string) => {
     const f = new FormData();
     f.append("file", file);

@@ -15,8 +15,6 @@ import { CalciteSheet } from "@esri/calcite-components-react";
 import { AlertTriangle, Bell, BellOff, ChevronRight, Search, X } from "lucide-react";
 import { getAdapter } from "@/data";
 import { useSocket } from "@/hooks/SocketContext";
-import { useTourStore } from "@/whatif/useTourStore";
-import { getScript } from "@/whatif/scenarioScripts";
 import type { Alert } from "@/lib/types";
 import { Spinner } from "@/components/ui/misc";
 import { AlertEvidenceDialog } from "@/components/AlertEvidenceDialog";
@@ -57,18 +55,16 @@ function NotificationBell({ alerts, loading }: { alerts: Alert[]; loading: boole
   const [seen, setSeen] = useState<Set<string>>(() => new Set());
   const [evidence, setEvidence] = useState<Alert | null>(null);
 
-  // The guided tour rings an alert card (a "dom" target like "alert-WRONG_WAY");
-  // force the drawer open during those steps so the tagged element is mounted.
-  const tour = useTourStore();
-  const alertStepActive = useMemo(() => {
-    if (!tour.scenarioId) return false;
-    const tgt = getScript(tour.scenarioId)?.steps[tour.stepIndex]?.target;
-    return (
-      tgt?.kind === "dom" && typeof tgt.selector === "string" && tgt.selector.startsWith("alert-")
-    );
-  }, [tour.scenarioId, tour.stepIndex]);
-
-  const expanded = open || alertStepActive;
+  // The alerts drawer is USER-OWNED state: it opens when the operator opens it
+  // and closes when they close it. It used to be force-opened whenever a guided
+  // What-If step targeted an "alert-*" coach-mark, with outside-click and Escape
+  // disabled so the ring could not be dismissed. That made the drawer appear on
+  // its own, and — because a script's LAST step can be an alert step, at which
+  // point the tour stops advancing and stays on it — the modal sheet stayed open
+  // and swallowed every click behind it, including the What-If Run button (a
+  // second scenario run looked like it hung). A coach-mark that cannot find its
+  // target simply skips; blocking the whole console is never the right trade.
+  const expanded = open;
   const unread = useMemo(() => alerts.filter((a) => !seen.has(alertKey(a))).length, [alerts, seen]);
 
   // Opening the drawer marks everything currently shown as read.
@@ -137,9 +133,6 @@ function NotificationBell({ alerts, loading }: { alerts: Alert[]; loading: boole
         displayMode="overlay"
         widthScale="s"
         style={{ "--calcite-sheet-width": "412px" } as unknown as React.CSSProperties}
-        // Keep the drawer pinned open while the guided tour is ringing an alert.
-        outsideCloseDisabled={alertStepActive || undefined}
-        escapeDisabled={alertStepActive || undefined}
         onCalciteSheetClose={() => setOpen(false)}
       >
         <div className="flex h-full w-full flex-col bg-muted/30 text-foreground">

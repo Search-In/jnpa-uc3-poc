@@ -149,6 +149,19 @@ def test_stale_memo_expires_and_the_old_ladder_returns():
     assert "hint" in out
 
 
+def test_a_genuinely_empty_live_queue_is_not_marked_degraded():
+    """The state the Driver-Advisory UI must be able to trust: the sim ANSWERED
+    and nobody is queueing. It has to be distinguishable from the unanswerable
+    case above (same count: 0), which is why the client reads the envelope and
+    not just `devices` — see web/src/lib/gateQueue.ts."""
+    gw = _gw(_Resp(200, {"count": 0, "devices": [], "filter_state": "AT_GATE_QUEUE"}))
+    out = _list(gw)
+    assert out["devices"] == []
+    assert out["degraded"] is False
+    assert out["state_filter_supported"] is True
+    assert out["decision_path"] == TruckPath.PRIMARY.value
+
+
 def test_memo_is_scoped_per_state_and_limit():
     """An AT_GATE_QUEUE memo must never answer an EN_ROUTE query."""
     gw = _gw(_Resp(200, dict(LIVE_BODY)))

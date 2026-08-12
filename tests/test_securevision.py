@@ -641,7 +641,9 @@ def test_router_face_status_and_health_never_leak_the_roster():
     health = client.get("/api/sv/health").json()
     assert health["status"] == "LIVE"
     assert health["mode"] == "UPLOAD_CLIP_ANALYTICS"
-    assert health["persistence"] == "NONE"
+    # Upload METADATA is durable since migration 0143 (core.video_analysis);
+    # detection results and any person/face payload remain unstored.
+    assert health["persistence"] == "ANALYSIS_METADATA"
     assert "password" not in json.dumps(health).lower()
 
 

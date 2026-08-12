@@ -171,6 +171,16 @@ class FakePerformanceRepo:
         return [{"terminal_code": "NSFT", "cycle": "IMPORT", "weather": "NORMAL",
                  "dwell_hours": 22.8}]
 
+    async def origin_coverage(self):
+        # Mirrors the live RDS shape: the API-sourced corpus holds report dates
+        # but no headline figures; the manually-imported corpus holds both.
+        return [
+            {"data_origin": "API", "reports": 24, "metric_reports": 0,
+             "date_from": "2026-07-11", "date_to": "2026-08-07"},
+            {"data_origin": "MANUAL", "reports": 54, "metric_reports": 54,
+             "date_from": "2026-02-01", "date_to": "2026-05-26"},
+        ]
+
 
 @pytest.fixture()
 def client():
@@ -266,6 +276,75 @@ def test_stats_overview(client):
     assert r.status_code == 200
     body = r.json()
     assert body["days"] == 1 and body["daily"][0]["total_teus"] == 33603.0
+
+
+# --------------------------------------------------------------- coverage
+# Regression cover for "Performance & Daily Reports shows — everywhere". The
+# console defaults to the LIVE data source, which narrows every perf read to
+# data_origin='API'; on the live RDS those rows carry report DATES but NULL
+# figures, so the board had nothing to render and no way to say why. /stats now
+# reports which provenance holds what, additively.
+def test_stats_reports_the_applied_origin_and_coverage(client):
+    live = client.get("/api/performance/stats", headers={"X-Data-Mode": "LIVE"})
+    assert live.status_code == 200
+    body = live.json()
+    assert body["data_origin"] == "API"
+    by_origin = {c["data_origin"]: c for c in body["coverage"]}
+    assert by_origin["API"]["metric_reports"] == 0        # dates but no figures
+    assert by_origin["MANUAL"]["metric_reports"] == 54    # where the figures are
+    # The pre-existing keys are untouched — this is an additive contract change.
+    assert set(body) >= {"daily", "latest_kpi", "days"}
+
+
+def test_stats_without_a_source_header_is_unfiltered(client):
+    body = client.get("/api/performance/stats").json()
+    assert body["data_origin"] is None
+
+
+def test_demo_mode_maps_to_the_manual_corpus(client):
+    body = client.get("/api/performance/stats", headers={"X-Data-Mode": "DEMO"}).json()
+    assert body["data_origin"] == "MANUAL"
+
+
+def test_a_repository_without_coverage_still_answers(client, monkeypatch):
+    """Backward compatibility: coverage is informational, never load-bearing."""
+    from gateway.routers import performance as prouter
+
+    class _NoCoverage(FakePerformanceRepo):
+        async def origin_coverage(self):
+            raise RuntimeError("column does not exist")
+
+    fake = PerformanceService(repository=_NoCoverage())
+    prouter_app = client.app
+    prouter_app.dependency_overrides[prouter.get_service] = lambda: fake
+    body = client.get("/api/performance/stats").json()
+    assert body["coverage"] == []
+    assert body["days"] == 1                       # the real payload still lands
+
+
+def test_null_metrics_are_reported_as_null_never_zero(client):
+    """The LIVE situation, asserted: a missing figure must not become a 0 — a
+    zero is a measurement, and the port did not report one."""
+    from gateway.routers import performance as prouter
+
+    class _AllNull(FakePerformanceRepo):
+        async def kpi(self, report_date, data_origin=None):
+            return {"report_date": "2026-08-07", "prev_report_date": None,
+                    "metrics": {"total_teus": None, "total_tonnes": None,
+                                "vessel_calls": None, "yard_occupancy_pct": None,
+                                "gate_total_teus": None, "total_pendency_teus": None},
+                    "deltas": {}}
+
+        async def daily_series(self, date_from, date_to, data_origin=None):
+            return [{"day": "2026-08-07", "total_teus": None, "gate_in_teus": None,
+                     "gate_out_teus": None, "yard_occupancy_pct": None}]
+
+    client.app.dependency_overrides[prouter.get_service] = (
+        lambda: PerformanceService(repository=_AllNull()))
+    body = client.get("/api/performance/stats", headers={"X-Data-Mode": "LIVE"}).json()
+    assert body["latest_kpi"]["metrics"]["total_teus"] is None
+    assert body["daily"][0]["total_teus"] is None
+    assert all(v is None for v in body["latest_kpi"]["metrics"].values())
 
 
 # =====================================================================

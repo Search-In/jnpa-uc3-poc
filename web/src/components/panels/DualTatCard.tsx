@@ -83,7 +83,7 @@ export default function DualTatCard() {
           <Timer className="h-4 w-4 shrink-0" aria-hidden />
           Turn Around Time Inside Port
         </h3>
-        {d && <StatusChip label={`${d.render_rule.ref} — shown as a pair`} tone="info" />}
+        {d && <StatusChip label="Shown as a pair" tone="info" />}
       </div>
 
       {q.isLoading && (

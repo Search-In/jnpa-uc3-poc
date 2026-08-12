@@ -260,9 +260,7 @@ export default function VehicleRegistry() {
                 {summary.data.assumption_text}{" "}
                 <span className="text-foreground">
                   Seed <span className="font-mono">{summary.data.seed}</span>.
-                </span>{" "}
-                Full entry: <span className="font-mono">docs/ASSUMPTIONS.md</span> §
-                {summary.data.assumption_ref}.
+                </span>
               </p>
             )}
           </div>

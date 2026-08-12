@@ -72,6 +72,55 @@ class PerformanceRepository:
                 "WHERE report_date < :d"), {"d": d})).mappings().first()
         return r["d"] if r and r["d"] else None
 
+    async def origin_coverage(self) -> list[dict]:
+        """Report coverage per provenance: {data_origin, reports, from, to}.
+
+        The dashboards default to the LIVE (``data_origin='API'``) corpus, and
+        every perf read is narrowed by that filter. When the API feed carries a
+        report DATE but no KPI VALUES — which is the live situation: the JNPA
+        daily-report API publishes vessels-on-berth and yard inventory only, so
+        throughput/gate/occupancy/pendency arrive NULL — the Overview has nothing
+        to render and, with no way to tell why, it printed an em-dash in every
+        card. This tells the caller what each provenance actually holds so the
+        UI can say "no API-sourced figures for this period; N manually-imported
+        reports are available" instead of a silent blank.
+
+        ``metric_reports`` counts report dates that carry at least ONE headline
+        KPI value, which is the number the operator cares about — a date with a
+        row but no figures cannot populate the board.
+        """
+        sql = """
+            SELECT s.data_origin AS data_origin,
+                   count(*)                                   AS reports,
+                   min(s.report_date)                         AS date_from,
+                   max(s.report_date)                         AS date_to,
+                   count(*) FILTER (
+                     WHERE tr.total_teus IS NOT NULL
+                        OR st.yard_occupancy_pct IS NOT NULL
+                        OR st.gate_total_teus IS NOT NULL
+                        OR st.icd_pendency_teus IS NOT NULL
+                        OR st.cfs_pendency_teus IS NOT NULL
+                   )                                          AS metric_reports
+              FROM core.perf_daily_snapshot s
+              LEFT JOIN core.perf_daily_traffic tr
+                     ON tr.report_date = s.report_date
+                    AND tr.terminal_code = 'JN_PORT' AND tr.period = 'DAY'
+                    AND tr.data_origin = s.data_origin
+              LEFT JOIN core.perf_daily_terminal_status st
+                     ON st.report_date = s.report_date
+                    AND st.terminal_code = 'TOTAL'
+                    AND st.data_origin = s.data_origin
+             GROUP BY s.data_origin
+             ORDER BY s.data_origin
+        """
+        async with get_engine(self._dsn).connect() as conn:
+            rows = (await conn.execute(text(sql))).mappings().all()
+        return [{"data_origin": r["data_origin"], "reports": int(r["reports"]),
+                 "metric_reports": int(r["metric_reports"]),
+                 "date_from": str(r["date_from"]) if r["date_from"] else None,
+                 "date_to": str(r["date_to"]) if r["date_to"] else None}
+                for r in rows]
+
     async def report_dates(self, limit: int = 60) -> list[str]:
         async with get_engine(self._dsn).connect() as conn:
             rows = (await conn.execute(text(

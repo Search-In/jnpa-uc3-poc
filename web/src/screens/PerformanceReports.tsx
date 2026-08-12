@@ -48,6 +48,7 @@ import { Card } from "@/components/ui/card";
 import { STATUS } from "@/lib/tokens";
 import { authEnabled, getRole } from "@/lib/auth";
 import UploadPanel from "@/screens/perf/UploadPanel";
+import { alternativeHint, derivePerfOverviewState, hasAnySeriesValue } from "@/lib/perfOverview";
 
 const POLL_MS = 30_000;
 
@@ -204,20 +205,53 @@ function OverviewTab() {
     queryFn: () => api.perfStats(),
     refetchInterval: POLL_MS,
   });
+  // Loading / failed / no-reports / no-figures / real values are five different
+  // answers; rendering "—" for all five is what made this board unreadable.
+  const view = derivePerfOverviewState({
+    isLoading: statsQ.isLoading,
+    isError: statsQ.isError,
+    data: statsQ.data,
+  });
   const m = statsQ.data?.latest_kpi?.metrics ?? {};
   const d = statsQ.data?.latest_kpi?.deltas ?? {};
   const kpiLoading = statsQ.isLoading;
+  const altHint = alternativeHint(view.alternative);
 
+  // NULL stays NULL. Coercing a missing figure to 0 drew a flat line along the
+  // axis that reads as "the port handled nothing that day" — a measurement the
+  // report never made. Recharts simply leaves a gap for null.
   const series = (statsQ.data?.daily ?? []).map((r) => ({
     day: r.day.slice(5),
-    teus: r.total_teus ?? 0,
-    gate_in: r.gate_in_teus ?? 0,
-    gate_out: r.gate_out_teus ?? 0,
-    occ: r.yard_occupancy_pct ?? 0,
+    teus: r.total_teus,
+    gate_in: r.gate_in_teus,
+    gate_out: r.gate_out_teus,
+    occ: r.yard_occupancy_pct,
   }));
+  const seriesHasValues = hasAnySeriesValue(statsQ.data?.daily);
 
   return (
     <div className="flex flex-col gap-4">
+      {/* One honest statement of what the board is showing. Never an auto-switch
+          to another data source: the operator chooses the source, and a LIVE
+          board must not quietly serve manually-imported figures. */}
+      {view.status === "error" && (
+        <Card className="border-severity-critical/40 p-3" role="alert">
+          <p className="text-sm font-medium" style={{ color: STATUS.critical }}>
+            {view.message}
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">{(statsQ.error as Error)?.message}</p>
+          <button type="button" className={`${BTN} mt-2`} onClick={() => void statsQ.refetch()}>
+            Retry
+          </button>
+        </Card>
+      )}
+      {(view.status === "no-metrics" || view.status === "no-reports") && (
+        <Card className="p-3" role="status">
+          <p className="text-sm font-medium text-foreground">{view.message}</p>
+          {altHint && <p className="mt-1 text-xs text-muted-foreground">{altHint}</p>}
+        </Card>
+      )}
+
       <StatGrid className="lg:grid-cols-4 xl:grid-cols-7">
         <StatCard
           icon={Container}
@@ -283,34 +317,38 @@ function OverviewTab() {
             JN Port container TEUs — daily trend
           </h2>
           <div className="h-[280px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={series} margin={{ top: 6, right: 10, bottom: 0, left: -12 }}>
-                <defs>
-                  <linearGradient id="teuGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={STATUS.info} stopOpacity={0.5} />
-                    <stop offset="100%" stopColor={STATUS.info} stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(215 20% 90%)" />
-                <XAxis
-                  dataKey="day"
-                  tick={CHART_AXIS}
-                  interval="preserveStartEnd"
-                  minTickGap={28}
-                />
-                <YAxis tick={CHART_AXIS} width={44} />
-                <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
-                <Area
-                  type="monotone"
-                  dataKey="teus"
-                  name="TEUs"
-                  stroke={STATUS.info}
-                  fill="url(#teuGrad)"
-                  strokeWidth={2}
-                  isAnimationActive={false}
-                />
-              </AreaChart>
-            </ResponsiveContainer>
+            {!seriesHasValues ? (
+              <ChartEmpty loading={statsQ.isLoading} message={view.message} />
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={series} margin={{ top: 6, right: 10, bottom: 0, left: -12 }}>
+                  <defs>
+                    <linearGradient id="teuGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={STATUS.info} stopOpacity={0.5} />
+                      <stop offset="100%" stopColor={STATUS.info} stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(215 20% 90%)" />
+                  <XAxis
+                    dataKey="day"
+                    tick={CHART_AXIS}
+                    interval="preserveStartEnd"
+                    minTickGap={28}
+                  />
+                  <YAxis tick={CHART_AXIS} width={44} />
+                  <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
+                  <Area
+                    type="monotone"
+                    dataKey="teus"
+                    name="TEUs"
+                    stroke={STATUS.info}
+                    fill="url(#teuGrad)"
+                    strokeWidth={2}
+                    isAnimationActive={false}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            )}
           </div>
         </Card>
         <Card className="p-3">
@@ -318,37 +356,51 @@ function OverviewTab() {
             Gate movements — daily IN / OUT (TEUs)
           </h2>
           <div className="h-[280px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={series} margin={{ top: 6, right: 10, bottom: 0, left: -12 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(215 20% 90%)" />
-                <XAxis
-                  dataKey="day"
-                  tick={CHART_AXIS}
-                  interval="preserveStartEnd"
-                  minTickGap={28}
-                />
-                <YAxis tick={CHART_AXIS} width={44} />
-                <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
-                <Legend wrapperStyle={{ fontSize: 11 }} />
-                <Bar
-                  dataKey="gate_in"
-                  name="Gate IN"
-                  fill={STATUS.ok}
-                  radius={[2, 2, 0, 0]}
-                  isAnimationActive={false}
-                />
-                <Bar
-                  dataKey="gate_out"
-                  name="Gate OUT"
-                  fill={STATUS.warning}
-                  radius={[2, 2, 0, 0]}
-                  isAnimationActive={false}
-                />
-              </BarChart>
-            </ResponsiveContainer>
+            {!seriesHasValues ? (
+              <ChartEmpty loading={statsQ.isLoading} message={view.message} />
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={series} margin={{ top: 6, right: 10, bottom: 0, left: -12 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(215 20% 90%)" />
+                  <XAxis
+                    dataKey="day"
+                    tick={CHART_AXIS}
+                    interval="preserveStartEnd"
+                    minTickGap={28}
+                  />
+                  <YAxis tick={CHART_AXIS} width={44} />
+                  <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Bar
+                    dataKey="gate_in"
+                    name="Gate IN"
+                    fill={STATUS.ok}
+                    radius={[2, 2, 0, 0]}
+                    isAnimationActive={false}
+                  />
+                  <Bar
+                    dataKey="gate_out"
+                    name="Gate OUT"
+                    fill={STATUS.warning}
+                    radius={[2, 2, 0, 0]}
+                    isAnimationActive={false}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
           </div>
         </Card>
       </div>
+    </div>
+  );
+}
+/** A chart with nothing to plot says so, instead of drawing empty axes. */
+function ChartEmpty({ loading, message }: { loading: boolean; message: string | null }) {
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-1 text-center">
+      <p className="text-sm text-muted-foreground">
+        {loading ? "Loading report data…" : (message ?? "No data available for selected period.")}
+      </p>
     </div>
   );
 }

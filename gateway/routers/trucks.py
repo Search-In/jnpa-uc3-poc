@@ -15,6 +15,7 @@ The gateway keeps the most recent /checkin submissions in a small in-memory map
 from __future__ import annotations
 
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
@@ -67,6 +68,28 @@ TRUCK_LIST_TIMEOUT = httpx.Timeout(4.0, connect=1.5)
 LIST_CACHE_FRESH_S = 3.0
 LIST_CACHE_STALE_S = 600.0
 _LIST_CACHE: Dict[str, tuple[float, dict]] = {}
+
+
+def _trace_list(rid: str, rung: str, state: Optional[str], limit: int,
+                body: dict, t0: float, *, status: int = 200) -> dict:
+    """ONE structured line per fleet-list answer — the trace the intermittent
+    Driver-Advisory queue needs to be diagnosable in a running deployment.
+
+    A miss on this endpoint is invisible in aggregate metrics (it is a 200 with
+    an empty list), so the request id, the rung that answered, the count and the
+    latency are logged together. Grep `trucks_list_answer` to reconstruct a
+    session: every alternation between count=N and degraded=true shows up with
+    the probe latency that caused it.
+    """
+    log.info("trucks_list_answer", request_id=rid, endpoint="/api/trucks",
+             state=state, limit=limit, status=status,
+             count=body.get("count", len(body.get("devices") or [])),
+             degraded=bool(body.get("degraded")),
+             decision_path=body.get("decision_path"), source=body.get("source"),
+             rung=rung, state_filter_supported=body.get("state_filter_supported"),
+             latency_ms=round((time.perf_counter() - t0) * 1000, 1),
+             cache_age_s=body.get("cache_age_s"))
+    return body
 
 
 def _list_cache_get(key: str, max_age_s: float) -> Optional[tuple[float, dict]]:
@@ -292,12 +315,15 @@ async def list_trucks(
     if state:
         params["state"] = state
     cache_key = f"{state or 'ALL'}:{limit}"
+    # Correlates the trace lines of ONE request across the rungs it walked.
+    rid = uuid.uuid4().hex[:12]
+    t_req = time.perf_counter()
 
     # --- CACHED (fresh): a probe from the last ~3 s answers as LIVE would ----
     fresh = _list_cache_get(cache_key, LIST_CACHE_FRESH_S)
     if fresh is not None:
         REQUESTS.labels("trucks", "ok").inc()
-        return fresh[1]
+        return _trace_list(rid, "CACHED_FRESH", state, limit, fresh[1], t_req)
 
     # --- PRIMARY: the truck-sim control plane -------------------------------
     t0 = time.perf_counter()
@@ -316,10 +342,17 @@ async def list_trucks(
                 body.setdefault("degraded", False)
                 body.setdefault("state_filter_supported", True)
                 _LIST_CACHE[cache_key] = (time.monotonic(), body)
-            return body
-        log.info("trucks_list_miss", status=resp.status_code)
+            return _trace_list(rid, "PRIMARY", state, limit, body, t_req)
+        log.info("trucks_list_miss", request_id=rid, status=resp.status_code,
+                 latency_ms=round((time.perf_counter() - t0) * 1000, 1))
     except httpx.HTTPError as exc:
-        log.warning("trucks_list_unreachable", url=url, error=str(exc))
+        # The intermittency lives here: a busy truck-sim event loop can answer
+        # slower than TRUCK_LIST_TIMEOUT even though it is perfectly healthy.
+        # Log the exception CLASS and the elapsed time so a timeout is
+        # distinguishable from a refused connection at a glance.
+        log.warning("trucks_list_unreachable", request_id=rid, url=url,
+                    error=str(exc), error_class=type(exc).__name__,
+                    elapsed_ms=round((time.perf_counter() - t0) * 1000, 1))
 
     # --- CACHED (stale): the last GOOD payload, served marked, not silently --
     stale = _list_cache_get(cache_key, LIST_CACHE_STALE_S)
@@ -330,17 +363,20 @@ async def list_trucks(
             source="memo", source_state=SourceState.DEGRADED,
             detail={"age_s": round(age_s, 1)})
         REQUESTS.labels("trucks", "degraded").inc()
-        return {**body, "degraded": True, "decision_path": TruckPath.CACHED.value,
-                "source": "memo", "cache_age_s": round(age_s, 1)}
+        return _trace_list(rid, "CACHED_STALE", state, limit,
+                           {**body, "degraded": True,
+                            "decision_path": TruckPath.CACHED.value,
+                            "source": "memo", "cache_age_s": round(age_s, 1)}, t_req)
 
     # A state-filtered query cannot be answered by the rungs below (see above).
     if state:
         REQUESTS.labels("trucks", "degraded").inc()
-        return {"count": 0, "filter_state": state, "devices": [], "degraded": True,
-                "decision_path": None, "source": None,
-                "state_filter_supported": False,
-                "hint": "TruckState is only known to the truck-sim; start it to "
-                        "filter by state."}
+        return _trace_list(rid, "UNANSWERABLE", state, limit,
+                           {"count": 0, "filter_state": state, "devices": [],
+                            "degraded": True, "decision_path": None, "source": None,
+                            "state_filter_supported": False,
+                            "hint": "TruckState is only known to the truck-sim; "
+                                    "start it to filter by state."}, t_req)
 
     # --- SECONDARY: the persisted telemetry tail in RDS ---------------------
     devices = await _list_secondary_rds(gw, limit)

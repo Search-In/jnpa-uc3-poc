@@ -24,7 +24,7 @@ from jnpa_shared.iso6346 import is_valid_container_no
 from services.cargo.service import CUSTOMS_BLOCKS_RELEASE
 from jnpa_shared.logging import get_logger
 
-from .repository import ContainerJobRepository, JobConflict
+from .repository import ContainerJobRepository, CustomsFlagged, JobConflict
 
 log = get_logger("services.container_job.service")
 
@@ -47,6 +47,36 @@ TRANSITIONS: Dict[str, frozenset[str]] = {
 
 MOVE_TYPES = ("IMPORT_PICK", "EXPORT_DROP", "EMPTY_PICK", "EMPTY_DROP")
 
+
+def open_job_not_exists(master_column: str, *, job_column: str,
+                        alias: str = "j") -> tuple[str, dict]:
+    """``NOT EXISTS (open job on this resource)`` SQL fragment + bound params.
+
+    "Occupied" is a DATABASE fact about core.container_job_assignment, and it is
+    the SAME fact for a truck and for a driver: a row on this resource whose
+    status is not terminal. Both availability queries (gateway.fleet for
+    core.vehicle, gateway.enrollment for core.driver_identity) build their
+    exclusion from this ONE definition, derived from :data:`TERMINAL`, so a new
+    job status can never make a busy resource look free in one list and not the
+    other — and neither can drift from what assignment validation enforces.
+
+    Terminal statuses (COMPLETED / CANCELLED) are excluded from the correlation,
+    which is what frees the resource again when a job finishes. Note this is not
+    ``driver_id IS NULL``: a completed job keeps its driver_id and must not go on
+    occupying them.
+
+    ``master_column`` is the qualified column on the table being filtered (e.g.
+    ``core.vehicle.vehicle_id``); ``job_column`` is the assignment column it must
+    match. Both are code-supplied identifiers, never client input.
+    """
+    names = sorted(TERMINAL)
+    keys = [f"term{i}" for i in range(len(names))]
+    placeholders = ", ".join(f":{k}" for k in keys)
+    sql = (f"NOT EXISTS (SELECT 1 FROM core.container_job_assignment {alias} "
+           f"WHERE {alias}.{job_column} = {master_column} "
+           f"AND {alias}.status NOT IN ({placeholders}))")
+    return sql, dict(zip(keys, names))
+
 # Pseudo-status for the UC-II -> UC-III handover queue: a container UC-II has
 # RELEASED that no truck has been dispatched against yet. It is NOT a job status
 # (nothing with this value is ever written to core.container_job_assignment,
@@ -54,7 +84,7 @@ MOVE_TYPES = ("IMPORT_PICK", "EXPORT_DROP", "EMPTY_PICK", "EMPTY_DROP")
 # a released box is visible on the UC-III console before a job exists.
 PENDING_ASSIGNMENT = "PENDING_ASSIGNMENT"
 
-# "Flagged by customs" is not a status of its own — core.cargo.customs_status is
+# "Flagged by Customs" is not a status of its own — core.cargo.customs_status is
 # CHECKed to PENDING / CLEARED / HELD / UNDER_INSPECTION and nothing else. The
 # dispositions that mean customs has stopped this box are already defined ONCE,
 # in the cargo module, as the set that forbids a release; a truck may not be
@@ -65,7 +95,12 @@ PENDING_ASSIGNMENT = "PENDING_ASSIGNMENT"
 # is the state of most of the corpus. Assignment stays open on PENDING.
 CUSTOMS_FLAGGED = CUSTOMS_BLOCKS_RELEASE
 
-CUSTOMS_FLAGGED_MESSAGE = "Flagged by customs"
+# The reason line the operator sees, and the full sentence that explains it. Both
+# are returned by the API rather than left for each client to restate, so the
+# console, the driver PWA and a raw API caller all report the refusal identically.
+CUSTOMS_FLAGGED_MESSAGE = "Flagged by Customs"
+CUSTOMS_FLAGGED_DETAIL = ("Vehicle and driver assignment is blocked because this "
+                          "container is flagged by Customs.")
 
 # BUG-4: move types that may NOT be dispatched without an identified driver.
 # An import pick-up leaves the terminal with a laden box against a PIN/Form-13,
@@ -158,6 +193,31 @@ class ContainerJobService:
     def _ms(t0: float) -> float:
         return round((perf_counter() - t0) * 1000, 1)
 
+    # ================================================================== customs
+    async def _customs_refusal(self, container_number: str,
+                               customs_status: str) -> ValidationFailed:
+        """The ONE customs_flagged refusal, raised from every assignment path.
+
+        Looks the recorded remark up only here — on the refusal path, so the happy
+        path costs nothing — and logs the block as a structured event. The note is
+        reported when customs left one and omitted when it did not; the reason and
+        the explanatory message never depend on it, so an absent remark can never
+        produce a blank or confusing reason.
+        """
+        note = await self._repo.customs_note(container_number)
+        log.warning("assignment_blocked_customs_flagged",
+                    extra={"container_number": container_number,
+                           "customs_status": customs_status,
+                           "reason": CUSTOMS_FLAGGED_MESSAGE,
+                           "customs_note_recorded": note is not None})
+        return ValidationFailed(
+            "customs_flagged",
+            f"{CUSTOMS_FLAGGED_MESSAGE}: {note}" if note else CUSTOMS_FLAGGED_MESSAGE,
+            reason=CUSTOMS_FLAGGED_MESSAGE,
+            customs_status=customs_status, customs_note=note,
+            container_number=container_number,
+            message=CUSTOMS_FLAGGED_DETAIL)
+
     # ============================================================== validation
     async def validate_assignment(self, *, container_number: Optional[str],
                                   vehicle_id: Optional[str], vehicle_no: Optional[str],
@@ -210,17 +270,13 @@ class ContainerJobService:
                            "detail": "known to cargo lifecycle",
                            "lifecycle_status": cargo.get("lifecycle_status")})
 
-            # --- customs: a flagged box may not be dispatched at all
+            # --- customs: a flagged box may not be dispatched at all.
+            # This is the pre-flight read (it is also what /api/jobs/validate
+            # answers with). assign() re-runs the same rule under the cargo row
+            # lock, so a hold landing after this read still refuses the write.
             customs_status = str(cargo.get("customs_status") or "").upper()
             if customs_status in CUSTOMS_FLAGGED:
-                # The note is fetched only on the refusal path, so the happy path
-                # costs nothing. Absent remark -> no note, never a guessed reason.
-                note = await self._repo.customs_note(cn)
-                raise ValidationFailed(
-                    "customs_flagged",
-                    f"{CUSTOMS_FLAGGED_MESSAGE}: {note}" if note else CUSTOMS_FLAGGED_MESSAGE,
-                    customs_status=customs_status, customs_note=note,
-                    container_number=cn)
+                raise await self._customs_refusal(cn, customs_status)
             checks.append({"check": "customs", "ok": True,
                            "detail": f"customs_status={customs_status or 'UNKNOWN'}",
                            "customs_status": customs_status})
@@ -274,6 +330,19 @@ class ContainerJobService:
                                        f"driver {driver_id} is {driver.get('status')}")
             driver_licence = driver_licence or driver.get("license_no")
             checks.append({"check": "driver", "ok": True, "detail": f"{driver_id} ACTIVE"})
+
+            # --- driver must not already hold an open job.
+            # The symmetric half of the vehicle rule above, and the reason the
+            # availability list can be trusted: a driver submitted directly to
+            # the API — bypassing the dropdown entirely — is refused here, not
+            # merely hidden from the console. One person cannot drive two trucks.
+            open_d = await self._repo.open_job_for_driver(driver_id)
+            if open_d:
+                raise ValidationFailed("driver_already_assigned",
+                                       f"driver {driver_id} already holds open job "
+                                       f"#{open_d['id']} ({open_d['status']})",
+                                       job_id=open_d["id"])
+            checks.append({"check": "driver_availability", "ok": True, "detail": "no open job"})
 
         # --- PDP permit: the ACTUAL permit decides (never the licence date alone)
         permit = None
@@ -346,7 +415,13 @@ class ContainerJobService:
             "document_reference": document_reference, "terminal": terminal, "gate": gate,
             "assigned_by": actor, "actor_role": actor_role, "notes": notes,
         }
-        job = await self._repo.create_job(rec)
+        try:
+            job = await self._repo.create_job(rec, blocked_customs=CUSTOMS_FLAGGED)
+        except CustomsFlagged as exc:
+            # Customs stopped the box between the pre-flight read above and the
+            # INSERT. The transaction rolled back, so no job and no history row
+            # exist; the operator gets the same refusal the pre-flight raises.
+            raise await self._customs_refusal(exc.container_number, exc.customs_status) from exc
         await self._publish(EVENT_ASSIGNED, job)
         log.info("job.assigned", extra={"job_id": job["id"], "container": job["container_number"],
                                         "vehicle": job["vehicle_id"], "ms": self._ms(t0)})
@@ -701,6 +776,12 @@ class ContainerJobService:
         """Vehicle IDs holding a non-terminal job — the real "truck is busy" set
         used by the Control-Room availability dropdown (BUG-1)."""
         return await self._repo.vehicles_with_open_jobs()
+
+    async def drivers_with_open_jobs(self) -> set:
+        """Driver IDs holding a non-terminal job — the "driver is busy" set, the
+        exact counterpart of :meth:`vehicles_with_open_jobs`, used by the
+        Control-Room driver availability list."""
+        return await self._repo.drivers_with_open_jobs()
 
     async def assignment_for_container(self, container_number: str) -> Optional[Dict[str, Any]]:
         job = await self._repo.latest_job_for_container(container_number.strip().upper())

@@ -91,9 +91,13 @@ export default function JobAssignPanel({
     queryKey: ["uc3-available-vehicles"],
     queryFn: () => api.availableVehicles(undefined, 200),
   });
+  // Availability is decided by the DATABASE, not here: /api/identity/drivers/available
+  // returns only ACTIVE drivers with no open container job. An occupied driver is
+  // never delivered to this component, so there is nothing to filter out below —
+  // and nothing a client-side check could get wrong.
   const driversQ = useQuery({
-    queryKey: ["uc3-active-drivers"],
-    queryFn: () => api.activeDrivers(),
+    queryKey: ["uc3-available-drivers"],
+    queryFn: () => api.availableDrivers(undefined, 200),
   });
   // /api/vehicles/available now excludes trucks holding an open job server-side
   // (BUG-1). This stays as a belt-and-braces cross-filter: the two queries are
@@ -140,9 +144,19 @@ export default function JobAssignPanel({
   // truck clears the driver; the operator can still override the selection
   // afterwards, and this does not fight them because it only re-runs when the
   // selected VEHICLE changes.
+  const freeDriverIds = useMemo(() => new Set(drivers.map((d) => d.driver_id)), [drivers]);
+  // A truck can be free while the driver bound to it is out on ANOTHER truck's
+  // job (the binding is an enrollment fact, the job is not). `available_total`
+  // says whether the page is the whole answer, so a driver missing from a
+  // truncated page is not mistaken for an occupied one.
+  const driversComplete = (driversQ.data?.available_total ?? 0) <= drivers.length;
+  const boundDriverFree = selectedVehicle?.driver_id
+    ? freeDriverIds.has(selectedVehicle.driver_id) || !driversComplete
+    : false;
+
   useEffect(() => {
-    setDriverId(selectedVehicle?.driver_id ?? NONE);
-  }, [vehicleId, selectedVehicle?.driver_id]);
+    setDriverId(boundDriverFree ? (selectedVehicle?.driver_id ?? NONE) : NONE);
+  }, [vehicleId, boundDriverFree, selectedVehicle?.driver_id]);
 
   const cn = container.trim().toUpperCase();
   const driverRequired = DRIVER_REQUIRED_MOVE_TYPES.has(moveType);
@@ -203,6 +217,7 @@ export default function JobAssignPanel({
       // stepper so the operator continues straight into Accept.
       qc.invalidateQueries({ queryKey: ["uc3-jobs"] });
       qc.invalidateQueries({ queryKey: ["uc3-available-vehicles"] });
+      qc.invalidateQueries({ queryKey: ["uc3-available-drivers"] });
       onAssigned?.(res.job.id);
       setContainer("");
       setVehicleId(NONE);
@@ -239,19 +254,26 @@ export default function JobAssignPanel({
         label: `${d.name ?? d.driver_id}${d.license_no ? ` — ${d.license_no}` : " — no licence on file"}`,
       })),
     ];
-    // The driver bound to the selected truck must always be selectable, even if
-    // the enrollment master (/api/identity/drivers) has not listed them — without
-    // this the auto-selected value would have no matching option and the select
-    // would silently render blank.
+    // The driver bound to the selected truck is offered even when the page did
+    // not reach them — but ONLY if availability says they are free. A bound
+    // driver who is out on another truck's job is deliberately not spliced back
+    // in: re-admitting them here would put an occupied driver in the dropdown,
+    // which is exactly what the availability query exists to prevent.
     const bound = selectedVehicle?.driver_id;
-    if (bound && !opts.some((o) => o.value === bound)) {
+    if (bound && boundDriverFree && !opts.some((o) => o.value === bound)) {
       opts.splice(1, 0, {
         value: bound,
         label: `${selectedVehicle?.driver_name ?? bound} — assigned to this truck`,
       });
     }
     return opts;
-  }, [drivers, driverRequired, selectedVehicle?.driver_id, selectedVehicle?.driver_name]);
+  }, [
+    drivers,
+    driverRequired,
+    boundDriverFree,
+    selectedVehicle?.driver_id,
+    selectedVehicle?.driver_name,
+  ]);
 
   // A 403 here means the signed-in role may raise jobs but not read the masters.
   const mastersForbidden =
@@ -326,7 +348,12 @@ export default function JobAssignPanel({
           {/* --------------------------------------------------------- driver */}
           <label className="flex flex-col gap-1.5">
             <span className="text-xs font-medium text-muted-foreground">
-              {driverRequired ? "Driver (required)" : "Driver (optional)"}
+              {driverRequired ? "Driver (required)" : "Driver (optional)"}{" "}
+              {driversQ.isSuccess ? (
+                <span className="text-muted-foreground/70">
+                  ({driversQ.data.available_total} available)
+                </span>
+              ) : null}
             </span>
             {driversQ.isLoading ? (
               <LoadingState label="Loading drivers…" />
@@ -345,9 +372,14 @@ export default function JobAssignPanel({
             )}
             {/* Say WHY the driver is filled in / missing, so an operator never has
                 to guess whether the truck has a driver on file. */}
-            {vehicleId !== NONE && selectedVehicle?.driver_id ? (
+            {vehicleId !== NONE && selectedVehicle?.driver_id && boundDriverFree ? (
               <span className="text-xs text-muted-foreground">
                 Auto-selected from {vehicleLabel(selectedVehicle)}
+              </span>
+            ) : vehicleId !== NONE && selectedVehicle?.driver_id ? (
+              <span className="text-xs text-amber-600 dark:text-amber-500">
+                {selectedVehicle.driver_name ?? selectedVehicle.driver_id} is assigned to this truck
+                but is already on an open job — pick another driver.
               </span>
             ) : vehicleId !== NONE && driverRequired ? (
               <span className="text-xs text-amber-600 dark:text-amber-500">
@@ -410,10 +442,12 @@ export default function JobAssignPanel({
               >
                 <div className="flex items-center gap-2">
                   <ShieldAlert className="h-3.5 w-3.5 shrink-0 text-destructive" aria-hidden />
-                  <span className="font-medium text-foreground">{customs.message}</span>
+                  <span className="font-medium text-foreground">{customs.reason}</span>
                 </div>
-                {/* Only what customs recorded — no reason is invented when the
-                    remark is absent. */}
+                {/* Reason, explanation and note all come from the refusal itself,
+                    so the panel cannot drift from what the backend enforced. Only
+                    what customs recorded — no note is invented when absent. */}
+                <span className="pl-5 text-muted-foreground">{customs.message}</span>
                 {customs.note ? (
                   <span className="pl-5 text-muted-foreground">Customs note: {customs.note}</span>
                 ) : null}

@@ -591,6 +591,92 @@ async def list_active_drivers(dsn: str) -> List[dict]:
             for d in _MEM_DRIVERS.values() if d.get("status") == "ACTIVE"]
 
 
+# ---------------------------------------------------------------- availability
+# "Free to take a NEW container job" is a DATABASE fact about
+# core.container_job_assignment — the same fact for a driver as for a truck. The
+# exclusion is therefore a correlated NOT EXISTS built from the job module's own
+# status vocabulary (services.container_job.service.open_job_not_exists, which
+# gateway.fleet uses for core.vehicle), never a set subtracted in Python and
+# never a filter applied by the client. It is NOT ``driver_id IS NULL``: a
+# COMPLETED or CANCELLED job keeps its driver_id and must free the driver again.
+_DRIVER_COLS = "driver_id, name, license_no, photo_url"
+
+
+def _assignable_drivers_where(q: Optional[str]) -> tuple[str, dict]:
+    """WHERE clause for ACTIVE drivers with no open job, plus the ``q`` search.
+
+    The search is applied in the SAME clause as the availability rule, so a
+    search for an occupied driver returns nothing rather than returning them and
+    leaving the caller to filter."""
+    from services.container_job.service import open_job_not_exists
+
+    pred, params = open_job_not_exists("core.driver_identity.driver_id",
+                                       job_column="driver_id")
+    clauses = ["status = :st", pred]
+    params["st"] = ACTIVE
+    needle = (q or "").strip().upper()
+    if needle:
+        clauses.append("(UPPER(driver_id) LIKE :needle OR "
+                       "UPPER(COALESCE(name, '')) LIKE :needle OR "
+                       "UPPER(COALESCE(license_no, '')) LIKE :needle)")
+        params["needle"] = f"%{needle}%"
+    return "WHERE " + " AND ".join(clauses), params
+
+
+def _mem_assignable_drivers(occupied: set, q: Optional[str]) -> List[dict]:
+    """Same rule for the in-memory identity backend, which has no job table to
+    join against and so is handed the busy set by the caller."""
+    needle = (q or "").strip().upper()
+    out = []
+    for d in _MEM_DRIVERS.values():
+        did = d.get("driver_id")
+        if not did or d.get("status") != ACTIVE or did in (occupied or set()):
+            continue
+        if needle and not any(needle in (str(d.get(f) or "")).upper()
+                              for f in ("driver_id", "name", "license_no")):
+            continue
+        out.append({"driver_id": did, "name": d.get("name"),
+                    "license_no": d.get("license_no"), "photo_url": d.get("photo_url")})
+    out.sort(key=lambda r: (r.get("name") or "").upper())
+    return out
+
+
+async def list_assignable_drivers(dsn: str, *, q: Optional[str] = None,
+                                  limit: int = 50,
+                                  occupied: Optional[set] = None) -> List[dict]:
+    """ACTIVE master drivers with NO open container job — the Assign-Job driver
+    dropdown source, and the counterpart of :func:`fleet.list_assignable`.
+
+    The exclusion is a JOIN, not a second round-trip subtracted in Python, so the
+    LIMIT applies to drivers who are genuinely free and the page can never be
+    padded with occupied ones. ``occupied`` is used ONLY by the in-memory backend."""
+    if await _backend(dsn) == "db":
+        from jnpa_shared.db import fetch_all
+
+        where, params = _assignable_drivers_where(q)
+        params["lim"] = limit
+        rows = await fetch_all(
+            f"SELECT {_DRIVER_COLS} FROM core.driver_identity {where} "
+            "ORDER BY name LIMIT :lim", params, dsn=dsn)
+        return [dict(r) for r in rows]
+    return _mem_assignable_drivers(occupied or set(), q)[:limit]
+
+
+async def count_assignable_drivers(dsn: str, *, q: Optional[str] = None,
+                                   occupied: Optional[set] = None) -> int:
+    """How many drivers are actually assignable right now — the number the
+    "Driver (N available)" label must show. Counted in the database so it is not
+    capped by the page ``limit`` the dropdown happens to request."""
+    if await _backend(dsn) == "db":
+        from jnpa_shared.db import fetch_one
+
+        where, params = _assignable_drivers_where(q)
+        row = await fetch_one(
+            f"SELECT count(*) AS n FROM core.driver_identity {where}", params, dsn=dsn)
+        return int((row or {}).get("n") or 0)
+    return len(_mem_assignable_drivers(occupied or set(), q))
+
+
 # Open enrollment states that still "hold" an assigned vehicle (not yet resolved).
 _OPEN_ENROL_STATES = (PENDING, REENROLL)
 

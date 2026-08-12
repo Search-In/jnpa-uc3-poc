@@ -23,7 +23,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from gateway.routers import container_job as R
-from services.container_job import ContainerJobService, JobConflict, ValidationFailed
+from services.container_job import (ContainerJobService, CustomsFlagged, JobConflict,
+                                    ValidationFailed)
 from services.container_job.service import normalize_plate
 
 
@@ -89,6 +90,9 @@ class FakeRepo:
             {"machine_code": "M-INNSA1SDMB01", "machine_class": "MOBILE",
              "machine_type": "M", "location_code": "INNSA1SDMB01", "active": True},
         ]
+        # Set by a test to run one callback inside create_job, i.e. after the
+        # pre-flight validation and before the write (see test_customs_hold_...).
+        self.on_create = None
         self.rms = {"BWLU9101815": {"container_no": "BWLU9101815", "igm_no": 1191409,
                                     "machine_type": "D", "scan_location": "INNSA1RSDT02",
                                     "cfs_name": "CLP", "machine_code": "D-INNSA1RSDT02",
@@ -115,6 +119,11 @@ class FakeRepo:
     async def open_job_for_vehicle(self, vid):
         return next((j for j in self.jobs.values()
                      if j["vehicle_id"] == vid and j["status"] not in ("COMPLETED", "CANCELLED")), None)
+
+    async def open_job_for_driver(self, did):
+        return next((j for j in self.jobs.values()
+                     if j.get("driver_id") == did
+                     and j["status"] not in ("COMPLETED", "CANCELLED")), None)
 
     async def open_job_for_container(self, cn):
         return next((j for j in self.jobs.values()
@@ -145,7 +154,20 @@ class FakeRepo:
         return counts
 
     # -- writes
-    async def create_job(self, rec):
+    async def create_job(self, rec, *, blocked_customs=frozenset()):
+        """Mirrors the real repository's ONE transaction, including the customs
+        re-read it performs under the cargo row lock before inserting anything.
+
+        ``on_create`` lets a test act between the service's pre-flight check and
+        this write — the window a concurrent customs hold lands in."""
+        if self.on_create is not None:
+            hook, self.on_create = self.on_create, None
+            hook()
+        cn = (rec.get("container_number") or "").strip().upper() or None
+        if cn and blocked_customs:
+            cs = str((self.cargo.get(cn) or {}).get("customs_status") or "").upper()
+            if cs in blocked_customs:
+                raise CustomsFlagged(cn, cs)
         if await self.open_job_for_vehicle(rec["vehicle_id"]):
             raise JobConflict("vehicle_already_assigned", "vehicle already holds an open job")
         if rec.get("container_number") and await self.open_job_for_container(rec["container_number"]):
@@ -187,6 +209,10 @@ class FakeRepo:
 
     async def job_events(self, job_id):
         return [e for e in self.events if e["job_id"] == job_id]
+
+    async def drivers_with_open_jobs(self):
+        return {j["driver_id"] for j in self.jobs.values()
+                if j.get("driver_id") and j["status"] not in ("COMPLETED", "CANCELLED")}
 
     async def vehicles_with_open_jobs(self):
         return {j["vehicle_id"] for j in self.jobs.values()
@@ -917,6 +943,7 @@ def test_combined_pagination_is_contiguous(client, repo, released):
 # nothing yet and must NOT block a dispatch.
 from services.container_job.service import (  # noqa: E402
     CUSTOMS_FLAGGED,
+    CUSTOMS_FLAGGED_DETAIL,
     CUSTOMS_FLAGGED_MESSAGE,
 )
 
@@ -1006,3 +1033,304 @@ def test_customs_gate_does_not_displace_the_existing_validations(client, repo):
     repo.documents["MSCU1234566"] = {"form13": 1, "pin": 0, "eir": 0}
     assert client.post("/api/jobs", json=second).json()["detail"]["error"] \
         == "vehicle_already_assigned"
+
+
+# ------------------------------------------------ the customs refusal CONTRACT
+# POST /api/jobs is the ONLY endpoint that binds a truck and a driver to a
+# container, and it binds BOTH in one call (there is no vehicle-only or
+# driver-only assignment API — see gateway/routers/container_job.py). So "vehicle
+# assignment" and "driver assignment" are two halves of the same request, and the
+# tests below assert each half of the outcome rather than two endpoints.
+
+def _job_rows(repo: FakeRepo) -> list[dict]:
+    return list(repo.jobs.values())
+
+
+def test_customs_pending_allows_vehicle_assignment(client, repo):
+    _set_customs(repo, "PENDING")
+    r = client.post("/api/jobs", json=_ASSIGN)
+    assert r.status_code == 201, r.text
+    assert r.json()["job"]["vehicle_id"] == "TRK-000001"   # the truck IS bound
+
+
+def test_customs_pending_allows_driver_assignment(client, repo):
+    _set_customs(repo, "PENDING")
+    r = client.post("/api/jobs", json=_ASSIGN)
+    assert r.status_code == 201, r.text
+    job = r.json()["job"]
+    assert job["driver_id"] == "DRV-1"                     # the driver IS bound
+    assert job["driver_licence"] == "UP6420140008203"
+
+
+def test_customs_pending_allows_combined_assignment(client, repo):
+    """Both halves land on the one job row, and the dry-run agrees."""
+    _set_customs(repo, "PENDING")
+    assert client.post("/api/jobs/validate", json=_ASSIGN).status_code == 200
+    job = client.post("/api/jobs", json=_ASSIGN).json()["job"]
+    assert (job["vehicle_id"], job["driver_id"]) == ("TRK-000001", "DRV-1")
+
+
+@pytest.mark.parametrize("status", sorted(CUSTOMS_FLAGGED))
+def test_customs_flagged_blocks_vehicle_assignment(client, repo, status):
+    _set_customs(repo, status)
+    r = client.post("/api/jobs", json=_ASSIGN)
+    assert r.status_code == 400
+    assert r.json()["detail"]["error"] == "customs_flagged"
+    assert all(j.get("vehicle_id") != "TRK-000001" for j in _job_rows(repo))
+
+
+@pytest.mark.parametrize("status", sorted(CUSTOMS_FLAGGED))
+def test_customs_flagged_blocks_driver_assignment(client, repo, status):
+    _set_customs(repo, status)
+    assert client.post("/api/jobs", json=_ASSIGN).status_code == 400
+    assert all(j.get("driver_id") != "DRV-1" for j in _job_rows(repo))
+
+
+def test_customs_flagged_blocks_combined_assignment(client, repo):
+    """The write and the dry-run refuse identically, so the console can block
+    before submit without ever being the only thing that does."""
+    _set_customs(repo, "HELD")
+    write = client.post("/api/jobs", json=_ASSIGN)
+    dry = client.post("/api/jobs/validate", json=_ASSIGN)
+    assert write.status_code == dry.status_code == 400
+    assert write.json()["detail"] == dry.json()["detail"]
+    assert repo.jobs == {}
+
+
+def test_customs_flagged_returns_customs_reason(client, repo):
+    """The refusal names CUSTOMS as the reason in a field of its own — a client
+    must not have to parse a sentence to know why."""
+    _set_customs(repo, "HELD")
+    detail = client.post("/api/jobs", json=_ASSIGN).json()["detail"]
+    assert detail["reason"] == CUSTOMS_FLAGGED_MESSAGE == "Flagged by Customs"
+    assert detail["customs_status"] == "HELD"
+    assert detail["container_number"] == "MRKU5014206"
+    assert detail["message"] == CUSTOMS_FLAGGED_DETAIL
+
+
+def test_customs_flagged_returns_customs_note(client, repo):
+    """The remark customs actually recorded is passed through verbatim."""
+    _set_customs(repo, "UNDER_INSPECTION")
+    repo.scans.append({"container_number": "MRKU5014206", "result": "SCAN_HOLD",
+                       "remarks": "Documentation mismatch"})
+    detail = client.post("/api/jobs", json=_ASSIGN).json()["detail"]
+    assert detail["customs_note"] == "Documentation mismatch"
+    assert detail["reason"] == CUSTOMS_FLAGGED_MESSAGE           # unchanged by the note
+    assert detail["detail"] == f"{CUSTOMS_FLAGGED_MESSAGE}: Documentation mismatch"
+
+
+def test_customs_flagged_note_reads_the_customs_modules_own_remark(client, repo):
+    """services.customs.reconcile_cargo records its reason on the EXISTING cargo
+    notification feed, not as a scan remark. That is how most real holds arise, so
+    the refusal reads it too rather than reporting a null note."""
+    _set_customs(repo, "UNDER_INSPECTION")
+    repo.customs_notes["MRKU5014206"] = \
+        "Container MRKU5014206 selected by RMS for customs scanning."
+    detail = client.post("/api/jobs", json=_ASSIGN).json()["detail"]
+    assert detail["customs_note"] == "Container MRKU5014206 selected by RMS for customs scanning."
+
+
+def test_customs_flagged_without_note_uses_fallback_reason(client, repo):
+    """No remark on record -> still a clear reason, never a blank or a guess."""
+    _set_customs(repo, "HELD")
+    detail = client.post("/api/jobs", json=_ASSIGN).json()["detail"]
+    assert detail["customs_note"] is None
+    assert detail["reason"] == CUSTOMS_FLAGGED_MESSAGE
+    assert detail["message"] == CUSTOMS_FLAGGED_DETAIL
+    assert detail["detail"] == CUSTOMS_FLAGGED_MESSAGE           # nothing invented
+
+
+def test_blocked_assignment_does_not_persist_vehicle(client, repo):
+    _set_customs(repo, "HELD")
+    assert client.post("/api/jobs", json=_ASSIGN).status_code == 400
+    assert repo.jobs == {}
+    assert repo.events == []                                     # no history row either
+    # and the truck is still free for a box customs has NOT stopped
+    repo.seed_container("MSCU1234566", lifecycle_status="RELEASED",
+                        customs_status="CLEARED", is_released=True)
+    assert client.post("/api/jobs",
+                       json={**_ASSIGN, "container_number": "MSCU1234566"}).status_code == 201
+
+
+def test_blocked_assignment_does_not_persist_driver(client, repo):
+    _set_customs(repo, "UNDER_INSPECTION")
+    assert client.post("/api/jobs", json=_ASSIGN).status_code == 400
+    assert not any(j.get("driver_id") for j in _job_rows(repo))
+    # the driver holds no work: the PWA's own list (GET /api/jobs?driver_id=)
+    # is empty, so nothing was half-written for them either
+    assert client.get("/api/jobs", params={"driver_id": "DRV-1"}).json()["count"] == 0
+
+
+@pytest.mark.parametrize("status", ["CLEARED", "PENDING"])
+def test_customs_clear_preserves_existing_assignment_behavior(client, repo, status):
+    """CASE 4/5: a non-flagged disposition changes nothing — every pre-existing
+    rule still decides the outcome, in its own words."""
+    _set_customs(repo, status)
+    # an inactive truck is still refused for being inactive
+    assert client.post("/api/jobs", json={**_ASSIGN, "vehicle_id": "TRK-000002"}) \
+        .json()["detail"]["error"] == "vehicle_not_active"
+    # a cancelled PDP is still refused for the permit
+    assert client.post("/api/jobs", json={**_ASSIGN, "move_type": "EMPTY_PICK",
+                                          "driver_id": None,
+                                          "driver_licence": "RJ1920060721778"}) \
+        .json()["detail"]["error"] == "pdp_inactive"
+    # and a clean request still succeeds
+    assert client.post("/api/jobs", json=_ASSIGN).status_code == 201
+
+
+@pytest.mark.parametrize("value", [None, "", "SOMETHING_NEW"])
+def test_unknown_customs_status_is_not_treated_as_flagged(client, repo, value):
+    """CASE 5, documented decision: the gate is fail-OPEN on an unrecognised or
+    absent disposition, matching the cargo module's release gate, which blocks on
+    the named dispositions only. Most of the corpus carries no customs decision
+    at all; failing closed would stop dispatch on missing data rather than on a
+    customs act. Only HELD / UNDER_INSPECTION block."""
+    repo.cargo["MRKU5014206"]["customs_status"] = value
+    r = client.post("/api/jobs", json=_ASSIGN)
+    assert r.status_code == 201, r.text
+    checks = {c["check"]: c for c in r.json()["checks"]}
+    assert checks["customs"]["detail"] == f"customs_status={(value or '').upper() or 'UNKNOWN'}"
+
+
+def test_customs_hold_landing_after_validation_still_blocks_the_write(client, repo):
+    """The race the frontend cannot close: customs flags the box between the
+    pre-flight check and the INSERT. The write re-reads the disposition under the
+    cargo row lock, so the job is never created — and the caller gets the same
+    customs_flagged body, not a generic conflict."""
+    _set_customs(repo, "PENDING")                       # passes the pre-flight read
+
+    def customs_holds_it_now() -> None:
+        _set_customs(repo, "HELD")
+        repo.customs_notes["MRKU5014206"] = "Held pending examination"
+
+    repo.on_create = customs_holds_it_now               # fires inside create_job
+    r = client.post("/api/jobs", json=_ASSIGN)
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert detail["error"] == "customs_flagged"
+    assert detail["reason"] == CUSTOMS_FLAGGED_MESSAGE
+    assert detail["customs_status"] == "HELD"
+    assert detail["customs_note"] == "Held pending examination"
+    assert repo.jobs == {} and repo.events == []        # the transaction rolled back
+
+
+def test_refusal_body_carries_no_internals(client, repo):
+    """No stack trace, no SQL, no DSN — only the business facts."""
+    _set_customs(repo, "HELD")
+    r = client.post("/api/jobs", json=_ASSIGN)
+    assert set(r.json()["detail"]) == {
+        "error", "detail", "reason", "customs_status", "customs_note",
+        "container_number", "message"}
+    for leak in ("Traceback", "SELECT ", "postgresql", "asyncpg", "core.cargo"):
+        assert leak not in r.text
+
+
+# ================================ occupancy: the API is the enforcement point
+# The availability lists (tests/test_vehicle_availability.py,
+# tests/test_driver_availability.py) decide what the console OFFERS. These decide
+# what the backend ACCEPTS — the two must agree, and a request that never went
+# near a dropdown must be refused just the same.
+
+def await_(coro):
+    """Drain a coroutine from a sync test (the fake repo's reads are async)."""
+    import asyncio
+
+    return asyncio.get_event_loop_policy().new_event_loop().run_until_complete(coro)
+
+
+def _second_container(repo: FakeRepo, cn: str = "MSCU1234566") -> str:
+    repo.seed_container(cn, lifecycle_status="RELEASED", customs_status="PENDING",
+                        is_released=True)
+    return cn
+
+
+def test_assignment_rejects_an_occupied_vehicle_submitted_directly(client, repo):
+    """Acceptance 5 (vehicle): posted straight to the API, bypassing the dropdown."""
+    assert client.post("/api/jobs", json=_ASSIGN).status_code == 201
+    second = {**_ASSIGN, "container_number": _second_container(repo),
+              # a DIFFERENT driver, so the vehicle is the only thing occupied
+              "driver_id": None, "driver_licence": "UP6420140008203",
+              "move_type": "EMPTY_PICK"}
+    r = client.post("/api/jobs", json=second)
+    assert r.status_code == 400
+    assert r.json()["detail"]["error"] == "vehicle_already_assigned"
+    assert len(repo.jobs) == 1                       # nothing extra was written
+
+
+def test_assignment_rejects_an_occupied_driver_submitted_directly(client, repo):
+    """Acceptance 5 (driver): the half that did not exist — one person could be
+    dispatched on two trucks at once."""
+    assert client.post("/api/jobs", json=_ASSIGN).status_code == 201
+    repo.vehicles["TRK-000003"] = {"vehicle_id": "TRK-000003", "vehicle_no": "MH04AB1234",
+                                   "vehicle_type": "Container Truck", "status": "ACTIVE"}
+    second = {**_ASSIGN, "container_number": _second_container(repo),
+              "vehicle_id": "TRK-000003"}           # free truck, SAME driver
+    r = client.post("/api/jobs", json=second)
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert detail["error"] == "driver_already_assigned"
+    assert detail["job_id"] == 1
+    assert len(repo.jobs) == 1
+
+
+def test_driver_availability_check_appears_in_the_check_list(client, repo):
+    checks = {c["check"] for c in client.post("/api/jobs", json=_ASSIGN).json()["checks"]}
+    assert {"vehicle_availability", "driver_availability"} <= checks
+
+
+@pytest.mark.parametrize("terminal_state", ["COMPLETED", "CANCELLED"])
+def test_terminal_job_frees_both_the_vehicle_and_the_driver(client, repo, terminal_state):
+    """Acceptance 9: a COMPLETED / CANCELLED job must not occupy anyone for ever.
+
+    Occupancy is the job's STATE — note the finished job still carries its
+    driver_id, which is exactly why ``driver_id IS NULL`` would be the wrong
+    rule. Reached through the real transitions (a job cannot be completed
+    straight from ASSIGNED — see test_never_started_job_cannot_be_completed…)."""
+    job = client.post("/api/jobs", json=_ASSIGN).json()["job"]
+    if terminal_state == "COMPLETED":
+        client.post("/api/gate/events", json={"event_type": "GATE_IN", "plate": "MH43BX1488",
+                                              "job_id": job["id"]})
+        assert client.post(f"/api/jobs/{job['id']}/complete").status_code == 200
+    else:
+        assert client.post(f"/api/jobs/{job['id']}/cancel",
+                           json={"reason": "truck broke down"}).status_code == 200
+    assert repo.jobs[job["id"]]["status"] == terminal_state
+    assert repo.jobs[job["id"]]["driver_id"] == "DRV-1"   # history keeps the driver
+    assert await_(repo.drivers_with_open_jobs()) == set()
+    assert await_(repo.vehicles_with_open_jobs()) == set()
+    # and both can be assigned again
+    r = client.post("/api/jobs", json={**_ASSIGN, "container_number": _second_container(repo)})
+    assert r.status_code == 201, r.text
+
+
+def test_customs_pending_with_free_vehicle_and_driver_is_assigned(client, repo):
+    """Acceptance 6+7: the combination the ticket calls out — nothing blocks."""
+    _set_customs(repo, "PENDING")
+    r = client.post("/api/jobs", json=_ASSIGN)
+    assert r.status_code == 201, r.text
+    job = r.json()["job"]
+    assert (job["vehicle_id"], job["driver_id"]) == ("TRK-000001", "DRV-1")
+
+
+def test_customs_flagged_blocks_even_with_a_free_vehicle_and_driver(client, repo):
+    """Acceptance 8: availability is necessary, not sufficient. The customs gate
+    still answers first, and with its own reason."""
+    _set_customs(repo, "HELD")
+    detail = client.post("/api/jobs", json=_ASSIGN).json()["detail"]
+    assert detail["error"] == "customs_flagged"
+    assert detail["reason"] == CUSTOMS_FLAGGED_MESSAGE
+    assert repo.jobs == {}
+
+
+def test_a_flagged_container_is_reported_as_customs_not_as_a_busy_driver(client, repo):
+    """Both rules hold at once; the operator is told about the CONTAINER, which is
+    the fact they cannot resolve by picking someone else. Container checks run
+    before resource checks, so customs answers even when the driver is also busy."""
+    client.post("/api/jobs", json=_ASSIGN)                    # DRV-1 now occupied
+    flagged = _second_container(repo, "MSCU1234566")
+    repo.cargo[flagged]["customs_status"] = "HELD"
+    detail = client.post("/api/jobs",
+                         json={**_ASSIGN, "container_number": flagged}).json()["detail"]
+    assert detail["error"] == "customs_flagged"
+    assert detail["reason"] == CUSTOMS_FLAGGED_MESSAGE
+    assert len(repo.jobs) == 1

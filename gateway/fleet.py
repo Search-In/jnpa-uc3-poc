@@ -444,16 +444,13 @@ async def list_vehicles(dsn: str, *, q: Optional[str] = None,
 # from the job module's own status vocabulary (services.container_job.service
 # TERMINAL) so a new status can never silently make a busy truck look free.
 def _open_job_predicate() -> tuple[str, dict]:
-    """``NOT EXISTS (open job for this vehicle)`` + its bound parameters."""
-    from services.container_job.service import TERMINAL
+    """``NOT EXISTS (open job for this vehicle)`` + its bound parameters.
 
-    names = sorted(TERMINAL)
-    keys = [f"term{i}" for i in range(len(names))]
-    placeholders = ", ".join(f":{k}" for k in keys)
-    sql = ("NOT EXISTS (SELECT 1 FROM core.container_job_assignment j "
-           "WHERE j.vehicle_id = core.vehicle.vehicle_id "
-           f"AND j.status NOT IN ({placeholders}))")
-    return sql, dict(zip(keys, names))
+    Delegates to the job module's own definition so the truck list and the driver
+    list (gateway.enrollment.list_assignable_drivers) exclude on ONE rule."""
+    from services.container_job.service import open_job_not_exists
+
+    return open_job_not_exists("core.vehicle.vehicle_id", job_column="vehicle_id")
 
 
 def _assignable_where(q: Optional[str]) -> tuple[str, dict]:

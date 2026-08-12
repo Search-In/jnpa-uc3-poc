@@ -1063,8 +1063,9 @@ services:
       # "configured". Credentials alone are not enough to go live.
       ULIP_LIVE_ENABLED: ${ULIP_LIVE_ENABLED:-0}
       ULIP_TIMEOUT_S: ${ULIP_TIMEOUT_S:-5}
-      # LDB/01 aggregates a container's whole trail: 10-20 s on production.
-      ULIP_LDB_TIMEOUT_S: ${ULIP_LDB_TIMEOUT_S:-30}
+      # LDB/01 aggregates a container's whole trail and is slow AND variable
+      # on production: 14.5 s and 35.5 s measured in the same minute.
+      ULIP_LDB_TIMEOUT_S: ${ULIP_LDB_TIMEOUT_S:-60}
       ULIP_RETRIES: ${ULIP_RETRIES:-2}
       ULIP_TOKEN_TTL_S: ${ULIP_TOKEN_TTL_S:-1800}
       ULIP_FASTAG_API: ${ULIP_FASTAG_API:-}

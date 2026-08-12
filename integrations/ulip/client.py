@@ -112,13 +112,19 @@ DEFAULT_LDB_API = DEFAULT_API_PATHS["LDB"]
 # Per-API timeout budgets, overriding ULIP_TIMEOUT_S for the APIs that need it.
 #
 # LDB/01 aggregates a container's whole trail across terminals, rail and road
-# and is genuinely slow: measured at **10-20 s** on production (0.1-0.7 s for
-# every other granted API). The 5 s default timed it out on all three retries,
-# so container tracking failed 100% of the time while looking like an outage.
-# Raising ULIP_TIMEOUT_S globally is the wrong fix — a gate decision must not
-# wait 30 s on a VAHAN lookup — so the budget is per API and generous only
-# where the upstream demands it. Env override: ``ULIP_<KEY>_TIMEOUT_S``.
-DEFAULT_API_TIMEOUTS: Dict[str, float] = {"LDB": 30.0}
+# and is genuinely slow — and, more awkwardly, VARIABLE. Measured on production:
+# 0.1-0.7 s for every other granted API, but LDB at 14.5 s for TCLU8538808 and
+# 35.5 s for CXRU1145597 in the same minute. The 5 s default timed it out on all
+# three retries, so container tracking failed 100% of the time while looking
+# like an outage; a 30 s budget still lost the slower containers, and because a
+# timeout is RETRIED the failure cost ~40 s before surfacing.
+#
+# The budget is therefore set above the slowest observed call, not the typical
+# one: a timeout here does not mean the upstream is broken, only that it is
+# slow, and retrying a slow call just doubles the wait. Raising ULIP_TIMEOUT_S
+# globally would be the wrong fix — a gate decision must not wait a minute on a
+# VAHAN lookup — so the budget is per API. Env override: ``ULIP_<KEY>_TIMEOUT_S``.
+DEFAULT_API_TIMEOUTS: Dict[str, float] = {"LDB": 60.0}
 
 # Request-field patterns, copied verbatim from the integration PDFs. ULIP
 # answers a violation with HTTP 400 and echoes the pattern, so rejecting the

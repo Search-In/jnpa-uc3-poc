@@ -17,10 +17,12 @@ export const DEFAULT_TIMEOUT_MS = 15_000;
 export const UPLOAD_TIMEOUT_MS = 120_000;
 
 // ULIP LDB/01 aggregates a container's whole trail across terminals, rail and
-// road and measures 10-20s on production — routinely longer than the 15s
-// default, so container tracking failed in the browser while the gateway was
-// answering correctly. Matches the gateway's own ULIP_LDB_TIMEOUT_S budget.
-export const LDB_TIMEOUT_MS = 35_000;
+// road. It is slow AND variable on production — 14.5s and 35.5s measured for
+// two containers in the same minute — so the 15s default aborted in the browser
+// while the gateway was answering correctly, and even 35s lost the slow ones.
+// Must stay ABOVE the gateway's own ULIP_LDB_TIMEOUT_S (60s), or the browser
+// gives up on a request the backend is about to answer.
+export const LDB_TIMEOUT_MS = 70_000;
 
 // Marker used on the thrown Error so apiError() can classify a timeout without
 // depending on the browser's DOMException wording (which differs across engines).

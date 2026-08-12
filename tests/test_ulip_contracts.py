@@ -626,14 +626,22 @@ def test_gatishakti_queries_never_bind_an_untyped_null_comparison():
     ``path: FALLBACK, count: 0`` while the rows sat in the table — a silent
     failure indistinguishable from "this state has no toll plazas". Any
     ``:param IS NULL`` must be cast.
+
+    The same defect was later found a second time, in the toll-enroute route —
+    which reads the very table GatiShakti seeds — so this scans every module
+    that queries the registry rather than just the repository. Found on
+    production 2026-08-13: `/api/fastag/toll-enroute` returned zero plazas for
+    every route while 59 sat in `core.gs_toll_plaza`.
     """
     import re
     from pathlib import Path
 
-    src = (Path(__file__).resolve().parents[1]
-           / "services" / "gatishakti" / "repository.py").read_text()
-    bare = re.findall(r":(\w+)\s+IS\s+NULL", src)
-    assert not bare, f"uncast NULL-compared bind parameters: {bare}"
+    root = Path(__file__).resolve().parents[1]
+    for rel in ("services/gatishakti/repository.py",
+                "gateway/routers/fastag.py"):
+        src = (root / rel).read_text()
+        bare = re.findall(r":(\w+)\s+IS\s+NULL", src)
+        assert not bare, f"{rel}: uncast NULL-compared bind parameters: {bare}"
 
 
 def test_ldb_trail_for_another_container_is_rejected():
@@ -664,9 +672,12 @@ def test_ldb_milestone_label_survives_normalisation():
 async def test_ldb_gets_a_wider_timeout_than_the_gate_facing_apis():
     """LDB/01 aggregates a container's whole trail across terminals, rail and
     road and measures **10-20 s on production**, against 0.1-0.7 s for every
-    other granted API. On the shared 5 s budget it timed out on all three
+    other granted API — and it is VARIABLE: 14.5 s and 35.5 s for two containers
+    in the same minute. On the shared 5 s budget it timed out on all three
     attempts, so container tracking failed 100% of the time and read as an
-    upstream outage rather than as our own timeout being too tight.
+    upstream outage rather than as our own timeout being too tight. The budget
+    is set above the SLOWEST observed call, not the typical one, because a
+    timeout here is retried and a retried slow call just doubles the wait.
 
     The fix must stay *per API*: raising ULIP_TIMEOUT_S globally would make a
     truck wait the same 30 s on a VAHAN lookup at the gate, which is the one
@@ -688,7 +699,7 @@ async def test_ldb_gets_a_wider_timeout_than_the_gate_facing_apis():
         await client.fetch_container_tracking("NSST1234570")
         await client.fetch_vehicle_by_rc("UP32KH0320")
 
-    assert seen["LDB/01"] == 30.0, "LDB/01 must get its own wider budget"
+    assert seen["LDB/01"] == 60.0, "LDB/01 must get its own wider budget"
     assert seen["VAHAN/04"] == 5.0, "the gate-facing APIs stay on the tight default"
 
 

@@ -617,7 +617,14 @@ async def _enroute_from_registry(request: Request, body: "TollEnrouteRequest",
                 """
                 SELECT name, latitude, longitude
                 FROM core.gs_toll_plaza
-                WHERE (:state_name IS NULL OR state_id = :state_name)
+                -- CAST is load-bearing: asyncpg cannot infer the type of a bare
+                -- parameter compared against NULL and raises
+                -- AmbiguousParameterError, which the handler below swallowed —
+                -- so this returned ZERO plazas for every route while looking
+                -- like an unseeded registry. Same defect, same shape, as the
+                -- one fixed in services/gatishakti/repository.py.
+                WHERE (CAST(:state_name AS text) IS NULL
+                       OR state_id = CAST(:state_name AS text))
                 ORDER BY name
                 LIMIT 200
                 """,
@@ -629,7 +636,10 @@ async def _enroute_from_registry(request: Request, body: "TollEnrouteRequest",
                 for r in rows
             ]
         except Exception as exc:  # noqa: BLE001 — registry not seeded yet
-            log.debug("toll_enroute_registry_unavailable", error=str(exc))
+            # WARNING, not debug: an unseeded registry and a broken query are
+            # indistinguishable to the caller (both yield an empty list), so
+            # the only way to tell them apart is for this to be visible.
+            log.warning("toll_enroute_registry_unavailable", error=str(exc))
     return {
         "clientId": payload["clientId"],
         "sourceState": body.source_state, "sourceName": body.source_name,

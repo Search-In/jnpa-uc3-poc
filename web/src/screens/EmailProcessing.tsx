@@ -208,15 +208,31 @@ export default function EmailProcessing() {
                     <td className="px-3 py-2 text-right">
                       <button
                         type="button"
-                        className="rounded-md border border-border px-2.5 py-1 text-xs font-medium hover:bg-muted disabled:opacity-50"
+                        className="rounded-md border border-border px-2.5 py-1 text-xs font-medium hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
                         onClick={() => {
                           setSelectedId(m.id);
                           setResult(null);
                           preview.mutate(m.id);
                         }}
-                        disabled={busyId === m.id}
+                        // An imported email is not re-processable. This reads the
+                        // SERVER's processing_status, not a local flag, so the
+                        // disabled state survives a refresh and is already correct
+                        // on first paint. FAILED / NEEDS_REVIEW stay actionable so a
+                        // fixed attachment can be retried. The backend keeps its own
+                        // guard (process() refuses a second import for a PROCESSED
+                        // row), so this is presentation, not the enforcement point.
+                        disabled={busyId === m.id || m.processing_status === "PROCESSED"}
+                        title={
+                          m.processing_status === "PROCESSED"
+                            ? "Already imported — re-processing is blocked"
+                            : undefined
+                        }
                       >
-                        {busyId === m.id ? "Working…" : "Process"}
+                        {busyId === m.id
+                          ? "Working…"
+                          : m.processing_status === "PROCESSED"
+                            ? "Processed"
+                            : "Process"}
                       </button>
                     </td>
                   </tr>

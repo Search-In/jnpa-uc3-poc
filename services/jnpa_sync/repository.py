@@ -26,6 +26,23 @@ from jnpa_shared.logging import get_logger
 
 log = get_logger("services.jnpa_sync.repository")
 
+
+def _as_datetime(value: Union[str, datetime, None]) -> Optional[datetime]:
+    """ISO string -> datetime for asyncpg's strict timestamptz binding.
+
+    Mirrors ``service._parse_ts``: an unparseable value becomes None so the
+    caller's COALESCE(..., now()) supplies the timestamp rather than the whole
+    row failing.
+    """
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+
 _DDL = """
 CREATE TABLE IF NOT EXISTS core.api_sync_state (
     group_slug      text PRIMARY KEY,
@@ -508,7 +525,14 @@ class SyncRepository:
                          "e": getattr(obs, "endpoint", None),
                          "s": getattr(obs, "severity", "INFO"),
                          "d": getattr(obs, "detail", None),
-                         "o": getattr(obs, "observed_at", None),
+                         # DefectObservation.observed_at is an ISO *string*, but
+                         # asyncpg types :o from the CAST and rejects a str
+                         # outright ("expected a datetime.date or datetime
+                         # .datetime instance"). Every observation therefore
+                         # failed to persist — and these rows are a deliverable
+                         # (JNPA's 31-Jul notice requires observed defects to be
+                         # reported), so the loss was silent but not harmless.
+                         "o": _as_datetime(getattr(obs, "observed_at", None)),
                          "r": run_id})
                     written += 1
                 except Exception as exc:  # noqa: BLE001

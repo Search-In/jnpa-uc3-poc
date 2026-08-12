@@ -189,12 +189,16 @@ class DashboardBoardsService:
                 continue
             items.append({
                 "call_id": cid,
-                "vcn": r.get("vcn") or p.vcn,
-                "via_no": r.get("via_no") or p.via_no,
+                # NULL in BOTH the call row and the projection is normal for a
+                # pre-VCN / no-voyage call; the response model types these as
+                # plain str, so None here fails validation and the whole board
+                # 500s. Empty string is the "not recorded" value everywhere else.
+                "vcn": r.get("vcn") or p.vcn or "",
+                "via_no": r.get("via_no") or p.via_no or "",
                 "imo_no": imo,
                 "vessel_name": name,
-                "voyage_no": r.get("voyage_no") or p.voyage_no,
-                "status": r.get("status") or p.status,
+                "voyage_no": r.get("voyage_no") or p.voyage_no or "",
+                "status": r.get("status") or p.status or "",
                 "state": traffic_state(p, anchor),
                 "berth_code": r.get("berth_code") or "",
                 "terminal": str(r.get("terminal_code") or "").strip(),

@@ -1040,8 +1040,28 @@ function DriverProfile({ dl }: { dl: string }) {
               <KV label="DL" value={dlQ.data.dl} />
               <KV label="Status" value={dlQ.data.status} />
               <KV label="Decision path" value={dlQ.data.decision_path} />
-              <KV label="Class" value={dlRec.cov ?? dlRec.vehicle_class} />
-              <KV label="Valid upto" value={dlRec.valid_upto ?? dlRec.doe} />
+              {/* A ULIP-sourced licence is a SarathiRecord: the classes are a
+                  list under `vehicle_classes` and the expiry is `valid_to`.
+                  Reading only the vahan-sim/Surepass spellings left both rows
+                  blank while SARATHI was returning them. */}
+              <KV
+                label="Class"
+                value={
+                  Array.isArray(dlRec.vehicle_classes) && dlRec.vehicle_classes.length
+                    ? (dlRec.vehicle_classes as string[]).join(", ")
+                    : (dlRec.cov ?? dlRec.vehicle_class)
+                }
+              />
+              <KV label="Valid upto" value={dlRec.valid_to ?? dlRec.valid_upto ?? dlRec.doe} />
+              <KV label="Issued" value={dlRec.date_of_issue} />
+              <KV
+                label="Issuing RTO"
+                value={
+                  dlRec.state && dlRec.rto_code
+                    ? `${dlRec.rto_code} · ${dlRec.state}`
+                    : (dlRec.rto_code ?? dlRec.state)
+                }
+              />
             </>
           )}
         </InfoCard>

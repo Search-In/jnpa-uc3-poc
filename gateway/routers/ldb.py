@@ -92,6 +92,73 @@ def _date_marker(ms_or_iso: Any) -> Optional[str]:
     return label[:10] if label and len(label) >= 10 else None
 
 
+# ------------------------------------------------------------- ULIP LDB/01 rung
+async def _ulip_events(state: GatewayState,
+                       container_number: str) -> Optional[List[Dict[str, Any]]]:
+    """ULIP LDB/01 -> normalised container events, newest first; None on a miss.
+
+    Without this rung ``/api/ldb/*`` and ``/api/logistics/*`` answer the SAME
+    container from different worlds: logistics returns the real thirteen-leg
+    trail from ULIP while this router invents "JNPA Gate-3 / GATE_IN / ETA in
+    six hours". Two endpoints contradicting each other about where a box is, is
+    worse than one of them saying nothing — so ULIP goes in front of the
+    LDB_BASE_URL seam, which stays as the rung below.
+
+    Never raises: any ULIP failure is a miss that falls through, exactly like an
+    unreachable upstream.
+    """
+    if not getattr(state.cfg, "ulip_live_enabled", False):
+        return None
+    try:
+        from integrations.ulip import UlipClient, UlipError
+        from integrations.ulip.schemas import normalize_container_events
+    except ImportError:                                    # pragma: no cover
+        return None
+    try:
+        client = UlipClient(api_url=state.cfg.ulip_api_url or None,
+                            api_key=state.cfg.ulip_api_key or None,
+                            client_id=state.cfg.ulip_client_id or None,
+                            client_secret=state.cfg.ulip_client_secret or None)
+        if not client.configured:
+            return None
+        events = normalize_container_events(
+            await client.fetch_container_tracking(container_number),
+            container_number)
+    except UlipError as exc:
+        log.warning("ldb_ulip_miss", container=container_number,
+                    error=type(exc).__name__)
+        return None
+    except Exception as exc:                               # noqa: BLE001
+        # A rung failing must never fail the request.
+        log.warning("ldb_ulip_error", container=container_number,
+                    error=type(exc).__name__)
+        return None
+    return events or None
+
+
+def _ulip_tracking(container_number: str,
+                   events: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Newest ULIP event -> the current-tracking shape this router returns.
+
+    ``eta`` stays **None**: LDB publishes where a container has been, not when
+    it will arrive. The mock builder's "now + 6 h" is the one field here that
+    was pure invention, and it must not be reproduced from live data.
+    """
+    from services.logistics.service import _tracking_status
+
+    newest = events[0]
+    detail = newest.get("detail") or {}
+    return {
+        "container_number": container_number,
+        "status": _tracking_status(newest.get("event_ts"), len(events)),
+        "current_location": newest.get("location"),
+        "last_event": newest.get("event_label") or newest.get("event_type"),
+        "eta": None,
+        "mode": (detail.get("transportmode") or detail.get("transportMode")
+                 or None),
+    }
+
+
 # --------------------------------------------------------------- mock builders
 def _mock_container(container_number: str) -> Dict[str, Any]:
     """Deterministic LDB current-tracking record keyed off the container number."""
@@ -330,7 +397,12 @@ async def _fetch_vahan_compliance(plate: str, state: GatewayState) -> Optional[D
 @router.get("/container/{container_number}")
 async def ldb_container(container_number: str,
                         state: GatewayState = Depends(get_state)) -> dict:
-    """Current tracking status for a container."""
+    """Current tracking status for a container — ULIP LDB/01, else the seam."""
+    events = await _ulip_events(state, container_number)
+    if events:
+        REQUESTS.labels("ldb", "ok").inc()
+        return {"source": "ULIP",
+                "tracking": _ulip_tracking(container_number, events)}
     result = await integrations.call(
         system="LDB", op="container", ref=container_number,
         request={"container_number": container_number},
@@ -348,26 +420,53 @@ async def ldb_movements(container_number: str,
     """Movement history for a container.
 
     Reads persisted rows from core.ldb_movement first (newest first); if none
-    exist, fetches the chain from the LDB adapter and persists each returned
-    movement (INSERT with its source) before returning.
+    exist, tries ULIP LDB/01, then falls back to the LDB adapter, persisting
+    each returned movement (INSERT with its source) before returning.
     """
     dsn = state.cfg.postgres_dsn
 
-    # 1. Persisted rows first (newest first).
+    # 1. Persisted rows first (newest first). A DB that is down, or missing
+    #    core.ldb_movement, must not take the endpoint out: ULIP below can
+    #    still answer, and every other rung in this service degrades rather
+    #    than 500s.
     if dsn:
         from jnpa_shared.db import fetch_all
-        rows = await fetch_all(
-            """SELECT ts, container_number, event, location, terminal, mode, source, detail
-                 FROM core.ldb_movement
-                WHERE container_number = :cn
-                ORDER BY ts DESC""",
-            {"cn": container_number}, dsn=dsn)
+        try:
+            rows = await fetch_all(
+                """SELECT ts, container_number, event, location, terminal, mode, source, detail
+                     FROM core.ldb_movement
+                    WHERE container_number = :cn
+                    ORDER BY ts DESC""",
+                {"cn": container_number}, dsn=dsn)
+        except Exception as exc:                           # noqa: BLE001
+            log.warning("ldb_movement_read_failed", container=container_number,
+                        error=type(exc).__name__)
+            rows = []
         if rows:
             movements = [_iso(dict(r)) for r in rows]
             REQUESTS.labels("ldb", "ok").inc()
             return {"source": "DB", "count": len(movements), "movements": movements}
 
-    # 2. Nothing persisted -> pull from the adapter.
+    # 2. ULIP LDB/01 — the real trail, ahead of the LDB_BASE_URL seam.
+    events = await _ulip_events(state, container_number)
+    if events:
+        movements = [{
+            "ts": e.get("event_ts"),
+            "container_number": container_number,
+            "event": e.get("event_label") or e.get("event_type"),
+            "location": e.get("location"),
+            # LDB publishes no terminal name; ``division`` is the nearest thing
+            # it carries and is frequently null. Left empty rather than guessed.
+            "terminal": (e.get("detail") or {}).get("division"),
+            "mode": ((e.get("detail") or {}).get("transportmode")
+                     or (e.get("detail") or {}).get("transportMode")),
+            "source": "ULIP",
+            "detail": e.get("detail") or {},
+        } for e in events]
+        REQUESTS.labels("ldb", "ok").inc()
+        return {"source": "ULIP", "count": len(movements), "movements": movements}
+
+    # 3. Nothing persisted and no ULIP answer -> pull from the adapter.
     result = await integrations.call(
         system="LDB", op="movements", ref=container_number,
         request={"container_number": container_number},
@@ -499,6 +598,23 @@ async def ldb_truck(vehicle_number: str,
 
 
 @router.get("/health")
-async def ldb_health() -> dict:
-    """LIVE-vs-MOCK posture for the LDB dependency."""
-    return integrations.health("LDB")
+async def ldb_health(state: GatewayState = Depends(get_state)) -> dict:
+    """LIVE-vs-MOCK posture for the LDB dependency.
+
+    Reports the rung that actually answers. ULIP LDB/01 now sits in front of
+    the LDB_BASE_URL seam, so reporting only the seam's config said "MOCK" on
+    the same screen where the container card was showing a real ULIP trail —
+    two contradictory provenance claims side by side.
+    """
+    posture = integrations.health("LDB")
+    cfg = state.cfg
+    ulip_live = bool(getattr(cfg, "ulip_live_enabled", False)
+                     and (cfg.ulip_api_key
+                          or (cfg.ulip_client_id and cfg.ulip_client_secret)))
+    posture["ulip_configured"] = ulip_live
+    posture["primary"] = "ULIP" if ulip_live else ("LDB_API" if posture["configured"]
+                                                   else "MOCK")
+    if ulip_live:
+        posture["mode"] = "LIVE"
+        posture["ulip_api"] = "LDB/01"
+    return posture

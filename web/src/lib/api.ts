@@ -16,6 +16,12 @@ export const DEFAULT_TIMEOUT_MS = 15_000;
 // Uploads/downloads move megabytes over venue wifi; they get a longer budget.
 export const UPLOAD_TIMEOUT_MS = 120_000;
 
+// ULIP LDB/01 aggregates a container's whole trail across terminals, rail and
+// road and measures 10-20s on production — routinely longer than the 15s
+// default, so container tracking failed in the browser while the gateway was
+// answering correctly. Matches the gateway's own ULIP_LDB_TIMEOUT_S budget.
+export const LDB_TIMEOUT_MS = 35_000;
+
 // Marker used on the thrown Error so apiError() can classify a timeout without
 // depending on the browser's DOMException wording (which differs across engines).
 const TIMEOUT_MARKER = "ETIMEDOUT";
@@ -607,6 +613,15 @@ export const api = {
     http<import("./types").Vehicle360>(`/api/vahan/vehicle-360/${encodeURIComponent(plate)}`),
   driverIntel: (key: string) =>
     http<import("./types").DriverIntel>(`/api/vahan/driver-intel/${encodeURIComponent(key)}`),
+  // Registration lookup down the vehicle ladder: ULIP VAHAN/04 -> VAHAN/01 ->
+  // vahan-sim -> CACHED -> PROVISIONAL. This is the LIVE registry read.
+  // ``vehicleIntel`` above is a different thing — an RDS aggregate of what we
+  // have already stored about a plate — and answers ``rc: null`` for a vehicle
+  // the port has never seen, so it must not be used to look a vehicle up.
+  vahanRc: (plate: string) =>
+    http<{ plate: string; decision_path: string; record: Record<string, unknown> }>(
+      `/api/vahan/rc/${encodeURIComponent(plate)}`,
+    ),
   // Alternate-key RC lookups (ULIP VAHAN/02 and /03). ULIP-only — the
   // simulator is keyed by plate — so these 503 when ULIP_LIVE_ENABLED is off
   // and 404 on a miss rather than falling back to a different vehicle.
@@ -1709,8 +1724,10 @@ export const api = {
   pdpVehicle: (plate: string) => http<any>(`/api/pdp/vehicle/${encodeURIComponent(plate)}`),
   pdpTraffic: () => http<any>("/api/pdp/traffic"),
   pdpHealth: () => http<any>("/api/pdp/health"),
-  ldbContainer: (no: string) => http<any>(`/api/ldb/container/${encodeURIComponent(no)}`),
-  ldbMovements: (no: string) => http<any>(`/api/ldb/container/${encodeURIComponent(no)}/movements`),
+  ldbContainer: (no: string) =>
+    http<any>(`/api/ldb/container/${encodeURIComponent(no)}`, undefined, LDB_TIMEOUT_MS),
+  ldbMovements: (no: string) =>
+    http<any>(`/api/ldb/container/${encodeURIComponent(no)}/movements`, undefined, LDB_TIMEOUT_MS),
   ldbTruck: (vehicleNumber: string) =>
     http<{
       source: string;
@@ -1790,9 +1807,14 @@ export const api = {
   // (data_available: false) — the surface never fabricates shipment data.
   // The browser only ever talks to the gateway — never to the ULIP platform.
   logisticsCurrent: () => http<import("./types").LogisticsCurrent>("/api/logistics/current"),
+  // A container reference resolves through ULIP LDB/01, so this shares the
+  // wider LDB budget; a vehicle reference goes to FASTAG/01 and returns in
+  // well under a second either way.
   logisticsTracking: (refId: string) =>
     http<import("./types").LogisticsTracking>(
       `/api/logistics/tracking/${encodeURIComponent(refId)}`,
+      undefined,
+      LDB_TIMEOUT_MS,
     ),
   logisticsEvents: (params?: {
     ref_id?: string;

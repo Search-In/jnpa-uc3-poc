@@ -1057,6 +1057,8 @@ services:
       ULIP_CLIENT_ID: ${ULIP_CLIENT_ID:-}
       ULIP_CLIENT_SECRET: ${ULIP_CLIENT_SECRET:-}
       ULIP_TIMEOUT_S: ${ULIP_TIMEOUT_S:-5}
+      # LDB/01 aggregates a container's whole trail: 10-20 s on production.
+      ULIP_LDB_TIMEOUT_S: ${ULIP_LDB_TIMEOUT_S:-30}
       ULIP_RETRIES: ${ULIP_RETRIES:-2}
       ULIP_TOKEN_TTL_S: ${ULIP_TOKEN_TTL_S:-1800}
       ULIP_FASTAG_API: ${ULIP_FASTAG_API:-}

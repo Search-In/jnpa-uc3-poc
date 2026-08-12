@@ -171,11 +171,14 @@ async def _ulip_dl(state: GatewayState, dl: str,
     When the caller supplies the holder's date of birth, **SARATHI/01** is
     tried first and SARATHI/02 is the fallback. /01 needs the extra identifier
     but answers with strictly more: the licence issue date, the issuing state
-    and RTO, and — uniquely among the granted APIs — the holder's name
-    unmasked plus a photograph. That is the difference between a licence check
-    and enough identity to issue a port pass, so it is worth the extra field
-    whenever enrolment has it. The gate itself never does, which is why /02
-    remains the default path.
+    and RTO, the full class list and a photograph. That is worth the extra
+    field whenever enrolment has it. The gate itself never has a date of
+    birth, which is why /02 remains the default path.
+
+    The holder's name is **masked on both** (``bioNatName`` comes back as
+    ``M*H*S*K*M*R* *O*I*``), notwithstanding the unmasked sample in the
+    response-schema document NLDSL supplied — do not treat /01 as an identity
+    source.
     """
     from integrations.ulip import UlipError
     from integrations.ulip.records import dl_to_record
@@ -371,8 +374,10 @@ async def sarathi_dl(
     dl_number: str,
     dob: Optional[str] = Query(
         None, description="Holder's date of birth as YYYY-MM-DD. When given, "
-                          "SARATHI/01 is tried first (richer record, unmasked "
-                          "name, photograph); SARATHI/02 remains the fallback."),
+                          "SARATHI/01 is tried first (issue date, issuing "
+                          "state/RTO, full class list, photograph); SARATHI/02 "
+                          "remains the fallback. The holder's name is masked "
+                          "on both."),
     state: GatewayState = Depends(get_state),
 ) -> dict:
     """Sarathi DL lookup — LIVE_PRIMARY -> LIVE_FALLBACK -> CACHED.

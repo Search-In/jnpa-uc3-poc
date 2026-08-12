@@ -1,239 +1,247 @@
-# Draft email to ULIP / NLDSL support — staging integration queries
+# Draft emails to NLDSL
 
-**To:** ULIP Support / NLDSL Integration Team
-**Subject:** ULIP staging (rtoj_searchin_usr) — integration observations and queries on the 13 granted APIs
+Two separate mails. **Mail 1** replies to ULIP support, closes out the queries
+and requests production access — send with the test-case PDF attached.
+**Mail 2** goes to `bd@nldsl.in`, which is where NLDSL asked us to send the two
+items they classed as new requirements. Send Mail 1 first.
+
+---
+---
+
+# Mail 1 — to ULIP Support
+
+**Subject:** ULIP staging (rtoj_searchin_usr) — queries closed, test-case document attached, request for production access
+**Attachment:** `ULIP_UAT_TestCases_JNPA_UC3.pdf`
 
 ---
 
 Dear Team,
 
-Thank you for whitelisting our IP `65.2.212.121` on the staging environment. We
-confirm access is working: `POST /user/login` now issues a token, and **12 of
-the 13 granted APIs returned data on our first end-to-end run** on 11 August
-2026. We have completed the integration into our JNPA DTCCC Use Case 3
-application and have prepared a test-case document with screenshots, which we
-are submitting separately in support of our request for production access.
+Thank you for the detailed responses. Every query we raised is now closed, and
+we have re-run our full test cycle against staging with the information you
+provided. **All thirteen granted APIs now return data successfully.** The
+attached test-case document records each API's usage in our JNPA DTCCC
+Use&nbsp;Case&nbsp;3 application, with screenshots of the running application
+showing the input request and the corresponding output response.
 
-While testing, we recorded the observations below. They are ordered by the
-impact they have on our go-live, and each is followed by the specific
-confirmation or action we would request from your side. Where the observed
-behaviour differs from the integration documents we have quoted both, so that
-you can tell us which is authoritative.
+Our confirmations against each of your points:
 
----
+**1. LDB/01 — confirmed working.** Using the container you supplied
+(`CXRU1145597`), the API responds correctly and we now retrieve a complete
+thirteen-leg trail across vessel, rail and road, including Gateway Terminals
+India (GTI), JNPT Central Parking Plaza and Khalapur toll plaza, each with
+coordinates, transport mode and timestamp. This is integrated and evidenced in
+the attached document.
 
-## 1. LDB/01 — upstream service unavailable on staging
+One observation we have handled on our side, and mention only so you are aware:
+on staging the API returns the same trail — for container `TCLU8538808` — for
+*every* container number we send, including `CXRU1145597` and the
+`NSST1234570` sample in the integration document. We take this as part of the
+static test data you describe. Our application compares the container named in
+the trail against the container requested and rejects a mismatch, so that one
+container's port milestones can never be attributed to another.
 
-Every call to `LDB/01` during our testing returned:
+**2. VAHAN/01 — understood.** Thank you for confirming that staging holds
+static test data whose responses need not reflect production. Our application
+discards any registration certificate whose registration number does not match
+the number queried, so a mismatched answer can never reach a gate decision. We
+would be grateful for confirmation that production `VAHAN/01` returns only the
+vehicle requested.
 
-```json
-{
-  "response": [
-    { "response": "LDB_01 - 3rd party service is down!",
-      "responseStatus": "ERROR" }
-  ],
-  "error": "true", "code": "200", "message": null
-}
-```
+**3. GATISHAKTI/01–03 — confirmed.** Thank you for the response structures. We
+have verified our field mapping against all three and it matches exactly:
 
-This is the only granted API that provides container movement, which is central
-to a port use case — it is how we trace an EXIM container's vessel, rail and
-road legs. We were therefore unable to test or evidence it end to end.
+- `GATISHAKTI/01` — `road_name`, `gis_length`, `road_type`, `lane_statu`,
+  `state_ut`. 33 rows retrieved for `NH-5`.
+- `GATISHAKTI/02` — `infrastr_s`, `infrastr_a`, `infrastr_n`, `type_owner`,
+  `storage_ca`, `type_infra`, `infrastr_v`. 13 rows retrieved for state 27.
+- `GATISHAKTI/03` — `st_name`, `dist_name`, `sub_dist`, `vname`, `park_name`,
+  `land_cat`, `land_avail`, `park_type`, `lat`, `lon`. 994 rows retrieved for
+  state 27.
 
-**Request:** please advise when the LDB upstream will be restored on staging,
-and whether the same dependency affects production.
+`GATISHAKTI/04` returns 59 toll plazas for Maharashtra and is fully integrated.
 
-**Observation for your consideration:** the reason text is placed in
-`response[0].response` while the top-level `message` field is `null`. A client
-reading only `message` sees no explanation at all. It would help integrators if
-the top-level `message` carried the reason as well.
+On road-network and corridor data with geometry: understood, and we are sending
+a detailed requirement note to `bd@nldsl.in` as you have asked.
 
----
+**One small documentation point for `GATISHAKTI/04`:** the integration document
+shows a `vname` / `lat` / `lon` sample, whereas the API returns `plaza_name`,
+`tollplazal` (latitude), `tollplaz_1` (longitude) and `nhno_new`. We have mapped
+the actual field names. Updating the document would help other integrators, as a
+client written to the sample receives zero rows with no error to indicate why.
 
-## 2. VAHAN/01 — the same request returns a different vehicle
+**4. FASTAG/02 — understood.** Thank you for clarifying that tag availability
+against a vehicle number depends on the test data configured in staging. The
+tag-id path works correctly and is evidenced in the attached document.
 
-Querying `VAHAN/01` repeatedly with `{"vehiclenumber": "UP32KH0320"}` returned
-two different registrations across calls, roughly half the time each:
+We would still be grateful for a ruling on the pattern conflict in the
+integration document for this API: the field table specifies
+`^[A-Z0-9]{5,11}$|^[A-Z0-9]{17,20}$` while the 400-error sample shows
+`[A-Z]{2}[0-9]{2}[A-Z]{0,5}[0-9]{4}$`. We currently validate against the looser
+of the two.
 
-| Call | `rc_regn_no` returned | Vehicle |
-|---|---|---|
-| 1 | `RJ11GC0346` | TATA LPT 2818 BS-VI |
-| 2 | `UP32KH0320` | SPLENDOR + (SELF-DRUM-CAST) |
-| 3 | `RJ11GC0346` | TATA LPT 2818 BS-VI |
+**5. SARATHI/01 — working, thank you.** The test data you supplied resolves
+correctly and the API is fully integrated. We retrieve the licence issue date,
+the issuing state and RTO, eight classes of vehicle and the transport validity —
+all fields `SARATHI/02` does not carry.
 
-`VAHAN/04` returned the requested vehicle on every call for the same input.
+One finding worth recording: **the internal space in the DL number is
+significant.** `GJ04 20120005008` resolves, while `GJ0420120005008` returns
+`errorcd: -1`. Our application now preserves the spacing exactly as supplied. A
+note in the integration document would save other integrators the same
+diagnosis.
 
-This matters to us because the vehicle we verify at the port gate determines
-whether a truck is admitted, on that vehicle's fitness, permit and blacklist
-status. We have added a guard that discards any registration certificate whose
-registration number does not match the number queried, so a mismatched answer
-is treated as "not found" rather than being used.
+We also note that staging masks `bioNatName` as well as `bioFullName`
+(`M*H*S*K*M*R* *O*I*`), whereas the response-schema document shows `bioNatName`
+unmasked. We have not treated this as an issue given your PII position below,
+but flag it in case the document is intended to reflect production behaviour.
 
-**Request:** please confirm whether this is expected behaviour of the staging
-environment (for example, sample data being rotated), or an issue. We would
-particularly like confirmation that **production `VAHAN/01` returns only the
-vehicle that was requested.**
+**6. VAHAN/02 and VAHAN/03 — understood.** We accept the PII position. Both
+endpoints are integrated and respond correctly; we are simply unable to
+demonstrate a successful resolution, because the chassis and engine numbers
+returned by `VAHAN/04` are masked and we have no other source for an unmasked
+key. Those two test cases are therefore marked in the attached document as
+blocked on data access rather than as failures. We are sending a requirement
+note to `bd@nldsl.in` as you have asked.
 
----
-
-## 3. GATISHAKTI/01, /02 and /03 — datasets differ from the integration document
-
-The integration document describes these as road-network APIs. On staging the
-payloads are as follows (all `HTTP 200`, `stateid 27` — Maharashtra):
-
-| API | Document describes | Actually returned | Rows |
-|---|---|---|---|
-| `GATISHAKTI/01` | National highway detail | Highway segments — `road_name`, `road_type`, `lane_statu`, `gis_length`, `state_ut`. **No latitude/longitude.** | 33 for `NH-5` |
-| `GATISHAKTI/02` | State road network | **Food-storage depots** — `infrastr_n`, `infrastr_a`, `storage_ca`, `type_infra`, `type_owner` | 13 |
-| `GATISHAKTI/03` | Named road points | **Industrial parks and estates** — `park_name`, `dist_name`, `land_cat`, `park_type`, with `lat`/`lon` | 994 |
-| `GATISHAKTI/04` | NHAI toll plazas | Toll plazas — as expected | 59 |
-
-The data itself is useful to us and we have integrated all four. However, we
-had planned to use `GATISHAKTI/01–03` to build the road corridor serving JNPA,
-and none of the three returns road geometry.
-
-**Requests:**
-1. Please confirm whether these are the intended datasets for `GATISHAKTI/02`
-   and `GATISHAKTI/03` on staging, or whether the staging environment is
-   serving a different dataset from production.
-2. Is a **road-network layer with coordinates** available under any API?
-   `GATISHAKTI/05` (national corridors) is described in the integration
-   document but is not in our granted list — we would like to request it if it
-   provides corridor geometry.
-
-**A note on `GATISHAKTI/04`:** the response field names differ from the
-document's sample. The document shows `vname` / `lat` / `lon`; the actual rows
-use `plaza_name`, `tollplazal` (latitude), `tollplaz_1` (longitude) and
-`nhno_new`. We have mapped the actual names. It would help other integrators if
-the document were updated to match, as a client written to the document
-receives zero rows without any error.
+**7. FASTag wallet balance — understood** and noted as outside ULIP's current
+scope. Our application reports "balance not published by ULIP" rather than
+displaying a figure, and no further action is required from your side.
 
 ---
 
-## 4. FASTAG/02 — lookup by vehicle number returns no tags
+## Two notes that would help other integrators
 
-For the same vehicle, the two FASTag APIs disagree:
+**`Accept: application/json` appears to be mandatory.** A request without it —
+including the `Accept: */*` sent by default by most HTTP client libraries —
+receives an `HTTP 400` with an **empty body**, giving no indication of the
+cause. The identical request with the header succeeds.
 
-| Request | Result |
-|---|---|
-| `FASTAG/01` `{"vehiclenumber": "CG07BC9186"}` | 3 toll crossings returned |
-| `FASTAG/02` `{"vehiclenumber": "CG07BC9186"}` | `vehicledetails` empty — no tags |
-| `FASTAG/02` `{"tagid": "34161FA8203286140F4064E0"}` | 1 tag returned correctly |
-
-A vehicle that has crossed toll plazas must carry a tag, so we would expect the
-vehicle-number lookup to return it.
-
-**Request:** please confirm whether `FASTAG/02` supports lookup by
-`vehiclenumber` on staging, and if so, a vehicle number that resolves — we
-would like to evidence this path.
-
-**Also on FASTAG/02:** the integration document gives two different patterns for
-`vehiclenumber` — the field table states
-`^[A-Z0-9]{5,11}$|^[A-Z0-9]{17,20}$`, while the 400-error sample shows
-`[A-Z]{2}[0-9]{2}[A-Z]{0,5}[0-9]{4}$`. Please confirm which is authoritative.
+**`HTTP 412` is returned before the credential is evaluated.** We observed 412
+(`"Access denied Please contact ULIP support!"`) both for an unregistered
+caller IP and for an unrecognised username, while a wrong password for a valid
+username returns `401`. Documenting this distinction would let integrators tell
+an allow-list problem from a credential problem immediately.
 
 ---
 
-## 5. SARATHI/01 — no test record resolves on staging
+## Request for production access
 
-`SARATHI/01` responds correctly, but every DL number and date-of-birth pair
-available to us returns:
+Our integration is complete across all thirteen granted APIs, with automated
+tests pinned against both the documented contracts and the live staging
+responses. The attached document records 33 test cases: **26 passed**, 5 are
+blocked solely on staging data access (the masked VAHAN identifiers and two
+SARATHI licence states), and 2 record behaviour that differs from our original
+expectation and is explained in place. No test failed because of a defect in
+the integration.
 
-```json
-{ "errorcd": -1, "erormsg": "Details not available " }
-```
+**We therefore request production API access for the same thirteen APIs.**
+Please advise the process, the production endpoint, and whether our calling IP
+`65.2.212.121` should also be registered for production, or whether a different
+address should be used.
 
-This includes the licence used as the worked example in the response-schema
-document you kindly shared (`GJ04 20120005008` with `bioDob` `1987-05-26`), and
-the DL number used in the `SARATHI/02` documentation.
+We would be glad to join a call if that would help.
 
-We have mapped the response schema you supplied — it differs entirely from
-`SARATHI/02` (`dldetobj[].dlobj`, `dlcovs[]`, `bio*` block) — but we cannot
-demonstrate the path working.
+Thank you again for your support throughout.
 
-**Request:** please share a **DL number and date of birth that resolve on the
-staging environment**, so we can complete this test case.
+Best regards,
 
-We would also note that `SARATHI/01` is valuable to us specifically because it
-returns the holder's name **unmasked** in `bioNatName` and a photograph in
-`biPhoto`; both are directly useful for issuing a port driver pass. Please
-confirm these fields are available in production for our account.
+[Name]
+[Designation]
+Search-In Solutions
+JNPA DTCCC — Use Case 3
+[Phone] · [Email]
+
+---
+---
+
+# Mail 2 — to bd@nldsl.in
+
+**Subject:** New requirement note — road-network geometry and unmasked vehicle identifiers for JNPA DTCCC (Use Case 3)
 
 ---
 
-## 6. VAHAN masking prevents testing VAHAN/02 and VAHAN/03
+Dear Team,
 
-Section 1.3 of the VAHAN document states that owner name, addresses and mobile
-number are masked for all users. In practice the **chassis and engine numbers
-are also masked** in the `VAHAN/04` response:
+ULIP Support has asked us to write to you with two requirements that fall
+outside our current API grant. We are the systems integrator for the JNPA
+Direct Trade Coordination & Control Centre (DTCCC), Use Case 3 — truck
+movement, gate automation and vehicle intelligence at Jawaharlal Nehru Port. We
+hold staging access for account `rtoj_searchin_usr` and have completed our
+integration of all thirteen granted APIs.
 
-```json
-{ "rcChasiNo": "ME4JF509AH70*****", "rcEngNo": "JF50E760*****" }
-```
+## Requirement 1 — road network and corridor data with geometry
 
-Because of this, a value returned by `VAHAN/04` cannot be used as the lookup
-key for `VAHAN/02` (by chassis) or `VAHAN/03` (by engine), and we have no
-other source of an unmasked chassis or engine number. Both APIs respond
-correctly, but every lookup we can construct returns "not found", so we cannot
-evidence a successful result.
+**What we need.** Road-network geometry for the corridors serving JNPA:
+polylines or ordered coordinate sequences for national and state highways,
+with segment identity, so that a road can be drawn and a position can be
+placed *along* it.
 
-**Requests:**
-1. Please share a **chassis number and an engine number that resolve on
-   staging**, so we can complete these two test cases.
-2. Please advise whether **unmasked owner details can be enabled for our
-   account** in production. Our use case includes port security screening and
-   police reporting, both of which require the real registered-owner name; a
-   masked name cannot be matched against a person.
+**Why.** JNPA handles a very large share of India's container traffic, and
+almost all of it arrives and leaves by road on a small number of corridors,
+principally NH-348. The DTCCC's purpose is to see congestion forming on those
+corridors and act before it reaches the gate. To do that we must project live
+truck positions — which we obtain from FASTag toll crossings and LDB container
+movements, both through ULIP — onto the road they are travelling on. That
+requires the road's shape.
 
----
+**The gap.** Of the granted APIs, `GATISHAKTI/01` returns road attributes
+(name, type, lane status, GIS length) but no coordinates; `GATISHAKTI/02`
+returns storage infrastructure; `GATISHAKTI/03` returns industrial parks with
+point coordinates. None returns road geometry. We can therefore describe a
+highway but cannot place a truck on it, which limits corridor congestion
+analysis to point observations rather than continuous flow.
 
-## 7. FASTag wallet balance — is any API available?
+**What this would enable.** Corridor-level congestion and bottleneck detection
+ahead of the port gate; estimated time of arrival at the gate computed along
+the actual route rather than as a straight line; identification of the specific
+stretch where delay is accumulating; and evidence-based diversion advice to
+transporters. Each of these is a stated DTCCC objective.
 
-None of the thirteen granted APIs returns a FASTag wallet balance:
-`FASTAG/01` returns toll crossings and `FASTAG/02` the tag registry. Our
-application therefore reports "balance not published by ULIP" rather than
-displaying a figure.
+**Specifically, we would request** either `GATISHAKTI/05` (national corridors),
+which the integration documents describe but which is not in our grant, if it
+carries geometry; or any equivalent API exposing road-network geometry, ideally
+filterable by state and by NH number. GeoJSON or an ordered coordinate list
+would both suit us.
 
-**Request:** please confirm whether a wallet-balance API exists under a
-different grant, or whether balance is out of scope for ULIP entirely.
+## Requirement 2 — unmasked chassis and engine numbers
 
----
+**What we need.** For `VAHAN/02` (lookup by chassis number) and `VAHAN/03`
+(lookup by engine number) to be usable, we need chassis and engine numbers that
+are not masked — either unmasked in the `VAHAN/04` response for our account, or
+the ability to query `VAHAN/02` and `VAHAN/03` with an unmasked value we capture
+physically at the gate.
 
-## 8. Two notes that would help other integrators
+**Why.** These two APIs exist to answer one question: *which vehicle is this,
+when the number plate cannot be trusted?* That situation is routine at a port
+gate — a damaged, obscured, repainted or duplicated plate — and it is precisely
+the situation in which correct identification matters most, because it is also
+how a vehicle evades enforcement. The chassis and engine numbers are stamped on
+the vehicle and can be read physically by gate staff.
 
-**`Accept: application/json` appears to be mandatory.** Any request that does
-not send this header — including the `Accept: */*` sent by default by most HTTP
-client libraries — receives an **`HTTP 400` with an empty body**, giving no
-indication of the cause. The same request with the header succeeds. We lost
-some time on this; a short line in the integration documents would prevent
-others from doing the same.
+**The gap.** `VAHAN/04` returns these fields masked (`ME4JF509AH70*****`,
+`JF50E760*****`). A masked value cannot be used as a lookup key, so today the
+two APIs can only return "not found" for any vehicle we encounter. We have no
+alternative source for an unmasked identifier.
 
-**`HTTP 412` is returned before the credential is evaluated.** We observed that
-412 (`"Access denied Please contact ULIP support!"`) is returned both for an
-unregistered caller IP and for a username the platform does not recognise,
-while a wrong password for a valid username returns `401`. Documenting this
-distinction would make it much easier for integrators to tell an allow-list
-issue from a credential issue.
+**What this would enable.** Positive vehicle identification at the gate when
+the plate is unreadable or disputed; a cross-check between the chassis and
+engine numbers to detect a tampered vehicle; and support for law-enforcement
+follow-up, which currently cannot proceed on a masked identifier.
 
----
+**We recognise this is PII-sensitive** and are not asking for a blanket
+relaxation. We would welcome any controlled arrangement — restriction to these
+two APIs, audit logging of every such lookup on our side, a data-sharing
+undertaking, or gating the capability behind the port operator's authorisation.
+We already log every ULIP call we make and can share that audit trail.
 
-## 9. Production access
+## About us
 
-Our integration is complete and covers all thirteen granted APIs end to end,
-with automated tests pinned against both the documented contracts and the live
-staging responses. We are submitting our test-case document with screenshots of
-the application showing the input request and corresponding output for each
-API.
-
-**We would like to request production API access for the same thirteen APIs**,
-and would be grateful if you could advise the process, the production
-endpoint, and whether the same IP (`65.2.212.121`) should be registered for
-production.
-
-We would be happy to join a call if that is easier for working through the
-items above.
-
-Thank you for your support.
+The integration is complete and in operation against staging, covering FASTag,
+LDB, VAHAN, SARATHI and GatiShakti. We have submitted a full test-case document
+with screenshots to ULIP Support in support of our production-access request,
+and would be happy to share it with you, or to walk through the use case on a
+call, if that would help you assess these requirements.
 
 Best regards,
 

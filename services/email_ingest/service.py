@@ -39,23 +39,69 @@ STATUS_FAILED = "FAILED"
 STATUS_NEEDS_REVIEW = "NEEDS_REVIEW"
 
 
-def _count(payload: Dict[str, Any], *names: str) -> int:
-    """First present integer among ``names`` (the two upload services differ)."""
-    for n in names:
-        v = payload.get(n)
-        if isinstance(v, bool):
-            continue
-        if isinstance(v, int):
-            return v
-        if isinstance(v, str) and v.isdigit():
-            return int(v)
-    summary = payload.get("summary")
-    if isinstance(summary, dict):
+def _counts(outcome: Dict[str, Any]) -> Dict[str, int]:
+    """Normalise an importer result envelope into the page's counters.
+
+    Reading the counts by guessing key names silently under-reported a
+    SUCCESSFUL import. The two importers return these EXACT keys:
+
+        MarineUploadService.import_file  (upload_service.py:214-219)
+            imported (= rows INSERTED) | updated | skipped | invalid | failed
+            | duplicate_file | summary.rows
+        GateDocumentService.import_file  (gate_documents/service.py:98)
+            imported | skipped | invalid | duplicate_file | summary.rows
+        CustomsService import           (customs/repository.py:715-719)
+            record_count | imported_count | error_count | duplicate
+        *.validate  (dry run, writes nothing)
+            summary.rows | summary.invalid
+
+    The three envelopes share no key spelling for "rejected" or "duplicate", so
+    every spelling is read explicitly rather than assumed.
+
+    Two corrections over the previous name-guessing:
+
+    * ROWS WRITTEN = ``imported + updated``. ``imported`` alone is INSERTS ONLY,
+      so re-sending a file whose rows already exist upserts every row yet
+      reported 0 written — the "1521 detected / 0 imported" symptom.
+    * DETECTED comes from ``summary.rows``. No importer emits ``record_count`` /
+      ``records`` / ``detected`` / ``total`` / ``parsed``, so the old lookup
+      matched nothing and detected was ALWAYS 0.
+
+    ``skipped`` is surfaced separately so a duplicate re-send reads as "already
+    imported" instead of looking like a silent no-op.
+    """
+    summary = outcome.get("summary")
+    summary = summary if isinstance(summary, dict) else {}
+
+    def num(src: Dict[str, Any], *names: str) -> int:
         for n in names:
-            v = summary.get(n)
+            v = src.get(n)
             if isinstance(v, int) and not isinstance(v, bool):
                 return v
-    return 0
+        return 0
+
+    detected = num(outcome, "record_count", "records", "detected", "total", "parsed")
+    if not detected:
+        detected = num(summary, "rows", "record_count", "records")
+
+    written = num(outcome, "imported", "imported_count", "upserted") + num(outcome, "updated")
+
+    # `invalid` (failed validation) and `failed` (failed to write) are distinct
+    # counters in the marine envelope; customs spells the same idea `error_count`.
+    # All are "rejected" to the operator.
+    rejected = num(outcome, "invalid") + num(outcome, "failed") + num(outcome, "error_count")
+    if not rejected:
+        rejected = num(summary, "invalid")
+
+    skipped = num(outcome, "skipped", "duplicates") or num(summary, "duplicates")
+
+    # Whole-file dedup: marine/gate-doc say `duplicate_file`, customs says
+    # `duplicate`. Either means "these bytes were already imported, so nothing was
+    # written" — which is a correct 0-written, not a failure.
+    duplicate = bool(outcome.get("duplicate_file") or outcome.get("duplicate"))
+
+    return {"detected": detected, "written": written, "rejected": rejected,
+            "skipped": skipped, "duplicate_file": duplicate}
 
 
 def _errors(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -159,6 +205,10 @@ class EmailProcessingService:
         results: List[Dict[str, Any]] = []
         all_errors: List[Dict[str, Any]] = []
         detected, imported, failed = 0, 0, 0
+        # Rows the importer deliberately skipped (row-level duplicates), and how
+        # many attachments were whole-file duplicates. Reported so "0 written" is
+        # explained rather than looking like nothing happened.
+        skipped, duplicate_files = 0, 0
         tables: List[str] = []
         types: List[str] = []
         needs_review = False
@@ -227,12 +277,14 @@ class EmailProcessingService:
                 results.append(entry)
                 continue
 
-            d = _count(outcome, "record_count", "records", "detected", "total", "parsed")
-            i = _count(outcome, "imported", "imported_count", "upserted")
-            f = _count(outcome, "invalid", "error_count", "rejected", "failed")
+            c = _counts(outcome)
+            d, i, f = c["detected"], c["written"], c["rejected"]
             detected += d
             imported += i if commit else 0
             failed += f
+            skipped += c["skipped"]
+            if c["duplicate_file"]:
+                duplicate_files += 1
             errs = _errors(outcome)
             all_errors.extend({**e, "record_ref": e.get("record_ref") or att.filename}
                               for e in errs)
@@ -287,6 +339,10 @@ class EmailProcessingService:
             "records_detected": detected,
             "records_imported": imported,
             "records_failed": failed,
+            # Additive diagnostics: a duplicate re-send writes nothing legitimately,
+            # which is otherwise indistinguishable from a silent failure.
+            "records_skipped": skipped,
+            "duplicate_files": duplicate_files,
             "attachments": results,
             "errors": all_errors[:100],
         }

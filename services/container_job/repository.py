@@ -26,6 +26,11 @@ from jnpa_shared.logging import get_logger
 
 log = get_logger("services.container_job.repository")
 
+def _norm_py(raw: Optional[str]) -> str:
+    """Python twin of :data:`ContainerJobRepository._NORM`, for bound parameters."""
+    return "".join(ch for ch in (raw or "").upper() if ch.isalnum())
+
+
 _JOB_COLS = ("container_number", "group_code", "transporter_id", "vehicle_id", "vehicle_no",
              "driver_id", "driver_licence", "move_type", "document_type",
              "document_reference", "terminal", "gate", "assigned_by", "notes")
@@ -108,23 +113,43 @@ class ContainerJobRepository:
                 {"p": vehicle_no})
         return None
 
-    async def open_job_for_vehicle(self, vehicle_id: str) -> Optional[dict]:
-        return await self._one(
-            "SELECT id, container_number, status FROM core.container_job_assignment "
-            "WHERE vehicle_id = :v AND status NOT IN ('COMPLETED','CANCELLED') LIMIT 1",
-            {"v": vehicle_id})
+    # The human identifier normalised in SQL exactly as normalize_plate() /
+    # normalize_licence() do in Python — see service.SQL_NORMALISE.
+    _NORM = "upper(regexp_replace(coalesce({col}, ''), '[^A-Za-z0-9]', '', 'g'))"
 
-    async def open_job_for_driver(self, driver_id: str) -> Optional[dict]:
-        """The non-terminal job this driver already holds, or None.
+    async def open_job_for_vehicle(self, vehicle_id: str,
+                                   vehicle_no: Optional[str] = None) -> Optional[dict]:
+        """The non-terminal job this TRUCK already holds, or None.
 
-        Same rule as :meth:`open_job_for_vehicle`: occupancy is the job's STATE,
-        not the presence of a driver_id — a COMPLETED or CANCELLED job keeps its
-        driver_id and must free the person again."""
+        Matched on the Vehicle ID or, when one is known, the registration — the
+        same widened rule the availability list excludes on
+        (services.container_job.service.open_job_not_exists). core.vehicle is
+        unique on vehicle_id alone, so one truck can hold two master rows; a job
+        raised against one of them still occupies the truck named by the other."""
+        norm = self._NORM.format(col="vehicle_no")
         return await self._one(
             "SELECT id, container_number, vehicle_id, status "
             "FROM core.container_job_assignment "
-            "WHERE driver_id = :d AND status NOT IN ('COMPLETED','CANCELLED') LIMIT 1",
-            {"d": driver_id})
+            f"WHERE (vehicle_id = :v OR (:p <> '' AND {norm} = :p)) "
+            "AND status NOT IN ('COMPLETED','CANCELLED') LIMIT 1",
+            {"v": vehicle_id, "p": _norm_py(vehicle_no)})
+
+    async def open_job_for_driver(self, driver_id: str,
+                                  driver_licence: Optional[str] = None) -> Optional[dict]:
+        """The non-terminal job this PERSON already holds, or None.
+
+        Same two rules as :meth:`open_job_for_vehicle`: occupancy is the job's
+        STATE (a COMPLETED or CANCELLED job keeps its driver_id and must free the
+        person again), and the person is identified by their licence as well as
+        their Driver ID, because core.driver_identity can carry several records
+        for one driver."""
+        norm = self._NORM.format(col="driver_licence")
+        return await self._one(
+            "SELECT id, container_number, vehicle_id, status "
+            "FROM core.container_job_assignment "
+            f"WHERE (driver_id = :d OR (:l <> '' AND {norm} = :l)) "
+            "AND status NOT IN ('COMPLETED','CANCELLED') LIMIT 1",
+            {"d": driver_id, "l": _norm_py(driver_licence)})
 
     async def open_job_for_container(self, container_number: str) -> Optional[dict]:
         return await self._one(
@@ -409,9 +434,14 @@ class ContainerJobRepository:
         /api/vehicles/available used to filter on and which excluded precisely the
         driver-bound fleet the PWA can sign in as."""
         rows = await self._rows(
-            "SELECT DISTINCT vehicle_id FROM core.container_job_assignment "
+            "SELECT DISTINCT vehicle_id, vehicle_no FROM core.container_job_assignment "
             "WHERE status NOT IN ('COMPLETED','CANCELLED') AND vehicle_id IS NOT NULL")
-        return {r["vehicle_id"] for r in rows if r.get("vehicle_id")}
+        # BOTH keys: this set is the in-memory backend's stand-in for the SQL
+        # correlation, which matches a Vehicle ID or a registration. Returning
+        # ids alone would let a truck's duplicate master row read as free.
+        out = {r["vehicle_id"] for r in rows if r.get("vehicle_id")}
+        out |= {_norm_py(r.get("vehicle_no")) for r in rows if _norm_py(r.get("vehicle_no"))}
+        return out
 
     async def drivers_with_open_jobs(self) -> set[str]:
         """Driver IDs currently holding a job that is neither COMPLETED nor
@@ -422,9 +452,12 @@ class ContainerJobRepository:
         it; the Postgres path filters with the correlated NOT EXISTS in
         gateway.enrollment so the LIMIT applies to genuinely free drivers."""
         rows = await self._rows(
-            "SELECT DISTINCT driver_id FROM core.container_job_assignment "
+            "SELECT DISTINCT driver_id, driver_licence FROM core.container_job_assignment "
             "WHERE status NOT IN ('COMPLETED','CANCELLED') AND driver_id IS NOT NULL")
-        return {r["driver_id"] for r in rows if r.get("driver_id")}
+        out = {r["driver_id"] for r in rows if r.get("driver_id")}
+        out |= {_norm_py(r.get("driver_licence")) for r in rows
+                if _norm_py(r.get("driver_licence"))}
+        return out
 
     async def latest_job_for_container(self, container_number: str) -> Optional[dict]:
         return await self._one(

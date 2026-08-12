@@ -133,3 +133,44 @@ async def test_searching_an_occupied_vehicle_by_plate_returns_nothing():
     # …and the same search finds it once the job is terminal
     found = await fleet.list_assignable(DSN, q="MH04QA9911", occupied=set())
     assert [r["vehicle_number"] for r in found] == ["MH04QA9911"]
+
+
+# ------------------------------------- duplicate records for ONE truck
+# core.vehicle is unique on vehicle_id; nothing guarantees one row per
+# registration on a database whose table predates the fleet module's schema. A
+# second row for the same plate is what lets an occupied truck keep appearing.
+@pytest.mark.asyncio
+async def test_duplicate_records_for_one_truck_yield_one_option():
+    await _register("MH04QA9911")
+    # a second master row for the same physical truck, punctuated differently
+    vid2 = await fleet.next_vehicle_id(DSN)
+    await fleet.add_vehicle(DSN, vehicle_id=vid2, vehicle_number="MH04 QA 9911",
+                            status=fleet.ACTIVE, created_by="test")
+    rows = await fleet.list_assignable(DSN, occupied=set())
+    assert len(rows) == 1                                   # one truck, one option
+    assert await fleet.count_assignable(DSN, occupied=set()) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_busy_truck_is_not_offered_through_a_duplicate_record():
+    """The bug behind "MH04QA9911 is assigned but still in the dropdown": the job
+    is held by the first record, so the truck is occupied — its twin row must not
+    stand in for it."""
+    busy = await _register("MH04QA9911")
+    vid2 = await fleet.next_vehicle_id(DSN)
+    await fleet.add_vehicle(DSN, vehicle_id=vid2, vehicle_number="MH04 QA 9911",
+                            status=fleet.ACTIVE, created_by="test")
+    await _register("MH04AB1234")
+    # what ContainerJobRepository.vehicles_with_open_jobs() returns: the Vehicle
+    # ID the job was raised against AND the registration it recorded
+    occupied = {busy, "MH04QA9911"}
+    rows = await fleet.list_assignable(DSN, occupied=occupied)
+    assert [r["vehicle_number"] for r in rows] == ["MH04AB1234"]
+    assert await fleet.count_assignable(DSN, occupied=occupied) == 1
+    assert await fleet.list_assignable(DSN, q="MH04QA9911", occupied=occupied) == []
+
+
+def test_the_predicate_matches_the_registration_as_well_as_the_vehicle_id():
+    sql, _ = fleet._open_job_predicate()
+    assert "j.vehicle_id = core.vehicle.vehicle_id" in sql
+    assert "vehicle_no" in sql                # the truck, not just the record

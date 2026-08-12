@@ -116,13 +116,26 @@ class FakeRepo:
     async def transporter_blacklisted(self, *, transporter_id, vehicle_no):
         return self.blacklist.get(transporter_id)
 
-    async def open_job_for_vehicle(self, vid):
-        return next((j for j in self.jobs.values()
-                     if j["vehicle_id"] == vid and j["status"] not in ("COMPLETED", "CANCELLED")), None)
+    @staticmethod
+    def _norm(raw):
+        return "".join(c for c in (raw or "").upper() if c.isalnum())
 
-    async def open_job_for_driver(self, did):
+    async def open_job_for_vehicle(self, vid, vehicle_no=None):
+        """Matches the real repository: Vehicle ID OR registration (one truck can
+        hold two master rows)."""
+        plate = self._norm(vehicle_no)
         return next((j for j in self.jobs.values()
-                     if j.get("driver_id") == did
+                     if (j["vehicle_id"] == vid
+                         or (plate and self._norm(j.get("vehicle_no")) == plate))
+                     and j["status"] not in ("COMPLETED", "CANCELLED")), None)
+
+    async def open_job_for_driver(self, did, driver_licence=None):
+        """Matches the real repository: Driver ID OR licence (one person can hold
+        several driver_identity records)."""
+        lic = self._norm(driver_licence)
+        return next((j for j in self.jobs.values()
+                     if (j.get("driver_id") == did
+                         or (lic and self._norm(j.get("driver_licence")) == lic))
                      and j["status"] not in ("COMPLETED", "CANCELLED")), None)
 
     async def open_job_for_container(self, cn):

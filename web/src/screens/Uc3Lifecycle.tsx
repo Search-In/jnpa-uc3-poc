@@ -292,6 +292,10 @@ export default function Uc3Lifecycle() {
   const items = jobsQ.data?.items ?? [];
   // Handover-queue entries are NOT jobs: they are released containers waiting for
   // one, so they are counted (and rendered) separately from dispatched work.
+  // Which queue entry the Assign panel is currently loaded with, so the operator
+  // can see which container they are assigning. Derived from the container in the
+  // form rather than held separately — the two can then never disagree.
+  const pendingSelected = term.trim().toUpperCase() || null;
   const pending = items.filter((j) => j.pending_handover === true);
   const jobs = items.filter((j): j is ContainerJob => j.pending_handover !== true);
   const openJobs = jobs.filter((j) => j.status !== "COMPLETED" && j.status !== "CANCELLED").length;
@@ -404,12 +408,23 @@ export default function Uc3Lifecycle() {
                           <li key={`pending:${j.container_number}`}>
                             <button
                               type="button"
+                              // Clicking a container that needs a truck hands it
+                              // to the Assign panel above (which pre-fills the
+                              // number and the first AVAILABLE truck + driver).
+                              // It only pre-fills — no job is created until the
+                              // operator validates and presses Assign.
                               onClick={() => {
                                 setSelectedJob(null);
                                 setOpenStep(null);
                                 setTerm(j.container_number ?? "");
                               }}
-                              className="flex w-full flex-col gap-1 px-3 py-2.5 text-left transition-colors hover:bg-muted/40"
+                              aria-current={pendingSelected === j.container_number}
+                              className={
+                                "flex w-full flex-col gap-1 px-3 py-2.5 text-left transition-colors " +
+                                (pendingSelected === j.container_number
+                                  ? "bg-primary/10"
+                                  : "hover:bg-muted/40")
+                              }
                             >
                               <div className="flex items-center justify-between gap-2">
                                 <span className="truncate font-mono text-[13px] font-medium text-foreground">

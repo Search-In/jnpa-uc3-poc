@@ -159,3 +159,56 @@ async def test_count_is_not_capped_by_the_page_limit():
     assert len(page) == 5
     assert await enr.count_assignable_drivers(DSN, occupied=occupied) == 19
     assert not {r["driver_id"] for r in page} & occupied
+
+
+# --------------------------------------- duplicate records for ONE person
+# core.driver_identity is keyed on driver_id alone: nothing stops the same
+# licence appearing under several Driver IDs (the driver master import and the
+# admin/PWA enrolment paths both create rows). That is what puts three identical
+# "AAKIL KHAN — MH01 20100095262" options in the dropdown — and, far worse, keeps
+# offering a driver who is out on a job under one of their OTHER records.
+LICENCE = "MH01 20100095262"
+
+
+def _same_person(*driver_ids: str) -> None:
+    for did in driver_ids:
+        _register(did, "AAKIL KHAN", licence=LICENCE)
+
+
+@pytest.mark.asyncio
+async def test_duplicate_records_for_one_person_yield_one_option():
+    _same_person("DRV-7", "DRV-8", "DRV-9")
+    _register("DRV-2", "Rahul", licence="UP6420140008203")
+    rows = await enr.list_assignable_drivers(DSN, occupied=set())
+    assert [r["driver_id"] for r in rows] == ["DRV-7", "DRV-2"]      # one AAKIL, not three
+    assert await enr.count_assignable_drivers(DSN, occupied=set()) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_busy_driver_is_not_offered_through_a_duplicate_record():
+    """The bug behind "the dropdown shows drivers who already have an open job":
+    the job is held by DRV-7, so the person is occupied — DRV-8 and DRV-9 are the
+    same licence and must not stand in for them."""
+    _same_person("DRV-7", "DRV-8", "DRV-9")
+    _register("DRV-2", "Rahul", licence="UP6420140008203")
+    # the caller's busy set names the licence the open job carries
+    busy = {"DRV-7", "".join(c for c in LICENCE if c.isalnum())}
+    rows = await enr.list_assignable_drivers(DSN, occupied=busy)
+    assert [r["name"] for r in rows] == ["Rahul"]
+    assert await enr.count_assignable_drivers(DSN, occupied=busy) == 1
+    # …and searching for them by name finds nothing
+    assert await enr.list_assignable_drivers(DSN, q="AAKIL", occupied=busy) == []
+
+
+def test_the_dedupe_key_is_the_licence_not_the_display_name():
+    """Two different people who happen to share a name stay two options."""
+    assert "license_no" in enr._DRIVER_IDENTITY
+    assert "name" not in enr._DRIVER_DEDUPE_KEY
+    assert enr._normalise_licence("MH01 20100095262") == enr._normalise_licence("mh0120100095262")
+    assert enr._normalise_licence("") == ""
+
+
+def test_the_predicate_matches_the_licence_as_well_as_the_driver_id():
+    where, _ = enr._assignable_drivers_where(None)
+    assert "j.driver_id = core.driver_identity.driver_id" in where
+    assert "driver_licence" in where          # the person, not just the record

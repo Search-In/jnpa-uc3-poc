@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+from datetime import timedelta
 from typing import Any, List, Optional
 
 from integrations.ulip import UlipClient, UlipError, UlipNotConfigured
@@ -106,7 +107,13 @@ class FastagPoller:
         try:
             rows = await fetch_all(
                 _ACTIVE_PLATES_SQL,
-                {"window": f"{self.active_days} days", "limit": self.max_plates},
+                # asyncpg maps `interval` to timedelta and REFUSES the string
+                # "7 days" ("'str' object has no attribute 'days'"). The failure
+                # was swallowed into a warning and the sweep returned zero
+                # plates, so the poller ran hourly and accumulated nothing —
+                # while FASTAG/01's 72-hour window kept discarding history.
+                {"window": timedelta(days=self.active_days),
+                 "limit": self.max_plates},
                 dsn=self._dsn,
             )
         except Exception as exc:  # noqa: BLE001 — a sweep must never crash

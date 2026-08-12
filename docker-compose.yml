@@ -1056,6 +1056,12 @@ services:
       ULIP_API_URL: ${ULIP_API_URL:-}
       ULIP_CLIENT_ID: ${ULIP_CLIENT_ID:-}
       ULIP_CLIENT_SECRET: ${ULIP_CLIENT_SECRET:-}
+      # The cutover switch. gateway/config.py reads it from the environment, so
+      # WITHOUT this line it is always false inside the container no matter what
+      # .env says — which silently disables the VAHAN LIVE_PRIMARY rung, the LDB
+      # ULIP rung and the FASTag 72-hour poller while everything still reports
+      # "configured". Credentials alone are not enough to go live.
+      ULIP_LIVE_ENABLED: ${ULIP_LIVE_ENABLED:-0}
       ULIP_TIMEOUT_S: ${ULIP_TIMEOUT_S:-5}
       # LDB/01 aggregates a container's whole trail: 10-20 s on production.
       ULIP_LDB_TIMEOUT_S: ${ULIP_LDB_TIMEOUT_S:-30}

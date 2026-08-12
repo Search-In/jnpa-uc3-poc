@@ -774,3 +774,33 @@ async def test_ldb_rung_is_skipped_when_ulip_live_is_off():
         cfg = _Cfg()
 
     assert await ldbmod._ulip_events(_State(), "NSST1234570") is None
+
+
+@pytest.mark.asyncio
+async def test_fastag_poller_binds_a_real_interval_not_a_string():
+    """asyncpg maps Postgres ``interval`` to ``timedelta`` and REFUSES the
+    string "7 days" — ``'str' object has no attribute 'days'``. The poller
+    caught that into a warning and returned zero plates, so it ran once an hour
+    and swept nothing while FASTAG/01's 72-hour window kept discarding the
+    history it exists to preserve. Verified live on production 2026-08-12:
+    ``fastag_poller_plate_query_failed`` every sweep, ``plates: 0``.
+
+    Pinned by asserting the BIND, because the failure mode is a silent no-op:
+    the poller reports success with zero work done."""
+    from datetime import timedelta
+    import services.fastag.poller as pollermod
+
+    captured: dict = {}
+
+    async def fake_fetch_all(sql, params, dsn=None):
+        captured.update(params)
+        return [{"plate": "MH14LE9625", "last_seen": None}]
+
+    poller = pollermod.FastagPoller(dsn="postgresql+asyncpg://x/y", active_days=7)
+    with mock.patch("jnpa_shared.db.fetch_all", fake_fetch_all):
+        plates = await poller.active_plates()
+
+    assert plates == ["MH14LE9625"]
+    assert isinstance(captured["window"], timedelta), \
+        f"interval must bind as timedelta, got {type(captured['window']).__name__}"
+    assert captured["window"] == timedelta(days=7)

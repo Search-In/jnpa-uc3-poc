@@ -8,14 +8,20 @@
 // /api/kpi/distribution). Nothing here recomputes a KPI in the browser — a
 // number an operator may act on should not depend on which client rendered it.
 //
-// The skew warning is deliberate and load-bearing. When the mean sits above the
-// P90 a handful of extreme trips are dominating the average, and the honest
-// response is to say so and point at the median rather than quietly trimming the
-// tail: the outliers are a real data-quality artifact (trip rows joined across
-// simulator restarts), and the project's rule is to surface DQ findings, not
-// delete them to make a headline look better.
+// WHAT IS NOT RENDERED HERE. The payload also carries two engineering
+// explanations: `skew_warning` (why a window's mean sits above its P90 — the
+// outliers behind it are a known data-quality artifact) and `note` (that every
+// figure is computed over per-trip rows and an unmeasured KPI reports null, not
+// zero). Both REMAIN in /api/kpi/distribution for the reporting and diagnostic
+// clients that need them; neither belongs on a control-room wallboard, where the
+// operator acts on the value against its target. The DQ finding is still
+// surfaced — through the API and the reports that read it — not deleted.
+//
+// No figure, threshold or computation changes with that omission: the panel
+// renders exactly the numbers the endpoint returns, unmeasured KPIs still show
+// an em-dash with samples: 0, and nothing is recomputed in the browser.
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, BarChart3 } from "lucide-react";
+import { BarChart3 } from "lucide-react";
 
 import { api } from "@/lib/api";
 import { fmtDateTimeIST } from "@/lib/utils";
@@ -72,13 +78,6 @@ function Row({ d }: { d: KpiDistributionEntry }) {
         />
         <Figure label="Target" value={d.target} unit={d.unit} hint={`baseline ${d.baseline}`} />
       </dl>
-
-      {d.skew_warning && (
-        <p className="mt-1.5 flex items-start gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 p-1.5 text-[10px] leading-snug text-amber-700 dark:text-amber-400">
-          <AlertTriangle className="mt-px h-3 w-3 shrink-0" aria-hidden />
-          {d.skew_warning}
-        </p>
-      )}
     </li>
   );
 }
@@ -125,7 +124,6 @@ export default function KpiDistributionPanel() {
               <Row key={d.key} d={d} />
             ))}
           </ul>
-          <p className="mt-2 text-[10px] leading-snug text-muted-foreground">{q.data?.note}</p>
         </>
       )}
     </Card>

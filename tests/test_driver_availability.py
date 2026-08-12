@@ -212,3 +212,56 @@ def test_the_predicate_matches_the_licence_as_well_as_the_driver_id():
     where, _ = enr._assignable_drivers_where(None)
     assert "j.driver_id = core.driver_identity.driver_id" in where
     assert "driver_licence" in where          # the person, not just the record
+
+
+@pytest.mark.asyncio
+async def test_a_busy_driver_is_not_offered_when_only_their_RECORD_id_is_known():
+    """The live spine has open jobs with driver_id set and driver_licence NULL, so
+    the busy set names the RECORD and nothing else. The PERSON is still occupied:
+    their other records must not stand in for them, by list or by search."""
+    _same_person("DRV-7", "DRV-8", "DRV-9")
+    _register("DRV-2", "Rahul", licence="UP6420140008203")
+
+    occupied = {"DRV-7"}                    # the RECORD, not the licence
+    rows = await enr.list_assignable_drivers(DSN, occupied=occupied)
+    assert [r["name"] for r in rows] == ["Rahul"]
+    assert await enr.count_assignable_drivers(DSN, occupied=occupied) == 1
+    assert await enr.list_assignable_drivers(DSN, q="AAKIL", occupied=occupied) == []
+    assert await enr.list_assignable_drivers(DSN, q=LICENCE, occupied=occupied) == []
+    assert await enr.count_assignable_drivers(DSN, q="AAKIL", occupied=occupied) == 0
+
+
+@pytest.mark.asyncio
+async def test_an_available_driver_is_still_found_by_search():
+    """The exclusion is not a blanket: a free driver is returned by name, by
+    licence and by Driver ID, and counted as one."""
+    _same_person("DRV-7", "DRV-8")
+    _register("DRV-2", "Rahul", licence="UP6420140008203")
+    for needle in ("Rahul", "UP6420140008203", "DRV-2"):
+        rows = await enr.list_assignable_drivers(DSN, q=needle, occupied={"DRV-7"})
+        assert [r["driver_id"] for r in rows] == ["DRV-2"], needle
+        assert await enr.count_assignable_drivers(DSN, q=needle, occupied={"DRV-7"}) == 1
+
+
+@pytest.mark.asyncio
+async def test_count_equals_the_unique_drivers_returned():
+    """Acceptance 9 for the driver side: the "N available" label is the length of
+    the de-duplicated, occupancy-filtered list — never the row count."""
+    _same_person("DRV-7", "DRV-8", "DRV-9")
+    _register("DRV-2", "Rahul", licence="UP6420140008203")
+    _register("DRV-3", "Suresh", licence="MH12 20150000001")
+    _register("DRV-4", "Suresh twin", licence="MH1220150000001")
+    occupied = {"DRV-7"}
+    rows = await enr.list_assignable_drivers(DSN, limit=500, occupied=occupied)
+    identities = {enr._normalise_licence(r["license_no"]) or r["driver_id"] for r in rows}
+    assert len(rows) == len(identities) == 2          # Rahul + one Suresh
+    assert await enr.count_assignable_drivers(DSN, occupied=occupied) == len(rows)
+
+
+def test_the_predicate_resolves_the_job_id_through_the_master():
+    """A job that names only a Driver ID still occupies the PERSON: the id is
+    resolved to a licence through core.driver_identity."""
+    where, _ = enr._assignable_drivers_where(None)
+    assert "FROM core.driver_identity md" in where
+    assert "md.driver_id = j.driver_id" in where
+    assert "md.license_no" in where

@@ -560,6 +560,11 @@ export interface AvailableVehicle {
   /** Driver bound to this truck in core.driver_identity, null when unassigned. */
   driver_id?: string | null;
   driver_name?: string | null;
+  /** That driver's licence — the PERSON behind the record. The available-driver
+   *  list carries one record per licence, so the binding is matched to it by
+   *  licence; a Driver ID alone cannot tell that the same person is listed under
+   *  another record. */
+  driver_licence?: string | null;
 }
 
 // Vehicle Master lifecycle status.

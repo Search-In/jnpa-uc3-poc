@@ -1,14 +1,20 @@
 import { describe, expect, it } from "vitest";
 
-import { autoSelect, dedupeBy, driverIdentity, vehicleIdentity } from "./assign";
+import { autoSelect, boundDriverFor, dedupeBy, driverIdentity, vehicleIdentity } from "./assign";
 import type { ActiveDriver } from "./api";
 import type { AvailableVehicle } from "./types";
 
-const veh = (id: string, plate: string, driver_id?: string): AvailableVehicle => ({
+const veh = (
+  id: string,
+  plate: string,
+  driver_id?: string,
+  driver_licence?: string,
+): AvailableVehicle => ({
   vehicle_id: id,
   vehicle_number: plate,
   plate,
   driver_id: driver_id ?? null,
+  driver_licence: driver_licence ?? null,
 });
 const drv = (id: string, name: string, license_no?: string): ActiveDriver => ({
   driver_id: id,
@@ -134,5 +140,81 @@ describe("autoSelect", () => {
 
   it("still selects a truck when no driver is free", () => {
     expect(autoSelect(AVAILABLE_VEHICLES, [])).toEqual({ vehicleId: "TRK-1", driverId: "" });
+  });
+});
+
+describe("boundDriverFor", () => {
+  const LICENCE = "MH01 20100095262";
+  // The person is available — but under DRV-1B, not the DRV-9C the vehicle is
+  // bound to. Both records are the same licence, so both are the same driver.
+  const drivers = [drv("DRV-1B", "AAKIL KHAN", LICENCE), ...AVAILABLE_DRIVERS];
+
+  it("resolves the bound driver by their record when that record is listed", () => {
+    const vehicle = veh("TRK-1", "MH04DV0411", "DRV-1B", LICENCE);
+    expect(boundDriverFor(vehicle, drivers)?.driver_id).toBe("DRV-1B");
+  });
+
+  it("resolves the bound PERSON when the list carries their other record", () => {
+    // De-duplication keeps one record per licence, so the bound record is
+    // routinely not the listed one. Matching on the Driver ID alone reported the
+    // driver as busy and dispatched a stranger instead.
+    const vehicle = veh("TRK-1", "MH04DV0411", "DRV-9C", LICENCE);
+    expect(boundDriverFor(vehicle, drivers)?.driver_id).toBe("DRV-1B");
+  });
+
+  it("resolves nobody when the bound person is out on a job", () => {
+    // Neither their record nor their licence is in the availability response.
+    const vehicle = veh("TRK-1", "MH04DV0411", "DRV-BUSY", "UP99 20200000001");
+    expect(boundDriverFor(vehicle, drivers)).toBeNull();
+  });
+
+  it("resolves nobody for a truck with no driver on file", () => {
+    expect(boundDriverFor(veh("TRK-1", "MH04DV0411"), drivers)).toBeNull();
+    expect(boundDriverFor(null, drivers)).toBeNull();
+  });
+});
+
+describe("auto-select never reaches an occupied resource", () => {
+  // Acceptance 10, stated as the property rather than a case: whatever the
+  // availability response is, the selection is drawn FROM it. The occupied
+  // resources below are simply absent from the lists, as the backend leaves them.
+  const OCCUPIED_VEHICLE = "TRK-BUSY";
+  const OCCUPIED_DRIVER = "DRV-BUSY";
+
+  it("never selects an occupied vehicle, however the form is seeded", () => {
+    for (const keep of [
+      {},
+      { vehicleId: OCCUPIED_VEHICLE },
+      { vehicleId: OCCUPIED_VEHICLE, driverId: OCCUPIED_DRIVER },
+    ]) {
+      const { vehicleId } = autoSelect(AVAILABLE_VEHICLES, AVAILABLE_DRIVERS, keep);
+      expect(vehicleId).not.toBe(OCCUPIED_VEHICLE);
+      expect(AVAILABLE_VEHICLES.map((v) => v.vehicle_id)).toContain(vehicleId);
+    }
+  });
+
+  it("never selects an occupied driver, not even the truck's own", () => {
+    // The truck is bound to an occupied driver by BOTH id and licence.
+    const vehicles = [veh("TRK-1", "MH04DV0411", OCCUPIED_DRIVER, "UP99 20200000001")];
+    for (const keep of [{}, { driverId: OCCUPIED_DRIVER }]) {
+      const { driverId } = autoSelect(vehicles, AVAILABLE_DRIVERS, keep);
+      expect(driverId).not.toBe(OCCUPIED_DRIVER);
+      expect(AVAILABLE_DRIVERS.map((d) => d.driver_id)).toContain(driverId);
+    }
+  });
+
+  it("leaves the driver empty when the availability response is empty", () => {
+    // "No available drivers" — the panel says so rather than selecting anyone.
+    const vehicles = [veh("TRK-1", "MH04DV0411", OCCUPIED_DRIVER, "UP99 20200000001")];
+    expect(autoSelect(vehicles, [])).toEqual({ vehicleId: "TRK-1", driverId: "" });
+  });
+
+  it("selects nothing at all when a search returns no available resource", () => {
+    // Searching for an occupied truck returns [] from the availability endpoint
+    // (the search runs inside the exclusion), so there is nothing to select.
+    expect(autoSelect([], AVAILABLE_DRIVERS, { vehicleId: OCCUPIED_VEHICLE })).toEqual({
+      vehicleId: "",
+      driverId: "DRV-1",
+    });
   });
 });

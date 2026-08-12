@@ -129,3 +129,17 @@ def test_the_ground_truth_note_is_operator_wording_in_both_branches():
     # The non-empty branch still states the rule that matters operationally:
     # markers are references, never folded into the headline average.
     assert "never averaged" in kpi_router.OPERATOR_GROUND_TRUTH_NOTE.lower()
+
+
+def test_the_machine_readable_metadata_survives_for_other_clients(payload):
+    """Live Operations stopped RENDERING the engineering metadata; the API kept
+    it. Reporting, audit and diagnostic clients still read these fields, so
+    removing them from the payload would be a breaking change — the boundary is
+    presentation, not the contract."""
+    for arm in ("terminal", "driver"):
+        assert payload["pair"][arm]["method"]
+        assert payload["pair"][arm]["baseline_source"]
+    assert payload["render_rule"]["ref"] == "UI-122"
+    assert payload["render_rule"]["note"]
+    assert "ground_truth_markers" in payload
+    assert payload["ground_truth_note"]

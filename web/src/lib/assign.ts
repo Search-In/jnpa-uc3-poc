@@ -45,6 +45,32 @@ export function dedupeBy<T>(items: T[], identity: (item: T) => string): T[] {
   });
 }
 
+/**
+ * The available driver record that IS the person bound to this truck, or null.
+ *
+ * The binding names a RECORD (core.driver_identity is keyed on driver_id), while
+ * the availability list carries one record per PERSON — so the bound record is
+ * frequently not the listed one even though the driver is free. Matching on the
+ * Driver ID alone then reports a free driver as busy, and the console falls back
+ * to a stranger. The licence is the person, so it is tried second.
+ *
+ * Returns only what the availability response contains: a driver who is out on a
+ * job is not in `drivers`, so this cannot resolve to them.
+ */
+export function boundDriverFor(
+  vehicle: Pick<AvailableVehicle, "driver_id" | "driver_licence"> | null | undefined,
+  drivers: ActiveDriver[],
+): ActiveDriver | null {
+  if (!vehicle) return null;
+  const byId = vehicle.driver_id
+    ? (drivers.find((d) => d.driver_id === vehicle.driver_id) ?? null)
+    : null;
+  if (byId) return byId;
+  const identity = (vehicle.driver_licence ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (!identity) return null;
+  return drivers.find((d) => driverIdentity(d) === identity) ?? null;
+}
+
 export interface AutoSelection {
   vehicleId: string;
   driverId: string;
@@ -57,9 +83,10 @@ export interface AutoSelection {
  * The driver preference is the one the console already had — the driver bound to
  * the chosen truck (core.driver_identity), so the person who can actually sign
  * into the PWA on that vehicle is the one dispatched — but ONLY when that driver
- * is in the available list. A bound driver who is out on another truck's job
- * falls through to the first available driver instead of being selected, which
- * is the difference between "convenient" and "wrong".
+ * is in the available list (see `boundDriverFor`, which matches the person, not
+ * the record). A bound driver who is out on another truck's job falls through to
+ * the first available driver instead of being selected, which is the difference
+ * between "convenient" and "wrong".
  *
  * `keep` is the operator's current choice: it survives untouched as long as it
  * is still available, so re-rendering never fights a manual selection.
@@ -74,7 +101,8 @@ export function autoSelect(
   const freeDriver = (id: string | null | undefined) =>
     id ? (drivers.find((d) => d.driver_id === id) ?? null) : null;
 
-  const driver = freeDriver(keep.driverId) ?? freeDriver(vehicle?.driver_id) ?? drivers[0] ?? null;
+  const driver =
+    freeDriver(keep.driverId) ?? boundDriverFor(vehicle, drivers) ?? drivers[0] ?? null;
 
   return { vehicleId: vehicle?.vehicle_id ?? "", driverId: driver?.driver_id ?? "" };
 }

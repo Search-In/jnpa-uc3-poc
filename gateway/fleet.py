@@ -455,7 +455,12 @@ def _open_job_predicate() -> tuple[str, dict]:
         # A registration identifies the truck the yard dispatches. core.vehicle is
         # unique on vehicle_id only, so the same plate can hold two rows; without
         # this the twin row of a busy truck reads as free.
-        master_identity="core.vehicle.vehicle_no", job_identity="vehicle_no")
+        master_identity="core.vehicle.vehicle_no", job_identity="vehicle_no",
+        # …and when the job row carries no registration of its own, resolve the
+        # one it does carry — the Vehicle ID — back to a plate through the master,
+        # so those jobs occupy the truck rather than just the record.
+        identity_table="core.vehicle", identity_key="vehicle_id",
+        identity_column="vehicle_no", identity_alias="mv")
 
 
 # One physical truck = one option. The registration is the identity (a vehicle
@@ -504,6 +509,12 @@ def _mem_assignable(occupied: set, q: Optional[str]) -> List[dict]:
     # correlation matches on.
     busy = set(occupied or set())
     busy |= {_plate_identity(o) for o in busy if _plate_identity(o)}
+    # A busy Vehicle ID names a RECORD; the truck it stands for is the plate that
+    # record carries, so every OTHER record for that plate is busy too. Resolved
+    # here for the same reason the SQL path resolves it through core.vehicle: the
+    # caller's set may name only the id.
+    busy |= {_mem_identity(v) for v in _MEM.values()
+             if v.get("vehicle_id") in busy and _mem_identity(v)}
     out, seen = [], set()
     for v in _MEM.values():
         vid = v.get("vehicle_id")
@@ -561,7 +572,11 @@ async def list_assignable(dsn: str, *, q: Optional[str] = None, limit: int = 50,
              "vehicle_number": v.get("vehicle_number"),
              "vehicle_type": v.get("vehicle_type"), "state": None,
              "driver_id": (dm.get(v["vehicle_id"]) or {}).get("driver_id"),
-             "driver_name": (dm.get(v["vehicle_id"]) or {}).get("name")}
+             "driver_name": (dm.get(v["vehicle_id"]) or {}).get("name"),
+             # The PERSON bound to this truck, not just their record: the driver
+             # list carries one record per licence, so the console matches the
+             # binding to it by licence and never by Driver ID alone.
+             "driver_licence": (dm.get(v["vehicle_id"]) or {}).get("license_no")}
             for v in rows]
 
 

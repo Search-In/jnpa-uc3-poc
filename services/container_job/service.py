@@ -58,7 +58,11 @@ SQL_NORMALISE = "upper(regexp_replace(coalesce({col}, ''), '[^A-Za-z0-9]', '', '
 def open_job_not_exists(master_column: str, *, job_column: str,
                         alias: str = "j",
                         master_identity: Optional[str] = None,
-                        job_identity: Optional[str] = None) -> tuple[str, dict]:
+                        job_identity: Optional[str] = None,
+                        identity_table: Optional[str] = None,
+                        identity_key: Optional[str] = None,
+                        identity_column: Optional[str] = None,
+                        identity_alias: str = "m") -> tuple[str, dict]:
     """``NOT EXISTS (open job on this resource)`` SQL fragment + bound params.
 
     "Occupied" is a DATABASE fact about core.container_job_assignment, and it is
@@ -87,6 +91,13 @@ def open_job_not_exists(master_column: str, *, job_column: str,
     normalised, and only when non-blank on both sides — two rows with no plate on
     file are not thereby the same truck.
 
+    ``identity_table`` / ``identity_key`` / ``identity_column`` resolve the job's
+    surrogate id back to the physical identity THROUGH the master, for jobs whose
+    denormalised plate/licence column is empty (older rows, and producers that
+    only ever had the id). Without it the exclusion silently degrades to the
+    surrogate id for exactly those rows, and the busy resource's twin record is
+    offered again.
+
     ``master_column`` is the qualified column on the table being filtered (e.g.
     ``core.vehicle.vehicle_id``); ``job_column`` is the assignment column it must
     match. All identifiers are code-supplied, never client input.
@@ -94,12 +105,25 @@ def open_job_not_exists(master_column: str, *, job_column: str,
     names = sorted(TERMINAL)
     keys = [f"term{i}" for i in range(len(names))]
     placeholders = ", ".join(f":{k}" for k in keys)
-    match = f"{alias}.{job_column} = {master_column}"
+    terms = [f"{alias}.{job_column} = {master_column}"]
     if master_identity and job_identity:
         job_norm = SQL_NORMALISE.format(col=f"{alias}.{job_identity}")
         master_norm = SQL_NORMALISE.format(col=master_identity)
-        match = (f"({match} OR (NULLIF({job_norm}, '') IS NOT NULL "
-                 f"AND {job_norm} = {master_norm}))")
+        terms.append(f"(NULLIF({job_norm}, '') IS NOT NULL AND {job_norm} = {master_norm})")
+        if identity_table and identity_key and identity_column:
+            # The job names a RECORD (a surrogate id); the identity it stands for
+            # lives in the master. Resolving it there closes the last hole: a job
+            # written without the denormalised plate/licence — an older row, or
+            # one from a producer that only had the id — would otherwise occupy
+            # its own master row and leave the twin row for the SAME truck or
+            # person reading as free, which is precisely "it is on a job and
+            # still in the dropdown".
+            other = SQL_NORMALISE.format(col=f"{identity_alias}.{identity_column}")
+            terms.append(
+                f"EXISTS (SELECT 1 FROM {identity_table} {identity_alias} "
+                f"WHERE {identity_alias}.{identity_key} = {alias}.{job_column} "
+                f"AND NULLIF({other}, '') IS NOT NULL AND {other} = {master_norm})")
+    match = terms[0] if len(terms) == 1 else "(" + " OR ".join(terms) + ")"
     sql = (f"NOT EXISTS (SELECT 1 FROM core.container_job_assignment {alias} "
            f"WHERE {match} "
            f"AND {alias}.status NOT IN ({placeholders}))")

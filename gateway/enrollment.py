@@ -629,7 +629,12 @@ def _assignable_drivers_where(q: Optional[str]) -> tuple[str, dict]:
         "core.driver_identity.driver_id", job_column="driver_id",
         # The licence identifies the person the job is dispatched to; matching
         # driver_id alone lets a busy driver's duplicate record read as free.
-        master_identity="core.driver_identity.license_no", job_identity="driver_licence")
+        master_identity="core.driver_identity.license_no", job_identity="driver_licence",
+        # A job with no licence of its own (3 of the 13 rows in the live spine)
+        # still names a Driver ID; resolving that id to a licence through the
+        # master is what stops the person's other records standing in for them.
+        identity_table="core.driver_identity", identity_key="driver_id",
+        identity_column="license_no", identity_alias="md")
     clauses = ["status = :st", pred]
     params["st"] = ACTIVE
     needle = (q or "").strip().upper()
@@ -647,6 +652,11 @@ def _mem_assignable_drivers(occupied: set, q: Optional[str]) -> List[dict]:
     needle = (q or "").strip().upper()
     busy = {str(o) for o in (occupied or set())}
     busy |= {_normalise_licence(o) for o in busy if _normalise_licence(o)}
+    # A busy Driver ID names a RECORD; the person it stands for is that record's
+    # licence, so the person's other records are busy too — the twin of the SQL
+    # path's resolution through core.driver_identity.
+    busy |= {_normalise_licence(d.get("license_no")) for d in _MEM_DRIVERS.values()
+             if d.get("driver_id") in busy and _normalise_licence(d.get("license_no"))}
     out, seen = [], set()
     for d in sorted(_MEM_DRIVERS.values(),
                     key=lambda r: ((r.get("name") or "").upper(), r.get("driver_id") or "")):
@@ -779,25 +789,32 @@ async def vehicle_assignment_conflict(dsn: str, vehicle_no: str, *,
 
 
 async def active_driver_vehicle_map(dsn: str) -> Dict[str, dict]:
-    """Map ``normalised Vehicle ID -> {driver_id, name}`` for every ACTIVE master
-    driver that holds a vehicle. Powers the Vehicle Master 'Assigned Driver'
-    column without an N+1 lookup per row."""
+    """Map ``normalised Vehicle ID -> {driver_id, name, license_no}`` for every
+    ACTIVE master driver that holds a vehicle. Powers the Vehicle Master
+    'Assigned Driver' column without an N+1 lookup per row.
+
+    The licence travels with the binding because the Driver ID identifies a
+    RECORD: the availability list returns one record per PERSON, so a console
+    that only knows the bound record's id cannot tell that the person is in the
+    list under another id. The licence is what makes them the same person."""
     out: Dict[str, dict] = {}
     if await _backend(dsn) == "db":
         from jnpa_shared.db import fetch_all
 
         rows = await fetch_all(
-            "SELECT driver_id, name, vehicle_no_norm FROM core.driver_identity "
+            "SELECT driver_id, name, license_no, vehicle_no_norm FROM core.driver_identity "
             "WHERE status = 'ACTIVE' AND vehicle_no_norm IS NOT NULL", dsn=dsn)
         for r in rows:
             if r["vehicle_no_norm"]:
-                out[r["vehicle_no_norm"]] = {"driver_id": r["driver_id"], "name": r["name"]}
+                out[r["vehicle_no_norm"]] = {"driver_id": r["driver_id"], "name": r["name"],
+                                             "license_no": r.get("license_no")}
         return out
     for d in _MEM_DRIVERS.values():
         if d.get("status") == ACTIVE:
             v = normalize_vehicle_no(d.get("vehicle_no"))
             if v:
-                out[v] = {"driver_id": d.get("driver_id"), "name": d.get("name")}
+                out[v] = {"driver_id": d.get("driver_id"), "name": d.get("name"),
+                          "license_no": d.get("license_no")}
     return out
 
 

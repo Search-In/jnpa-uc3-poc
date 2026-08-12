@@ -576,9 +576,7 @@ export const api = {
     if (status) q.set("status", status);
     q.set("limit", String(limit));
     q.set("offset", String(offset));
-    return http<{ items: EmailMessage[]; total: number }>(
-      `/api/email/messages?${q.toString()}`,
-    );
+    return http<{ items: EmailMessage[]; total: number }>(`/api/email/messages?${q.toString()}`);
   },
   emailMessage: (id: number) => http<EmailMessageDetail>(`/api/email/messages/${id}`),
   // Dry run: classifies and validates, writes nothing. Shows the operator which
@@ -2706,12 +2704,7 @@ export interface ScanStatus {
 }
 
 // ---- UC3 Email Processing ------------------------------------------------
-export type EmailStatus =
-  | "UNPROCESSED"
-  | "PROCESSING"
-  | "PROCESSED"
-  | "FAILED"
-  | "NEEDS_REVIEW";
+export type EmailStatus = "UNPROCESSED" | "PROCESSING" | "PROCESSED" | "FAILED" | "NEEDS_REVIEW";
 
 /** Mailbox posture. Deliberately has NO password field — the server never sends one. */
 export interface EmailHealth {

@@ -160,9 +160,7 @@ export default function EmailProcessing() {
         {list.isLoading ? (
           <LoadingState label="Loading emails…" />
         ) : rows.length === 0 ? (
-          <EmptyState>
-            No matching emails yet. Use “Check mailbox” to read the inbox.
-          </EmptyState>
+          <EmptyState>No matching emails yet. Use “Check mailbox” to read the inbox.</EmptyState>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -271,8 +269,9 @@ export default function EmailProcessing() {
                   {result.committed ? "Imported / rejected" : "Would import / reject"}
                 </dt>
                 <dd className="font-medium">
-                  {result.committed ? result.records_imported : result.records_detected -
-                    result.records_failed}{" "}
+                  {result.committed
+                    ? result.records_imported
+                    : result.records_detected - result.records_failed}{" "}
                   / {result.records_failed}
                 </dd>
               </div>
@@ -318,8 +317,8 @@ export default function EmailProcessing() {
               <ul className="mt-1 list-disc pl-5">
                 {result.errors.slice(0, 50).map((e, i) => (
                   <li key={i}>
-                    <span className="font-mono">{e.record_ref ?? "—"}</span>: {e.error_detail ??
-                      e.error_code}
+                    <span className="font-mono">{e.record_ref ?? "—"}</span>:{" "}
+                    {e.error_detail ?? e.error_code}
                   </li>
                 ))}
               </ul>
@@ -359,9 +358,7 @@ export default function EmailProcessing() {
           ) : (
             <div className="flex flex-col gap-3 text-sm">
               <div className="flex items-start justify-between gap-3">
-                <h2 className="text-base font-semibold">
-                  {detail.data.subject || "(no subject)"}
-                </h2>
+                <h2 className="text-base font-semibold">{detail.data.subject || "(no subject)"}</h2>
                 <button
                   type="button"
                   className="text-xs underline"
@@ -388,9 +385,7 @@ export default function EmailProcessing() {
                 </div>
                 <div className="flex gap-2">
                   <dt className="text-muted-foreground">Received</dt>
-                  <dd>
-                    {detail.data.received_at ? fmtDateTimeIST(detail.data.received_at) : "—"}
-                  </dd>
+                  <dd>{detail.data.received_at ? fmtDateTimeIST(detail.data.received_at) : "—"}</dd>
                 </div>
               </dl>
               <div>

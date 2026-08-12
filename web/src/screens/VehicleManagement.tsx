@@ -784,11 +784,11 @@ function RcLookupPanel() {
       const v = query!.value;
       if (query!.kind === "chassis") return api.vahanByChassis(v);
       if (query!.kind === "engine") return api.vahanByEngine(v);
-      const intel = await api.vehicleIntel(v);
-      return {
-        record: intel as unknown as Record<string, unknown>,
-        decision_path: (intel as any)?.decision_path ?? (intel as any)?.path,
-      };
+      // The registry read, NOT vehicle-intel: that one is an RDS aggregate of
+      // what the port has already stored, so it answers {rc: null} for any
+      // vehicle we have not seen before and the card rendered a single
+      // "Vehicle Number" row while VAHAN/04 was returning a full certificate.
+      return api.vahanRc(v);
     },
     enabled: !!query?.value,
     retry: false,

@@ -147,10 +147,20 @@ async def upsert_driver_from_dl(*, dl_number, record: Dict[str, Any], dsn) -> No
 
 
 def dl_status(record: Dict[str, Any]) -> str:
-    """Derive VALID/EXPIRED/NOT_FOUND from a DL record's validity/expiry field."""
+    """Derive VALID/EXPIRED/NOT_FOUND from a DL record's validity/expiry field.
+
+    ``valid_to`` is the name :class:`~jnpa_shared.schemas.SarathiRecord` uses,
+    so it is the ONLY expiry key present on a ULIP-sourced licence. Omitting it
+    made every ULIP DL fall through to the "no parsable expiry" default below
+    and report **VALID** — including a licence that expired years ago. That is
+    a fail-open at the gate, and it went live the moment ULIP became the
+    LIVE_PRIMARY rung. The remaining names come from vahan-sim and the older
+    Surepass shape; all are kept so every rung is read correctly.
+    """
     if not record:
         return "NOT_FOUND"
-    for key in ("valid_upto", "validity", "expiry_date", "doe", "nt_validity_to"):
+    for key in ("valid_to", "valid_upto", "validity", "expiry_date", "doe",
+                "nt_validity_to"):
         v = record.get(key)
         if v:
             try:

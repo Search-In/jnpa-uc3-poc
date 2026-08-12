@@ -16,6 +16,11 @@ credential, NO vendor URL in business code (mirrors integrations.tomtom.client):
     ULIP_RETRIES        retries AFTER the first try   (default 2)
     ULIP_TOKEN_TTL_S    login-token reuse window      (default 1800)
 
+Any single API can be given its own budget with ``ULIP_<KEY>_TIMEOUT_S`` (see
+:data:`DEFAULT_API_TIMEOUTS`) — ``ULIP_LDB_TIMEOUT_S`` defaults to 30 s because
+LDB/01 takes 10-20 s on production while everything else answers in under a
+second.
+
 Every granted API path is env-overridable via ``ULIP_<NAME>_API`` (see
 :data:`DEFAULT_API_PATHS`) — e.g. ``ULIP_FASTAG_API`` (default ``FASTAG/01``),
 ``ULIP_LDB_API`` (default ``LDB/01``), ``ULIP_VAHAN_RC_API`` (default
@@ -103,6 +108,17 @@ DEFAULT_API_PATHS: Dict[str, str] = {
 # Backwards-compatible aliases (imported by services/logistics and its tests).
 DEFAULT_FASTAG_API = DEFAULT_API_PATHS["FASTAG"]
 DEFAULT_LDB_API = DEFAULT_API_PATHS["LDB"]
+
+# Per-API timeout budgets, overriding ULIP_TIMEOUT_S for the APIs that need it.
+#
+# LDB/01 aggregates a container's whole trail across terminals, rail and road
+# and is genuinely slow: measured at **10-20 s** on production (0.1-0.7 s for
+# every other granted API). The 5 s default timed it out on all three retries,
+# so container tracking failed 100% of the time while looking like an outage.
+# Raising ULIP_TIMEOUT_S globally is the wrong fix — a gate decision must not
+# wait 30 s on a VAHAN lookup — so the budget is per API and generous only
+# where the upstream demands it. Env override: ``ULIP_<KEY>_TIMEOUT_S``.
+DEFAULT_API_TIMEOUTS: Dict[str, float] = {"LDB": 30.0}
 
 # Request-field patterns, copied verbatim from the integration PDFs. ULIP
 # answers a violation with HTTP 400 and echoes the pattern, so rejecting the
@@ -204,6 +220,15 @@ class UlipClient:
             self.api_paths["FASTAG"] = fastag_api.strip("/")
         if ldb_api:
             self.api_paths["LDB"] = ldb_api.strip("/")
+        # Per-API timeout budgets, keyed by the RESOLVED path so _call_api can
+        # find one without every fetch method having to pass its key through.
+        self.api_timeouts = {
+            key: _as_float(env.get(f"ULIP_{key}_TIMEOUT_S"),
+                           DEFAULT_API_TIMEOUTS.get(key, self.timeout_s))
+            for key in self.api_paths
+        }
+        self._timeout_by_path = {self.api_paths[key]: budget
+                                 for key, budget in self.api_timeouts.items()}
         self._http = http_client
         self._token: Optional[str] = None
         self._token_at: float = 0.0
@@ -391,12 +416,15 @@ class UlipClient:
         if not self.configured:
             raise UlipNotConfigured(
                 "neither ULIP_API_KEY nor ULIP_CLIENT_ID/ULIP_CLIENT_SECRET is set")
-        client = self._http or httpx.AsyncClient(timeout=self.timeout_s)
+        path = api_path.strip("/")
+        budget = self._timeout_by_path.get(path, self.timeout_s)
+        client = self._http or httpx.AsyncClient(timeout=budget)
         owns = self._http is None
-        url = f"{self.api_url}/{api_path.strip('/')}"
+        url = f"{self.api_url}/{path}"
         try:
             body = await self._post_json(client, url, payload,
-                                         allow_reauth=self.auth_mode == "login")
+                                         allow_reauth=self.auth_mode == "login",
+                                         timeout_s=budget)
         finally:
             if owns:
                 await client.aclose()
@@ -412,10 +440,12 @@ class UlipClient:
         return envelope
 
     async def _post_json(self, client: httpx.AsyncClient, url: str,
-                         payload: Dict[str, Any], *, allow_reauth: bool) -> Dict[str, Any]:
+                         payload: Dict[str, Any], *, allow_reauth: bool,
+                         timeout_s: Optional[float] = None) -> Dict[str, Any]:
         """POST with bounded retries. Retries timeouts / network errors / 5xx;
         401/403 forces ONE re-login (login mode) then fails as UlipAuthError;
         other 4xx (429 rate limit included) fail fast."""
+        budget = self.timeout_s if timeout_s is None else timeout_s
         last_exc: UlipError = UlipUnavailable(f"no attempt made against {url}")
         reauthed = False
         for attempt in range(self.retries + 1):
@@ -426,10 +456,10 @@ class UlipClient:
                 resp = await client.post(
                     url, json=payload,
                     headers={"Authorization": f"Bearer {token}", **JSON_HEADERS},
-                    timeout=self.timeout_s,
+                    timeout=budget,
                 )
             except httpx.TimeoutException as exc:
-                last_exc = UlipTimeout(f"ULIP timed out after {self.timeout_s}s")
+                last_exc = UlipTimeout(f"ULIP timed out after {budget}s")
                 log.warning("ulip_timeout", attempt=attempt,
                             error=self._redact(str(exc)))
                 continue

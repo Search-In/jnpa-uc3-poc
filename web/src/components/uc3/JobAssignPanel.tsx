@@ -37,6 +37,7 @@ import { api, apiError } from "../../lib/api";
 import { customsBlock, type CustomsBlock } from "../../lib/customs";
 import type { ContainerJob, JobAssignInput, JobCheck } from "../../lib/api";
 import { assignableCount, vehicleLabel } from "../../lib/vehicles";
+import { autoSelect, dedupeBy, driverIdentity, vehicleIdentity } from "../../lib/assign";
 
 // The move types the backend accepts (services/container_job/service.py MOVE_TYPES).
 const MOVE_TYPES = [
@@ -77,6 +78,15 @@ export default function JobAssignPanel({
   const qc = useQueryClient();
 
   const [container, setContainer] = useState(defaultContainer);
+  // UX: clicking a container in the Container Jobs list below pre-fills this
+  // form. `defaultContainer` used to seed useState only, so it applied on the
+  // FIRST render and never again — every later click left the operator retyping
+  // the number they had just clicked. Syncing on change is what makes the click
+  // do anything. It pre-fills only: nothing is submitted (see `assign`, which
+  // runs from the button alone).
+  useEffect(() => {
+    if (defaultContainer) setContainer(defaultContainer);
+  }, [defaultContainer]);
   const [vehicleId, setVehicleId] = useState(NONE);
   const [driverId, setDriverId] = useState(NONE);
   const [moveType, setMoveType] = useState<string>(MOVE_TYPES[0].value);
@@ -118,7 +128,10 @@ export default function JobAssignPanel({
     [openJobsQ.data],
   );
 
-  const allVehicles = vehiclesQ.data?.vehicles ?? [];
+  const allVehicles = useMemo(
+    () => dedupeBy(vehiclesQ.data?.vehicles ?? [], vehicleIdentity),
+    [vehiclesQ.data],
+  );
   const vehicles = allVehicles.filter((v) => !busyVehicles.has(v.vehicle_id));
   const busyCount = allVehicles.length - vehicles.length;
   // The count comes from the DB (vehicles ACTIVE with no open job), not from the
@@ -130,7 +143,14 @@ export default function JobAssignPanel({
     vehicles.length,
     busyCount,
   );
-  const drivers = useMemo(() => driversQ.data?.drivers ?? [], [driversQ.data]);
+  // One person = one option. The backend already collapses duplicate
+  // core.driver_identity records for a licence; this guarantees it for the
+  // rendered list too, so "AAKIL KHAN — MH01 20100095262" can never appear three
+  // times. It only ever REMOVES a repeat, never admits an occupied driver.
+  const drivers = useMemo(
+    () => dedupeBy(driversQ.data?.drivers ?? [], driverIdentity),
+    [driversQ.data],
+  );
 
   const selectedVehicle = useMemo(
     () => vehicles.find((v) => v.vehicle_id === vehicleId),
@@ -146,19 +166,31 @@ export default function JobAssignPanel({
   // selected VEHICLE changes.
   const freeDriverIds = useMemo(() => new Set(drivers.map((d) => d.driver_id)), [drivers]);
   // A truck can be free while the driver bound to it is out on ANOTHER truck's
-  // job (the binding is an enrollment fact, the job is not). `available_total`
-  // says whether the page is the whole answer, so a driver missing from a
-  // truncated page is not mistaken for an occupied one.
-  const driversComplete = (driversQ.data?.available_total ?? 0) <= drivers.length;
+  // job (the binding is an enrollment fact, the job is not).
   const boundDriverFree = selectedVehicle?.driver_id
-    ? freeDriverIds.has(selectedVehicle.driver_id) || !driversComplete
+    ? freeDriverIds.has(selectedVehicle.driver_id)
     : false;
 
-  useEffect(() => {
-    setDriverId(boundDriverFree ? (selectedVehicle?.driver_id ?? NONE) : NONE);
-  }, [vehicleId, boundDriverFree, selectedVehicle?.driver_id]);
-
   const cn = container.trim().toUpperCase();
+
+  // UX: once a container is chosen, offer a complete assignment rather than two
+  // empty dropdowns. Both values come from `autoSelect`, which picks only from
+  // the availability responses — an occupied truck or driver is not in them, so
+  // it cannot be auto-selected. A selection the operator has already made is
+  // kept as long as it is still available. Nothing is submitted: this fills the
+  // form, and the Assign button stays the only thing that posts a job.
+  useEffect(() => {
+    if (!cn) return;
+    const next = autoSelect(vehicles, drivers, {
+      vehicleId: vehicleId || undefined,
+      driverId: driverId || undefined,
+    });
+    setVehicleId(next.vehicleId);
+    setDriverId(next.driverId);
+    // `vehicleId`/`driverId` are read, not tracked: re-running on our own writes
+    // would fight the operator's next manual change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cn, vehicles, drivers]);
   const driverRequired = DRIVER_REQUIRED_MOVE_TYPES.has(moveType);
   // A container customs has flagged cannot be assigned; the button stays out of
   // reach until the operator changes container. `customsFor` pins the block to
@@ -343,6 +375,12 @@ export default function JobAssignPanel({
                 options={vehicleOptions}
               />
             )}
+            {vehiclesQ.isSuccess && vehicles.length === 0 ? (
+              <span className="text-xs text-amber-600 dark:text-amber-500">
+                No available vehicles — every ACTIVE truck is on an open job. One frees up when its
+                job is completed or cancelled.
+              </span>
+            ) : null}
           </label>
 
           {/* --------------------------------------------------------- driver */}
@@ -370,6 +408,12 @@ export default function JobAssignPanel({
                 options={driverOptions}
               />
             )}
+            {driversQ.isSuccess && drivers.length === 0 ? (
+              <span className="text-xs text-amber-600 dark:text-amber-500">
+                No available drivers — every ACTIVE driver is on an open job. One frees up when
+                their job is completed or cancelled.
+              </span>
+            ) : null}
             {/* Say WHY the driver is filled in / missing, so an operator never has
                 to guess whether the truck has a driver on file. */}
             {vehicleId !== NONE && selectedVehicle?.driver_id && boundDriverFree ? (

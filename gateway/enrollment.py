@@ -601,6 +601,21 @@ async def list_active_drivers(dsn: str) -> List[dict]:
 # COMPLETED or CANCELLED job keeps its driver_id and must free the driver again.
 _DRIVER_COLS = "driver_id, name, license_no, photo_url"
 
+# One PERSON = one option. A driving licence identifies the person; core.driver_identity
+# is keyed on driver_id alone, so the same driver can hold several records (the
+# visible symptom being three identical "AAKIL KHAN — MH01 20100095262" entries,
+# and — worse — a driver who is out on a job under one record still being offered
+# through another). A driver with no licence on file can only be themselves, so
+# they fall back to their Driver ID.
+_DRIVER_IDENTITY = ("NULLIF(upper(regexp_replace(coalesce(license_no, ''), "
+                    "'[^A-Za-z0-9]', '', 'g')), '')")
+_DRIVER_DEDUPE_KEY = f"COALESCE({_DRIVER_IDENTITY}, driver_id)"
+
+
+def _normalise_licence(raw: Optional[str]) -> str:
+    """Python twin of _DRIVER_IDENTITY, for the in-memory backend."""
+    return "".join(ch for ch in (raw or "").upper() if ch.isalnum())
+
 
 def _assignable_drivers_where(q: Optional[str]) -> tuple[str, dict]:
     """WHERE clause for ACTIVE drivers with no open job, plus the ``q`` search.
@@ -610,8 +625,11 @@ def _assignable_drivers_where(q: Optional[str]) -> tuple[str, dict]:
     leaving the caller to filter."""
     from services.container_job.service import open_job_not_exists
 
-    pred, params = open_job_not_exists("core.driver_identity.driver_id",
-                                       job_column="driver_id")
+    pred, params = open_job_not_exists(
+        "core.driver_identity.driver_id", job_column="driver_id",
+        # The licence identifies the person the job is dispatched to; matching
+        # driver_id alone lets a busy driver's duplicate record read as free.
+        master_identity="core.driver_identity.license_no", job_identity="driver_licence")
     clauses = ["status = :st", pred]
     params["st"] = ACTIVE
     needle = (q or "").strip().upper()
@@ -627,17 +645,25 @@ def _mem_assignable_drivers(occupied: set, q: Optional[str]) -> List[dict]:
     """Same rule for the in-memory identity backend, which has no job table to
     join against and so is handed the busy set by the caller."""
     needle = (q or "").strip().upper()
-    out = []
-    for d in _MEM_DRIVERS.values():
+    busy = {str(o) for o in (occupied or set())}
+    busy |= {_normalise_licence(o) for o in busy if _normalise_licence(o)}
+    out, seen = [], set()
+    for d in sorted(_MEM_DRIVERS.values(),
+                    key=lambda r: ((r.get("name") or "").upper(), r.get("driver_id") or "")):
         did = d.get("driver_id")
-        if not did or d.get("status") != ACTIVE or did in (occupied or set()):
+        identity = _normalise_licence(d.get("license_no")) or did
+        if not did or d.get("status") != ACTIVE:
+            continue
+        if did in busy or (identity and identity in busy):
             continue
         if needle and not any(needle in (str(d.get(f) or "")).upper()
                               for f in ("driver_id", "name", "license_no")):
             continue
+        if identity in seen:
+            continue
+        seen.add(identity)
         out.append({"driver_id": did, "name": d.get("name"),
                     "license_no": d.get("license_no"), "photo_url": d.get("photo_url")})
-    out.sort(key=lambda r: (r.get("name") or "").upper())
     return out
 
 
@@ -655,9 +681,14 @@ async def list_assignable_drivers(dsn: str, *, q: Optional[str] = None,
 
         where, params = _assignable_drivers_where(q)
         params["lim"] = limit
+        # DISTINCT ON collapses duplicate records for one person BEFORE the
+        # LIMIT, so the page holds `limit` distinct drivers rather than `limit`
+        # rows that may name the same person three times.
         rows = await fetch_all(
-            f"SELECT {_DRIVER_COLS} FROM core.driver_identity {where} "
-            "ORDER BY name LIMIT :lim", params, dsn=dsn)
+            f"SELECT * FROM (SELECT DISTINCT ON ({_DRIVER_DEDUPE_KEY}) {_DRIVER_COLS} "
+            f"FROM core.driver_identity {where} "
+            f"ORDER BY {_DRIVER_DEDUPE_KEY}, driver_id) d "
+            "ORDER BY name, driver_id LIMIT :lim", params, dsn=dsn)
         return [dict(r) for r in rows]
     return _mem_assignable_drivers(occupied or set(), q)[:limit]
 
@@ -672,7 +703,8 @@ async def count_assignable_drivers(dsn: str, *, q: Optional[str] = None,
 
         where, params = _assignable_drivers_where(q)
         row = await fetch_one(
-            f"SELECT count(*) AS n FROM core.driver_identity {where}", params, dsn=dsn)
+            f"SELECT count(DISTINCT {_DRIVER_DEDUPE_KEY}) AS n "
+            f"FROM core.driver_identity {where}", params, dsn=dsn)
         return int((row or {}).get("n") or 0)
     return len(_mem_assignable_drivers(occupied or set(), q))
 

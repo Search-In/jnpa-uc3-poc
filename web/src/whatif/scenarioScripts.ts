@@ -341,7 +341,6 @@ const TFC3: GuidedScript = {
   ],
 };
 
-
 // MONSOON-FRIDAY — scenarios/monsoon_friday.py: the master end-to-end chain, and the
 // LAST segment of the cross-twin Monsoon story (UC-1 pilotage hold -> UC-2 late discharge
 // -> here). The id and label already existed in ScenarioContext; only the guided script
@@ -394,8 +393,13 @@ const MONSOON_FRIDAY: GuidedScript = {
       },
       explain:
         "The weekly Friday-evening arrival wave lands into the slowdown — including the evacuation surge released by the cargo twin once the delayed vessels finally discharged. Demand and degraded capacity coincide.",
-      metrics: [{ label: "Inbound trucks injected", from: 0, to: 120, unit: "trucks", tone: "worse" }],
-      action: { kind: "DEMAND_SURGE", detail: "120 EN_ROUTE_TO_PORT trucks injected (Friday peak + UC-2 evacuation)" },
+      metrics: [
+        { label: "Inbound trucks injected", from: 0, to: 120, unit: "trucks", tone: "worse" },
+      ],
+      action: {
+        kind: "DEMAND_SURGE",
+        detail: "120 EN_ROUTE_TO_PORT trucks injected (Friday peak + UC-2 evacuation)",
+      },
     },
     {
       title: "The queue builds at the primary gate",
@@ -422,7 +426,9 @@ const MONSOON_FRIDAY: GuidedScript = {
       },
       explain:
         "The twin re-routes inbound trucks onto the best alternative gate rather than letting them all queue at one. The queue redistributes across capacity that was sitting idle.",
-      metrics: [{ label: "G-NSICT queue (simulated)", from: 90, to: 38, unit: "trucks", tone: "better" }],
+      metrics: [
+        { label: "G-NSICT queue (simulated)", from: 90, to: 38, unit: "trucks", tone: "better" },
+      ],
       action: { kind: "AUTO_REROUTE", detail: "Inbound trucks re-routed to best alternative gate" },
     },
     {
@@ -436,7 +442,9 @@ const MONSOON_FRIDAY: GuidedScript = {
       },
       explain:
         "Queued trucks idle, and idling is measurable. The carbon read shows the idle CO₂e the queue produced and the share the re-route avoided — a simulated propagation under the stated assumptions, not a claimed baseline. This closes the chain that began with a pilotage hold in UC-1.",
-      metrics: [{ label: "Avoided idle CO₂e (simulated)", from: 0, to: "~1.4", unit: "t", tone: "better" }],
+      metrics: [
+        { label: "Avoided idle CO₂e (simulated)", from: 0, to: "~1.4", unit: "t", tone: "better" },
+      ],
     },
   ],
 };

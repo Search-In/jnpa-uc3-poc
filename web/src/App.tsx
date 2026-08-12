@@ -57,7 +57,6 @@ function Guard({ path, children }: { path: string; children: React.ReactNode }) 
   return <Navigate to="/live" replace />;
 }
 
-
 /**
  * Where "/" actually lands.
  *

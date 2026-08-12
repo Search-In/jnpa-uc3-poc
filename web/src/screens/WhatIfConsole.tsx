@@ -42,7 +42,6 @@ import { getScript } from "@/whatif/scenarioScripts";
 import { SCENARIOS } from "@/whatif/scenarioRunners";
 import { ReactiveGuidePanel } from "@/components/panels/ReactiveGuidePanel";
 
-
 // Display-only theme labels that make the requested scenario themes
 // discoverable in the UI. These NEVER change the backend `runner` name or the
 // run/reset wiring — they only annotate the shared SCENARIO_LABELS title. Any

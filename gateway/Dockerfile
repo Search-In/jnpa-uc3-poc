@@ -81,7 +81,7 @@ RUN python -m playwright install chromium || true
 # stack explicitly so a half-written starlette is caught at build, not runtime.
 RUN python -c "import starlette.exceptions, fastapi; from starlette.exceptions import HTTPException; print('asgi stack OK', fastapi.__version__)" \
     && python -c "import gateway.main, gateway.fallback, gateway.cache; print('gateway import OK')" \
-    && python -c "import services.fastag; from services.fastag import UlipFastagClient, FastagService; print('fastag layer OK')" \
+    && python -c "import services.fastag; from services.fastag import FastagService, FastagPoller; print('fastag layer OK')" \
     && python -c "from integrations.openmeteo import OpenMeteoClient; from services.weather import WeatherService; print('weather layer OK')" \
     && python -c "from integrations.tomtom import TomTomClient; from services.traffic import TrafficService; print('traffic layer OK')" \
     && python -c "from integrations.openaq import OpenAQClient; from services.air_quality import AirQualityService; print('air-quality layer OK')" \

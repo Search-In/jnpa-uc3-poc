@@ -446,29 +446,48 @@ async def test_truck_list_state_filter_never_answers_from_a_fallback(monkeypatch
     """T-4 honesty guard: only the truck-sim knows TruckState.
 
     Returning the UNFILTERED fleet for `state=AT_GATE_QUEUE` would answer a
-    different question than the one asked, so the fallback rungs are skipped and
-    the response says the filter could not be applied.
+    different question than the one asked, so the fleet-list fallback rungs are
+    skipped and the response says the filter could not be applied.
+
+    The Driver-PWA rung is the ONE query allowed to run here, and it answers a
+    different question ("who is signed in"): its rows land in
+    ``registered_devices``, never in ``devices``, so ``count`` and
+    ``state_filter_supported`` are unaffected.
     """
     from gateway.routers import trucks
 
-    called = False
+    seen_sql: list[str] = []
 
-    async def _should_not_run(sql, params=None, dsn=None):
-        nonlocal called
-        called = True
+    async def _record(sql, params=None, dsn=None):
+        seen_sql.append(sql)
+        if "core.push_subscription" in sql:  # the additive Driver-PWA rung
+            return [{"device_id": "TRK-000007", "plate": "MH04AB7777",
+                     "driver_id": "DRV-7", "driver_name": "A Driver",
+                     "lat": 18.95, "lon": 72.94, "last_seen": None}]
         return [{"device_id": "X", "plate": "P", "lat": 1.0, "lon": 2.0,
                  "speed_kmh": 0.0, "heading": 0.0, "ts": None}]
 
     import jnpa_shared.db as _db
-    monkeypatch.setattr(_db, "fetch_all", _should_not_run)
-
-    out = await trucks.list_trucks(state="AT_GATE_QUEUE", limit=50,
-                                   gw=_RdsGw(_DeadListHttp()))
+    monkeypatch.setattr(_db, "fetch_all", _record)
+    trucks._REGISTERED_CACHE.clear()  # process-global memo; don't inherit a hit
+    try:
+        out = await trucks.list_trucks(state="AT_GATE_QUEUE", limit=50,
+                                       gw=_RdsGw(_DeadListHttp()))
+    finally:
+        trucks._REGISTERED_CACHE.clear()
 
     assert out["count"] == 0
+    assert out["devices"] == []
     assert out["state_filter_supported"] is False
     assert out["filter_state"] == "AT_GATE_QUEUE"
-    assert called is False, "a state-filtered query must not be served from RDS"
+    # The fleet-list SECONDARY/TERTIARY rungs stayed shut: the only SQL that ran
+    # was the registered-driver-device read.
+    assert all("core.push_subscription" in sql for sql in seen_sql), (
+        "a state-filtered fleet list must not be served from RDS")
+    # ...and its rows are a SEPARATE, explicitly-sourced list.
+    assert out["registered_count"] == 1
+    assert [d["source"] for d in out["registered_devices"]] == ["pwa-registered"]
+    assert out["registered_devices"][0]["state"] is None
 
 
 def test_congestion_metrics_artifact_is_the_real_committed_file():

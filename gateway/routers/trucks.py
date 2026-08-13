@@ -69,9 +69,40 @@ LIST_CACHE_FRESH_S = 3.0
 LIST_CACHE_STALE_S = 600.0
 _LIST_CACHE: Dict[str, tuple[float, dict]] = {}
 
+# --- REGISTERED DRIVER DEVICES (the Driver PWA rung) ------------------------
+#
+# The rungs above answer "which trucks does the SIMULATOR hold in this state".
+# They cannot answer "which devices does a real, signed-in driver hold", because
+# a PWA login never enters the sim's population: it writes a durable registration
+# to ``core.push_subscription`` (device_id == the Vehicle ID == the JWT's
+# device_id) and nothing else. So a signed-in driver was invisible to the
+# Driver-Advisory console and un-reroutable from it, even though
+# ``POST /api/trucks/{id}/route`` could already reach that exact device.
+#
+# This rung reads that registration back. It is ADDITIVE and strictly separate:
+# registered devices are returned under ``registered_devices``, never merged into
+# ``devices``, because ``devices`` means "measured to be in the requested
+# TruckState" and a registration measures no such thing. Every field the sim
+# would supply and we do not know is NULL — never a placeholder:
+#
+#     state = null   eta_s = null   remaining_km = null   gate_id = null
+#
+# Position/last_seen come from ``core.truck_telemetry`` when that device has
+# actually reported, and are null otherwise.
+REGISTERED_SOURCE = "pwa-registered"
+SIM_SOURCE = "truck-sim"
+# A registration older than this is not considered a live driver device. Matches
+# the window in the device-identity audit.
+REGISTERED_ACTIVE_WINDOW = "12 hours"
+# Same memo discipline as the fleet list: the console polls, and one indexed
+# query per few seconds is enough for a table that changes at human speed.
+REGISTERED_CACHE_TTL_S = 3.0
+_REGISTERED_CACHE: Dict[str, tuple[float, list]] = {}
+
 
 def _trace_list(rid: str, rung: str, state: Optional[str], limit: int,
-                body: dict, t0: float, *, status: int = 200) -> dict:
+                body: dict, t0: float, *, status: int = 200,
+                registered: Optional[list] = None) -> dict:
     """ONE structured line per fleet-list answer — the trace the intermittent
     Driver-Advisory queue needs to be diagnosable in a running deployment.
 
@@ -80,7 +111,15 @@ def _trace_list(rid: str, rung: str, state: Optional[str], limit: int,
     latency are logged together. Grep `trucks_list_answer` to reconstruct a
     session: every alternation between count=N and degraded=true shows up with
     the probe latency that caused it.
+
+    ``registered`` (the Driver-PWA rung) is attached here, on a COPY of the body,
+    so it reaches every answer a state-filtered query can produce without any
+    rung having to know about it — and without writing it into ``_LIST_CACHE``,
+    whose entries must stay exactly what the sim said.
     """
+    if registered is not None:
+        body = {**body, "registered_devices": registered,
+                "registered_count": len(registered)}
     log.info("trucks_list_answer", request_id=rid, endpoint="/api/trucks",
              state=state, limit=limit, status=status,
              count=body.get("count", len(body.get("devices") or [])),
@@ -88,7 +127,8 @@ def _trace_list(rid: str, rung: str, state: Optional[str], limit: int,
              decision_path=body.get("decision_path"), source=body.get("source"),
              rung=rung, state_filter_supported=body.get("state_filter_supported"),
              latency_ms=round((time.perf_counter() - t0) * 1000, 1),
-             cache_age_s=body.get("cache_age_s"))
+             cache_age_s=body.get("cache_age_s"),
+             registered_count=body.get("registered_count"))
     return body
 
 
@@ -259,6 +299,108 @@ async def _list_secondary_rds(state: GatewayState, limit: int) -> Optional[list[
     return devices or None
 
 
+async def _list_registered_pwa_devices(state: GatewayState, limit: int) -> list[dict]:
+    """Devices a REAL driver is signed in on, from ``core.push_subscription``.
+
+    A device qualifies when all of the following hold — every one of them a fact
+    already recorded by the existing login/push flow, none of them synthesised:
+
+      * it has a push registration (WebPush subscription or FCM token), i.e. a
+        driver completed ``enablePush()`` on it after signing in;
+      * that registration was refreshed inside ``REGISTERED_ACTIVE_WINDOW``;
+      * its ``device_id`` exists in the Vehicle Master (``core.vehicle``) — the
+        same gate ``POST /api/driver/login`` applies, so a device that could not
+        have signed in cannot appear here either.
+
+    The ACTIVE driver assigned to the vehicle is joined in for display, and the
+    latest telemetry row (if the device has ever reported) supplies a real
+    position. Nothing is invented: a device with no telemetry gets
+    ``position: null`` / ``last_seen: null``, and ``state``/``eta_s``/
+    ``remaining_km``/``gate_id`` are ALWAYS null for this source — a registration
+    is not a queue measurement.
+
+    Returns [] (never None) when the DSN is unset or the query fails: this rung
+    is additive and must never be able to break the fleet list.
+    """
+    dsn = getattr(state.cfg, "postgres_dsn", None)
+    if not dsn:
+        return []
+    from jnpa_shared.db import fetch_all
+
+    try:
+        rows = await fetch_all(
+            f"""
+            SELECT p.device_id,
+                   -- vehicle_no falls back to the vehicle_id when no plate is
+                   -- known (see fleet.sync_from_fleet's COALESCE), so NULLIF
+                   -- keeps a TRK id out of the PLATE column instead of
+                   -- presenting it as a registration number.
+                   NULLIF(v.vehicle_no, v.vehicle_id) AS plate,
+                   d.driver_id,
+                   d.name AS driver_name,
+                   t.lat, t.lon, t.ts AS last_seen
+            FROM core.push_subscription p
+            JOIN core.vehicle v
+              ON v.vehicle_id = p.device_id
+            LEFT JOIN core.driver_identity d
+              ON d.vehicle_no_norm = p.device_id
+             AND d.status = 'ACTIVE'
+            LEFT JOIN LATERAL (
+                SELECT lat, lon, ts
+                FROM core.truck_telemetry
+                WHERE device_id = p.device_id
+                ORDER BY ts DESC
+                LIMIT 1
+            ) t ON true
+            WHERE (p.webpush IS NOT NULL OR p.fcm_token IS NOT NULL)
+              AND p.updated_at > now() - interval '{REGISTERED_ACTIVE_WINDOW}'
+            ORDER BY p.updated_at DESC
+            LIMIT :limit
+            """,
+            {"limit": limit}, dsn=dsn,
+        )
+    except Exception as exc:  # noqa: BLE001 — additive rung: degrade to empty
+        log.warning("trucks_list_registered_failed", error=str(exc))
+        return []
+
+    devices: list[dict] = []
+    for r in rows:
+        row = dict(r)
+        lat, lon = row.get("lat"), row.get("lon")
+        ts = row.get("last_seen")
+        devices.append({
+            "device_id": row.get("device_id"),
+            "plate": row.get("plate"),
+            "driver_id": row.get("driver_id"),
+            "driver_name": row.get("driver_name"),
+            # NOT MEASURED for a registration — null, never a placeholder value.
+            "gate_id": None,
+            "state": None,
+            "eta_s": None,
+            "remaining_km": None,
+            "speed_kmh": None,
+            "heading": None,
+            "segment_id": None,
+            # Real telemetry only.
+            "position": ({"lat": lat, "lon": lon}
+                         if lat is not None and lon is not None else None),
+            "last_seen": ts.isoformat() if isinstance(ts, datetime) else ts,
+            "source": REGISTERED_SOURCE,
+        })
+    return devices
+
+
+async def _registered_devices_cached(state: GatewayState, limit: int) -> list[dict]:
+    """:func:`_list_registered_pwa_devices` behind a short memo (the console polls)."""
+    key = f"registered:{limit}"
+    hit = _REGISTERED_CACHE.get(key)
+    if hit and (time.monotonic() - hit[0]) <= REGISTERED_CACHE_TTL_S:
+        return hit[1]
+    devices = await _list_registered_pwa_devices(state, limit)
+    _REGISTERED_CACHE[key] = (time.monotonic(), devices)
+    return devices
+
+
 def _list_tertiary_checkins(limit: int) -> Optional[list[dict]]:
     """TERTIARY for the fleet LIST: the manual web check-ins already held in
     memory — the same rung ``GET /api/trucks/{id}`` falls back to. A vehicle here
@@ -309,6 +451,20 @@ async def list_trucks(
     response degrades to empty — returning the unfiltered fleet would answer a
     different question than the one asked. The response says so via
     ``state_filter_supported``.
+
+    REGISTERED DRIVER DEVICES. A state-filtered answer additionally carries
+    ``registered_devices`` — the devices a real driver is currently signed in on
+    (see :func:`_list_registered_pwa_devices`). They are a SEPARATE list, never
+    merged into ``devices``:
+
+      * ``devices`` keeps its exact meaning — trucks the sim measured to be in
+        the requested TruckState — so ``count``, the queue-depth cards and the
+        empty/unavailable classification are all unchanged;
+      * ``registered_devices`` are real but unmeasured, so their state, ETA,
+        remaining distance and gate are null.
+
+    Both lists carry an explicit per-device ``source`` (``truck-sim`` vs
+    ``pwa-registered``) so the console can never present one as the other.
     """
     url = gw.cfg.truck_api_url.rstrip("/") + "/devices/list"
     params: Dict[str, str] = {"limit": str(limit)}
@@ -319,11 +475,19 @@ async def list_trucks(
     rid = uuid.uuid4().hex[:12]
     t_req = time.perf_counter()
 
+    # The Driver-PWA rung. Resolved ONCE per request and attached to whichever
+    # rung answers, so a signed-in driver is listed whether the sim is up, memoed
+    # or unreachable. Only for state-filtered queries: an unfiltered fleet read
+    # is a different question (and its SECONDARY/TERTIARY rungs already return
+    # every device they know of).
+    registered = await _registered_devices_cached(gw, limit) if state else None
+
     # --- CACHED (fresh): a probe from the last ~3 s answers as LIVE would ----
     fresh = _list_cache_get(cache_key, LIST_CACHE_FRESH_S)
     if fresh is not None:
         REQUESTS.labels("trucks", "ok").inc()
-        return _trace_list(rid, "CACHED_FRESH", state, limit, fresh[1], t_req)
+        return _trace_list(rid, "CACHED_FRESH", state, limit, fresh[1], t_req,
+                           registered=registered)
 
     # --- PRIMARY: the truck-sim control plane -------------------------------
     t0 = time.perf_counter()
@@ -338,11 +502,20 @@ async def list_trucks(
             body = resp.json()
             if isinstance(body, dict):
                 body.setdefault("decision_path", TruckPath.PRIMARY.value)
-                body.setdefault("source", "truck-sim")
+                body.setdefault("source", SIM_SOURCE)
                 body.setdefault("degraded", False)
                 body.setdefault("state_filter_supported", True)
+                # Per-device provenance: the console renders simulator rows and
+                # registered driver devices in the same console and must never
+                # be able to confuse the two. The sim does not stamp its own
+                # payload, so the gateway does it here (setdefault — an upstream
+                # that ever starts sending `source` keeps it).
+                for dev in body.get("devices") or []:
+                    if isinstance(dev, dict):
+                        dev.setdefault("source", SIM_SOURCE)
                 _LIST_CACHE[cache_key] = (time.monotonic(), body)
-            return _trace_list(rid, "PRIMARY", state, limit, body, t_req)
+            return _trace_list(rid, "PRIMARY", state, limit, body, t_req,
+                               registered=registered)
         log.info("trucks_list_miss", request_id=rid, status=resp.status_code,
                  latency_ms=round((time.perf_counter() - t0) * 1000, 1))
     except httpx.HTTPError as exc:
@@ -366,9 +539,15 @@ async def list_trucks(
         return _trace_list(rid, "CACHED_STALE", state, limit,
                            {**body, "degraded": True,
                             "decision_path": TruckPath.CACHED.value,
-                            "source": "memo", "cache_age_s": round(age_s, 1)}, t_req)
+                            "source": "memo", "cache_age_s": round(age_s, 1)}, t_req,
+                           registered=registered)
 
     # A state-filtered query cannot be answered by the rungs below (see above).
+    # The QUEUE stays unanswerable — `devices: []` and `state_filter_supported:
+    # False` are unchanged, because no rung below the sim knows a TruckState.
+    # The registered driver devices attached alongside are a different question
+    # ("who is signed in"), which the DB *can* answer, so they survive a sim
+    # outage: an operator can still re-route a real driver with the sim down.
     if state:
         REQUESTS.labels("trucks", "degraded").inc()
         return _trace_list(rid, "UNANSWERABLE", state, limit,
@@ -376,7 +555,8 @@ async def list_trucks(
                             "degraded": True, "decision_path": None, "source": None,
                             "state_filter_supported": False,
                             "hint": "TruckState is only known to the truck-sim; "
-                                    "start it to filter by state."}, t_req)
+                                    "start it to filter by state."}, t_req,
+                           registered=registered)
 
     # --- SECONDARY: the persisted telemetry tail in RDS ---------------------
     devices = await _list_secondary_rds(gw, limit)

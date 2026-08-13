@@ -143,23 +143,70 @@ def _format_vehicle_id(seq: int) -> str:
     return f"TRK-{seq:06d}"
 
 
+# First suffix of the OPERATOR-created Vehicle ID range. Everything below it
+# belongs to the truck simulator, which mints TRK-000001 … TRK-{num_devices} and
+# is hard-capped at max_devices=30 000 (ingest/trucking_app/trucking_app/
+# config.py). 900 000 leaves that ceiling — and any plausible re-scaling of it —
+# far behind, while staying inside the 6-digit id format so no existing
+# consumer, index or regex changes. See :func:`next_vehicle_id`.
+OPERATOR_ID_FLOOR = 900_001
+
+
+def is_simulator_id(vehicle_id: str) -> bool:
+    """True for a Vehicle ID in the simulator's range (suffix < the operator floor).
+
+    Provenance test for a well-formed ``TRK-######``; anything that is not a
+    canonical TRK id is not the simulator's (``_seq_of`` -> 0 would otherwise
+    read as "simulator")."""
+    seq = _seq_of(vehicle_id)
+    return 0 < seq < OPERATOR_ID_FLOOR
+
+
+def is_operator_id(vehicle_id: str) -> bool:
+    """True for a Vehicle ID minted by :func:`next_vehicle_id` for an operator."""
+    return _seq_of(vehicle_id) >= OPERATOR_ID_FLOOR
+
+
 async def next_vehicle_id(dsn: str) -> str:
-    """Next Vehicle ID in the TRK sequence: max existing suffix + 1, zero-padded to
-    6 digits (e.g. existing max TRK-000017 -> TRK-000018). Vehicle IDs are never
-    entered by hand — the backend owns the sequence."""
+    """Next Vehicle ID for an OPERATOR-created vehicle, from the reserved range.
+
+    Allocated as ``max(highest operator suffix, OPERATOR_ID_FLOOR - 1) + 1``, so
+    the first operator vehicle is ``TRK-900001`` and every later one continues
+    from the highest operator id already issued.
+
+    WHY A SEPARATE RANGE. This used to be ``MAX(suffix over the WHOLE table) + 1``,
+    which collided with the simulator. The sim mints ``TRK-000001 …
+    TRK-0{num_devices}`` deterministically in memory (``TRUCK_NUM_DEVICES``,
+    default 20 000) while the boot sync only imports the first ``limit=5000`` of
+    them into ``core.vehicle`` (``gateway/main.py``). ``MAX`` therefore saw
+    ~``TRK-005000`` and handed the next operator vehicle ``TRK-005001`` — an id
+    the simulator is ALREADY using for a different truck with a different plate.
+    The console would then show that operator's vehicle carrying the simulator's
+    plate, and a re-route pushed to it would reach the wrong driver.
+
+    ``OPERATOR_ID_FLOOR`` sits above the sim's hard ``max_devices`` ceiling
+    (30 000), so the two namespaces cannot meet no matter how far the sim is
+    scaled. Existing ids are untouched — this only changes what is minted NEXT,
+    and :func:`sync_from_fleet` / :func:`sync_from_assignments` keep inserting
+    the ids they are given.
+    """
     highest = 0
     if await _backend(dsn) == "db":
         from jnpa_shared.db import fetch_one
 
         # Zero-padded ids sort lexically the same as numerically (<= 999999), so
         # MAX(vehicle_id) over the well-formed ids gives the highest suffix.
+        # Restricted to the operator range: a simulator id must never advance
+        # the operator sequence (nor be able to exhaust it).
         row = await fetch_one(
             "SELECT MAX(vehicle_id) AS m FROM core.vehicle "
-            "WHERE vehicle_id ~ '^TRK-[0-9]{6}$'", dsn=dsn)
+            "WHERE vehicle_id ~ '^TRK-[0-9]{6}$' AND vehicle_id >= :floor",
+            {"floor": _format_vehicle_id(OPERATOR_ID_FLOOR)}, dsn=dsn)
         highest = _seq_of(row["m"]) if row and row.get("m") else 0
     else:
-        highest = max((_seq_of(v) for v in _MEM), default=0)
-    return _format_vehicle_id(highest + 1)
+        highest = max((s for s in (_seq_of(v) for v in _MEM)
+                       if s >= OPERATOR_ID_FLOOR), default=0)
+    return _format_vehicle_id(max(highest + 1, OPERATOR_ID_FLOOR))
 
 
 async def find_by_number(dsn: str, vehicle_number: str) -> Optional[dict]:
@@ -669,4 +716,5 @@ __all__ = [
     "add_vehicle", "update_vehicle", "sync_from_fleet", "sync_from_assignments",
     "orphan_active_drivers", "get_vehicle", "vehicle_exists", "list_vehicles",
     "list_available", "stats", "next_vehicle_id", "find_by_number",
+    "OPERATOR_ID_FLOOR", "is_simulator_id", "is_operator_id",
 ]

@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import { MockAdapter } from "./mock";
+import { buildCombinedReport } from "@/lib/svCombinedReport";
 
 const a = new MockAdapter();
 
@@ -54,7 +55,7 @@ describe("DataAdapter contract — MockAdapter", () => {
     const all = await a.trucks();
     expect(all.length).toBeGreaterThan(10);
     expect(
-      all.every((t) => typeof t.position.lat === "number" && typeof t.position.lon === "number"),
+      all.every((t) => typeof t.position?.lat === "number" && typeof t.position?.lon === "number"),
     ).toBe(true);
     const queued = await a.trucks("AT_GATE_QUEUE");
     expect(queued.every((t) => t.state === "AT_GATE_QUEUE")).toBe(true);
@@ -259,6 +260,20 @@ describe("DataAdapter contract — MockAdapter", () => {
     expect(r.narrative_provenance).toBe("AI_GENERATED");
     expect(r.ai_generated).toBe(true);
     expect(typeof r.combined_description).toBe("string");
+  });
+
+  it("svIncidentAll() drives the structured combined report without losing data", async () => {
+    const r = await a.svIncidentAll("A1");
+    const view = buildCombinedReport(r);
+    // The report is presented as sections, not as one paragraph — and the
+    // narrative is still carried through verbatim for the full-text view.
+    expect(view.narrative).toBe(r.combined_description);
+    expect(view.aiGenerated).toBe(r.ai_generated);
+    expect(view.incidents).toEqual(r.incidents);
+    expect(view.sections.length).toBeGreaterThan(0);
+    for (const section of view.sections) {
+      expect(section.facts.length + section.notes.length).toBeGreaterThan(0);
+    }
   });
 
   it("svStreamTicket() returns a scoped stream URL", async () => {

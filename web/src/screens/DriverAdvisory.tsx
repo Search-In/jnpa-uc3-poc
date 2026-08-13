@@ -25,6 +25,7 @@ import {
 import { DecisionPathBadge } from "@/components/DecisionPathBadge";
 import { fmtEta } from "@/lib/utils";
 import { gateIdColour } from "@/lib/tokens";
+import { etaSeconds, isRegisteredDevice, matchesQuery, remainingKmLabel } from "@/lib/advisoryRows";
 import {
   deriveQueueState,
   gateDepth,
@@ -50,22 +51,10 @@ import {
   AlertTriangle,
   CloudRain,
   TrafficCone,
+  Smartphone,
 } from "lucide-react";
 
 const GATES = ["G-NSICT", "G-JNPCT", "G-NSIGT", "G-BMCT"];
-
-// Free-flow highway speed (km/h) used as a client-side safety net when the
-// truck-sim payload lacks `eta_s`. The backend now always supplies one (seeded
-// at inject + a serializer fallback), so this rarely triggers; the value mirrors
-// the backend's speed_highway_kmh so the estimate stays consistent if it does.
-const FREE_FLOW_KMH = 55;
-
-// ETA-to-gate in seconds: prefer the live `eta_s`; otherwise fall back to the
-// remaining distance at free-flow speed (0 km remaining -> ~0 s -> "<1 min").
-function etaSeconds(truck: TruckDevice): number {
-  if (truck.eta_s != null) return truck.eta_s;
-  return (truck.remaining_km / FREE_FLOW_KMH) * 3600;
-}
 
 // Trucks AT_GATE_QUEUE with ETA-to-gate and a re-routing recommendation. The
 // recommendation picks the least-loaded alternative gate; "Push Re-route" forces
@@ -105,6 +94,21 @@ export default function DriverAdvisory() {
   lastGood.current = recordAnswer(lastGood.current, fresh, queued.dataUpdatedAt);
   const queueState = withLastKnownGood(fresh, lastGood.current, Date.now());
   const devices = queueState.devices;
+
+  // --- Registered driver devices (Driver PWA) ------------------------------
+  // Read STRAIGHT off the envelope, deliberately outside the queue-state
+  // machinery: this list answers "who is signed in", not "who is queueing", so
+  // it must not affect (or be affected by) the AT_GATE_QUEUE classification,
+  // the queue count or the per-gate depth cards. The gateway answers it from
+  // the DB, so it survives a truck-sim outage that makes the queue itself
+  // unanswerable.
+  const registered = queued.data?.registered_devices ?? [];
+
+  // One search box over both tables, so an operator can find a driver who has
+  // just signed in without knowing whether the simulator has them queueing.
+  const [search, setSearch] = useState("");
+  const visibleQueue = devices.filter((d) => matchesQuery(d, search));
+  const visibleRegistered = registered.filter((d) => matchesQuery(d, search));
 
   // --- Accident Route Advisory (additive) ---------------------------------
   // Reuse the existing accidents API to surface ACTIVE (REPORTED /
@@ -226,13 +230,21 @@ export default function DriverAdvisory() {
         <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
           <Route className="h-4 w-4 text-muted-foreground" />
           {t("advisory.congestionRerouting", "Congestion Rerouting")}
+          {/* Finds a device across BOTH tables — the queued simulator trucks and
+              the registered driver devices — so a driver who just signed in is
+              reachable without them being in AT_GATE_QUEUE. */}
+          <input
+            type="search"
+            data-testid="advisory-search"
+            className="ml-auto w-56 rounded-md border border-border bg-background px-2 py-1 text-xs font-normal text-foreground placeholder:text-muted-foreground"
+            placeholder={t("advisory.searchPlaceholder", "Search device, plate or driver")}
+            aria-label={t("advisory.searchPlaceholder", "Search device, plate or driver")}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
           {/* Table-level re-fetch: this query only, no page reload; the rendered
               rows stay put while it runs (keepPreviousData above). */}
-          <RefreshButton
-            onRefresh={() => void queued.refetch()}
-            isRefreshing={queued.isFetching}
-            className="ml-auto"
-          />
+          <RefreshButton onRefresh={() => void queued.refetch()} isRefreshing={queued.isFetching} />
         </div>
         {queueState.status === "error" ? (
           <Card>
@@ -283,12 +295,13 @@ export default function DriverAdvisory() {
                       <th className="px-4 py-2">{t("advisory.colGate")}</th>
                       <th className="px-4 py-2">{t("advisory.colEta")}</th>
                       <th className="px-4 py-2">{t("advisory.colRemaining")}</th>
+                      <th className="px-4 py-2">{t("advisory.colSource", "Source")}</th>
                       <th className="px-4 py-2">{t("advisory.colRecommend")}</th>
                       <th className="px-4 py-2 text-right">{t("advisory.colAction")}</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {devices.slice(0, 200).map((t) => (
+                    {visibleQueue.slice(0, 200).map((t) => (
                       <QueueRow
                         key={t.device_id}
                         truck={t}
@@ -303,6 +316,72 @@ export default function DriverAdvisory() {
           </Card>
         )}
       </div>
+
+      {/* Registered driver devices (Driver PWA) — additive, and deliberately a
+          SEPARATE table from the gate queue above. These devices are real (a
+          driver is signed in on each) but their queue state was never measured,
+          so they are never mixed into the AT_GATE_QUEUE rows, never counted in
+          the queue KPI, and never shown with an ETA or a remaining distance.
+          The operator can still assign a gate and push the re-route: delivery
+          targets device_id, which is exactly what this list is keyed on. */}
+      {registered.length > 0 && (
+        <div className="px-4 py-3" data-testid="advisory-registered">
+          <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+            <Smartphone className="h-4 w-4 text-muted-foreground" />
+            {t("advisory.registeredDevices", "Registered driver devices")}
+            <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              {t("advisory.sourcePwa", "Source: PWA")}
+            </span>
+            <span className="text-xs font-normal text-muted-foreground">
+              {t("advisory.registeredCount", "{{count}} signed in", {
+                count: registered.length,
+              })}
+            </span>
+          </div>
+          <Card className="overflow-hidden">
+            <p className="border-b border-border bg-muted/40 px-4 py-2 text-xs text-muted-foreground">
+              {t(
+                "advisory.registeredHint",
+                "Devices a driver is signed in on. Gate queue position, ETA and remaining distance are not measured for these devices and are shown as “—”.",
+              )}
+            </p>
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="border-b border-border bg-muted/60 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+                    <tr>
+                      <th className="px-4 py-2">{t("advisory.colDevice")}</th>
+                      <th className="px-4 py-2">{t("advisory.colPlate")}</th>
+                      <th className="px-4 py-2">{t("advisory.colDriver", "Driver")}</th>
+                      <th className="px-4 py-2">{t("advisory.colEta")}</th>
+                      <th className="px-4 py-2">{t("advisory.colRemaining")}</th>
+                      <th className="px-4 py-2">{t("advisory.colSource", "Source")}</th>
+                      <th className="px-4 py-2">{t("advisory.colRecommend")}</th>
+                      <th className="px-4 py-2 text-right">{t("advisory.colAction")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleRegistered.slice(0, 200).map((d) => (
+                      <QueueRow
+                        key={d.device_id}
+                        truck={d}
+                        recommend={recommendFor(d.gate_id)}
+                        qc={qc}
+                        showDriver
+                      />
+                    ))}
+                  </tbody>
+                </table>
+                {visibleRegistered.length === 0 && (
+                  <EmptyState>
+                    {t("advisory.noRegisteredMatch", "No registered device matches this search.")}
+                  </EmptyState>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {/* Accident Route Advisory (additive) */}
       <div className="px-4 py-3">
@@ -583,10 +662,13 @@ function QueueRow({
   truck,
   recommend,
   qc,
+  showDriver = false,
 }: {
   truck: TruckDevice;
   recommend: string;
   qc: ReturnType<typeof useQueryClient>;
+  /** Registered-devices table: show the assigned driver instead of the gate. */
+  showDriver?: boolean;
 }) {
   const { t } = useTranslation();
   // The dropdown shows the suggested gate by default, but stays editable. Once
@@ -595,6 +677,8 @@ function QueueRow({
   const [selected, setSelected] = useState<string | null>(null);
   const gate = selected ?? recommend;
   const [done, setDone] = useState(false);
+  const isPwa = isRegisteredDevice(truck);
+  const eta = etaSeconds(truck);
 
   const reroute = useMutation({
     mutationFn: (gateId: string) =>
@@ -619,9 +703,26 @@ function QueueRow({
     <tr className="border-b border-border/50 hover:bg-muted/40">
       <td className="px-4 py-2 font-mono text-xs">{truck.device_id}</td>
       <td className="px-4 py-2 font-mono text-xs">{truck.plate ?? "—"}</td>
-      <td className="px-4 py-2">{truck.gate_id ? <GateChip gate={truck.gate_id} /> : "—"}</td>
-      <td className="px-4 py-2 tabular-nums">{fmtEta(etaSeconds(truck))}</td>
-      <td className="px-4 py-2 tabular-nums">{truck.remaining_km.toFixed(1)} km</td>
+      {showDriver ? (
+        <td className="px-4 py-2 text-xs">{truck.driver_name ?? truck.driver_id ?? "—"}</td>
+      ) : (
+        <td className="px-4 py-2">{truck.gate_id ? <GateChip gate={truck.gate_id} /> : "—"}</td>
+      )}
+      {/* NEVER a fabricated figure: null means the value was not measured for
+          this device, and "—" is the only honest rendering of that. */}
+      <td className="px-4 py-2 tabular-nums">{eta == null ? "—" : fmtEta(eta)}</td>
+      <td className="px-4 py-2 tabular-nums">{remainingKmLabel(truck)}</td>
+      <td className="px-4 py-2">
+        <span
+          className={
+            isPwa
+              ? "rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-primary"
+              : "rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
+          }
+        >
+          {isPwa ? t("advisory.sourcePwaShort", "PWA") : t("advisory.sourceSim", "Simulator")}
+        </span>
+      </td>
       <td className="px-4 py-2">
         <Select value={gate} onValueChange={onGateChange} disabled={reroute.isPending}>
           <SelectTrigger

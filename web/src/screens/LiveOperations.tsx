@@ -287,18 +287,18 @@ export default function LiveOperations() {
     ? (allTrucks.find((t) => t.device_id === selected.device_id) ?? selected)
     : null;
 
-  const selectedFocus = selected
+  // Null when the selected device has never reported a position — there is
+  // nothing to focus the map on, so the map simply stays where it is.
+  const selectedFocus = selected?.position
     ? { lat: selected.position.lat, lon: selected.position.lon }
     : null;
 
   // Selecting a vehicle pans/zooms the map to it.
   useEffect(() => {
-    if (selected && view) {
+    if (selected?.position && view) {
+      const { lat, lon } = selected.position;
       void view
-        .goTo(
-          { center: [selected.position.lon, selected.position.lat], zoom: 15 },
-          { duration: 700, easing: "ease-in-out" },
-        )
+        .goTo({ center: [lon, lat], zoom: 15 }, { duration: 700, easing: "ease-in-out" })
         .catch(() => {});
     }
   }, [selected, view]);
@@ -640,15 +640,30 @@ function VehicleDetail({
         <DetailGroup title="Trip">
           <DetailRow label="Gate" value={truck.gate_id ?? "—"} />
           <DetailRow label="Segment" value={truck.segment_id ?? "—"} />
-          <DetailRow label="Remaining" value={`${truck.remaining_km.toFixed(1)} km`} />
-          <DetailRow label="Speed" value={`${Math.round(truck.speed_kmh)} km/h`} />
+          {/* "—" for anything this device never reported: printing a rounded
+              null would state a measurement that was never taken. */}
+          <DetailRow
+            label="Remaining"
+            value={truck.remaining_km == null ? "—" : `${truck.remaining_km.toFixed(1)} km`}
+          />
+          <DetailRow
+            label="Speed"
+            value={truck.speed_kmh == null ? "—" : `${Math.round(truck.speed_kmh)} km/h`}
+          />
         </DetailGroup>
         <DetailGroup title="ETA">
           <DetailRow label="To gate" value={fmtEta(truck.eta_s)} />
-          <DetailRow label="Heading" value={`${Math.round(truck.heading)}°`} />
+          <DetailRow
+            label="Heading"
+            value={truck.heading == null ? "—" : `${Math.round(truck.heading)}°`}
+          />
           <DetailRow
             label="Position"
-            value={`${truck.position.lat.toFixed(3)}, ${truck.position.lon.toFixed(3)}`}
+            value={
+              truck.position
+                ? `${truck.position.lat.toFixed(3)}, ${truck.position.lon.toFixed(3)}`
+                : "—"
+            }
           />
         </DetailGroup>
         <DetailGroup title="Driver / RC">

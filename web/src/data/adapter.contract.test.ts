@@ -54,7 +54,7 @@ describe("DataAdapter contract — MockAdapter", () => {
     const all = await a.trucks();
     expect(all.length).toBeGreaterThan(10);
     expect(
-      all.every((t) => typeof t.position.lat === "number" && typeof t.position.lon === "number"),
+      all.every((t) => typeof t.position?.lat === "number" && typeof t.position?.lon === "number"),
     ).toBe(true);
     const queued = await a.trucks("AT_GATE_QUEUE");
     expect(queued.every((t) => t.state === "AT_GATE_QUEUE")).toBe(true);

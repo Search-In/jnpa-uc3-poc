@@ -468,7 +468,17 @@
     "colRecommend": "अनुशंसा",
     "colAction": "कार्रवाई",
     "rerouted": "री-रूट किया गया",
-    "pushReroute": "री-रूट भेजें"
+    "pushReroute": "री-रूट भेजें",
+    "colSource": "स्रोत",
+    "colDriver": "चालक",
+    "searchPlaceholder": "डिवाइस, नंबर या चालक खोजें",
+    "registeredDevices": "पंजीकृत चालक डिवाइस",
+    "sourcePwa": "स्रोत: PWA",
+    "sourcePwaShort": "PWA",
+    "sourceSim": "सिमुलेटर",
+    "registeredCount": "{{count}} साइन इन",
+    "registeredHint": "वे डिवाइस जिन पर चालक साइन इन है। इन डिवाइस के लिए गेट कतार, ETA और शेष दूरी मापी नहीं जाती और “—” दिखाई जाती है।",
+    "noRegisteredMatch": "इस खोज से कोई पंजीकृत डिवाइस मेल नहीं खाता।"
   },
   "geofencing": {
     "selectEdit": "चुनें / संपादित करें",

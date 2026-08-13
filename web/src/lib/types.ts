@@ -60,12 +60,32 @@ export interface TruckDevice {
    * does not make. Every consumer must handle null.
    */
   state: string | null;
-  position: { lat: number; lon: number };
-  speed_kmh: number;
-  heading: number;
-  remaining_km: number;
+  /** Null for a device that has never reported a position (see `source`). */
+  position: { lat: number; lon: number } | null;
+  speed_kmh: number | null;
+  heading: number | null;
+  /**
+   * Distance still to run to the gate, or null when it was never measured.
+   *
+   * Nullable because a `pwa-registered` device is a registration, not a
+   * position fix: the gateway sends null rather than 0, and the UI must render
+   * "—". Typing this `number` is what would let a `.toFixed()` print "0.0 km"
+   * for a distance nobody measured.
+   */
+  remaining_km: number | null;
   eta_s: number | null;
   segment_id?: string | null;
+  /**
+   * Provenance. `truck-sim` = a synthetic simulator truck; `pwa-registered` = a
+   * device a real driver is signed in on (core.push_subscription). The console
+   * must never present one as the other.
+   */
+  source?: string | null;
+  /** Present on `pwa-registered` devices with an ACTIVE assigned driver. */
+  driver_id?: string | null;
+  driver_name?: string | null;
+  /** ISO timestamp of the last real telemetry fix, when there is one. */
+  last_seen?: string | null;
 }
 
 export interface SourceHealth {

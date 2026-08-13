@@ -279,3 +279,70 @@ describe("last-known-good queue", () => {
     expect(recordAnswer(null, memo, 5_000)?.at).toBe(5_000);
   });
 });
+
+// The registered-driver-device list rides on the SAME envelope as the gate
+// queue. That is only safe if it cannot influence what the queue is understood
+// to be: a signed-in driver is not a measurement that anyone is queueing.
+describe("registered driver devices do not disturb the queue measurement", () => {
+  const withRegistered: TruckListEnvelope = {
+    ...LIVE_QUEUE,
+    registered_devices: [
+      {
+        device_id: "TRK-000026",
+        plate: "MH04QA9911",
+        gate_id: null,
+        state: null,
+        position: null,
+        speed_kmh: null,
+        heading: null,
+        remaining_km: null,
+        eta_s: null,
+        source: "pwa-registered",
+      },
+    ],
+    registered_count: 1,
+  };
+
+  it("keeps the queue count to what the simulator measured", () => {
+    const s = deriveQueueState({ isLoading: false, isError: false, envelope: withRegistered });
+    expect(s.status).toBe("ok");
+    expect(s.count).toBe(3); // NOT 4
+    expect(s.devices.map((d) => d.device_id)).not.toContain("TRK-000026");
+  });
+
+  it("keeps the per-gate depth cards unchanged", () => {
+    const s = deriveQueueState({ isLoading: false, isError: false, envelope: withRegistered });
+    expect(gateDepth(s, "G-NSICT")).toBe(2);
+    expect(gateDepth(s, "G-BMCT")).toBe(1);
+    expect(gateDepth(s, "G-JNPCT")).toBe(0);
+  });
+
+  it("still reports a genuinely empty queue as empty when a driver is signed in", () => {
+    // The distinction the whole module exists for: somebody being signed in
+    // says nothing about whether anybody is queueing.
+    const s = deriveQueueState({
+      isLoading: false,
+      isError: false,
+      envelope: { ...withRegistered, devices: [], count: 0 },
+    });
+    expect(s.status).toBe("empty");
+    expect(s.count).toBe(0);
+  });
+
+  it("still reports an unanswerable queue as unavailable, never as empty", () => {
+    const s = deriveQueueState({
+      isLoading: false,
+      isError: false,
+      envelope: {
+        devices: [],
+        count: 0,
+        degraded: true,
+        state_filter_supported: false,
+        registered_devices: withRegistered.registered_devices,
+        registered_count: 1,
+      },
+    });
+    expect(s.status).toBe("unavailable");
+    expect(s.count).toBeNull();
+  });
+});

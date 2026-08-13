@@ -696,10 +696,12 @@ function VehiclesTable({
           {vehicles.map((v) => {
             const plate = v.plate ?? v.device_id;
             const driver = (v.plate && driverByPlate.get(v.plate.toUpperCase())) || "—";
+            // A device with no position fix (a web check-in, or a registered
+            // driver device that has never reported) has no location to print.
             const loc =
               v.gate_id ??
               v.segment_id ??
-              `${v.position.lat.toFixed(3)}, ${v.position.lon.toFixed(3)}`;
+              (v.position ? `${v.position.lat.toFixed(3)}, ${v.position.lon.toFixed(3)}` : "—");
             return (
               <tr key={v.device_id} className="hover:bg-muted/40">
                 <td className="px-3 py-1.5 font-mono font-medium text-foreground">{plate}</td>

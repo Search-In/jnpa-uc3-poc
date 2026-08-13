@@ -487,7 +487,17 @@
     "pushReroute": "Push Re-route",
     "selectGateAria": "Recommended gate for {{device}}",
     "saving": "saving…",
-    "gateUpdated": "updated"
+    "gateUpdated": "updated",
+    "colSource": "Source",
+    "colDriver": "Driver",
+    "searchPlaceholder": "Search device, plate or driver",
+    "registeredDevices": "Registered driver devices",
+    "sourcePwa": "Source: PWA",
+    "sourcePwaShort": "PWA",
+    "sourceSim": "Simulator",
+    "registeredCount": "{{count}} signed in",
+    "registeredHint": "Devices a driver is signed in on. Gate queue position, ETA and remaining distance are not measured for these devices and are shown as “—”.",
+    "noRegisteredMatch": "No registered device matches this search."
   },
   "geofencing": {
     "selectEdit": "Select / edit",

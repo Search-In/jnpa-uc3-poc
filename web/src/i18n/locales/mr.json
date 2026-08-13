@@ -468,7 +468,17 @@
     "colRecommend": "शिफारस",
     "colAction": "कृती",
     "rerouted": "री-रूट केले",
-    "pushReroute": "री-रूट पाठवा"
+    "pushReroute": "री-रूट पाठवा",
+    "colSource": "स्रोत",
+    "colDriver": "चालक",
+    "searchPlaceholder": "डिव्हाइस, क्रमांक किंवा चालक शोधा",
+    "registeredDevices": "नोंदणीकृत चालक डिव्हाइस",
+    "sourcePwa": "स्रोत: PWA",
+    "sourcePwaShort": "PWA",
+    "sourceSim": "सिम्युलेटर",
+    "registeredCount": "{{count}} साइन इन",
+    "registeredHint": "चालक साइन इन असलेली डिव्हाइसेस. या डिव्हाइसेसाठी गेट रांग, ETA आणि उर्वरित अंतर मोजले जात नाही आणि “—” दाखवले जाते.",
+    "noRegisteredMatch": "या शोधाशी जुळणारी नोंदणीकृत डिव्हाइस नाही."
   },
   "geofencing": {
     "selectEdit": "निवडा / संपादित करा",

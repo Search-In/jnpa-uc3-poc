@@ -7,6 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { EmptyState, ErrorState, Spinner } from "@/components/ui/misc";
 import { StatCard, StatGrid, StatusChip, RefreshButton } from "@/components/ui/dtccc";
+import type { Tone } from "@/components/ui/dtccc";
 import { fmtEta } from "@/lib/utils";
 import { Warehouse, ParkingCircle, TriangleAlert, PlayCircle, Undo2 } from "lucide-react";
 
@@ -28,10 +29,10 @@ import { Warehouse, ParkingCircle, TriangleAlert, PlayCircle, Undo2 } from "luci
 
 const REFRESH_MS = 5_000;
 
-function toneFor(status: string | undefined): "ok" | "info" | "warn" | "crit" | "neutral" {
+function toneFor(status: string | undefined): Tone {
   switch (status) {
     case "CRITICAL":
-      return "crit";
+      return "critical";
     case "HIGH":
       return "warn";
     case "ELEVATED":

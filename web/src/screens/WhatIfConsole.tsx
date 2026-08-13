@@ -50,38 +50,71 @@ import {
 } from "@/whatif/runState";
 import { getScript } from "@/whatif/scenarioScripts";
 import { ReactiveGuidePanel } from "@/components/panels/ReactiveGuidePanel";
+import { Uc3ExecutionPanel } from "@/components/whatif/Uc3ExecutionPanel";
 
-const SCENARIOS: { id: ScenarioId; runner: string; blurb: string; params: Record<string, any> }[] =
-  [
-    {
-      id: "TFC-1",
-      runner: "tfc1",
-      blurb:
-        "Close G-NSICT; forecaster predicts spillover; trucks auto-re-route; TAS slots rescheduled.",
-      params: { gate_id: "G-NSICT", duration_minutes: 120 },
+const SCENARIOS: {
+  id: ScenarioId;
+  runner: string;
+  blurb: string;
+  params: Record<string, any>;
+  /** Body actually POSTed to the runner; defaults to `params`. */
+  runParams?: Record<string, any>;
+}[] = [
+  {
+    id: "TFC-1",
+    runner: "tfc1",
+    blurb:
+      "Close G-NSICT; forecaster predicts spillover; trucks auto-re-route; TAS slots rescheduled.",
+    params: { gate_id: "G-NSICT", duration_minutes: 120 },
+  },
+  {
+    id: "TFC-2",
+    runner: "tfc2",
+    blurb:
+      "Inject a wrong-way track at Karal Phata; anomaly fires; e-Challan issued with evidence.",
+    params: { camera_id: "C-KARAL-EXIT" },
+  },
+  {
+    id: "TFC-3",
+    runner: "tfc3",
+    blurb:
+      "UC-II DPD release spike (2.5×) → corridor demand surge; forecaster build-up; gate-slot reissue.",
+    params: { dpd_release_spike: 2.5 },
+  },
+  {
+    // TFC-4 drives the EXISTING UC-3 implementation (migration 0144 +
+    // services/yard_capacity + gateway/routers/yard.py) through
+    // scenarios/tfc4.py. It runs on exactly the same run/reset/timeline
+    // wiring as TFC-1/2/3 — no second implementation, no frontend animation.
+    id: "TFC-4",
+    runner: "tfc4",
+    blurb:
+      "Yard utilization reaches 95% and internal truck traffic creates arrival pressure. Hold affected truck arrivals, recommend authorized CPP/nearby parking, notify drivers, and release trucks when yard capacity becomes available.",
+    params: {
+      yard_utilization_pct: 95,
+      yard_status: "CRITICAL",
+      arrival_trucks: 14,
+      recommended_parking: "CPP",
     },
-    {
-      id: "TFC-2",
-      runner: "tfc2",
-      blurb:
-        "Inject a wrong-way track at Karal Phata; anomaly fires; e-Challan issued with evidence.",
-      params: { camera_id: "C-KARAL-EXIT" },
+    // The parameter chips above are the operator-facing summary; these are the
+    // keys scenarios/tfc4.py actually accepts. Kept separate so the card can
+    // read "Yard status: CRITICAL" without inventing a backend parameter.
+    runParams: {
+      yard_id: "JNPA-NSICT-YARD",
+      gate_id: "G-NSICT",
+      arrival_trucks: 14,
+      target_utilization_pct: 95,
+      release_containers: 5,
     },
-    {
-      id: "TFC-3",
-      runner: "tfc3",
-      blurb:
-        "UC-II DPD release spike (2.5×) → corridor demand surge; forecaster build-up; gate-slot reissue.",
-      params: { dpd_release_spike: 2.5 },
-    },
-    {
-      id: "MONSOON-FRIDAY",
-      runner: "monsoon_friday",
-      blurb:
-        "Heavy Rain — cascades to driver & fuel shortage + reactive recommendations. Monsoon rain + Friday peak → congestion → demand surge → gate queue → reroute → carbon impact.",
-      params: { gate_id: "G-NSICT", rain_intensity: "heavy", demand_trucks: 120 },
-    },
-  ];
+  },
+  {
+    id: "MONSOON-FRIDAY",
+    runner: "monsoon_friday",
+    blurb:
+      "Heavy Rain — cascades to driver & fuel shortage + reactive recommendations. Monsoon rain + Friday peak → congestion → demand surge → gate queue → reroute → carbon impact.",
+    params: { gate_id: "G-NSICT", rain_intensity: "heavy", demand_trucks: 120 },
+  },
+];
 
 // Display-only theme labels that make the requested scenario themes
 // discoverable in the UI. These NEVER change the backend `runner` name or the
@@ -126,7 +159,8 @@ export default function WhatIfConsole() {
   const activeRunner = runState.runner;
 
   const run = useMutation({
-    mutationFn: (s: (typeof SCENARIOS)[number]) => getAdapter().runScenario(s.runner, s.params),
+    mutationFn: (s: (typeof SCENARIOS)[number]) =>
+      getAdapter().runScenario(s.runner, s.runParams ?? s.params),
   });
   const resetScenarioRun = useMutation({
     mutationFn: () => getAdapter().resetScenario(activeRunner!, activeHandle ?? undefined),
@@ -181,6 +215,19 @@ export default function WhatIfConsole() {
       setRunState(resetRun());
       resetBanner();
     }
+  }
+
+  // TFC-4 is the only scenario with a UC-3 execution panel. Keyed on the RUNNER
+  // (not the label) so a previewed recorded run lights it up too.
+  const isUc3Run = activeRunner === "tfc4" && !!activeHandle;
+
+  // "Reset TFC-4" resets ONLY this run: it calls the same scenario reset the
+  // console's global button does, which for tfc4 force-releases the remaining
+  // holds through /api/yard/capacity/{yard}/release (so drivers still get the
+  // proceed advisory), restores the yard's opening occupancy and removes the
+  // trucks this run injected. It touches no other scenario's state.
+  async function onResetTfc4() {
+    await onReset();
   }
 
   const handlesQ = useQuery({
@@ -259,9 +306,9 @@ export default function WhatIfConsole() {
       <Section
         title="Live Scenarios"
         icon={Radio}
-        hint="Trigger a reactive what-if chain (TFC-1/2/3)"
+        hint="Trigger a reactive what-if chain (TFC-1/2/3/4)"
       >
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
           {SCENARIOS.map((s) => {
             const active = runState.scenarioId === s.id && !!activeHandle;
             return (
@@ -409,6 +456,30 @@ export default function WhatIfConsole() {
             ))}
           </div>
         </Section>
+      )}
+
+      {/* UC-3 Execution — TFC-4 only. Reads the SAME timeline steps the run
+          recorded, so every figure is a value the UC-3 API returned. Shown for a
+          live run and for a previewed recorded run alike. */}
+      {isUc3Run && (
+        <div className="px-4 pt-3" data-testid="uc3-execution-section">
+          <div className="mb-2 flex items-center gap-2">
+            <h2 className="text-sm font-semibold">{SCENARIO_LABELS["TFC-4"]}</h2>
+            <button
+              onClick={() => void onResetTfc4()}
+              disabled={resetScenarioRun.isPending || !activeRunner}
+              className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-muted disabled:opacity-40"
+              data-testid="reset-tfc4"
+            >
+              {resetScenarioRun.isPending ? <Spinner /> : <RotateCcw className="h-3.5 w-3.5" />}{" "}
+              Reset TFC-4
+            </button>
+          </div>
+          <Uc3ExecutionPanel
+            steps={steps}
+            running={isBusy(runState) || runState.status === "running"}
+          />
+        </div>
       )}
 
       {/* Reactive timeline */}

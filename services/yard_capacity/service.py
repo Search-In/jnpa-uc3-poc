@@ -362,7 +362,9 @@ class YardCapacityService:
             if row is None:  # already held by a concurrent evaluation
                 continue
             if notify:
-                await self._notify_hold(row, view, facility, wait_min)
+                # Reflect the outcome on the row we are about to return; the DB
+                # row is updated by _push, but this dict predates that write.
+                row["notified"] = await self._notify_hold(row, view, facility, wait_min)
             held.append(_hold_view(row))
 
         result["held"] = held
@@ -413,7 +415,7 @@ class YardCapacityService:
                                                   actor=actor, reason=reason)
         if notify:
             for row in released:
-                await self._notify_release(row, view)
+                row["release_notified"] = await self._notify_release(row, view)
 
         out = {
             "yard": view,
@@ -491,7 +493,7 @@ class YardCapacityService:
 
     async def _notify_hold(self, row: Dict[str, Any], view: Dict[str, Any],
                            facility: Optional[Dict[str, Any]],
-                           wait_min: Optional[int]) -> None:
+                           wait_min: Optional[int]) -> bool:
         where = (facility or {}).get("name") or "the authorised parking facility"
         body = (f"JNPA yard capacity is currently at {view['utilization_pct']:.0f}%. "
                 f"Please proceed to {where} and wait until yard capacity becomes "
@@ -519,9 +521,9 @@ class YardCapacityService:
             "alert_id": row.get("alert_id"),
             "requires_ack": False,
         }
-        await self._push(row, advisory, release=False)
+        return await self._push(row, advisory, release=False)
 
-    async def _notify_release(self, row: Dict[str, Any], view: Dict[str, Any]) -> None:
+    async def _notify_release(self, row: Dict[str, Any], view: Dict[str, Any]) -> bool:
         # One decimal here, unlike the hold advisory: the release message quotes a
         # figure that is deliberately just below the threshold, and rounding it to
         # a whole number printed "95% utilised" next to "capacity is available".
@@ -544,10 +546,19 @@ class YardCapacityService:
             "hold_id": row.get("id"),
             "requires_ack": False,
         }
-        await self._push(row, advisory, release=True)
+        return await self._push(row, advisory, release=True)
 
     async def _push(self, row: Dict[str, Any], advisory: Dict[str, Any],
-                    *, release: bool) -> None:
+                    *, release: bool) -> bool:
+        """Dispatch one advisory and audit the outcome. Returns whether it landed.
+
+        The caller MUTATES its in-memory row with this result: ``create_hold`` /
+        ``release_holds`` return the row as it was written, i.e. with
+        ``notified``/``release_notified`` still false, because the push happens
+        after the INSERT. Returning the flag (rather than re-reading the row) is
+        what stops the API response from reporting "0 drivers notified" while the
+        table and the audit trail both say every one of them was.
+        """
         device_id = str(row.get("device_id"))
         delivered = False
         detail: Dict[str, Any] = {}
@@ -570,6 +581,7 @@ class YardCapacityService:
         except Exception as exc:  # noqa: BLE001 — audit best-effort
             log.warning("yard_capacity.notify_audit_failed", device_id=device_id,
                         error=str(exc))
+        return delivered
 
 
 # ------------------------------------------------------------------ shaping

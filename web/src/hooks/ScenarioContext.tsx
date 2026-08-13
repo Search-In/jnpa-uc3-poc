@@ -1,17 +1,18 @@
 import { createContext, useContext, useState, type ReactNode } from "react";
 
-// The header shows the active demo scenario (none / TFC-1 / TFC-2 / TFC-3) and a
+// The header shows the active demo scenario (none / TFC-1..4 / Monsoon) and a
 // "Reset to baseline" button. Prompt 10 wires this to the scenario driver; here
 // it is client-side state shared across screens (the What-If console will drive
 // it). Persisted to sessionStorage so a refresh keeps the banner.
 
-export type ScenarioId = "none" | "TFC-1" | "TFC-2" | "TFC-3" | "MONSOON-FRIDAY";
+export type ScenarioId = "none" | "TFC-1" | "TFC-2" | "TFC-3" | "TFC-4" | "MONSOON-FRIDAY";
 
 export const SCENARIO_LABELS: Record<ScenarioId, string> = {
   none: "Baseline",
   "TFC-1": "TFC-1 · Gate closure",
   "TFC-2": "TFC-2 · Congestion surge",
   "TFC-3": "TFC-3 · GPS / re-route",
+  "TFC-4": "TFC-4 · Peak Yard Utilization & Truck Arrival Management",
   "MONSOON-FRIDAY": "Monsoon Friday · master",
 };
 

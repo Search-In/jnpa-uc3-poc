@@ -333,6 +333,10 @@ def test_peak_yard_alerts_holds_recommends_cpp_and_notifies_each_driver():
     assert out2["parking"]["estimated_wait_min"] == 6      # 12 slots @120/h
     # Every held driver was pushed the advisory, and each delivery was audited.
     assert len(pushes) == 6 and len(repo2.notified) == 6
+    # The RESPONSE must report the delivery too — create_hold returns the row as
+    # written (notified=false), so a stale copy would tell the console that zero
+    # drivers were reached while the table said every one of them was.
+    assert all(h["notified"] for h in out2["held"])
     body = pushes[0][1]["body"]
     assert pushes[0][1]["type"] == ADVISORY_HOLD
     assert "yard capacity is currently at 95%" in body.lower()
@@ -357,6 +361,7 @@ def test_release_after_capacity_recovery_notifies_and_clears_holds():
     partial = asyncio.run(svc.release(yard_id=repo.state["yard_id"]))
     assert partial["released_count"] == 8 or partial["released_count"] == 6
     assert all(p[1]["type"] == ADVISORY_RELEASE for p in pushes)
+    assert all(r["release_notified"] for r in partial["released"])
     assert "You may now proceed" in pushes[0][1]["body"]
     # The release figure keeps a decimal so it never rounds up to the threshold
     # it is reporting as cleared.

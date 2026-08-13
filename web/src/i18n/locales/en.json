@@ -541,6 +541,7 @@
       "TFC-1": "Close G-NSICT; forecaster predicts spillover; trucks auto-re-route; TAS slots rescheduled.",
       "TFC-2": "Inject a wrong-way track at Karal Phata; anomaly fires; e-Challan issued with evidence.",
       "TFC-3": "UC-II DPD release spike (2.5×) → corridor demand surge; forecaster build-up; gate-slot reissue.",
+      "TFC-4": "Yard utilization reaches 95% and internal truck traffic creates arrival pressure. Hold affected truck arrivals, recommend authorized CPP/nearby parking, notify drivers, and release trucks when yard capacity becomes available.",
       "MONSOON-FRIDAY": "Master scenario: monsoon rain + Friday peak → congestion → demand surge → gate queue → reroute → carbon impact."
     },
     "demoTimelines": "Demo & recorded timelines",

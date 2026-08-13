@@ -166,6 +166,12 @@ _POLICY: tuple[tuple[str, frozenset[str]], ...] = (
     ("/api/cargo-jobs", CONTROL_ROOM | {Role.CUSTOMS.value}),
     ("/api/gate/", CONTROL_ROOM | {Role.CUSTOMS.value}),
     ("/api/yard", CONTROL_ROOM | {Role.CUSTOMS.value}),
+    # UC-3 arrival management: a DRIVER may poll ITS OWN hold (the polling
+    # fallback for the parking/proceed advisory, mirroring
+    # /api/trucks/{id}/route/latest). Longest-prefix wins over /api/yard above;
+    # the per-device scope is enforced by _DRIVER_DEVICE_SCOPED below and the
+    # bare list path is refused outright.
+    ("/api/yard/arrivals/holds", {Role.DRIVER.value} | CONTROL_ROOM | {Role.CUSTOMS.value}),
     ("/api/scan", CONTROL_ROOM | {Role.CUSTOMS.value}),
     # Export leg (booking -> Form13 -> gate-in -> VGM -> LEO -> COPRAR -> loaded).
     # Same audience as the import job spine it mirrors: LEO and the shipping bill
@@ -283,6 +289,10 @@ _METHOD_POLICY: tuple[tuple[str, frozenset[str], frozenset[str]], ...] = (
     # UC3-027: recomputing the plaza release rate throttles real trucks. Only the
     # control room may trigger it; GET /api/cpp/advice stays readable by drivers.
     ("/api/cpp/release", _WRITE, CONTROL_ROOM),
+    # UC-3: adjusting yard occupancy, running arrival management and releasing
+    # held trucks throttle real vehicles — control-room only. Reads stay open so
+    # the driver PWA can poll its own hold status.
+    ("/api/yard/capacity", _WRITE, CONTROL_ROOM),
 )
 
 
@@ -302,6 +312,7 @@ def roles_for(path: str, method: str) -> frozenset[str]:
 _DRIVER_DEVICE_SCOPED = (
     re.compile(r"^/api/trucks/([^/]+)"),
     re.compile(r"^/api/push/test/([^/]+)"),
+    re.compile(r"^/api/yard/arrivals/holds/([^/]+)"),
 )
 
 
@@ -315,6 +326,8 @@ def driver_scope_violation(path: str, device_id: str | None) -> str | None:
     """
     if path in ("/api/trucks", "/api/trucks/"):
         return "driver token may not list the fleet"
+    if path in ("/api/yard/arrivals/holds", "/api/yard/arrivals/holds/"):
+        return "driver token may not list other drivers' arrival holds"
     for pat in _DRIVER_DEVICE_SCOPED:
         m = pat.match(path)
         if m:

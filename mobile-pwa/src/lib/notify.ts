@@ -121,6 +121,29 @@ export function alertToNotification(kind: string, body?: string): DriverNotifica
       href: "#/zones",
       tag: `noparking:${k}`,
     };
+  // UC-3 yard-capacity arrival management. Checked BEFORE the generic parking
+  // and congestion buckets: these two carry their own instruction ("wait here"
+  // / "you may proceed"), which the generic copy would replace with a vaguer
+  // one. `body` is the sentence the gateway composed, so the driver reads the
+  // same utilisation figure the control room is looking at.
+  if (k.includes("YARD_CAPACITY_HOLD"))
+    return {
+      category: "parking",
+      title: "Hold at authorised parking",
+      body:
+        body ||
+        "JNPA yard capacity is constrained. Proceed to the authorised parking facility and wait.",
+      href: "#/parking",
+      tag: "yardhold",
+    };
+  if (k.includes("YARD_CAPACITY_RELEASE"))
+    return {
+      category: "reroute",
+      title: "Proceed to terminal gate",
+      body: body || "Yard capacity is available. You may now proceed to your assigned gate.",
+      href: "#/trip",
+      tag: "yardrelease",
+    };
   if (k.includes("CONGESTION") || k.includes("QUEUE") || k.includes("DENSITY"))
     return {
       category: "congestion",

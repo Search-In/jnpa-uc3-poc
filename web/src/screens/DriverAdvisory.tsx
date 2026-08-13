@@ -35,6 +35,7 @@ import {
   type LastKnownGoodQueue,
 } from "@/lib/gateQueue";
 import { weatherCondition, weatherHumidityPct, weatherRainMm } from "@/lib/weather";
+import { ArrivalManagementPanel, YardCapacityPanel } from "@/components/panels/YardArrivalPanel";
 import {
   congestionTone,
   fmtDelay,
@@ -62,6 +63,10 @@ const GATES = ["G-NSICT", "G-JNPCT", "G-NSIGT", "G-BMCT"];
 export default function DriverAdvisory() {
   const { t } = useTranslation();
   const qc = useQueryClient();
+  // UC-3: which yard the capacity board + arrival-management table are showing.
+  // Undefined means "whatever the gateway selects first" (the configured demo
+  // yard), so the console works with no client-side default to drift.
+  const [yardId, setYardId] = useState<string | undefined>(undefined);
   const queued = useQuery({
     queryKey: ["trucks", "AT_GATE_QUEUE", "advisory"],
     // The ENVELOPE, not just the rows: `degraded` / `state_filter_supported` /
@@ -225,6 +230,12 @@ export default function DriverAdvisory() {
           })}
         </StatGrid>
       </div>
+
+      {/* UC-3 — the yard constraint that explains the queue below it, and the
+          trucks whose arrival was managed because of it. Both read straight
+          from /api/yard/*; nothing is recomputed in the browser. */}
+      <YardCapacityPanel yardId={yardId} onYardChange={setYardId} />
+      <ArrivalManagementPanel yardId={yardId} />
 
       <div className="px-4 py-3">
         <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">

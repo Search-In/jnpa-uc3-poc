@@ -406,6 +406,67 @@ def test_queue_outage_degrades_instead_of_raising():
     assert out["arrivals"]["total"] == 0 and out["held"] == []
 
 
+# --------------------------------------------------- evaluate's queue read
+def test_read_gate_queue_retries_past_a_degraded_empty_answer(monkeypatch):
+    """The live TFC-4 failure: a degraded/stale fleet-list answer right after
+    injection must be retried, not recorded as 'nobody is arriving'."""
+    from gateway.routers import trucks as trucks_router
+    from gateway.routers import yard as yard_router
+
+    answers = [
+        # attempt 1: the pre-injection snapshot / timed-out probe
+        {"count": 0, "devices": [], "degraded": True, "decision_path": None},
+        # attempt 2: the sim answers with the injected trucks
+        {"count": 2, "devices": [{"device_id": "SYN-A"}, {"device_id": "SYN-B"}],
+         "degraded": False, "decision_path": "PRIMARY"},
+    ]
+    calls = []
+
+    async def fake_list(*, state, limit, gw):
+        calls.append((state, limit))
+        return answers[min(len(calls) - 1, len(answers) - 1)]
+
+    monkeypatch.setattr(trucks_router, "list_trucks", fake_list)
+    body = asyncio.run(yard_router.read_gate_queue(object(), delay_s=0.0))
+    assert [d["device_id"] for d in body["devices"]] == ["SYN-A", "SYN-B"]
+    assert len(calls) == 2
+    # The read must use its own wide memo key, never the consoles' (500) one —
+    # sharing that key is exactly what served evaluate a pre-injection snapshot.
+    assert all(limit == yard_router.QUEUE_READ_LIMIT == 2000 for _, limit in calls)
+
+
+def test_read_gate_queue_accepts_an_honest_empty_first_answer(monkeypatch):
+    """PRIMARY answering 'queue is empty' is a measurement — no retry loop."""
+    from gateway.routers import trucks as trucks_router
+    from gateway.routers import yard as yard_router
+
+    calls = []
+
+    async def fake_list(*, state, limit, gw):
+        calls.append(1)
+        return {"count": 0, "devices": [], "degraded": False,
+                "decision_path": "PRIMARY"}
+
+    monkeypatch.setattr(trucks_router, "list_trucks", fake_list)
+    body = asyncio.run(yard_router.read_gate_queue(object(), delay_s=0.0))
+    assert body["devices"] == [] and len(calls) == 1
+
+
+def test_read_gate_queue_returns_the_degraded_answer_after_all_attempts(monkeypatch):
+    from gateway.routers import trucks as trucks_router
+    from gateway.routers import yard as yard_router
+
+    calls = []
+
+    async def fake_list(*, state, limit, gw):
+        calls.append(1)
+        return {"count": 0, "devices": [], "degraded": True, "decision_path": None}
+
+    monkeypatch.setattr(trucks_router, "list_trucks", fake_list)
+    body = asyncio.run(yard_router.read_gate_queue(object(), attempts=3, delay_s=0.0))
+    assert body["degraded"] is True and len(calls) == 3
+
+
 # ------------------------------------------------------------ RBAC + wiring
 def test_routes_are_registered_and_writes_are_control_room_only():
     from gateway import auth

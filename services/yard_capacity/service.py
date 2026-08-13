@@ -263,6 +263,20 @@ class YardCapacityService:
                                             default_source="pwa-registered")
         )
         existing = await self._repo.active_holds(yard_id)
+        # ONE line answering "which trucks did arrival management actually see,
+        # and which did it filter, and why" — the trace the live TFC-4 diagnosis
+        # needed. already-held is the ONLY filter this service applies; anything
+        # missing beyond that was absent from the queue read itself (see the
+        # queue_* provenance echoed in the response below).
+        held_ids = [h["device_id"] for h in existing]
+        log.info("yard_evaluate_arrivals", yard_id=yard_id,
+                 simulator=sum(1 for c in candidates if c.source == "truck-sim"),
+                 enrolled_pwa=sum(1 for c in candidates if c.source == "pwa-registered"),
+                 filtered_already_held=[c.device_id for c in candidates
+                                        if c.device_id in set(held_ids)],
+                 queue_degraded=bool(arrivals_payload.get("degraded")),
+                 queue_decision_path=arrivals_payload.get("decision_path"),
+                 candidate_ids_sample=[c.device_id for c in candidates][:15])
         plan = model.plan_holds(
             yard_id=yard_id,
             capacity_slots=view["capacity_slots"],
@@ -270,7 +284,7 @@ class YardCapacityService:
             candidates=candidates,
             high_pct=thr.high_pct, critical_pct=thr.critical_pct,
             slots_per_truck=thr.slots_per_truck,
-            already_held=[h["device_id"] for h in existing],
+            already_held=held_ids,
         )
 
         result: Dict[str, Any] = {
@@ -282,6 +296,11 @@ class YardCapacityService:
                 "already_held": len(existing),
                 "queue_source": arrivals_payload.get("source"),
                 "queue_degraded": bool(arrivals_payload.get("degraded")),
+                # Which rung of the fleet list answered, and how old a cached
+                # answer was — so "0 arrivals" is always distinguishable from
+                # "the queue could not be read" in the response itself.
+                "queue_decision_path": arrivals_payload.get("decision_path"),
+                "queue_cache_age_s": arrivals_payload.get("cache_age_s"),
             },
             "congestion_pressure": plan.pressure,
             "constrained": plan.constrained,

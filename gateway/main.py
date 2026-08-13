@@ -101,6 +101,7 @@ from .routers import (
     dq,
     driver_jobs,
     edi_vessel,
+    email_processing,
     export_lifecycle,
     auto_leo,
     trip_search,
@@ -755,6 +756,11 @@ app.include_router(fastag.router)
 app.include_router(cargo_simulation.router)
 app.include_router(cargo.router)
 app.include_router(scenario_ext.router)
+# UC3 Email Processing (/api/email). Reads the admin mailbox over IMAP read-only
+# and routes attachments into the EXISTING master tables through the existing
+# marine / gate-document upload services. Inert until EMAIL_HOST + EMAIL_USER +
+# EMAIL_PASSWORD are set: every route answers "mailbox not configured".
+app.include_router(email_processing.router)
 # Appendix-C capability services (Empty-Container, Carbon, Gate-Data/Auto-LEO,
 # Identity/face-recognition, Parking) — each proxies its upstream and degrades
 # to the service's own deterministic logic so the dashboard always renders.

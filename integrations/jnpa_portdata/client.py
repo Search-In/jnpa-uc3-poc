@@ -468,7 +468,16 @@ class JnpaPortDataClient:
         resp = await self._request(
             "GET", f"v2/files/{file_ref}", headers=headers,
             expect_binary=True, allowed_statuses=(304,))
-        resp_etag = (resp.headers.get("ETag") or "").strip().strip('"') or None
+        # RFC 7232 weak validator. A front-end that gzips on the fly downgrades
+        # the strong ETag to W/"<sha256>" (the Vercel sim does exactly this, and
+        # httpx negotiates gzip by default), so the W/ prefix has to come off
+        # BEFORE the quotes — .strip('"') alone leaves W/"<sha256> behind, which
+        # then fails the comparison below on a byte-correct file.
+        raw_etag = (resp.headers.get("ETag") or "").strip()
+        etag_is_weak = raw_etag.startswith("W/")
+        if etag_is_weak:
+            raw_etag = raw_etag[2:].strip()
+        resp_etag = raw_etag.strip('"') or None
         if resp.status_code == 304:
             return FileFetch(file_ref=file_ref, status=304, etag=resp_etag)
         content = resp.content
@@ -477,6 +486,11 @@ class JnpaPortDataClient:
         # content-coding to the ETag Apache-style ("<sha256>-gzip"); compare
         # on the base hash and record the deviation instead of failing.
         etag_cmp = resp_etag
+        if etag_is_weak:
+            self._observe(
+                "RUNTIME_ETAG_WEAK_VALIDATOR", f"GET /v2/files/{file_ref}",
+                f'response ETag is a weak validator (W/"{resp_etag}") because '
+                f"the front-end gzipped the body; verified against the base hash")
         if resp_etag:
             match = re.fullmatch(r"([0-9a-fA-F]{64})-(?:gzip|br|deflate)",
                                  resp_etag)

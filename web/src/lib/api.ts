@@ -16,6 +16,12 @@ export const DEFAULT_TIMEOUT_MS = 15_000;
 // Uploads/downloads move megabytes over venue wifi; they get a longer budget.
 export const UPLOAD_TIMEOUT_MS = 120_000;
 
+// ULIP LDB/01 aggregates a container's whole trail across terminals, rail and
+// road and measures 10-20s on production — routinely longer than the 15s
+// default, so container tracking failed in the browser while the gateway was
+// answering correctly. Matches the gateway's own ULIP_LDB_TIMEOUT_S budget.
+export const LDB_TIMEOUT_MS = 35_000;
+
 // Marker used on the thrown Error so apiError() can classify a timeout without
 // depending on the browser's DOMException wording (which differs across engines).
 const TIMEOUT_MARKER = "ETIMEDOUT";
@@ -567,6 +573,31 @@ export const api = {
         entry_time: entryTime,
       }),
     }),
+  // ---- UC3 Email Processing (/api/email) ---------------------------------
+  // The mailbox password is server-side only: no endpoint below returns it and
+  // emailHealth() answers with a masked address plus a connected flag.
+  emailHealth: () => http<EmailHealth>("/api/email/health"),
+  emailSync: () =>
+    http<{ scanned: number; stored: number; subject_prefix: string }>("/api/email/sync", {
+      method: "POST",
+    }),
+  emailMessages: (status?: string, limit = 50, offset = 0) => {
+    const q = new URLSearchParams();
+    if (status) q.set("status", status);
+    q.set("limit", String(limit));
+    q.set("offset", String(offset));
+    return http<{ items: EmailMessage[]; total: number }>(`/api/email/messages?${q.toString()}`);
+  },
+  emailMessage: (id: number) => http<EmailMessageDetail>(`/api/email/messages/${id}`),
+  // Dry run: classifies and validates, writes nothing. Shows the operator which
+  // master table the data would land in BEFORE anything is imported.
+  emailPreview: (id: number) =>
+    http<EmailProcessResult>(`/api/email/messages/${id}/preview`, { method: "POST" }),
+  emailImport: (id: number, override = false) =>
+    http<EmailProcessResult>(
+      `/api/email/messages/${id}/import${override ? "?override=true" : ""}`,
+      { method: "POST" },
+    ),
   aiEvents: (eventType?: string, limit = 200) => {
     const q = new URLSearchParams();
     if (eventType) q.set("event_type", eventType);
@@ -586,6 +617,15 @@ export const api = {
     http<import("./types").Vehicle360>(`/api/vahan/vehicle-360/${encodeURIComponent(plate)}`),
   driverIntel: (key: string) =>
     http<import("./types").DriverIntel>(`/api/vahan/driver-intel/${encodeURIComponent(key)}`),
+  // Registration lookup down the vehicle ladder: ULIP VAHAN/04 -> VAHAN/01 ->
+  // vahan-sim -> CACHED -> PROVISIONAL. This is the LIVE registry read.
+  // ``vehicleIntel`` above is a different thing — an RDS aggregate of what we
+  // have already stored about a plate — and answers ``rc: null`` for a vehicle
+  // the port has never seen, so it must not be used to look a vehicle up.
+  vahanRc: (plate: string) =>
+    http<{ plate: string; decision_path: string; record: Record<string, unknown> }>(
+      `/api/vahan/rc/${encodeURIComponent(plate)}`,
+    ),
   // Alternate-key RC lookups (ULIP VAHAN/02 and /03). ULIP-only — the
   // simulator is keyed by plate — so these 503 when ULIP_LIVE_ENABLED is off
   // and 404 on a miss rather than falling back to a different vehicle.
@@ -1741,8 +1781,10 @@ export const api = {
   pdpVehicle: (plate: string) => http<any>(`/api/pdp/vehicle/${encodeURIComponent(plate)}`),
   pdpTraffic: () => http<any>("/api/pdp/traffic"),
   pdpHealth: () => http<any>("/api/pdp/health"),
-  ldbContainer: (no: string) => http<any>(`/api/ldb/container/${encodeURIComponent(no)}`),
-  ldbMovements: (no: string) => http<any>(`/api/ldb/container/${encodeURIComponent(no)}/movements`),
+  ldbContainer: (no: string) =>
+    http<any>(`/api/ldb/container/${encodeURIComponent(no)}`, undefined, LDB_TIMEOUT_MS),
+  ldbMovements: (no: string) =>
+    http<any>(`/api/ldb/container/${encodeURIComponent(no)}/movements`, undefined, LDB_TIMEOUT_MS),
   ldbTruck: (vehicleNumber: string) =>
     http<{
       source: string;
@@ -1822,9 +1864,14 @@ export const api = {
   // (data_available: false) — the surface never fabricates shipment data.
   // The browser only ever talks to the gateway — never to the ULIP platform.
   logisticsCurrent: () => http<import("./types").LogisticsCurrent>("/api/logistics/current"),
+  // A container reference resolves through ULIP LDB/01, so this shares the
+  // wider LDB budget; a vehicle reference goes to FASTAG/01 and returns in
+  // well under a second either way.
   logisticsTracking: (refId: string) =>
     http<import("./types").LogisticsTracking>(
       `/api/logistics/tracking/${encodeURIComponent(refId)}`,
+      undefined,
+      LDB_TIMEOUT_MS,
     ),
   logisticsEvents: (params?: {
     ref_id?: string;
@@ -2750,4 +2797,108 @@ export interface ScanStatus {
   result: string | null;
   cleared: boolean;
   job_id: number | null;
+}
+
+// ---- UC3 Email Processing ------------------------------------------------
+export type EmailStatus = "UNPROCESSED" | "PROCESSING" | "PROCESSED" | "FAILED" | "NEEDS_REVIEW";
+
+/** Mailbox posture. Deliberately has NO password field — the server never sends one. */
+export interface EmailHealth {
+  connected: boolean;
+  message: string;
+  ledger?: boolean;
+  mailbox?: {
+    host: string;
+    port: number;
+    /** Masked, e.g. `o*****s@example.com`. */
+    user: string;
+    security: string;
+    mailbox: string;
+    subject_prefix: string;
+    enabled: boolean;
+    configured: boolean;
+  };
+}
+
+export interface EmailMessage {
+  id: number;
+  message_id: string;
+  subject: string | null;
+  sender: string | null;
+  recipients: string | null;
+  cc: string | null;
+  received_at: string | null;
+  body_preview: string | null;
+  attachment_count: number;
+  processing_status: EmailStatus;
+  detected_type: string | null;
+  target_master_table: string | null;
+  records_detected: number;
+  records_imported: number;
+  records_failed: number;
+  error_detail: string | null;
+  processed_at: string | null;
+  processed_by: string | null;
+}
+
+export interface EmailAttachment {
+  id: number;
+  filename: string;
+  content_type: string | null;
+  size_bytes: number;
+  detected_format: string | null;
+  detected_document_type: string | null;
+  target_master_table: string | null;
+  process_status: string;
+  records_detected: number;
+  records_imported: number;
+  records_failed: number;
+  error_detail: string | null;
+}
+
+export interface EmailMessageDetail extends EmailMessage {
+  body_text: string | null;
+  attachments: EmailAttachment[];
+  errors: {
+    id: number;
+    attachment_id: number | null;
+    record_ref: string | null;
+    error_code: string;
+    error_detail: string | null;
+  }[];
+}
+
+/** Outcome of a preview (`committed:false`) or an import (`committed:true`). */
+export interface EmailProcessResult {
+  ok: boolean;
+  status: EmailStatus | "PREVIEWED";
+  committed?: boolean;
+  already_processed?: boolean;
+  message: string;
+  detected_type: string | null;
+  target_master_table: string | null;
+  /** Populated on NEEDS_REVIEW: the tables this content might belong to. */
+  candidates?: string[];
+  reason?: string;
+  records_detected: number;
+  records_imported: number;
+  records_failed: number;
+  attachments: {
+    filename: string;
+    size_bytes?: number;
+    content_type?: string;
+    detected_format: string | null;
+    document_type: string | null;
+    master_table: string | null;
+    confident: boolean;
+    reason_code?: string | null;
+    reason?: string | null;
+    candidates?: string[];
+    status?: string;
+    records_detected?: number;
+    records_imported?: number;
+    records_failed?: number;
+    error?: string;
+  }[];
+  errors?: { record_ref?: string | null; error_code?: string; error_detail?: string | null }[];
 }

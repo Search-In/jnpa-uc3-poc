@@ -415,7 +415,10 @@ function LdbTab() {
                 </div>
                 <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[12px]">
                   <Field label="Status" value={tracking.status} />
-                  <Field label="Location" value={tracking.location} />
+                  {/* Both the ULIP rung and the mock seam spell this
+                      ``current_location``; reading only ``location`` left this
+                      row showing "—" on every source. */}
+                  <Field label="Location" value={tracking.location ?? tracking.current_location} />
                   <Field label="Terminal" value={tracking.terminal} />
                   <Field label="Last Event" value={tracking.last_event ?? tracking.event} />
                   <Field label="Line" value={tracking.line ?? tracking.shipping_line} />

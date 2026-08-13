@@ -104,6 +104,20 @@ _MARINE_REPORT_DOUBLES = frozenset({
     "voyage-registration", "expected-time-of-arrival", "loop",
 })
 
+# ICEGATE customs messages the live feed delivers UNDER nlp-marine. These are
+# customs documents, not PCS marine messages — the same codes the customs
+# module accepts (gateway/customs_ext._DDL: message_type IN 'CHPOI03',
+# 'CHPOI10', 'CHPOI13', ...). The marine registry cannot identify them and
+# rejected every one as "unsupported PCS message type: unknown".
+_CUSTOMS_MESSAGE_PREFIXES = ("CHPOI03", "CHPOI10", "CHPOI13")
+
+# Image assets (vessel slides). The marine registry funnels an unrecognised
+# document to the XML parser, so a PNG came back as the misleading
+# "could not parse XML document 1: not well-formed" — the file is a valid PNG,
+# it simply has no consumer.
+_IMAGE_SUFFIXES = (".PNG", ".JPG", ".JPEG", ".GIF", ".BMP", ".WEBP", ".TIF",
+                   ".TIFF")
+
 
 def cfs_facility(filename: str) -> Optional[str]:
     upper = filename.upper()
@@ -115,6 +129,36 @@ def cfs_facility(filename: str) -> Optional[str]:
 
 
 _TABULAR_SUFFIXES = (".csv", ".txt", ".xls", ".xlsx", ".xlsm")
+
+# .csv/.txt need content sniffing before being treated as tabular: the
+# gate-documents corpus serves EIR/FORM13/PIN as single-document "Field:
+# Value" per line (LICNo:/TruckNo:/TrailerNo: — a different field name for
+# "truck number" in each), the SAME record also delivered as XML/JSON
+# siblings. Feeding that shape into a header+rows CSV parser makes "Truck
+# Number column not found" on every file — the header ends up being the whole
+# first line and every subsequent line becomes a one-field row. No column
+# alias fixes this; there is no tabular structure in the source at all. .xls/
+# .xlsx/.xlsm are binary spreadsheet formats and stay unconditionally tabular.
+_TEXT_TABULAR_SUFFIXES = (".csv", ".txt")
+
+
+def _looks_tabular_text(content: bytes) -> bool:
+    """A genuine CSV header line has multiple comma-separated column names,
+    with no leading "Fieldname:" prefix. A "Field: Value" single-document
+    line has its colon BEFORE any comma — even when the value itself contains
+    one (e.g. "Terminal: Nhava Sheva Freeport Terminal (NSFT), Mumbai": the
+    comma belongs to the value, not a second column). So: colon-before-comma
+    (or colon with no comma at all) -> key:value, not tabular; comma-before-
+    colon (or no colon at all) -> tabular."""
+    try:
+        first_line = content.split(b"\n", 1)[0].decode("utf-8", errors="replace")
+    except Exception:
+        return True  # can't tell; don't block a file that might be genuinely tabular
+    colon = first_line.find(":")
+    comma = first_line.find(",")
+    if colon != -1 and (comma == -1 or colon < comma):
+        return False
+    return comma != -1
 
 
 class JnpaRouter:
@@ -219,6 +263,22 @@ class JnpaRouter:
                                           "extract — PCS XML is authoritative;"
                                           " no consumer wired",
                                 "message_type": mt, "filename": filename})
+                # 3. ICEGATE customs messages (CHPOI03/10/13) served under this
+                #    group. Hand them to the consumer that owns the format
+                #    instead of letting the marine registry reject them.
+                if up.startswith(_CUSTOMS_MESSAGE_PREFIXES):
+                    svc = self._service("customs")
+                    result = await svc.import_bytes(content, filename)
+                    return _normalize("customs", result)
+                # 4. Image assets — no image consumer exists, and letting these
+                #    reach the XML parser reports a parse error on a file that
+                #    is perfectly well-formed. Land replayable instead.
+                if up.endswith(_IMAGE_SUFFIXES):
+                    return RouteOutcome(
+                        service="marine", status="UNROUTED",
+                        detail={"reason": "image asset — no image consumer "
+                                          "wired",
+                                "message_type": mt, "filename": filename})
             # The marine parser registry auto-detects the document type from
             # envelope + filename (PCS XML, pilot-card xlsx, port-craft PDF).
             svc = self._service("marine")
@@ -266,9 +326,14 @@ class JnpaRouter:
             doc_type = gate_doc_type(filename, message_type)
             suffix = ("." + filename.rsplit(".", 1)[-1].lower()
                       if "." in filename else "")
-            if doc_type is None or suffix not in _TABULAR_SUFFIXES:
-                # Single-document JSON/XML/photo payloads have no tabular
-                # reader today — land + replay when one exists.
+            tabular = (suffix in _TABULAR_SUFFIXES
+                       and (suffix not in _TEXT_TABULAR_SUFFIXES
+                            or _looks_tabular_text(content)))
+            if doc_type is None or not tabular:
+                # Single-document JSON/XML/photo payloads (and single-document
+                # "Field: Value" .txt renderings of the same EIR/FORM13/PIN
+                # record) have no tabular reader today — land + replay when
+                # one exists.
                 return RouteOutcome(
                     service="gate_documents", status="UNROUTED",
                     detail={"reason": "non-tabular gate document or no "

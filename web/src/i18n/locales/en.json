@@ -44,6 +44,7 @@
     "demo": "Demo Console",
     "enrollments": "Driver Enrollment",
     "vehicles": "Vehicle Management",
+    "emailProcessing": "Email Processing",
     "accidents": "Accident Management",
     "transporters": "Transporter Blacklist",
     "cameraAi": "Camera AI",

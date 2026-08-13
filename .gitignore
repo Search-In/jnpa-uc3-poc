@@ -2,6 +2,10 @@
 .env
 .env.local
 *.env.local
+/\\\\
+# Vite/Next-style per-mode local overrides (.env.development.local, …) — these
+# hold the real EMAIL_PASSWORD / app password during local work.
+.env.*.local
 # Runtime env files and the rolling backups/temp files written by
 # deploy/aws/use-rds.sh — these carry the live RDS password.
 .env.prod

@@ -19,8 +19,10 @@ Covered deliberately:
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
+from unittest import mock
 
 import httpx
 import pytest
@@ -656,3 +658,119 @@ def test_ldb_milestone_label_survives_normalisation():
     events = normalize_container_events(env(LDB_HIT), "NSST1234570")
     assert {e["event_type"] for e in events} == {"CONTAINER_MOVEMENT"}
     assert {e["event_label"] for e in events} == {"PORT IN", "PORT OUT"}
+
+
+@pytest.mark.asyncio
+async def test_ldb_gets_a_wider_timeout_than_the_gate_facing_apis():
+    """LDB/01 aggregates a container's whole trail across terminals, rail and
+    road and measures **10-20 s on production**, against 0.1-0.7 s for every
+    other granted API. On the shared 5 s budget it timed out on all three
+    attempts, so container tracking failed 100% of the time and read as an
+    upstream outage rather than as our own timeout being too tight.
+
+    The fix must stay *per API*: raising ULIP_TIMEOUT_S globally would make a
+    truck wait the same 30 s on a VAHAN lookup at the gate, which is the one
+    place latency is not affordable."""
+    seen: dict[str, float] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/user/login"):
+            return httpx.Response(200, json={"response": {"id": "tok"}})
+        seen[request.url.path.rsplit("/ulip/v1.0.0/", 1)[-1]] = \
+            request.extensions["timeout"]["read"]
+        return httpx.Response(200, json=ok([]))
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as http:
+        client = UlipClient(api_url="https://ulip.test/ulip/v1.0.0",
+                            client_id="u", client_secret="p",
+                            timeout_s=5.0, http_client=http)
+        await client.fetch_container_tracking("NSST1234570")
+        await client.fetch_vehicle_by_rc("UP32KH0320")
+
+    assert seen["LDB/01"] == 30.0, "LDB/01 must get its own wider budget"
+    assert seen["VAHAN/04"] == 5.0, "the gate-facing APIs stay on the tight default"
+
+
+@pytest.mark.asyncio
+async def test_a_per_api_timeout_is_env_overridable():
+    """NLDSL's latency is theirs to change, so the budget must be tunable
+    without a code change — same posture as the API-path registry."""
+    seen: dict[str, float] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/user/login"):
+            return httpx.Response(200, json={"response": {"id": "tok"}})
+        seen[request.url.path.rsplit("/ulip/v1.0.0/", 1)[-1]] = \
+            request.extensions["timeout"]["read"]
+        return httpx.Response(200, json=ok([]))
+
+    with mock.patch.dict(os.environ, {"ULIP_LDB_TIMEOUT_S": "12.5"}):
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = UlipClient(api_url="https://ulip.test/ulip/v1.0.0",
+                                client_id="u", client_secret="p",
+                                timeout_s=5.0, http_client=http)
+            await client.fetch_container_tracking("NSST1234570")
+    assert seen["LDB/01"] == 12.5
+
+
+def test_an_expired_ulip_licence_is_not_reported_valid_at_the_gate():
+    """``dl_status()`` decides VALID vs EXPIRED for the gate, and it reads the
+    expiry by field name. It knew ``valid_upto`` (vahan-sim) and the older
+    Surepass spellings but NOT ``valid_to`` — the only expiry field a
+    :class:`SarathiRecord` publishes, and therefore the only one a ULIP-sourced
+    licence carries.
+
+    So every ULIP DL fell through to the "record present, no parsable expiry ->
+    treat as valid" default and came back VALID, whatever its expiry date. That
+    is a fail-open at the gate, and it became reachable the moment ULIP was
+    made the LIVE_PRIMARY rung in production."""
+    from gateway import vehicle_intel
+
+    expired = dl_to_record("GJ04 20120005008", {
+        "dl_status": "Active.", "transport_valid_to": "2022-01-31",
+        "vehicle_classes": ["LMV"]}).model_dump(mode="json")
+    assert expired["valid_to"] == "2022-01-31"
+    assert vehicle_intel.dl_status(expired) == "EXPIRED"
+
+    current = dl_to_record("GJ04 20120005008", {
+        "dl_status": "Active.", "transport_valid_to": "2099-12-31",
+        "vehicle_classes": ["LMV"]}).model_dump(mode="json")
+    assert vehicle_intel.dl_status(current) == "VALID"
+
+    # The rungs that predate ULIP keep working — vahan-sim spells it differently.
+    assert vehicle_intel.dl_status({"valid_upto": "2022-01-31"}) == "EXPIRED"
+
+
+def test_ldb_tracking_never_publishes_an_invented_eta():
+    """``/api/ldb/*`` used to answer from a mock builder that made up "JNPA
+    Gate-3 / GATE_IN / ETA = now + 6 h" while ``/api/logistics/*`` returned the
+    real ULIP trail for the SAME container — two endpoints contradicting each
+    other about where a box is. ULIP LDB/01 is now the rung in front.
+
+    LDB publishes where a container HAS BEEN, never when it will arrive, so the
+    ETA the mock invented must not be reproduced from live data."""
+    import gateway.routers.ldb as ldbmod
+
+    events = normalize_container_events(env(LDB_HIT), "NSST1234570")
+    tracking = ldbmod._ulip_tracking("NSST1234570", events)
+    assert tracking["eta"] is None
+    assert tracking["container_number"] == "NSST1234570"
+    # LDB's own milestone, not the canonical bucket.
+    assert tracking["last_event"] == events[0]["event_label"]
+    assert tracking["current_location"] == events[0]["location"]
+
+
+@pytest.mark.asyncio
+async def test_ldb_rung_is_skipped_when_ulip_live_is_off():
+    """The flag is the cutover switch: with it off, nothing may reach ULIP."""
+    import gateway.routers.ldb as ldbmod
+
+    class _Cfg:
+        ulip_live_enabled = False
+
+    class _State:
+        cfg = _Cfg()
+
+    assert await ldbmod._ulip_events(_State(), "NSST1234570") is None

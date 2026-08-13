@@ -36,6 +36,7 @@ import {
   Anchor,
   Boxes,
   Ship,
+  Mail,
 } from "lucide-react";
 
 export interface NavLeaf {
@@ -146,6 +147,9 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       leaf("/vehicles", "nav.vehicles", CarFront),
       leaf("/enrollments", "nav.enrollments", UserPlus),
+      // Incoming "JNPA…" emails from the admin mailbox, routed into the existing
+      // master tables. Administration, not lifecycle: it is a data-intake console.
+      leaf("/email-processing", "nav.emailProcessing", Mail),
       leaf("/health", "nav.health", HeartPulse),
       ...(SHOW_INTERNAL_SCREENS
         ? [

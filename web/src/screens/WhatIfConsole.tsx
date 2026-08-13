@@ -49,6 +49,7 @@ import {
   type WhatIfRunState,
 } from "@/whatif/runState";
 import { getScript } from "@/whatif/scenarioScripts";
+import { SCENARIOS } from "@/whatif/scenarioRunners";
 import { ReactiveGuidePanel } from "@/components/panels/ReactiveGuidePanel";
 import { Uc3ExecutionPanel } from "@/components/whatif/Uc3ExecutionPanel";
 

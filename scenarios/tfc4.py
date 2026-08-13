@@ -31,6 +31,8 @@ require. No RBAC rule is relaxed for this scenario.
 """
 from __future__ import annotations
 
+import asyncio
+
 from typing import Any, Dict, List, Optional
 
 from jnpa_shared import tracing
@@ -83,6 +85,56 @@ async def _board(up: Upstreams, yard_id: str) -> Optional[Dict[str, Any]]:
     return (body or {}).get("yard")
 
 
+#: Propagation-check budget between inject and evaluate. The gateway's fleet
+#: list memoises answers for a few seconds, so the injected trucks can take one
+#: memo window to appear through the gateway lens even though the truck-sim
+#: holds them immediately.
+VERIFY_ATTEMPTS = 5
+VERIFY_DELAY_S = 2.0
+
+
+async def _verify_queue_propagation(
+    up: Upstreams, injected_ids: List[str],
+) -> Dict[str, Any]:
+    """Prove the injected trucks are visible through the SAME gateway read the
+    UC-3 evaluate step (and the Driver-Advisory console) uses — before evaluating.
+
+    This is the guard for the live failure mode where /devices/inject confirmed
+    14 trucks but evaluate saw an empty queue: the gateway's fleet-list memo was
+    still serving a pre-injection snapshot. Polls GET /api/trucks?state=
+    AT_GATE_QUEUE until at least one injected id shows up (or attempts run out),
+    and returns the full injected-vs-seen trace either way, so the timeline
+    records exactly which ids were visible to arrival management and which were
+    not — never a bare count.
+    """
+    want = set(injected_ids)
+    seen_count, matched, decision_path, degraded = 0, [], None, None
+    for attempt in range(1, VERIFY_ATTEMPTS + 1):
+        body = await up.gw_get("/api/trucks",
+                               {"state": "AT_GATE_QUEUE", "limit": "2000"}) or {}
+        devices = body.get("devices") or []
+        seen = {str(d.get("device_id")) for d in devices}
+        matched = sorted(want & seen)
+        seen_count = len(devices)
+        decision_path = body.get("decision_path")
+        degraded = bool(body.get("degraded"))
+        if matched:
+            return {"visible": True, "attempts": attempt,
+                    "matched_count": len(matched), "matched_sample": matched[:10],
+                    "queue_count": seen_count, "queue_decision_path": decision_path,
+                    "queue_degraded": degraded}
+        if attempt < VERIFY_ATTEMPTS:
+            await asyncio.sleep(VERIFY_DELAY_S)
+    return {"visible": False, "attempts": VERIFY_ATTEMPTS,
+            "matched_count": 0, "matched_sample": [],
+            "queue_count": seen_count, "queue_decision_path": decision_path,
+            "queue_degraded": degraded,
+            "note": ("injected trucks never appeared in the gateway's "
+                     "AT_GATE_QUEUE read — check truck-sim reachability from "
+                     "the gateway and the fleet-list rung in the gateway log "
+                     "(grep yard_queue_read / trucks_list_answer)")}
+
+
 async def run(params: Dict[str, Any], handle_id: str | None = None) -> ScenarioHandle:
     cfg = ScenarioConfig.from_env()
     yard_id = str(params.get("yard_id") or DEFAULT_YARD)
@@ -128,12 +180,24 @@ async def run(params: Dict[str, Any], handle_id: str | None = None) -> ScenarioH
                 "state": "AT_GATE_QUEUE",
             })
             injected = int((inj or {}).get("injected") or 0)
+            injected_ids = [str(d) for d in (inj or {}).get("device_ids") or []]
+            # PROPAGATION CHECK — the injected trucks must be visible through
+            # the same gateway read evaluate uses BEFORE evaluate runs. This is
+            # what turns "inject said 14, evaluate saw 0" from a silent wrong
+            # answer into a diagnosed, visible condition on the timeline.
+            visibility = (await _verify_queue_propagation(up, injected_ids)
+                          if injected_ids else
+                          {"visible": False, "matched_count": 0,
+                           "note": "nothing injected"})
             await h.step(
-                f"Injected {injected} AT_GATE_QUEUE truck arrivals at {gate_id}",
+                (f"Injected {injected} AT_GATE_QUEUE truck arrivals at {gate_id} "
+                 f"({visibility.get('matched_count', 0)} visible in the gateway queue)"),
                 trigger="truck-sim:/devices/inject",
-                status="ok" if inj else "degraded",
+                status="ok" if (inj and visibility.get("visible")) else "degraded",
                 detail={"phase": "arrivals", "injected": injected, "requested": arrivals,
-                        "gate_id": gate_id, "truck_tag": tag},
+                        "gate_id": gate_id, "truck_tag": tag,
+                        "injected_ids_sample": injected_ids[:10],
+                        "gateway_queue_visibility": visibility},
             )
 
             # --- Step 3: drive the yard to peak utilisation ------------------

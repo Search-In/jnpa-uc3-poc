@@ -25,6 +25,8 @@ surface, and without a variable path segment defeating the match.
 """
 from __future__ import annotations
 
+import asyncio
+
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
@@ -39,6 +41,62 @@ router = APIRouter(prefix="/api/yard", tags=["yard"])
 
 _service = None
 
+# --- The gate-queue read behind /evaluate -----------------------------------
+#
+# LIVE-DEMO ROOT CAUSE (TFC-4 "0 arriving trucks"): evaluate used to read the
+# queue with limit=500 — the EXACT (state, limit) memo key the Driver-Advisory
+# and Command-Center consoles poll. With any dashboard open, the fleet list's
+# CACHED_FRESH rung (<=3 s) answered evaluate from a snapshot taken BEFORE the
+# scenario injected its trucks, so arrival management evaluated an empty queue
+# one second after the truck-sim confirmed 14 injections. Two changes, both to
+# HOW the existing endpoint is read — the endpoint itself is untouched:
+#
+#   * limit=2000 (the endpoint's max): a PRIVATE memo key no console polls, so
+#     evaluate can never be served another caller's pre-injection snapshot —
+#     and the wider sample keeps freshly-injected trucks (appended at the end
+#     of the sim's population dict) inside the window on a large fleet.
+#   * retry while the answer is degraded-and-empty: a hold/no-hold decision is
+#     worth a few seconds; a busy truck-sim missing one 4 s list budget must
+#     not be recorded as "nobody is arriving".
+#
+# Every attempt is logged with the rung that answered and the ids seen, so the
+# injected-vs-seen trace the next diagnosis needs is in the gateway log.
+QUEUE_READ_LIMIT = 2000
+QUEUE_READ_ATTEMPTS = 3
+QUEUE_READ_RETRY_DELAY_S = 2.5
+
+
+async def read_gate_queue(gw: GatewayState, *, attempts: int = QUEUE_READ_ATTEMPTS,
+                          delay_s: float = QUEUE_READ_RETRY_DELAY_S) -> Dict[str, Any]:
+    """AT_GATE_QUEUE through the EXISTING fleet list, hardened for decisions.
+
+    Returns the same envelope ``GET /api/trucks?state=AT_GATE_QUEUE`` serves the
+    console (``devices`` + ``registered_devices`` + provenance), retrying only
+    when the answer is BOTH degraded and empty — an honest "sim answered, queue
+    is empty" is returned as-is on the first attempt.
+    """
+    from . import trucks as trucks_router
+
+    body: Dict[str, Any] = {}
+    for attempt in range(1, max(1, attempts) + 1):
+        body = await trucks_router.list_trucks(
+            state="AT_GATE_QUEUE", limit=QUEUE_READ_LIMIT, gw=gw)
+        devices = body.get("devices") or []
+        registered = body.get("registered_devices") or []
+        log.info("yard_queue_read", attempt=attempt,
+                 count=len(devices), registered_count=len(registered),
+                 degraded=bool(body.get("degraded")),
+                 decision_path=body.get("decision_path"),
+                 source=body.get("source"),
+                 cache_age_s=body.get("cache_age_s"),
+                 state_filter_supported=body.get("state_filter_supported"),
+                 device_ids_sample=[d.get("device_id") for d in devices[:10]])
+        if devices or not body.get("degraded"):
+            return body
+        if attempt < attempts:
+            await asyncio.sleep(delay_s)
+    return body
+
 
 def get_service(request: Request):
     """Singleton YardCapacityService wired to the EXISTING gateway seams."""
@@ -50,13 +108,13 @@ def get_service(request: Request):
         from .. import mailer
         from .. import notifications as notif
         from . import parking as parking_router
-        from . import trucks as trucks_router
 
         async def arrivals_fn() -> Dict[str, Any]:
             # The SAME code path the Driver-Advisory console reads — simulator
-            # trucks measured AT_GATE_QUEUE plus registered PWA driver devices.
-            return await trucks_router.list_trucks(state="AT_GATE_QUEUE",
-                                                   limit=500, gw=gw)
+            # trucks measured AT_GATE_QUEUE plus registered PWA driver devices —
+            # hardened for decision use (private memo key + retry, see
+            # read_gate_queue above).
+            return await read_gate_queue(gw)
 
         async def parking_fn():
             body = await parking_router.availability(state=gw)

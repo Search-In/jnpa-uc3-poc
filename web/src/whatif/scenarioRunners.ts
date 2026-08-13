@@ -12,7 +12,10 @@ export const SCENARIOS: {
   id: ScenarioId;
   runner: string;
   blurb: string;
+  /** Operator-facing parameter chips shown on the card. */
   params: Record<string, any>;
+  /** Body actually POSTed to the runner; defaults to `params`. */
+  runParams?: Record<string, any>;
 }[] = [
   {
     id: "TFC-1",
@@ -34,6 +37,32 @@ export const SCENARIOS: {
     blurb:
       "UC-II DPD release spike (2.5×) → corridor demand surge; forecaster build-up; gate-slot reissue.",
     params: { dpd_release_spike: 2.5 },
+  },
+  {
+    // TFC-4 drives the EXISTING UC-3 implementation (migration 0144 +
+    // services/yard_capacity + gateway/routers/yard.py) through
+    // scenarios/tfc4.py. It runs on exactly the same run/reset/timeline
+    // wiring as TFC-1/2/3 — no second implementation, no frontend animation.
+    id: "TFC-4",
+    runner: "tfc4",
+    blurb:
+      "Yard utilization reaches 95% and internal truck traffic creates arrival pressure. Hold affected truck arrivals, recommend authorized CPP/nearby parking, notify drivers, and release trucks when yard capacity becomes available.",
+    params: {
+      yard_utilization_pct: 95,
+      yard_status: "CRITICAL",
+      arrival_trucks: 14,
+      recommended_parking: "CPP",
+    },
+    // The parameter chips above are the operator-facing summary; these are the
+    // keys scenarios/tfc4.py actually accepts. Kept separate so the card can
+    // read "Yard status: CRITICAL" without inventing a backend parameter.
+    runParams: {
+      yard_id: "JNPA-NSICT-YARD",
+      gate_id: "G-NSICT",
+      arrival_trucks: 14,
+      target_utilization_pct: 95,
+      release_containers: 5,
+    },
   },
   {
     id: "MONSOON-FRIDAY",

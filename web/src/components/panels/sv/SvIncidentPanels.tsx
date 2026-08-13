@@ -13,6 +13,7 @@
 
 import { useMemo } from "react";
 import {
+  AlertTriangle,
   Camera,
   Container as ContainerIcon,
   ScanLine,
@@ -22,7 +23,14 @@ import {
 } from "lucide-react";
 
 import { Card } from "@/components/ui/card";
-import { DataTable, StatCard, StatGrid, StatusChip, type Column } from "@/components/ui/dtccc";
+import {
+  DataTable,
+  StatCard,
+  StatGrid,
+  StatusChip,
+  TONE_COLOUR,
+  type Column,
+} from "@/components/ui/dtccc";
 import { EmptyState, Spinner } from "@/components/ui/misc";
 import { STATUS } from "@/lib/tokens";
 import { fmtDateTimeIST } from "@/lib/utils";
@@ -34,6 +42,13 @@ import {
   type SvPersonDetection,
   validationTone,
 } from "@/lib/securevision";
+import {
+  buildCombinedReport,
+  type SvReportFact,
+  type SvReportSection,
+  type SvReportSectionKey,
+  type SvRiskAndAction,
+} from "@/lib/svCombinedReport";
 import { useSvCombined, useSvIncident, useSvPersons } from "@/hooks/useSecureVision";
 import {
   SvAiBadge,
@@ -413,9 +428,110 @@ export function SvTamperPanel({ analysisId }: { analysisId: string | null }) {
 }
 
 // ---------------------------------------------------------------- combined ALL
+// The combined report is the operator's FIRST screen after an analysis, so it
+// is laid out to be scanned, not read: a verbatim summary line, a risk/action
+// strip, then one compact card per subject. The AI narrative is still carried
+// in full behind a disclosure — the redesign re-arranges the same content, it
+// never edits, re-words or supplements what SecureVision said (lib/
+// svCombinedReport.ts owns that split and is unit-tested).
+
+const SECTION_ICON: Record<SvReportSectionKey, React.ComponentType<{ className?: string }>> = {
+  vehicle: Truck,
+  person: ShieldAlert,
+  camera: VideoOff,
+};
+
+/** One label/value pair — a chip when the model gave the value a tone. */
+function ReportFact({ fact }: { fact: SvReportFact }) {
+  return (
+    <div className="flex items-baseline justify-between gap-2" title={fact.hint}>
+      <span className="shrink-0 text-[10.5px] uppercase tracking-wide text-muted-foreground">
+        {fact.label}
+      </span>
+      {fact.tone ? (
+        <StatusChip label={fact.value} tone={fact.tone} />
+      ) : (
+        <span
+          className={`min-w-0 truncate text-right text-xs text-foreground${
+            fact.mono ? " font-mono font-semibold" : ""
+          }`}
+        >
+          {fact.value}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** A findings card. Rendered only for sections that actually have data. */
+function ReportSectionCard({ section }: { section: SvReportSection }) {
+  const Icon = SECTION_ICON[section.key];
+  return (
+    <div className="rounded-md border border-border bg-card/60 p-2.5">
+      <div className="mb-1.5 flex items-center gap-1.5">
+        <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+        <h4 className="truncate text-[11px] font-semibold uppercase tracking-wide text-foreground">
+          {section.title}
+        </h4>
+      </div>
+      {section.facts.length > 0 && (
+        <div className="space-y-1">
+          {section.facts.map((f) => (
+            <ReportFact key={`${section.key}-${f.label}`} fact={f} />
+          ))}
+        </div>
+      )}
+      {section.notes.length > 0 && (
+        <ul className="mt-1.5 space-y-1 border-t border-border pt-1.5">
+          {section.notes.slice(0, 3).map((note, i) => (
+            <li key={`${section.key}-note-${i}`} className="flex gap-1.5 text-[11px] leading-snug">
+              <span aria-hidden className="text-muted-foreground">
+                •
+              </span>
+              <span className="min-w-0 text-muted-foreground">{note}</span>
+            </li>
+          ))}
+          {section.notes.length > 3 && (
+            <li className="text-[10.5px] text-muted-foreground/80">
+              +{section.notes.length - 3} more in the full narrative below
+            </li>
+          )}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** Risk / priority / recommended action, exactly as the narrative stated them. */
+function RiskActionStrip({ riskAction }: { riskAction: SvRiskAndAction }) {
+  const tile = (label: string, value: string, colour: string, wide = false) => (
+    <div
+      key={label}
+      className={`rounded-md border px-2.5 py-1.5${wide ? " sm:col-span-2" : ""}`}
+      style={{ borderColor: `${colour}55`, backgroundColor: `${colour}0d` }}
+    >
+      <div className="text-[10.5px] uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="mt-0.5 text-[13px] font-semibold leading-snug" style={{ color: colour }}>
+        {value}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="grid gap-2 sm:grid-cols-4">
+      {riskAction.risk &&
+        tile("Risk level", riskAction.risk.value, TONE_COLOUR[riskAction.risk.tone])}
+      {riskAction.priority &&
+        tile("Priority", riskAction.priority.value, TONE_COLOUR[riskAction.priority.tone])}
+      {riskAction.action && tile("Recommended action", riskAction.action, TONE_COLOUR.info, true)}
+    </div>
+  );
+}
+
 export function SvCombinedReportPanel({ analysisId }: { analysisId: string | null }) {
   const q = useSvCombined(analysisId);
   const report = q.data;
+  const view = useMemo(() => buildCombinedReport(report), [report]);
 
   const columns: Column<SvIncident>[] = useMemo(
     () => [
@@ -462,42 +578,108 @@ export function SvCombinedReportPanel({ analysisId }: { analysisId: string | nul
         <SvSectionHeader
           icon={ScanLine}
           title="Combined incident report"
-          subtitle="Every analyzer that fired for this clip"
+          subtitle="Operator summary of every analyzer that fired for this clip"
+          right={
+            <StatusChip
+              label={`${view.incidents.length} detection${view.incidents.length === 1 ? "" : "s"}`}
+              tone={view.incidents.length ? "info" : "neutral"}
+            />
+          }
         />
-        {report?.combined_description && (
-          <div
-            className="rounded border p-2.5"
-            style={{ borderColor: `${STATUS.warning}55`, backgroundColor: `${STATUS.warning}0d` }}
-          >
-            <div className="mb-1 flex items-center gap-2">
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                Narrative
-              </span>
-              {report.ai_generated && <SvAiBadge />}
-            </div>
-            <p className="text-sm text-foreground">{report.combined_description}</p>
-            <p className="mt-1 text-[10.5px] text-muted-foreground">
-              Written by a language model from the detections below. Verify against the evidence
-              before acting on it.
-            </p>
+
+        {q.isLoading ? (
+          <Loading />
+        ) : (
+          <div className="space-y-2.5">
+            {view.summary && (
+              <div
+                className="rounded border p-2.5"
+                style={{
+                  borderColor: `${STATUS.warning}55`,
+                  backgroundColor: `${STATUS.warning}0d`,
+                }}
+              >
+                <div className="mb-1 flex items-center gap-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Summary
+                  </span>
+                  {view.aiGenerated && <SvAiBadge />}
+                </div>
+                <p className="text-sm leading-snug text-foreground">{view.summary}</p>
+                <p className="mt-1 text-[10.5px] text-muted-foreground">
+                  Written by a language model from the detections below. Verify against the evidence
+                  before acting on it.
+                </p>
+              </div>
+            )}
+
+            {view.riskAction && <RiskActionStrip riskAction={view.riskAction} />}
+
+            {view.sections.length > 0 && (
+              <div className="grid gap-2 md:grid-cols-3">
+                {view.sections.map((section) => (
+                  <ReportSectionCard key={section.key} section={section} />
+                ))}
+              </div>
+            )}
+
+            {view.other.length > 0 && (
+              <ul className="space-y-1">
+                {view.other.map((note, i) => (
+                  <li key={`other-${i}`} className="flex gap-1.5 text-[11px] leading-snug">
+                    <AlertTriangle
+                      className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground"
+                      aria-hidden
+                    />
+                    <span className="min-w-0 text-muted-foreground">{note}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {!view.summary && !view.riskAction && view.sections.length === 0 && (
+              <EmptyState>No incidents fired for this clip.</EmptyState>
+            )}
+
+            {view.narrative && (
+              <details className="group rounded-md border border-border">
+                <summary className="flex cursor-pointer list-none items-center gap-2 px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground transition hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  <span className="transition-transform group-open:rotate-90">›</span>
+                  View full narrative
+                  <span className="ml-auto text-[10px] font-normal normal-case tracking-normal text-muted-foreground/70">
+                    verbatim from SecureVision
+                  </span>
+                </summary>
+                <p className="whitespace-pre-line border-t border-border px-2.5 py-2 text-xs leading-relaxed text-foreground">
+                  {view.narrative}
+                </p>
+              </details>
+            )}
+
+            <details className="group rounded-md border border-border">
+              <summary className="flex cursor-pointer list-none items-center gap-2 px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground transition hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                <span className="transition-transform group-open:rotate-90">›</span>
+                View detection details ({view.incidents.length})
+              </summary>
+              <div className="border-t border-border p-2">
+                <DataTable
+                  columns={columns}
+                  rows={view.incidents}
+                  rowKey={(i) => `${i.analysis_id}-${i.incident_type}-${i.track_id ?? "x"}`}
+                  status={{
+                    isLoading: q.isLoading,
+                    isFetching: q.isFetching,
+                    isError: q.isError,
+                    error: q.error,
+                  }}
+                  onRetry={() => void q.refetch()}
+                  emptyLabel="No incidents fired for this clip."
+                  pageSize={8}
+                />
+              </div>
+            </details>
           </div>
         )}
-        <div className="mt-3">
-          <DataTable
-            columns={columns}
-            rows={report?.incidents ?? []}
-            rowKey={(i) => `${i.analysis_id}-${i.incident_type}-${i.track_id ?? "x"}`}
-            status={{
-              isLoading: q.isLoading,
-              isFetching: q.isFetching,
-              isError: q.isError,
-              error: q.error,
-            }}
-            onRetry={() => void q.refetch()}
-            emptyLabel="No incidents fired for this clip."
-            pageSize={8}
-          />
-        </div>
       </Card>
     </div>
   );

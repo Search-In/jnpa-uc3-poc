@@ -450,7 +450,24 @@ def _open_job_predicate() -> tuple[str, dict]:
     list (gateway.enrollment.list_assignable_drivers) exclude on ONE rule."""
     from services.container_job.service import open_job_not_exists
 
-    return open_job_not_exists("core.vehicle.vehicle_id", job_column="vehicle_id")
+    return open_job_not_exists(
+        "core.vehicle.vehicle_id", job_column="vehicle_id",
+        # A registration identifies the truck the yard dispatches. core.vehicle is
+        # unique on vehicle_id only, so the same plate can hold two rows; without
+        # this the twin row of a busy truck reads as free.
+        master_identity="core.vehicle.vehicle_no", job_identity="vehicle_no",
+        # …and when the job row carries no registration of its own, resolve the
+        # one it does carry — the Vehicle ID — back to a plate through the master,
+        # so those jobs occupy the truck rather than just the record.
+        identity_table="core.vehicle", identity_key="vehicle_id",
+        identity_column="vehicle_no", identity_alias="mv")
+
+
+# One physical truck = one option. The registration is the identity (a vehicle
+# with no plate on file can only be itself, so it falls back to its Vehicle ID).
+_VEHICLE_IDENTITY = ("NULLIF(upper(regexp_replace(coalesce(vehicle_no, ''), "
+                     "'[^A-Za-z0-9]', '', 'g')), '')")
+_DEDUPE_KEY = f"COALESCE({_VEHICLE_IDENTITY}, vehicle_id)"
 
 
 def _assignable_where(q: Optional[str]) -> tuple[str, dict]:
@@ -465,16 +482,53 @@ def _assignable_where(q: Optional[str]) -> tuple[str, dict]:
     return "WHERE " + " AND ".join(clauses), params
 
 
+def _plate_identity(raw: Optional[str]) -> str:
+    """Python twin of _VEHICLE_IDENTITY: strip everything that is not
+    alphanumeric, upper-case the rest, so ``MH04 QA 9911`` and ``MH04QA9911`` are
+    one truck.
+
+    Deliberately NOT normalize_vehicle_no(), which only trims and upper-cases:
+    that is the key of the one-active-driver-per-vehicle constraint
+    (core.driver_identity.vehicle_no_norm) and widening it would change what that
+    index means for data already written."""
+    return "".join(ch for ch in (raw or "").upper() if ch.isalnum())
+
+
+def _mem_identity(v: Mapping[str, Any]) -> str:
+    """The physical truck a master row describes: its registration, or its
+    Vehicle ID when no plate is on file. Mirrors _DEDUPE_KEY above."""
+    return _plate_identity(v.get("vehicle_number")) or (v.get("vehicle_id") or "")
+
+
 def _mem_assignable(occupied: set, q: Optional[str]) -> List[dict]:
+    """Same two rules as the SQL path: exclude occupied trucks (by Vehicle ID OR
+    registration — the caller's set may name either), then one row per truck."""
     needle = (q or "").strip().upper()
-    out = []
+    # `occupied` carries Vehicle IDs AND normalised registrations (see
+    # ContainerJobRepository.vehicles_with_open_jobs) — the same two keys the SQL
+    # correlation matches on.
+    busy = set(occupied or set())
+    busy |= {_plate_identity(o) for o in busy if _plate_identity(o)}
+    # A busy Vehicle ID names a RECORD; the truck it stands for is the plate that
+    # record carries, so every OTHER record for that plate is busy too. Resolved
+    # here for the same reason the SQL path resolves it through core.vehicle: the
+    # caller's set may name only the id.
+    busy |= {_mem_identity(v) for v in _MEM.values()
+             if v.get("vehicle_id") in busy and _mem_identity(v)}
+    out, seen = [], set()
     for v in _MEM.values():
         vid = v.get("vehicle_id")
-        if not vid or v.get("status") != ACTIVE or vid in (occupied or set()):
+        identity = _mem_identity(v)
+        if not vid or v.get("status") != ACTIVE:
+            continue
+        if vid in busy or (identity and identity in busy):
             continue
         if needle and needle not in vid.upper() \
                 and needle not in (v.get("vehicle_number") or "").upper():
             continue
+        if identity in seen:
+            continue
+        seen.add(identity)
         out.append(dict(v))
     out.sort(key=lambda r: r.get("created_at") or "", reverse=True)
     return out
@@ -504,16 +558,25 @@ async def list_assignable(dsn: str, *, q: Optional[str] = None, limit: int = 50,
 
         where, params = _assignable_where(q)
         params["lim"] = limit
+        # DISTINCT ON collapses duplicate master rows for one truck BEFORE the
+        # LIMIT, so the page holds `limit` distinct trucks rather than `limit`
+        # rows that may name the same one twice.
         rows = [_row(r) for r in await fetch_all(
-            f"SELECT {_COLS} FROM core.vehicle {where} "
-            f"ORDER BY created_at DESC LIMIT :lim", params, dsn=dsn)]
+            f"SELECT * FROM (SELECT DISTINCT ON ({_DEDUPE_KEY}) {_COLS} "
+            f"FROM core.vehicle {where} "
+            f"ORDER BY {_DEDUPE_KEY}, created_at DESC) v "
+            "ORDER BY created_at DESC LIMIT :lim", params, dsn=dsn)]
     else:
         rows = _mem_assignable(occupied or set(), q)[:limit]
     return [{"vehicle_id": v["vehicle_id"], "plate": v.get("vehicle_number"),
              "vehicle_number": v.get("vehicle_number"),
              "vehicle_type": v.get("vehicle_type"), "state": None,
              "driver_id": (dm.get(v["vehicle_id"]) or {}).get("driver_id"),
-             "driver_name": (dm.get(v["vehicle_id"]) or {}).get("name")}
+             "driver_name": (dm.get(v["vehicle_id"]) or {}).get("name"),
+             # The PERSON bound to this truck, not just their record: the driver
+             # list carries one record per licence, so the console matches the
+             # binding to it by licence and never by Driver ID alone.
+             "driver_licence": (dm.get(v["vehicle_id"]) or {}).get("license_no")}
             for v in rows]
 
 
@@ -526,8 +589,9 @@ async def count_assignable(dsn: str, *, q: Optional[str] = None,
         from jnpa_shared.db import fetch_one
 
         where, params = _assignable_where(q)
-        row = await fetch_one(f"SELECT count(*) AS n FROM core.vehicle {where}",
-                              params, dsn=dsn)
+        row = await fetch_one(
+            f"SELECT count(DISTINCT {_DEDUPE_KEY}) AS n FROM core.vehicle {where}",
+            params, dsn=dsn)
         return int((row or {}).get("n") or 0)
     return len(_mem_assignable(occupied or set(), q))
 

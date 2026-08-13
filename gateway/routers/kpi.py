@@ -29,6 +29,41 @@ log = get_logger("gateway.kpi")
 
 router = APIRouter(prefix="/api/kpi", tags=["kpi"])
 
+# ---------------------------------------------------------------- operator copy
+# OPERATOR-FACING metadata for GET /api/kpi/dual-tat. The control-room console
+# renders these strings verbatim, so this is the API/UI boundary where the
+# engineering notes stop: the internal derivation (which corpus legs carry
+# events, which are modelled, how the baseline was chosen and where it is
+# written down) belongs to the code and the design docs, NOT to a screen an
+# operator reads during a shift.
+#
+# The strings are named constants rather than literals inside the response so a
+# regression test can assert on them directly, and so any future edit is made in
+# one place instead of four. NOTHING here changes what is computed — the
+# measured values, targets, baselines and ground-truth markers below are
+# untouched.
+OPERATOR_METHOD_TERMINAL = (
+    "Average of the gate-in to gate-out time recorded on gate documents."
+)
+OPERATOR_METHOD_DRIVER = (
+    "Plaza entry to highway exit — the terminal turnaround plus the plaza hold "
+    "and the corridor exit leg."
+)
+OPERATOR_BASELINE_SOURCE = (
+    "Internal reference baseline — no published landside benchmark exists."
+)
+OPERATOR_RENDER_NOTE = (
+    "Both turnaround definitions are always shown together: the difference "
+    "between them is the operationally significant figure."
+)
+OPERATOR_GROUND_TRUTH_NOTE = (
+    "Turnarounds measured from completed gate records. Shown as reference "
+    "markers only — they are never averaged into the headline figure."
+)
+OPERATOR_GROUND_TRUTH_EMPTY_NOTE = (
+    "No gate document carries both a truck-in and a truck-out time."
+)
+
 # Whitelisted KPI views (schema-qualified). The name segment in /api/kpi/{view}
 # is validated against these keys so the path can never inject arbitrary SQL.
 KPI_VIEWS: Dict[str, str] = {
@@ -488,36 +523,30 @@ async def dual_tat(state: GatewayState = Depends(get_state)) -> dict:
                 "label": "Turn Around Time Inside Port (terminal)",
                 "unit": "min",
                 "definition": "gate-in to gate-out",
-                "method": "mean(truck_out_ts - truck_in_ts) over gate documents",
+                "method": OPERATOR_METHOD_TERMINAL,
                 "target": target.target if target else None,
                 "baseline": target.baseline if target else None,
-                "baseline_source": ("PoC demonstration baseline — JNPA publishes no "
-                                    "landside baseline; see docs/ASSUMPTIONS.md"),
+                "baseline_source": OPERATOR_BASELINE_SOURCE,
             },
             "driver": {
                 "key": "tat_driver",
                 "label": "Turn Around Time Inside Port (driver)",
                 "unit": "min",
                 "definition": "plaza entry to highway exit",
-                "method": ("terminal TAT + plaza hold + corridor egress; the plaza "
-                           "legs have no corpus events (gaps G6/G9) and are simulated"),
+                "method": OPERATOR_METHOD_DRIVER,
                 "target": target.target if target else None,
                 "baseline": target.baseline if target else None,
-                "baseline_source": ("PoC demonstration baseline — JNPA publishes no "
-                                    "landside baseline; see docs/ASSUMPTIONS.md"),
+                "baseline_source": OPERATOR_BASELINE_SOURCE,
             },
         },
         "render_rule": {
             "ref": "UI-122",
             "must_render_together": True,
-            "note": ("Neither definition may be displayed alone anywhere in the "
-                     "product. The gap between them is the reportable finding."),
+            "note": OPERATOR_RENDER_NOTE,
         },
         "ground_truth_markers": markers,
-        "ground_truth_note": (
-            "The only REAL measured turnarounds in the corpus. Plotted as reference "
-            "markers, never mixed into the aggregate." if markers else
-            "No gate document carries both a truck-in and a truck-out time."),
+        "ground_truth_note": (OPERATOR_GROUND_TRUTH_NOTE if markers else
+                              OPERATOR_GROUND_TRUTH_EMPTY_NOTE),
     }
 
 

@@ -341,7 +341,115 @@ const TFC3: GuidedScript = {
   ],
 };
 
-export const GUIDED_SCRIPTS: GuidedScript[] = [TFC1, TFC2, TFC3];
+// MONSOON-FRIDAY — scenarios/monsoon_friday.py: the master end-to-end chain, and the
+// LAST segment of the cross-twin Monsoon story (UC-1 pilotage hold -> UC-2 late discharge
+// -> here). The id and label already existed in ScenarioContext; only the guided script
+// was missing, so the runner could be started but never narrated.
+//
+// Steps are 1:1 with the runner's own order — rain nudge -> congestion onset -> demand
+// surge -> gate queue -> reroute -> carbon — and the constants match the Python
+// (PRIMARY_GATE, SPILLOVER_GATES, DEMAND_SURGE, GATE_QUEUE) so the narration cannot
+// describe a run the backend did not perform.
+const MONSOON_FRIDAY: GuidedScript = {
+  id: "MONSOON-FRIDAY",
+  runner: "monsoon_friday",
+  title: "Monsoon Friday · master",
+  steps: [
+    {
+      title: "Heavy monsoon rain slows the corridor",
+      target: {
+        page: "/live",
+        kind: "map",
+        component: "Corridor segments SEG-04 … SEG-12 on the Live Operations map",
+        mapAssets: ["SEG-04", "SEG-05", "SEG-06", "SEG-07", "SEG-08", "SEG-09"],
+        highlightType: "halo",
+      },
+      explain:
+        "The same weather front that suspended pilot transfer upstream is now over the road corridor. Rain drops segment speeds across the mid and near-port stretch — a broad slowdown rather than a single blockage.",
+      metrics: [{ label: "Rain nudge", from: "none", to: "heavy", tone: "worse" }],
+      action: { kind: "WEATHER_NUDGE", detail: "Rain applied to SEG-04 … SEG-12" },
+    },
+    {
+      title: "The congestion forecaster crosses its onset threshold",
+      target: {
+        page: "/advisory",
+        kind: "dom",
+        component: "Congestion forecast panel",
+        highlightType: "ring",
+        scrollBehaviour: "center",
+      },
+      explain:
+        "With speeds down across the corridor the forecaster's onset probability crosses 0.7 — it now expects congestion rather than merely observing slow traffic.",
+      metrics: [{ label: "Onset probability", from: "< 0.4", to: "≥ 0.7", tone: "worse" }],
+    },
+    {
+      title: "Friday-peak truck demand arrives on top of it",
+      target: {
+        page: "/live",
+        kind: "map",
+        component: "Inbound trucks on the corridor",
+        mapAssets: ["SEG-08", "SEG-09", "SEG-10"],
+        highlightType: "halo",
+      },
+      explain:
+        "The weekly Friday-evening arrival wave lands into the slowdown — including the evacuation surge released by the cargo twin once the delayed vessels finally discharged. Demand and degraded capacity coincide.",
+      metrics: [
+        { label: "Inbound trucks injected", from: 0, to: 120, unit: "trucks", tone: "worse" },
+      ],
+      action: {
+        kind: "DEMAND_SURGE",
+        detail: "120 EN_ROUTE_TO_PORT trucks injected (Friday peak + UC-2 evacuation)",
+      },
+    },
+    {
+      title: "The queue builds at the primary gate",
+      target: {
+        page: "/live",
+        kind: "map",
+        component: "Gate G-NSICT marker on the Live Operations map",
+        mapAssets: ["G-NSICT"],
+        highlightType: "halo",
+      },
+      explain:
+        "Trucks reach a gate with finite lanes and the AT_GATE_QUEUE state builds at G-NSICT. This is where the whole chain — a monsoon four hours ago at the pilot boarding ground — finally becomes a queue somebody is standing in.",
+      metrics: [{ label: "G-NSICT queue", from: 0, to: 90, unit: "trucks", tone: "worse" }],
+      action: { kind: "GATE_QUEUE", detail: "AT_GATE_QUEUE build-up at G-NSICT" },
+    },
+    {
+      title: "Trucks are re-routed to the spillover gates",
+      target: {
+        page: "/live",
+        kind: "map",
+        component: "Spillover gates G-JNPCT / G-NSIGT / G-BMCT",
+        mapAssets: ["G-JNPCT", "G-NSIGT", "G-BMCT"],
+        highlightType: "halo",
+      },
+      explain:
+        "The twin re-routes inbound trucks onto the best alternative gate rather than letting them all queue at one. The queue redistributes across capacity that was sitting idle.",
+      metrics: [
+        { label: "G-NSICT queue (simulated)", from: 90, to: 38, unit: "trucks", tone: "better" },
+      ],
+      action: { kind: "AUTO_REROUTE", detail: "Inbound trucks re-routed to best alternative gate" },
+    },
+    {
+      title: "Carbon impact — the idling this avoided",
+      target: {
+        page: "/carbon",
+        kind: "dom",
+        component: "Idle CO₂e panel",
+        highlightType: "ring",
+        scrollBehaviour: "center",
+      },
+      explain:
+        "Queued trucks idle, and idling is measurable. The carbon read shows the idle CO₂e the queue produced and the share the re-route avoided — a simulated propagation under the stated assumptions, not a claimed baseline. This closes the chain that began with a pilotage hold in UC-1.",
+      metrics: [
+        { label: "Avoided idle CO₂e (simulated)", from: 0, to: "~1.4", unit: "t", tone: "better" },
+      ],
+    },
+  ],
+};
+
+export const GUIDED_SCRIPTS: GuidedScript[] = [TFC1, TFC2, TFC3, MONSOON_FRIDAY];
 
 export function getScript(id: ScenarioId | string | null): GuidedScript | undefined {
   return GUIDED_SCRIPTS.find((s) => s.id === id || s.runner === id);

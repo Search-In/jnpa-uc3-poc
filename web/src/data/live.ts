@@ -102,6 +102,9 @@ export class LiveAdapter implements DataAdapter {
   trafficSnapshots = async () => (await api.trafficSnapshots()).snapshots;
   trafficPredict = (horizon = 15) => api.trafficPredict(horizon);
   trucks = async (state?: string, limit = 300) => (await api.trucks(state, limit)).devices;
+  // Envelope-preserving read (degraded / state_filter_supported / hint) — see
+  // lib/gateQueue.ts for why the Driver-Advisory queue cannot use `trucks()`.
+  trucksEnvelope = async (state?: string, limit = 300) => await api.trucks(state, limit);
   reroute = async (deviceId: string, body: any) => {
     const r = await api.reroute(deviceId, body);
     return { rerouted: r.rerouted };
@@ -407,7 +410,7 @@ export class LiveAdapter implements DataAdapter {
   // Thin pass-throughs: the gateway already normalised the vendor payloads, so
   // there is deliberately no parsing here to drift from the backend's.
   svHealth = () => api.svHealth();
-  svAnalyses = (limit?: number) => api.svAnalyses(limit);
+  svAnalyses = (limit?: number, offset?: number) => api.svAnalyses(limit, offset);
   svUploadVideo = (file: File, cameraCode: string) => api.svUploadVideo(file, cameraCode);
   svIncident = (analysisId: string, code: "i01" | "i02" | "i09" | "i12", strong?: boolean) =>
     api.svIncident(analysisId, code, strong);

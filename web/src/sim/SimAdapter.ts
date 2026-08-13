@@ -40,6 +40,13 @@ export function makeSimAdapter(base: DataAdapter): DataAdapter {
     async trucks(state?: string, limit?: number) {
       return applyTrucks(await base.trucks(state, limit), simStore.getState(), state);
     },
+    // Same sim overlay as trucks(), applied to the rows INSIDE the envelope so
+    // the queue posture (degraded / unavailable) is passed through untouched.
+    async trucksEnvelope(state?: string, limit?: number) {
+      const env = await base.trucksEnvelope(state, limit);
+      const devices = applyTrucks(env.devices ?? [], simStore.getState(), state);
+      return { ...env, devices, count: devices.length };
+    },
     async trafficPredict(horizon?: number) {
       return applyPredict(await base.trafficPredict(horizon), simStore.getState());
     },

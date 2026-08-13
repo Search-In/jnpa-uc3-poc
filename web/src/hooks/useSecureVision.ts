@@ -3,14 +3,15 @@
 // One place owns the query keys, the poll posture and the "which analyses do we
 // even have?" question, so the six host screens stay thin and cannot drift.
 //
-// The important constraint encoded here: SecureVision has NO incident-history
-// API and nothing is persisted on our side, so "recent analyses" means the clips
-// uploaded through this gateway process. Screens that show SecureVision data are
-// therefore scoped to a chosen analysis — never to an implied searchable
-// history, which does not exist.
+// Two different things used to be conflated here. SecureVision publishes no
+// incident-history API — its DETECTIONS are only ever fetched per analysis, and
+// that is still true, so screens showing SecureVision results stay scoped to a
+// chosen analysis. But the list of analyses THIS system performed is our own
+// record, and it is now durable (core.video_analysis): it survives a gateway,
+// container or worker restart and is paginated rather than session-scoped.
 
 import { useMemo } from "react";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQueries, useQuery } from "@tanstack/react-query";
 import { getAdapter } from "@/data";
 import type { SvAnalysis, SvCombinedReport, SvIncident, SvPersonResult } from "@/lib/securevision";
 
@@ -24,7 +25,9 @@ export const SV_SCAN_LIMIT = 10;
 
 export const svKeys = {
   health: ["sv", "health"] as const,
+  /** Prefix key — invalidating it refreshes every page of the history. */
   analyses: ["sv", "analyses"] as const,
+  analysesPage: (limit: number, offset: number) => ["sv", "analyses", limit, offset] as const,
   incident: (analysisId: string, code: string) => ["sv", "incident", analysisId, code] as const,
   persons: (analysisId: string) => ["sv", "incident", analysisId, "i07"] as const,
   combined: (analysisId: string) => ["sv", "incident", analysisId, "all"] as const,
@@ -43,13 +46,18 @@ export function useSvHealth(enabled = true) {
   });
 }
 
-export function useSvAnalyses(enabled = true) {
+/** Default rows per history page. */
+export const SV_PAGE_SIZE = 25;
+
+export function useSvAnalyses(enabled = true, limit = SV_PAGE_SIZE, offset = 0) {
   return useQuery({
-    queryKey: svKeys.analyses,
-    queryFn: () => getAdapter().svAnalyses(),
+    queryKey: svKeys.analysesPage(limit, offset),
+    queryFn: () => getAdapter().svAnalyses(limit, offset),
     staleTime: SV_STALE_MS,
     enabled,
     retry: false,
+    // Paging must not blank the table between pages.
+    placeholderData: keepPreviousData,
   });
 }
 

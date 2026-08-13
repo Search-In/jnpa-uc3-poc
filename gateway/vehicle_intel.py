@@ -16,8 +16,9 @@ import os
 import asyncio
 import json
 import re
+import time
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Dict, List, Optional, TypeVar
 
 from .logging import get_logger
 
@@ -170,8 +171,91 @@ def dl_status(record: Dict[str, Any]) -> str:
     return "VALID"  # record present, no parsable expiry -> treat as valid
 
 
+# --- response budget --------------------------------------------------------
+#
+# The console abandons a request after 15 s (web/src/lib/api.ts
+# DEFAULT_TIMEOUT_MS) and paints "Unable to load live data". Every aggregate
+# below fans out into independent lookups, so ONE pathological leg used to take
+# the whole screen down with it.
+#
+# MEASURED 2026-08-12 against RDS, plate MH04DV3973: the telemetry leg
+# (core.truck_telemetry WHERE plate = ...) ran past 90 s without returning,
+# because `idx_truck_telemetry_plate_ts` was left INVALID by an interrupted
+# CONCURRENTLY build and the planner fell back to scanning the 14 GB ts index
+# with `plate` as a filter — a plate with no telemetry rows has to be read to
+# the very end before the answer "none" is known. /vehicle-360 therefore
+# returned NOTHING, even though the master, driver and transporter rows had all
+# resolved in under 40 ms. The index itself is repaired by
+# 0141_intel_lookup_indexes.sql; this budget is what stops any FUTURE slow leg
+# from doing the same thing.
+#
+# asyncio.gather(return_exceptions=True) already degrades a leg that RAISES.
+# These deadlines extend the identical treatment to a leg that merely HANGS: on
+# expiry the statement is cancelled, _default() substitutes the leg's empty
+# fallback, and the UI renders that section as "Not Available" while the rest of
+# the profile paints normally. The primary identity spine gets the longer slice
+# because it is what the screen exists to show; optional intelligence sections
+# get the shorter one.
+def _env_seconds(name: str, default: float) -> float:
+    """Positive float from the environment, else `default`."""
+    try:
+        value = float(os.getenv(name) or default)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+#: Whole-response wall clock. Comfortably inside the console's 15 s so a
+#: degraded answer always beats the client-side abort.
+_TOTAL_BUDGET_S = _env_seconds("INTEL_TOTAL_BUDGET_S", 12.0)
+#: Identity spine — vehicle master row, driver row, licence master.
+_PRIMARY_TIMEOUT_S = _env_seconds("INTEL_PRIMARY_TIMEOUT_S", 8.0)
+#: Optional intelligence — telemetry, gate events, challans, alerts, activity.
+_LEG_TIMEOUT_S = _env_seconds("INTEL_LEG_TIMEOUT_S", 5.0)
+
+T = TypeVar("T")
+
+
+class _Budget:
+    """Wall clock shared by every leg of one aggregate response.
+
+    Legs run in stages (the 360 spine has to resolve the driver before it can
+    look up that driver's licence), so a per-leg timeout alone is not enough —
+    two 8 s stages would still overshoot the client. Each stage asks for a slice
+    and gets what is actually left, which bounds the SUM rather than each part.
+    """
+
+    __slots__ = ("_deadline",)
+
+    def __init__(self, total: Optional[float] = None) -> None:
+        # Read the module global at CALL time, not at def time, so the operator
+        # env vars above (and the tests) actually take effect.
+        self._deadline = time.monotonic() + (
+            _TOTAL_BUDGET_S if total is None else total)
+
+    def remaining(self) -> float:
+        return max(0.0, self._deadline - time.monotonic())
+
+    def slice(self, want: float) -> float:
+        """`want` seconds, or whatever is left of the budget if that is less."""
+        return min(want, self.remaining())
+
+
+async def _bounded(coro: Awaitable[T], timeout: float) -> T:
+    """Await `coro` under a deadline.
+
+    On expiry the awaited statement is CANCELLED, which asyncpg turns into a
+    server-side CancelRequest — so the pooled connection comes straight back
+    instead of being pinned for the full 60 s `command_timeout`. The raised
+    TimeoutError travels to the enclosing gather(return_exceptions=True), where
+    _default() converts it into that leg's empty fallback.
+    """
+    return await asyncio.wait_for(coro, timeout)
+
+
 # --- aggregate reads (dashboards) ------------------------------------------
-async def vehicle_intel(plate: str, *, dsn: Optional[str]) -> dict:
+async def vehicle_intel(plate: str, *, dsn: Optional[str],
+                        budget: Optional["_Budget"] = None) -> dict:
     """Everything known about a vehicle: RC + tracking + violations + challans + alerts.
 
     The six lookups are mutually independent (different tables, all keyed by the
@@ -184,6 +268,10 @@ async def vehicle_intel(plate: str, *, dsn: Optional[str]) -> dict:
     if not dsn:
         return {}
     from jnpa_shared.db import fetch_all, fetch_one
+
+    # Shared with the caller when this runs as one leg of vehicle_360, so both
+    # halves spend the SAME wall clock rather than one budget each.
+    budget = budget or _Budget()
 
     async def _rc():
         r = await fetch_one("SELECT * FROM core.vehicle_rc WHERE plate = :p", {"p": plate}, dsn=dsn)
@@ -219,8 +307,10 @@ async def vehicle_intel(plate: str, *, dsn: Optional[str]) -> dict:
             {"p": plate}, dsn=dsn)
         return [_row(r) for r in rows]
 
+    leg = budget.slice(_LEG_TIMEOUT_S)
     rc, tracking, violations, challans, alerts, hist = await asyncio.gather(
-        _rc(), _tracking(), _violations(), _challans(), _alerts(), _history(),
+        _bounded(_rc(), leg), _bounded(_tracking(), leg), _bounded(_violations(), leg),
+        _bounded(_challans(), leg), _bounded(_alerts(), leg), _bounded(_history(), leg),
         return_exceptions=True,
     )
     return {
@@ -330,6 +420,7 @@ async def vehicle_360(plate: str, *, dsn: Optional[str]) -> dict:
         return _empty_360(plate)
     from jnpa_shared.db import fetch_all, fetch_one
 
+    budget = _Budget()
     norm = _plate_norm(plate)
 
     async def _vehicle():
@@ -400,8 +491,13 @@ async def vehicle_360(plate: str, *, dsn: Optional[str]) -> dict:
             {"n": norm}, dsn=dsn)
         return [_row(r) for r in rows]
 
+    # The identity spine (vehicle / driver) is the reason this screen exists, so
+    # it gets the longer slice; the rest degrades to "Not Available" if slow.
+    primary, leg = budget.slice(_PRIMARY_TIMEOUT_S), budget.slice(_LEG_TIMEOUT_S)
     intel, veh, drv, trn, gates, jobs = await asyncio.gather(
-        vehicle_intel(plate, dsn=dsn), _vehicle(), _driver(), _transporter(), _gates(), _jobs(),
+        _bounded(vehicle_intel(plate, dsn=dsn, budget=budget), primary),
+        _bounded(_vehicle(), primary), _bounded(_driver(), primary),
+        _bounded(_transporter(), leg), _bounded(_gates(), leg), _bounded(_jobs(), leg),
         return_exceptions=True,
     )
     intel = _default(intel, {})
@@ -455,7 +551,10 @@ async def vehicle_360(plate: str, *, dsn: Optional[str]) -> dict:
                 {"d": drv.get("driver_id")}, dsn=dsn)
 
         lic_r, enr_r, ver_r = await asyncio.gather(
-            _licence(), _enrollment(), _verification(), return_exceptions=True)
+            _bounded(_licence(), budget.slice(_PRIMARY_TIMEOUT_S)),
+            _bounded(_enrollment(), budget.slice(_LEG_TIMEOUT_S)),
+            _bounded(_verification(), budget.slice(_LEG_TIMEOUT_S)),
+            return_exceptions=True)
         licence = _row(lic_r) if not isinstance(lic_r, BaseException) and lic_r else None
         enrollment_row = _row(enr_r) if not isinstance(enr_r, BaseException) and enr_r else None
         verification = _row(ver_r) if not isinstance(ver_r, BaseException) and ver_r else None
@@ -665,13 +764,16 @@ async def driver_intel(driver_key: str, *, dsn: Optional[str]) -> dict:
         return {}
     from jnpa_shared.db import fetch_all, fetch_one
 
+    budget = _Budget()
     out: Dict[str, Any] = {"driver_key": driver_key}
     try:
-        drv = await fetch_one(
-            "SELECT * FROM core.driver_identity WHERE driver_id = :k OR license_no = :k",
-            {"k": driver_key}, dsn=dsn)
+        drv = await _bounded(
+            fetch_one(
+                "SELECT * FROM core.driver_identity WHERE driver_id = :k OR license_no = :k",
+                {"k": driver_key}, dsn=dsn),
+            budget.slice(_PRIMARY_TIMEOUT_S))
         out["driver"] = _row(drv) if drv else None
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 — incl. TimeoutError; the profile still renders
         out["driver"] = None
 
     # The remaining three lookups depend only on fields already resolved from the
@@ -702,8 +804,10 @@ async def driver_intel(driver_key: str, *, dsn: Optional[str]) -> dict:
             {"p": vehicle_no}, dsn=dsn)
         return [_row(r) for r in rows]
 
+    leg = budget.slice(_LEG_TIMEOUT_S)
     dlh, vlog, cases = await asyncio.gather(
-        _dl_history(), _activity(), _violations(), return_exceptions=True,
+        _bounded(_dl_history(), leg), _bounded(_activity(), leg), _bounded(_violations(), leg),
+        return_exceptions=True,
     )
     out["dl_history"] = _default(dlh, [])
     out["activity"] = _default(vlog, [])

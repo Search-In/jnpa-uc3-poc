@@ -195,18 +195,32 @@ describe("DataAdapter contract — MockAdapter", () => {
     expect(["LIVE", "UNAVAILABLE", "NOT_CONFIGURED"]).toContain(h.status);
     // Clip analytics, not live CCTV — the mode is part of the contract.
     expect(h.mode).toBe("UPLOAD_CLIP_ANALYTICS");
-    // Nothing is persisted on our side; the flag must say so.
-    expect(h.persistence).toBe("NONE");
+    // Analysis METADATA is durable (core.video_analysis, migration 0143);
+    // detection results and any person/face payload are not stored.
+    expect(h.persistence).toBe("ANALYSIS_METADATA");
   });
 
-  it("svAnalyses() is explicitly session-scoped, never a history", async () => {
+  it("svAnalyses() is a durable, paginated history", async () => {
     const list = await a.svAnalyses();
-    expect(list.persisted).toBe(false);
+    // The history is persisted (it survives a gateway/worker restart) and
+    // reports its own size so the UI can page through ALL of it.
+    expect(list.persisted).toBe(true);
+    expect(list.degraded).toBe(false);
+    expect(typeof list.total).toBe("number");
     expect(Array.isArray(list.analyses)).toBe(true);
     for (const an of list.analyses) {
       expect(typeof an.analysis_id).toBe("string");
-      expect(an.persisted).toBe(false);
+      // Operational metadata only — no face/person field is part of the shape.
+      expect(Object.keys(an).join(",")).not.toMatch(/face|embedding|biometric/i);
     }
+  });
+
+  it("svAnalyses() paginates: a later page never repeats the first", async () => {
+    const first = await a.svAnalyses(1, 0);
+    const second = await a.svAnalyses(1, 1);
+    const ids = new Set(first.analyses.map((x) => x.analysis_id));
+    for (const an of second.analyses) expect(ids.has(an.analysis_id)).toBe(false);
+    expect(first.total).toBe(second.total);
   });
 
   it("svIncident() returns the per-analyzer blocks the screens read", async () => {

@@ -48,32 +48,84 @@ TRANSITIONS: Dict[str, frozenset[str]] = {
 MOVE_TYPES = ("IMPORT_PICK", "EXPORT_DROP", "EMPTY_PICK", "EMPTY_DROP")
 
 
+# SQL normalisation of a human identifier (registration plate / licence number),
+# byte-for-byte the rule normalize_plate() and normalize_licence() apply in
+# Python: strip everything that is not alphanumeric, upper-case the rest. Written
+# once so the two can never drift.
+SQL_NORMALISE = "upper(regexp_replace(coalesce({col}, ''), '[^A-Za-z0-9]', '', 'g'))"
+
+
 def open_job_not_exists(master_column: str, *, job_column: str,
-                        alias: str = "j") -> tuple[str, dict]:
+                        alias: str = "j",
+                        master_identity: Optional[str] = None,
+                        job_identity: Optional[str] = None,
+                        identity_table: Optional[str] = None,
+                        identity_key: Optional[str] = None,
+                        identity_column: Optional[str] = None,
+                        identity_alias: str = "m") -> tuple[str, dict]:
     """``NOT EXISTS (open job on this resource)`` SQL fragment + bound params.
 
     "Occupied" is a DATABASE fact about core.container_job_assignment, and it is
     the SAME fact for a truck and for a driver: a row on this resource whose
-    status is not terminal. Both availability queries (gateway.fleet for
-    core.vehicle, gateway.enrollment for core.driver_identity) build their
-    exclusion from this ONE definition, derived from :data:`TERMINAL`, so a new
-    job status can never make a busy resource look free in one list and not the
-    other — and neither can drift from what assignment validation enforces.
+    status is not terminal. Every availability query (gateway.fleet for
+    core.vehicle, gateway.enrollment for core.driver_identity) and every
+    assignment validation builds its exclusion from this ONE definition, derived
+    from :data:`TERMINAL`, so a new job status can never make a busy resource
+    look free in one place and not another.
 
     Terminal statuses (COMPLETED / CANCELLED) are excluded from the correlation,
     which is what frees the resource again when a job finishes. Note this is not
     ``driver_id IS NULL``: a completed job keeps its driver_id and must not go on
     occupying them.
 
+    ``master_identity`` / ``job_identity`` widen the match from the master ROW to
+    the PHYSICAL RESOURCE. Neither master is keyed on the human identifier —
+    core.vehicle is unique on vehicle_id, core.driver_identity on driver_id — so
+    the same truck can hold two rows under two Vehicle IDs, and the same person
+    two driver records under two Driver IDs (the visible symptom being duplicate
+    dropdown entries: one name, one licence, three options). Correlating on the
+    surrogate id alone then reports a busy truck as free through its twin row,
+    which is exactly what an operator sees as "MH04QA9911 is on a job and still
+    in the list". A registration or a licence identifies the resource the yard
+    actually dispatches, so an open job against EITHER key occupies it. Compared
+    normalised, and only when non-blank on both sides — two rows with no plate on
+    file are not thereby the same truck.
+
+    ``identity_table`` / ``identity_key`` / ``identity_column`` resolve the job's
+    surrogate id back to the physical identity THROUGH the master, for jobs whose
+    denormalised plate/licence column is empty (older rows, and producers that
+    only ever had the id). Without it the exclusion silently degrades to the
+    surrogate id for exactly those rows, and the busy resource's twin record is
+    offered again.
+
     ``master_column`` is the qualified column on the table being filtered (e.g.
     ``core.vehicle.vehicle_id``); ``job_column`` is the assignment column it must
-    match. Both are code-supplied identifiers, never client input.
+    match. All identifiers are code-supplied, never client input.
     """
     names = sorted(TERMINAL)
     keys = [f"term{i}" for i in range(len(names))]
     placeholders = ", ".join(f":{k}" for k in keys)
+    terms = [f"{alias}.{job_column} = {master_column}"]
+    if master_identity and job_identity:
+        job_norm = SQL_NORMALISE.format(col=f"{alias}.{job_identity}")
+        master_norm = SQL_NORMALISE.format(col=master_identity)
+        terms.append(f"(NULLIF({job_norm}, '') IS NOT NULL AND {job_norm} = {master_norm})")
+        if identity_table and identity_key and identity_column:
+            # The job names a RECORD (a surrogate id); the identity it stands for
+            # lives in the master. Resolving it there closes the last hole: a job
+            # written without the denormalised plate/licence — an older row, or
+            # one from a producer that only had the id — would otherwise occupy
+            # its own master row and leave the twin row for the SAME truck or
+            # person reading as free, which is precisely "it is on a job and
+            # still in the dropdown".
+            other = SQL_NORMALISE.format(col=f"{identity_alias}.{identity_column}")
+            terms.append(
+                f"EXISTS (SELECT 1 FROM {identity_table} {identity_alias} "
+                f"WHERE {identity_alias}.{identity_key} = {alias}.{job_column} "
+                f"AND NULLIF({other}, '') IS NOT NULL AND {other} = {master_norm})")
+    match = terms[0] if len(terms) == 1 else "(" + " OR ".join(terms) + ")"
     sql = (f"NOT EXISTS (SELECT 1 FROM core.container_job_assignment {alias} "
-           f"WHERE {alias}.{job_column} = {master_column} "
+           f"WHERE {match} "
            f"AND {alias}.status NOT IN ({placeholders}))")
     return sql, dict(zip(keys, names))
 
@@ -310,7 +362,8 @@ class ContainerJobService:
                        "detail": f"{vehicle['vehicle_id']} ACTIVE"})
 
         # --- vehicle must not already hold an open job
-        open_v = await self._repo.open_job_for_vehicle(vehicle["vehicle_id"])
+        open_v = await self._repo.open_job_for_vehicle(vehicle["vehicle_id"],
+                                                       vehicle.get("vehicle_no"))
         if open_v:
             raise ValidationFailed("vehicle_already_assigned",
                                    f"vehicle {vehicle['vehicle_id']} already holds open job "
@@ -336,7 +389,7 @@ class ContainerJobService:
             # availability list can be trusted: a driver submitted directly to
             # the API — bypassing the dropdown entirely — is refused here, not
             # merely hidden from the console. One person cannot drive two trucks.
-            open_d = await self._repo.open_job_for_driver(driver_id)
+            open_d = await self._repo.open_job_for_driver(driver_id, driver_licence)
             if open_d:
                 raise ValidationFailed("driver_already_assigned",
                                        f"driver {driver_id} already holds open job "

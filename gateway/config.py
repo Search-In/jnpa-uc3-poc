@@ -7,10 +7,60 @@ other services (``SimConfig.from_env()`` etc.).
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import List
 
 from jnpa_shared.config import get_settings
+
+
+# Loaded in this order; with override=False the FIRST value seen wins, so this
+# list reads highest-precedence first. `.env` is the deployed file (it is on the
+# production host next to the compose file); `.env.local` is the developer
+# override that shadows it, matching the Makefile, which passes .env.local to
+# compose and includes it for host-side targets.
+_ENV_FILENAMES = (".env.local", ".env")
+
+
+def _load_env_files() -> None:
+    """Seed ``os.environ`` from ``.env.local`` / ``.env`` before reading config.
+
+    Everything below is read straight from ``os.environ``, while
+    ``jnpa_shared.config.Settings`` reads its env file through pydantic's
+    ``env_file``. That split meant the gateway silently ignored every var that
+    only this class consumes — e.g. a JNPA_PORTDATA_CLIENT_KEY sitting in the
+    file left /api/integrations/jnpa/health reporting DISABLED, with no hint
+    that the file had been read for some settings but not these.
+
+    PRECEDENCE — a real environment variable ALWAYS wins: every load uses
+    ``override=False``, so anything compose/ECS injects is never overwritten by
+    a file. Between files, ``.env.local`` shadows ``.env``.
+
+    Both files are searched in the same directory: the nearest ancestor of the
+    CWD that contains either. Loading both from one directory (rather than
+    per-file walks) keeps a stray file further up the tree from silently
+    half-configuring the process.
+    """
+    if "pytest" in sys.modules:
+        # NEVER under test. `cfg` is built at gateway.main import time, so the
+        # suite would inherit whatever the developer's .env.local happens to
+        # say — e.g. AUTH_ENABLED=true turns every unauthenticated 404
+        # assertion into a 401. Tests must see the process environment only.
+        return
+    try:
+        from dotenv import load_dotenv
+    except ModuleNotFoundError:      # dotenv is a jnpa-shared pin; never fatal
+        return
+    here = Path.cwd()
+    for candidate in [here, *here.parents]:
+        present = [candidate / name for name in _ENV_FILENAMES
+                   if (candidate / name).is_file()]
+        if not present:
+            continue
+        for env_file in present:      # .env.local before .env
+            load_dotenv(env_file, override=False)
+        return
 
 
 def _as_float(value: str | None, default: float) -> float:
@@ -202,8 +252,8 @@ class GatewayConfig:
     # (dt.jnpa.in/poc-api-data-access); point it at the local sim
     # (ingest/jnpa_portdata_sim) for offline work. NO hardcoded vendor URL
     # in business code.
-    jnpa_portdata_api_url: str = ""
-    jnpa_portdata_client_key: str = ""
+    jnpa_portdata_api_url: str = "https://jnpa-mock-server-private.vercel.app"
+    jnpa_portdata_client_key: str = "YTU1NjNlMWRlNjY4MjExN2QzOGM="
     jnpa_api_mode: str = "LIVE"              # LIVE | SIM (labels runs/evidence)
     jnpa_sync_enabled: bool = True           # scheduler gate (key still required)
     jnpa_sync_interval_s: int = 300
@@ -214,6 +264,7 @@ class GatewayConfig:
 
     @classmethod
     def from_env(cls) -> "GatewayConfig":
+        _load_env_files()
         shared = get_settings()
         return cls(
             host=os.environ.get("HOST", "0.0.0.0"),

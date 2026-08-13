@@ -34,7 +34,17 @@ def get_engine(dsn: Optional[str] = None, echo: bool = False) -> AsyncEngine:
         echo=echo,
         pool_pre_ping=True,
         pool_size=5,
-        max_overflow=5,
+        # A SINGLE /api/vahan/vehicle-360 request opens ELEVEN concurrent
+        # connections — five lookups of its own plus the six inside
+        # vehicle_intel() — because every fetch_all() takes its own connection.
+        # With the previous 5+5 ceiling one leg of every such request was always
+        # queued behind another, and a queue wait counts against the console's
+        # 15 s budget just like a slow query does. Overflow connections are
+        # closed on return, so the steady-state idle count is still pool_size.
+        max_overflow=10,
+        # ...and when the pool IS saturated, fail inside the caller's budget
+        # rather than after SQLAlchemy's 30 s default, which no caller waits for.
+        pool_timeout=10,
         # RDS over a WAN: NAT/firewalls silently drop idle TCP connections, and
         # asyncpg's defaults wait FOREVER on a dead socket — a single stale
         # connection then hangs whatever awaited it (observed: gateway boot

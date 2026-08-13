@@ -87,6 +87,7 @@ import type {
   DataMode,
   OcrEval,
 } from "./types";
+import type { TruckListEnvelope } from "@/lib/gateQueue";
 import { isValidContainerNo } from "@/lib/iso6346";
 import { buildKpiResult } from "@/kpi/compute";
 
@@ -1019,6 +1020,20 @@ export class MockAdapter implements DataAdapter {
       );
     });
     return Promise.resolve({ decision_path: "SYNTHETIC", predictions });
+  }
+
+  // The mock control plane is always "live" — it answers every state filter
+  // itself, so the envelope is never degraded. Kept in step with trucks().
+  async trucksEnvelope(state?: string, limit = 300): Promise<TruckListEnvelope> {
+    const devices = await this.trucks(state, limit);
+    return {
+      devices,
+      count: devices.length,
+      degraded: false,
+      decision_path: "PRIMARY",
+      source: "mock",
+      state_filter_supported: true,
+    };
   }
 
   trucks(state?: string, limit = 300): Promise<TruckDevice[]> {
@@ -2366,7 +2381,9 @@ export class MockAdapter implements DataAdapter {
       reachable: false,
       camera_map_configured: false,
       camera_map_entries: 0,
-      persistence: "NONE",
+      // Upload METADATA is durable (core.video_analysis); detection results
+      // and any person/face payload are not stored. Mirrors the gateway.
+      persistence: "ANALYSIS_METADATA",
       analyses_in_session: 1,
       stream_tickets_outstanding: 0,
       mode: "UPLOAD_CLIP_ANALYTICS",
@@ -2374,11 +2391,18 @@ export class MockAdapter implements DataAdapter {
     });
   }
 
-  svAnalyses(): Promise<SvAnalysisList> {
+  svAnalyses(limit = 50, offset = 0): Promise<SvAnalysisList> {
+    const all = [MOCK_SV_ANALYSIS];
+    const page = all.slice(offset, offset + limit);
     return Promise.resolve({
-      analyses: [MOCK_SV_ANALYSIS],
-      count: 1,
-      persisted: false,
+      analyses: page,
+      count: page.length,
+      total: all.length,
+      limit,
+      offset,
+      persisted: true,
+      degraded: false,
+      source: "mock",
       note: "DEMO fixtures — no SecureVision call was made.",
     });
   }

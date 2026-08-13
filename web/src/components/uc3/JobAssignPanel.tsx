@@ -28,7 +28,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, ShieldAlert, Truck, UserCheck, XCircle } from "lucide-react";
 
-import { FilterSelect, StatusChip } from "@/components/ui/dtccc";
+import { FilterSelect, SearchInput, StatusChip } from "@/components/ui/dtccc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { EmptyState, ErrorState, LoadingState } from "@/components/ui/misc";
@@ -37,6 +37,13 @@ import { api, apiError } from "../../lib/api";
 import { customsBlock, type CustomsBlock } from "../../lib/customs";
 import type { ContainerJob, JobAssignInput, JobCheck } from "../../lib/api";
 import { assignableCount, vehicleLabel } from "../../lib/vehicles";
+import {
+  autoSelect,
+  boundDriverFor,
+  dedupeBy,
+  driverIdentity,
+  vehicleIdentity,
+} from "../../lib/assign";
 
 // The move types the backend accepts (services/container_job/service.py MOVE_TYPES).
 const MOVE_TYPES = [
@@ -53,6 +60,16 @@ const NONE = "";
 // rejects these move types with `driver_required` when driver_id is absent;
 // gating the button here turns that 400 into an inline hint instead.
 const DRIVER_REQUIRED_MOVE_TYPES = new Set<string>(["IMPORT_PICK"]);
+
+/** Debounce the search boxes so a keystroke is not a request. */
+function useDebounced<T>(value: T, delay = 320): T {
+  const [d, setD] = useState(value);
+  useEffect(() => {
+    const id = setTimeout(() => setD(value), delay);
+    return () => clearTimeout(id);
+  }, [value, delay]);
+  return d;
+}
 
 /** A check row rendered from either a success payload or a rejection. */
 type CheckRow = { key: string; ok: boolean; label: string; detail: string };
@@ -77,6 +94,15 @@ export default function JobAssignPanel({
   const qc = useQueryClient();
 
   const [container, setContainer] = useState(defaultContainer);
+  // UX: clicking a container in the Container Jobs list below pre-fills this
+  // form. `defaultContainer` used to seed useState only, so it applied on the
+  // FIRST render and never again — every later click left the operator retyping
+  // the number they had just clicked. Syncing on change is what makes the click
+  // do anything. It pre-fills only: nothing is submitted (see `assign`, which
+  // runs from the button alone).
+  useEffect(() => {
+    if (defaultContainer) setContainer(defaultContainer);
+  }, [defaultContainer]);
   const [vehicleId, setVehicleId] = useState(NONE);
   const [driverId, setDriverId] = useState(NONE);
   const [moveType, setMoveType] = useState<string>(MOVE_TYPES[0].value);
@@ -87,17 +113,28 @@ export default function JobAssignPanel({
   // already refused, and shows the reason customs actually recorded.
   const [customs, setCustoms] = useState<CustomsBlock | null>(null);
 
+  // Search is a QUERY PARAMETER of the availability endpoint, never a filter
+  // applied to a wider list: `q` is applied inside the same WHERE as the
+  // occupancy rule server-side, so searching for a truck that is on a job
+  // returns nothing at all. Fetching the master and filtering it here — the
+  // obvious alternative — would put occupied trucks back in reach of the
+  // operator, which is the whole bug.
+  const [vehicleSearch, setVehicleSearch] = useState("");
+  const [driverSearch, setDriverSearch] = useState("");
+  const vehicleQ = useDebounced(vehicleSearch.trim());
+  const driverQ = useDebounced(driverSearch.trim());
+
   const vehiclesQ = useQuery({
-    queryKey: ["uc3-available-vehicles"],
-    queryFn: () => api.availableVehicles(undefined, 200),
+    queryKey: ["uc3-available-vehicles", vehicleQ],
+    queryFn: () => api.availableVehicles(vehicleQ || undefined, 200),
   });
   // Availability is decided by the DATABASE, not here: /api/identity/drivers/available
   // returns only ACTIVE drivers with no open container job. An occupied driver is
   // never delivered to this component, so there is nothing to filter out below —
   // and nothing a client-side check could get wrong.
   const driversQ = useQuery({
-    queryKey: ["uc3-available-drivers"],
-    queryFn: () => api.availableDrivers(undefined, 200),
+    queryKey: ["uc3-available-drivers", driverQ],
+    queryFn: () => api.availableDrivers(driverQ || undefined, 200),
   });
   // /api/vehicles/available now excludes trucks holding an open job server-side
   // (BUG-1). This stays as a belt-and-braces cross-filter: the two queries are
@@ -118,7 +155,10 @@ export default function JobAssignPanel({
     [openJobsQ.data],
   );
 
-  const allVehicles = vehiclesQ.data?.vehicles ?? [];
+  const allVehicles = useMemo(
+    () => dedupeBy(vehiclesQ.data?.vehicles ?? [], vehicleIdentity),
+    [vehiclesQ.data],
+  );
   const vehicles = allVehicles.filter((v) => !busyVehicles.has(v.vehicle_id));
   const busyCount = allVehicles.length - vehicles.length;
   // The count comes from the DB (vehicles ACTIVE with no open job), not from the
@@ -130,7 +170,14 @@ export default function JobAssignPanel({
     vehicles.length,
     busyCount,
   );
-  const drivers = useMemo(() => driversQ.data?.drivers ?? [], [driversQ.data]);
+  // One person = one option. The backend already collapses duplicate
+  // core.driver_identity records for a licence; this guarantees it for the
+  // rendered list too, so "AAKIL KHAN — MH01 20100095262" can never appear three
+  // times. It only ever REMOVES a repeat, never admits an occupied driver.
+  const drivers = useMemo(
+    () => dedupeBy(driversQ.data?.drivers ?? [], driverIdentity),
+    [driversQ.data],
+  );
 
   const selectedVehicle = useMemo(
     () => vehicles.find((v) => v.vehicle_id === vehicleId),
@@ -144,21 +191,36 @@ export default function JobAssignPanel({
   // truck clears the driver; the operator can still override the selection
   // afterwards, and this does not fight them because it only re-runs when the
   // selected VEHICLE changes.
-  const freeDriverIds = useMemo(() => new Set(drivers.map((d) => d.driver_id)), [drivers]);
   // A truck can be free while the driver bound to it is out on ANOTHER truck's
-  // job (the binding is an enrollment fact, the job is not). `available_total`
-  // says whether the page is the whole answer, so a driver missing from a
-  // truncated page is not mistaken for an occupied one.
-  const driversComplete = (driversQ.data?.available_total ?? 0) <= drivers.length;
-  const boundDriverFree = selectedVehicle?.driver_id
-    ? freeDriverIds.has(selectedVehicle.driver_id) || !driversComplete
-    : false;
-
-  useEffect(() => {
-    setDriverId(boundDriverFree ? (selectedVehicle?.driver_id ?? NONE) : NONE);
-  }, [vehicleId, boundDriverFree, selectedVehicle?.driver_id]);
+  // job (the binding is an enrollment fact, the job is not). Resolved against the
+  // availability response by PERSON: the bound record may not be the record the
+  // list carries for them, and matching ids alone would call a free driver busy.
+  const boundDriver = useMemo(
+    () => boundDriverFor(selectedVehicle, drivers),
+    [selectedVehicle, drivers],
+  );
+  const boundDriverFree = boundDriver !== null;
 
   const cn = container.trim().toUpperCase();
+
+  // UX: once a container is chosen, offer a complete assignment rather than two
+  // empty dropdowns. Both values come from `autoSelect`, which picks only from
+  // the availability responses — an occupied truck or driver is not in them, so
+  // it cannot be auto-selected. A selection the operator has already made is
+  // kept as long as it is still available. Nothing is submitted: this fills the
+  // form, and the Assign button stays the only thing that posts a job.
+  useEffect(() => {
+    if (!cn) return;
+    const next = autoSelect(vehicles, drivers, {
+      vehicleId: vehicleId || undefined,
+      driverId: driverId || undefined,
+    });
+    setVehicleId(next.vehicleId);
+    setDriverId(next.driverId);
+    // `vehicleId`/`driverId` are read, not tracked: re-running on our own writes
+    // would fight the operator's next manual change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cn, vehicles, drivers]);
   const driverRequired = DRIVER_REQUIRED_MOVE_TYPES.has(moveType);
   // A container customs has flagged cannot be assigned; the button stays out of
   // reach until the operator changes container. `customsFor` pins the block to
@@ -254,26 +316,14 @@ export default function JobAssignPanel({
         label: `${d.name ?? d.driver_id}${d.license_no ? ` — ${d.license_no}` : " — no licence on file"}`,
       })),
     ];
-    // The driver bound to the selected truck is offered even when the page did
-    // not reach them — but ONLY if availability says they are free. A bound
-    // driver who is out on another truck's job is deliberately not spliced back
-    // in: re-admitting them here would put an occupied driver in the dropdown,
-    // which is exactly what the availability query exists to prevent.
-    const bound = selectedVehicle?.driver_id;
-    if (bound && boundDriverFree && !opts.some((o) => o.value === bound)) {
-      opts.splice(1, 0, {
-        value: bound,
-        label: `${selectedVehicle?.driver_name ?? bound} — assigned to this truck`,
-      });
-    }
+    // Nothing is spliced in for the truck's bound driver. The panel used to
+    // re-admit them here when the page had not reached them, which is the seam an
+    // occupied driver got back through; `boundDriverFor` now resolves the binding
+    // WITHIN this same list (by licence, so the person's other record counts), so
+    // a bound driver who is free is already an option and one who is out on a job
+    // has no way back into the dropdown.
     return opts;
-  }, [
-    drivers,
-    driverRequired,
-    boundDriverFree,
-    selectedVehicle?.driver_id,
-    selectedVehicle?.driver_name,
-  ]);
+  }, [drivers, driverRequired]);
 
   // A 403 here means the signed-in role may raise jobs but not read the masters.
   const mastersForbidden =
@@ -328,6 +378,11 @@ export default function JobAssignPanel({
                 </span>
               ) : null}
             </span>
+            <SearchInput
+              value={vehicleSearch}
+              onChange={setVehicleSearch}
+              placeholder="Search registration / Vehicle ID…"
+            />
             {vehiclesQ.isLoading ? (
               <LoadingState label="Loading trucks…" />
             ) : vehiclesQ.isError && !mastersForbidden ? (
@@ -343,6 +398,15 @@ export default function JobAssignPanel({
                 options={vehicleOptions}
               />
             )}
+            {vehiclesQ.isSuccess && vehicles.length === 0 ? (
+              <span className="text-xs text-amber-600 dark:text-amber-500">
+                {vehicleQ
+                  ? `No available vehicle matches “${vehicleQ}” — a truck on an open job is not
+                     offered, however it is searched for.`
+                  : `No available vehicles — every ACTIVE truck is on an open job. One frees up
+                     when its job is completed or cancelled.`}
+              </span>
+            ) : null}
           </label>
 
           {/* --------------------------------------------------------- driver */}
@@ -355,6 +419,11 @@ export default function JobAssignPanel({
                 </span>
               ) : null}
             </span>
+            <SearchInput
+              value={driverSearch}
+              onChange={setDriverSearch}
+              placeholder="Search name / licence / Driver ID…"
+            />
             {driversQ.isLoading ? (
               <LoadingState label="Loading drivers…" />
             ) : driversQ.isError && !mastersForbidden ? (
@@ -370,6 +439,15 @@ export default function JobAssignPanel({
                 options={driverOptions}
               />
             )}
+            {driversQ.isSuccess && drivers.length === 0 ? (
+              <span className="text-xs text-amber-600 dark:text-amber-500">
+                {driverQ
+                  ? `No available driver matches “${driverQ}” — a driver on an open job is not
+                     offered, however they are searched for.`
+                  : `No available drivers — every ACTIVE driver is on an open job. One frees up
+                     when their job is completed or cancelled.`}
+              </span>
+            ) : null}
             {/* Say WHY the driver is filled in / missing, so an operator never has
                 to guess whether the truck has a driver on file. */}
             {vehicleId !== NONE && selectedVehicle?.driver_id && boundDriverFree ? (

@@ -83,9 +83,20 @@ class PerformanceService:
         t0 = perf_counter()
         daily = await self._repo.daily_series(date_from, date_to, data_origin)
         kpi = await self._repo.kpi(None, data_origin)
+        # ADDITIVE keys (`data_origin`, `coverage`) — existing consumers of
+        # `daily` / `latest_kpi` / `days` are untouched. They exist so the
+        # Overview can distinguish "the API returned no figures for this
+        # provenance" from "the request failed" and from "the figures are zero";
+        # see repository.origin_coverage().
+        coverage: list = []
+        try:
+            coverage = await self._repo.origin_coverage()
+        except Exception as exc:  # noqa: BLE001 — coverage is informational only
+            log.warning("performance.stats.coverage_failed", extra={"error": str(exc)})
         log.info("performance.stats", extra={"ms": round((perf_counter() - t0) * 1000, 1),
                  "days": len(daily)})
-        return {"daily": daily, "latest_kpi": kpi, "days": len(daily)}
+        return {"daily": daily, "latest_kpi": kpi, "days": len(daily),
+                "data_origin": data_origin, "coverage": coverage}
 
     # ---------------------------------------------------------------- LDB
     async def ldb_dwell(self, filters) -> Dict[str, Any]:

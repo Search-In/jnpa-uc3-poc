@@ -893,7 +893,11 @@ function GatiShaktiTab() {
               ? "No highway has been refreshed yet. GATISHAKTI/01 is keyed by NH number, so each highway must be pulled by name — see POST /api/gatishakti/refresh."
               : `${active.api} has nothing stored for this ${view === "highways" ? "highway" : "state"} yet. Refresh the reference set to populate it.`
           }
-          search
+          search={(r, q) =>
+            `${r.name ?? ""} ${r.state_id ?? ""} ${r.nh_no ?? ""} ${r.source_api ?? ""}`
+              .toLowerCase()
+              .includes(q)
+          }
           searchPlaceholder={`Filter ${active.label.toLowerCase()}…`}
           pageSize={12}
         />

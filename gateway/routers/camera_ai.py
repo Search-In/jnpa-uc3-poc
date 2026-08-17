@@ -33,6 +33,7 @@ from typing import Any, Dict, List, Mapping, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
+from ..datewindow import DateWindow, date_window, window_cond
 from ..logging import get_logger
 from ..metrics import REQUESTS
 from ..state import GatewayState, get_state
@@ -175,7 +176,8 @@ async def ingest_counts(body: Dict[str, Any] = Body(...),
 async def list_counts(camera_id: Optional[str] = Query(default=None),
                       gate_id: Optional[str] = Query(default=None),
                       limit: int = Query(default=100, ge=1, le=1000),
-                      state: GatewayState = Depends(get_state)) -> dict:
+                      state: GatewayState = Depends(get_state),
+                      window: DateWindow = Depends(date_window),) -> dict:
     dsn = state.cfg.postgres_dsn
     if not dsn:
         return {"count": 0, "counts": []}
@@ -189,6 +191,12 @@ async def list_counts(camera_id: Optional[str] = Query(default=None),
     if gate_id:
         where.append("gate_id = :gate")
         params["gate"] = gate_id
+    # GAP-DATE-01: appended BEFORE the clause is joined — appending
+    # after it is assembled is a silent no-op.
+    _wcond = window_cond(window, "ts", params)
+    if _wcond:
+        where.append(_wcond)
+
     clause = ("WHERE " + " AND ".join(where)) if where else ""
     rows = await fetch_all(
         f"SELECT * FROM core.camera_ai_count {clause} ORDER BY ts DESC LIMIT :limit",
@@ -267,14 +275,22 @@ async def ingest_trailer(body: Dict[str, Any] = Body(...),
 
 @router.get("/trailer")
 async def list_trailer(limit: int = Query(default=100, ge=1, le=1000),
-                       state: GatewayState = Depends(get_state)) -> dict:
+                       state: GatewayState = Depends(get_state),
+                       window: DateWindow = Depends(date_window),) -> dict:
     dsn = state.cfg.postgres_dsn
     if not dsn:
         return {"count": 0, "reads": []}
     from jnpa_shared.db import fetch_all
+    # GAP-DATE-01. This statement had no WHERE at all, so one is
+    # injected before ORDER BY; `_where` is empty when no window is
+    # given, leaving the SQL byte-identical to before.
+    _p: dict = {}
+    _cond = window_cond(window, "ts", _p)
+    _where = f"WHERE {_cond}" if _cond else ""
+
     rows = await fetch_all(
-        "SELECT * FROM core.trailer_read ORDER BY ts DESC LIMIT :limit",
-        {"limit": limit}, dsn=dsn)
+        f"SELECT * FROM core.trailer_read {_where} ORDER BY ts DESC LIMIT :limit",
+        {**{"limit": limit}, **_p}, dsn=dsn)
     REQUESTS.labels("camera_ai", "ok").inc()
     return {"count": len(rows), "reads": [_iso(dict(r)) for r in rows]}
 
@@ -323,14 +339,22 @@ async def ingest_container(body: Dict[str, Any] = Body(...),
 
 @router.get("/container")
 async def list_container(limit: int = Query(default=100, ge=1, le=1000),
-                         state: GatewayState = Depends(get_state)) -> dict:
+                         state: GatewayState = Depends(get_state),
+                         window: DateWindow = Depends(date_window),) -> dict:
     dsn = state.cfg.postgres_dsn
     if not dsn:
         return {"count": 0, "reads": []}
     from jnpa_shared.db import fetch_all
+    # GAP-DATE-01. This statement had no WHERE at all, so one is
+    # injected before ORDER BY; `_where` is empty when no window is
+    # given, leaving the SQL byte-identical to before.
+    _p: dict = {}
+    _cond = window_cond(window, "ts", _p)
+    _where = f"WHERE {_cond}" if _cond else ""
+
     rows = await fetch_all(
-        "SELECT * FROM core.container_read ORDER BY ts DESC LIMIT :limit",
-        {"limit": limit}, dsn=dsn)
+        f"SELECT * FROM core.container_read {_where} ORDER BY ts DESC LIMIT :limit",
+        {**{"limit": limit}, **_p}, dsn=dsn)
     REQUESTS.labels("camera_ai", "ok").inc()
     return {"count": len(rows), "reads": [_iso(dict(r)) for r in rows]}
 

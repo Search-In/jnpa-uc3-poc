@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 from typing import Any, Mapping, Optional, Sequence
+from gateway.datewindow import window_cond  # GAP-DATE-01 shared primitive
 
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -144,6 +145,16 @@ class VesselCallRepository:
         if data_origin is not None:
             conds.append("c.data_origin = :data_origin")
             params["data_origin"] = data_origin
+        # GAP-DATE-01. The window travels inside `filters` so it reaches every
+        # caller of this builder without changing a single service signature.
+        # `date_col` is supplied BY THE CALLER and is never inferred here: this
+        # builder is shared across tables, and a guessed column is a filter that
+        # silently returns the wrong rows rather than an error.
+        _wcond = window_cond(filters.get("_window"), filters.get("_date_col") or "",
+                             params) if filters.get("_date_col") else None
+        if _wcond:
+            conds.append(_wcond)
+
         clause = ("WHERE " + " AND ".join(conds)) if conds else ""
         return clause, params
 
@@ -782,6 +793,16 @@ class VesselCallRepository:
             if filters.get(col) is not None:
                 clauses.append(f"{col} = :{col}")
                 params[col] = filters[col]
+
+        # GAP-DATE-01. The window travels inside `filters` so it reaches every
+        # caller of this builder without changing a single service signature.
+        # `date_col` is supplied BY THE CALLER and is never inferred here: this
+        # builder is shared across tables, and a guessed column is a filter that
+        # silently returns the wrong rows rather than an error.
+        _wcond = window_cond(filters.get("_window"), filters.get("_date_col") or "",
+                             params) if filters.get("_date_col") else None
+        if _wcond:
+            clauses.append(_wcond)
         return ((" WHERE " + " AND ".join(clauses)) if clauses else ""), params
 
     async def list_files(self, *, filters: Mapping[str, Any], limit: int, offset: int) -> list[dict]:

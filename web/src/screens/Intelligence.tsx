@@ -66,6 +66,12 @@ export default function Intelligence() {
   const [mode, setMode] = useState<Mode>("vehicle");
   const [term, setTerm] = useState("");
   const [submitted, setSubmitted] = useState<string>("");
+  // Optional holder date of birth. SARATHI/02 answers without it; SARATHI/01
+  // needs it and answers with strictly more — the licence issue date, the
+  // issuing state and RTO, the full class list. The gate never has a DOB,
+  // which is why it is optional here rather than required.
+  const [dob, setDob] = useState("");
+  const [submittedDob, setSubmittedDob] = useState<string>("");
   const [params] = useSearchParams();
   const gs = useGlobalSearch();
 
@@ -90,6 +96,7 @@ export default function Intelligence() {
     const t = term.trim();
     if (!t) return;
     setSubmitted(mode === "vehicle" ? t.toUpperCase() : t);
+    setSubmittedDob(mode === "driver" ? dob.trim() : "");
   }
 
   return (
@@ -127,6 +134,21 @@ export default function Intelligence() {
                 className="h-9 w-full rounded-md border border-border bg-background pl-9 pr-3 text-[13px] outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
               />
             </div>
+            {/* Driver only. Empty = SARATHI/02; a date selects SARATHI/01. */}
+            {mode === "driver" && (
+              <label className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
+                <span className="whitespace-nowrap">Date of birth</span>
+                <input
+                  type="date"
+                  value={dob}
+                  onChange={(e) => setDob(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && run()}
+                  max={new Date().toISOString().slice(0, 10)}
+                  title="Optional. With a date of birth the richer SARATHI/01 is queried; without one SARATHI/02 answers."
+                  className="h-9 rounded-md border border-border bg-background px-2 text-[13px] outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                />
+              </label>
+            )}
             <button
               onClick={run}
               className="inline-flex h-9 items-center gap-1.5 rounded-md bg-primary px-4 text-[13px] font-semibold text-primary-foreground hover:bg-primary/90"
@@ -140,7 +162,7 @@ export default function Intelligence() {
       {mode === "vehicle" ? (
         <VehicleProfile plate={submitted} />
       ) : mode === "driver" ? (
-        <DriverProfile key={submitted} dl={submitted} />
+        <DriverProfile key={`${submitted}|${submittedDob}`} dl={submitted} dob={submittedDob} />
       ) : mode === "doubletrip" ? (
         <Embedded>
           <DoubleTrip />
@@ -964,7 +986,7 @@ function VehicleRecords({
 
 // --- Driver profile ----------------------------------------------------------
 
-function DriverProfile({ dl }: { dl: string }) {
+function DriverProfile({ dl, dob }: { dl: string; dob?: string }) {
   const enabled = !!dl;
   const diQ = useQuery({
     queryKey: ["driver-intel", dl],
@@ -972,8 +994,11 @@ function DriverProfile({ dl }: { dl: string }) {
     enabled,
   });
   const dlQ = useQuery({
-    queryKey: ["dl-lookup", dl],
-    queryFn: () => api.dlLookup(dl),
+    // The DOB is part of the key: it selects a different upstream API with a
+    // richer record, so a cached SARATHI/02 answer must not be served for a
+    // SARATHI/01 request.
+    queryKey: ["dl-lookup", dl, dob ?? ""],
+    queryFn: () => api.dlLookup(dl, dob || undefined),
     enabled,
     retry: false,
   });
@@ -1030,7 +1055,15 @@ function DriverProfile({ dl }: { dl: string }) {
           <KV label="Vehicle" value={di.vehicle_no} />
           <KV label="Mobile" value={d.mobile} />
         </InfoCard>
-        <InfoCard title="DL (Sarathi)" icon={ScanSearch}>
+        <InfoCard
+          title="DL (Sarathi)"
+          icon={ScanSearch}
+          actions={
+            dlQ.data?.source_api ? (
+              <StatusChip label={dlQ.data.source_api} tone="info" />
+            ) : undefined
+          }
+        >
           {dlQ.isLoading ? (
             <LoadingState />
           ) : dlQ.isError || !dlQ.data ? (
@@ -1062,6 +1095,23 @@ function DriverProfile({ dl }: { dl: string }) {
                     : (dlRec.rto_code ?? dlRec.state)
                 }
               />
+              {/* Issued / Issuing RTO are blank on SARATHI/02 because that API
+                  does not publish them — not because the licence lacks them.
+                  Saying which API answered turns a blank row from "no data"
+                  into "we did not ask the API that carries it". */}
+              {dlQ.data.source_api === "SARATHI/02" && (
+                <p className="mt-2 text-[11px] text-muted-foreground sm:col-span-2">
+                  {dob
+                    ? "SARATHI/01 did not resolve this licence with that date of birth, so SARATHI/02 answered — it publishes no issue date or issuing RTO."
+                    : "SARATHI/02 answered. Add the holder's date of birth above to query SARATHI/01, which also carries the issue date, the issuing state and RTO."}
+                </p>
+              )}
+              {dlQ.data.source_api === "SARATHI/01" && (
+                <p className="mt-2 text-[11px] text-muted-foreground sm:col-span-2">
+                  SARATHI/01 answered. The holder's name is masked at source on both SARATHI APIs,
+                  so neither is an identity source.
+                </p>
+              )}
             </>
           )}
         </InfoCard>

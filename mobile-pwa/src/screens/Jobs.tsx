@@ -1,3 +1,4 @@
+import { useNavigate } from "react-router-dom";
 /**
  * Driver Jobs — the UC-III job surface for the driver PWA.
  *
@@ -50,6 +51,7 @@ function nextAction(job: DriverJob): { key: string; label: string } | null {
 }
 
 export default function Jobs() {
+  const navigate = useNavigate();
   const [jobs, setJobs] = useState<DriverJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<number | null>(null);
@@ -129,6 +131,16 @@ export default function Jobs() {
                 v={<span className="mono">{`${job.document_type} ${job.document_reference}`}</span>}
               />
             )}
+
+            {/* D-07 — the papers for THIS job. Reached from the job rather
+                than from a global document list: the endpoint is scoped to the
+                job's owner, and so is the way in. */}
+            <button
+              className="btn btn-ghost"
+              onClick={() => navigate(`/jobs/${job.id}/documents`)}
+            >
+              Documents
+            </button>
 
             {needsYard && (
               <label className="field">

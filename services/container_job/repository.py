@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 from typing import Any, Mapping, Optional
+from gateway.datewindow import window_cond  # GAP-DATE-01 shared primitive
 
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -382,6 +383,16 @@ class ContainerJobRepository:
         if f.get("transporter_id") is not None:
             clauses.append("transporter_id = :tid")
             p["tid"] = f["transporter_id"]
+
+        # GAP-DATE-01. The window travels inside `filters` so it reaches every
+        # caller of this builder without changing a single service signature.
+        # `date_col` is supplied BY THE CALLER and is never inferred here: this
+        # builder is shared across tables, and a guessed column is a filter that
+        # silently returns the wrong rows rather than an error.
+        _wcond = window_cond(f.get("_window"), f.get("_date_col") or "",
+                             params) if f.get("_date_col") else None
+        if _wcond:
+            clauses.append(_wcond)
         return ((" WHERE " + " AND ".join(clauses)) if clauses else ""), p
 
     async def list_jobs(self, *, filters: Mapping[str, Any], limit: int, offset: int) -> list[dict]:
@@ -422,6 +433,16 @@ class ContainerJobRepository:
         if f.get("container_number"):
             clauses = " AND c.container_number = :pcn"
             p["pcn"] = str(f["container_number"]).strip().upper()
+
+        # GAP-DATE-01. The window travels inside `filters` so it reaches every
+        # caller of this builder without changing a single service signature.
+        # `date_col` is supplied BY THE CALLER and is never inferred here: this
+        # builder is shared across tables, and a guessed column is a filter that
+        # silently returns the wrong rows rather than an error.
+        _wcond = window_cond(f.get("_window"), f.get("_date_col") or "",
+                             params) if f.get("_date_col") else None
+        if _wcond:
+            clauses.append(_wcond)
         return clauses, p
 
     async def list_pending_handover(self, *, filters: Mapping[str, Any],
@@ -509,7 +530,9 @@ class ContainerJobRepository:
 
     async def gate_events_for(self, *, plate: Optional[str] = None,
                               container_number: Optional[str] = None,
-                              job_id: Optional[int] = None, limit: int = 100) -> list[dict]:
+                              job_id: Optional[int] = None, limit: int = 100,
+                                      window: Any = None,
+                                      date_col: Optional[str] = None,) -> list[dict]:
         clauses, p = [], {"limit": limit}
         if plate:
             clauses.append("plate = :plate")
@@ -520,6 +543,12 @@ class ContainerJobRepository:
         if job_id is not None:
             clauses.append("job_id = :jid")
             p["jid"] = job_id
+        # GAP-DATE-01: appended before the WHERE is assembled — after it,
+        # this is a silent no-op. `date_col` is named by the caller.
+        _wc = window_cond(window, date_col, p) if date_col else None
+        if _wc:
+            clauses.append(_wc)
+
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         return await self._rows(
             "SELECT id, ts, device_id, plate, gate_id, trip_id, event_type, container_number, "
@@ -543,7 +572,9 @@ class ContainerJobRepository:
         return dict(row)
 
     async def movements_for(self, *, container_number: Optional[str] = None,
-                            job_id: Optional[int] = None, limit: int = 100) -> list[dict]:
+                            job_id: Optional[int] = None, limit: int = 100,
+                                    window: Any = None,
+                                    date_col: Optional[str] = None,) -> list[dict]:
         clauses, p = [], {"limit": limit}
         if container_number:
             clauses.append("container_number = :cn")
@@ -551,6 +582,12 @@ class ContainerJobRepository:
         if job_id is not None:
             clauses.append("job_id = :jid")
             p["jid"] = job_id
+        # GAP-DATE-01: appended before the WHERE is assembled — after it,
+        # this is a silent no-op. `date_col` is named by the caller.
+        _wc = window_cond(window, date_col, p) if date_col else None
+        if _wc:
+            clauses.append(_wc)
+
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         return await self._rows(
             f"SELECT * FROM core.cargo_movement_event{where} "
@@ -608,7 +645,9 @@ class ContainerJobRepository:
             "ORDER BY scanned_at DESC, id DESC LIMIT 1", {"cn": container_number})
 
     async def scans_for(self, *, container_number: Optional[str] = None,
-                        result: Optional[str] = None, limit: int = 100) -> list[dict]:
+                        result: Optional[str] = None, limit: int = 100,
+                                window: Any = None,
+                                date_col: Optional[str] = None,) -> list[dict]:
         clauses, p = [], {"limit": limit}
         if container_number:
             clauses.append("container_number = :cn")
@@ -616,6 +655,12 @@ class ContainerJobRepository:
         if result:
             clauses.append("result = :r")
             p["r"] = result
+        # GAP-DATE-01: appended before the WHERE is assembled — after it,
+        # this is a silent no-op. `date_col` is named by the caller.
+        _wc = window_cond(window, date_col, p) if date_col else None
+        if _wc:
+            clauses.append(_wc)
+
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         return await self._rows(
             f"SELECT * FROM core.scan_event{where} ORDER BY scanned_at DESC, id DESC LIMIT :limit", p)

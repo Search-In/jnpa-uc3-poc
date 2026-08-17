@@ -78,6 +78,22 @@ export const IconPin = (p: P) => (
   </Svg>
 );
 
+export const IconFile = (p: P) => (
+  <Svg {...p}>
+    <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z" />
+    <path d="M14 3v5h5" />
+  </Svg>
+);
+
+export const IconScale = (p: P) => (
+  <Svg {...p}>
+    <path d="M12 3v18" />
+    <path d="M5 7h14" />
+    <path d="M5 7 2 14h6L5 7Z" />
+    <path d="M19 7l-3 7h6l-3-7Z" />
+  </Svg>
+);
+
 export const IconFlag = (p: P) => (
   <Svg {...p}>
     <path d="M5 21V4" />

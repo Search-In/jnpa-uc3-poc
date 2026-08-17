@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Optional, Union
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict
 
+from ..datewindow import DateWindow, date_window
 from ..data_mode import data_mode
 from ..metrics import REQUESTS
 from ..pii import mask_for_request
@@ -126,6 +127,9 @@ async def list_drivers(
         "transporter_id": transporter_id,
         "data_origin": mode,
     }
+    # GAP-DATE-01: the window travels with the filters; the column is
+    # stated here, never inferred by the shared where-builder.
+
     res = await service.list_drivers(filters, sort=sort, direction=direction,
                                      limit=limit, offset=offset)
     REQUESTS.labels("drivers_master", "ok").inc()

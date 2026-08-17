@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict
 
+from ..datewindow import DateWindow, date_window
 from ..data_mode import data_mode
 from ..metrics import REQUESTS
 from services.marine.pilotage import PilotageService
@@ -101,8 +102,14 @@ async def list_pilotage(
     offset: int = Query(default=0, ge=0),
     mode: Optional[str] = Depends(data_mode),
     service: PilotageService = Depends(get_service),
+    window: DateWindow = Depends(date_window),
 ) -> PilotageListResponse:
-    res = await service.list_pilotage(_filters(movement, imo, pilot, vessel, via, mode),
+    # GAP-DATE-01: the window rides with the filters into the shared
+    # where-builder; the column is stated here, never inferred there.
+    _f = _filters(movement, imo, pilot, vessel, via, mode)
+    _f["_window"] = window
+    _f["_date_col"] = "created_at"
+    res = await service.list_pilotage(_f,
                                       sort=sort, direction=direction, limit=limit, offset=offset)
     REQUESTS.labels(_API, "ok").inc()
     return PilotageListResponse(**res)

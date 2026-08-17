@@ -234,6 +234,48 @@ async function postForm<T>(path: string, form: FormData): Promise<T> {
 }
 
 export const api = {
+  // --- golden thread (S-06 Evidence & Audit Explorer) ---
+  // Walks all 18 lifecycle hops for one box and returns a verdict for every one,
+  // plus the SQL behind each — Notice §1(d).
+  containerThread: (containerNo: string) =>
+    http<import("./types").ThreadResponse>(`/api/thread/container/${encodeURIComponent(containerNo)}`),
+
+  // --- D-13 fleet ---
+  fleet: (transporterId?: number) =>
+    http<import("./types").FleetResponse>(
+      `/api/fleet${transporterId ? `?transporter_id=${transporterId}` : ""}`),
+
+  // --- T-09 facilities directory ---
+  facilities: (params: { type?: string; q?: string } = {}) => {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) if (v) qs.set(k, v);
+    const s = qs.toString();
+    return http<import("./types").FacilitiesResponse>(`/api/facilities${s ? `?${s}` : ""}`);
+  },
+
+  // --- S-08 ad-hoc query ---
+  queryDatasets: () =>
+    http<{ datasets: import("./types").QueryDataset[]; max_rows: number; note: string }>(
+      "/api/query/datasets"),
+
+  runQuery: (dataset: string, params: Record<string, string | undefined>) => {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) if (v) qs.set(k, v);
+    const q = qs.toString();
+    return http<import("./types").QueryResult>(
+      `/api/query/${encodeURIComponent(dataset)}${q ? `?${q}` : ""}`);
+  },
+
+  // --- cross-app focus ---
+  // Relay a selected vessel/container/truck to the other two dashboards. They
+  // sit on different origins, so the gateway socket is the only channel that
+  // reaches them. Callers treat a rejection as normal (offline demo).
+  broadcastFocus: (focus: import("./focusStore").PortFocus) =>
+    http<{ delivered: boolean }>("/api/focus/broadcast", {
+      method: "POST",
+      body: JSON.stringify(focus),
+    }),
+
   // --- geometry ---
   gates: () => http<{ gates: import("./types").Gate[] }>("/api/gates"),
   corridor: () => http<import("./types").CorridorGeometry>("/api/corridor"),
@@ -415,22 +457,51 @@ export const api = {
     }),
 
   // --- GatiShakti reference data — /api/gatishakti/* ---
-  // Backend-only reference master data (NHAI toll plazas, road network).
-  // Served from core.gs_*; `refresh` is what re-pulls it from ULIP.
+  // Reference master data served from core.gs_*; `refresh` is what re-pulls it
+  // from ULIP. The endpoint names follow the ULIP documentation, but what the
+  // four APIs really return does not: /01 is highway attributes with NO
+  // coordinates, /02 is food-storage depots, /03 is industrial parks, /04 is
+  // NHAI toll plazas. The helpers below are named for the CONTENT, because
+  // that is what the screen has to label, and /01 and /02 arrive on the same
+  // endpoint separated only by `source_api`.
   gatishaktiHealth: () => http<any>("/api/gatishakti/health"),
   gatishaktiTollPlazas: (stateId = "27", limit = 500) =>
     http<import("./types").GatiShaktiRows>(
       `/api/gatishakti/toll-plazas?state_id=${encodeURIComponent(stateId)}&limit=${limit}`,
     ),
-  gatishaktiRoads: (params?: { state_id?: string; nh_no?: string; limit?: number }) => {
+  gatishaktiRoads: (params?: {
+    state_id?: string;
+    nh_no?: string;
+    source_api?: string;
+    limit?: number;
+  }) => {
     const q = new URLSearchParams();
     if (params?.state_id) q.set("state_id", params.state_id);
     if (params?.nh_no) q.set("nh_no", params.nh_no);
+    if (params?.source_api) q.set("source_api", params.source_api);
     if (params?.limit) q.set("limit", String(params.limit));
     return http<import("./types").GatiShaktiRows>(
       `/api/gatishakti/roads${q.toString() ? `?${q}` : ""}`,
     );
   },
+  /** GATISHAKTI/01 — highway attributes for one NH number. */
+  gatishaktiHighway: (nhNo: string, limit = 500) =>
+    http<import("./types").GatiShaktiRows>(
+      `/api/gatishakti/roads?nh_no=${encodeURIComponent(nhNo)}` +
+        `&source_api=${encodeURIComponent("GATISHAKTI/01")}&limit=${limit}`,
+    ),
+  /** The NH numbers /01 has been refreshed for — the Highways picker. */
+  gatishaktiNhNumbers: (limit = 200) =>
+    http<{ rows: import("./types").GatiShaktiNhNumber[]; count: number; path: string }>(
+      `/api/gatishakti/nh-numbers?limit=${limit}`,
+    ),
+  /** GATISHAKTI/02 — food-storage depots for one state. */
+  gatishaktiStorageDepots: (stateId = "27", limit = 500) =>
+    http<import("./types").GatiShaktiRows>(
+      `/api/gatishakti/roads?state_id=${encodeURIComponent(stateId)}` +
+        `&source_api=${encodeURIComponent("GATISHAKTI/02")}&limit=${limit}`,
+    ),
+  /** GATISHAKTI/03 — industrial parks (the only reference set with coords). */
   gatishaktiRoadPoints: (stateId = "27", limit = 1000) =>
     http<import("./types").GatiShaktiRows>(
       `/api/gatishakti/road-points?state_id=${encodeURIComponent(stateId)}&limit=${limit}`,
@@ -624,10 +695,16 @@ export const api = {
   // ``vehicleIntel`` above is a different thing — an RDS aggregate of what we
   // have already stored about a plate — and answers ``rc: null`` for a vehicle
   // the port has never seen, so it must not be used to look a vehicle up.
+  // `source_api` names which of the pair actually replied — VAHAN/01 is an
+  // invisible retry behind /04, so a screen that hardcodes the badge is wrong
+  // whenever the retry is what answered. Absent on the non-ULIP rungs.
   vahanRc: (plate: string) =>
-    http<{ plate: string; decision_path: string; record: Record<string, unknown> }>(
-      `/api/vahan/rc/${encodeURIComponent(plate)}`,
-    ),
+    http<{
+      plate: string;
+      decision_path: string;
+      source_api?: string;
+      record: Record<string, unknown>;
+    }>(`/api/vahan/rc/${encodeURIComponent(plate)}`),
   // Alternate-key RC lookups (ULIP VAHAN/02 and /03). ULIP-only — the
   // simulator is keyed by plate — so these 503 when ULIP_LIVE_ENABLED is off
   // and 404 on a miss rather than falling back to a different vehicle.
@@ -639,9 +716,21 @@ export const api = {
     http<{ engine: string; decision_path: string; record: Record<string, unknown> }>(
       `/api/vahan/engine/${encodeURIComponent(engineNumber)}`,
     ),
-  dlLookup: (dl: string) =>
-    http<{ dl: string; decision_path?: string; status?: string; record?: Record<string, unknown> }>(
-      `/api/vahan/dl/${encodeURIComponent(dl)}`,
+  // Sarathi DL. Supplying the holder's date of birth (YYYY-MM-DD) selects
+  // SARATHI/01, which carries the issue date, the issuing state and RTO and
+  // the full class list; without it SARATHI/02 answers with less. /01 also
+  // needs the RTO's own spacing ("GJ04 20120005008"), so the DL is passed
+  // through unsquashed and the gateway tries both spellings.
+  dlLookup: (dl: string, dob?: string) =>
+    http<{
+      dl: string;
+      decision_path?: string;
+      source_api?: string;
+      status?: string;
+      record?: Record<string, unknown>;
+    }>(
+      `/api/vahan/dl/${encodeURIComponent(dl)}` +
+        (dob ? `?dob=${encodeURIComponent(dob)}` : ""),
     ),
   verificationHistory: (limit = 100) =>
     http<{ count: number; history: Record<string, unknown>[] }>(
@@ -1295,6 +1384,10 @@ export const api = {
     berthed_only?: boolean;
     from?: string;
     to?: string;
+    // The shared window (gateway/datewindow.py). Preferred over from/to: these
+    // are plain YYYY-MM-DD in IST and `to_date` covers the whole day.
+    from_date?: string;
+    to_date?: string;
     sort?: string;
     direction?: string;
     limit?: number;
@@ -1308,7 +1401,13 @@ export const api = {
       `/api/berthing${qs.toString() ? `?${qs}` : ""}`,
     );
   },
-  berthingStats: (params?: { terminal?: string; from?: string; to?: string }) => {
+  berthingStats: (params?: {
+    terminal?: string;
+    from?: string;
+    to?: string;
+    from_date?: string;
+    to_date?: string;
+  }) => {
     const qs = new URLSearchParams();
     Object.entries(params || {}).forEach(
       ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),

@@ -14,6 +14,10 @@ import {
   type Role,
 } from "@/lib/auth";
 import { LoginGate } from "@/components/auth/LoginGate";
+import VesselThread from "@/screens/VesselThread";
+import AdhocQuery from "@/screens/AdhocQuery";
+import FacilitiesScreen from "@/screens/Facilities";
+import FleetView from "@/screens/FleetView";
 import CommandCenter from "@/screens/CommandCenter";
 import AlertsCenter from "@/screens/AlertsCenter";
 import LiveOperations from "@/screens/LiveOperations";
@@ -281,8 +285,49 @@ function DashboardShell({
               </Guard>
             }
           />
+          {/* S-06 Evidence & Audit Explorer — the trace screen. */}
+          <Route
+            path="/vessel-thread"
+            element={
+              <Guard path="/vessel-thread">
+                <VesselThread />
+              </Guard>
+            }
+          />
+          {/* D-13 Fleet View — transporter-scoped server-side. */}
+          <Route
+            path="/fleet"
+            element={
+              <Guard path="/fleet">
+                <FleetView />
+              </Guard>
+            }
+          />
+          {/* T-09 Facilities & Utilities Directory. */}
+          <Route
+            path="/facilities"
+            element={
+              <Guard path="/facilities">
+                <FacilitiesScreen />
+              </Guard>
+            }
+          />
+          {/* S-08 Ad-hoc Query — a query builder, never a SQL box. */}
+          <Route
+            path="/adhoc-query"
+            element={
+              <Guard path="/adhoc-query">
+                <AdhocQuery />
+              </Guard>
+            }
+          />
           {/* Follow-The-Box is out of scope (client clarification); its former
-              route now resolves to the UC-3 Lifecycle console. */}
+              route now resolves to the UC-3 Lifecycle console. The 431-line
+              screen behind it was deleted on 17-Aug (GAP-UI-03) — an orphaned
+              file that no import reaches reads as an oversight rather than as a
+              decision. It remains in history at 26960b8 if the descope is ever
+              reversed:
+                git checkout 26960b8 -- web/src/screens/FollowTheBox.tsx */}
           <Route path="/follow-the-box" element={<Navigate to="/uc3-lifecycle" replace />} />
           <Route
             path="/parking"

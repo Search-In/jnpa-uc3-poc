@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel
 
+from ..datewindow import DateWindow, date_window
 from ..data_mode import data_mode
 from services.rail.repository import RailRepository
 
@@ -75,10 +76,12 @@ async def rail_fois(
     offset: int = Query(0, ge=0),
     repo: RailRepository = Depends(get_repo),
     origin: Optional[str] = Depends(data_mode),
+    window: DateWindow = Depends(date_window),
 ) -> Page:
     items, total = await repo.list_fois(
         data_origin=origin, loaded_empty=loaded_empty, q=q,
-        limit=limit, offset=offset)
+        limit=limit, offset=offset,
+        window=window, date_col="eda")
     return _page(items, total, limit, offset, response)
 
 
@@ -107,10 +110,12 @@ async def rail_cto(
     offset: int = Query(0, ge=0),
     repo: RailRepository = Depends(get_repo),
     origin: Optional[str] = Depends(data_mode),
+    window: DateWindow = Depends(date_window),
 ) -> Page:
     items, total = await repo.list_cto(
         data_origin=origin, cto_code=cto_code, q=q,
-        limit=limit, offset=offset)
+        limit=limit, offset=offset,
+        window=window, date_col="event_ts")
     return _page(items, total, limit, offset, response)
 
 
@@ -132,7 +137,9 @@ async def rail_uploads(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     repo: RailRepository = Depends(get_repo),
+    window: DateWindow = Depends(date_window),
 ) -> Page:
     items, total = await repo.list_uploads(feed=feed, limit=limit,
-                                           offset=offset)
+                                           offset=offset,
+        window=window, date_col="created_at")
     return _page(items, total, limit, offset, response)

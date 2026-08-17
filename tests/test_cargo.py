@@ -117,13 +117,31 @@ class FakeCargoRepo:
     def _filtered(self, *, container_number=None, customs_status=None,
                   yard_block=None, is_released=None, vehicle_number=None,
                   eseal_status=None, pre_document_status=None,
-                  origin_stream=None, lifecycle_status=None) -> list[dict]:
+                  origin_stream=None, lifecycle_status=None,
+                  # Matched case- and whitespace-insensitively by the real
+                  # repository, because the same hull reaches core.cargo from
+                  # sources that disagree on both.
+                  vessel_name=None,
+                  # Vessel identity resolved through the cargo row's IGM rather
+                  # than off core.cargo (GAP-VESSEL-01). This fake holds no IGM,
+                  # so it accepts the arguments and cannot honour them — asserted
+                  # explicitly below rather than silently ignored, which would
+                  # let a broken filter pass its tests.
+                  imo_no=None, call_sign=None,
+                  window=None, date_col=None) -> list[dict]:
+        assert imo_no is None and call_sign is None, (
+            "FakeCargoRepo cannot resolve a vessel through the IGM — exercise "
+            "imo_no/call_sign against the real repository (see "
+            "tests/test_cargo_vessel_filter.py)")
         rows = list(self._rows.values())
         eq = {"container_number": container_number, "customs_status": customs_status,
               "yard_block": yard_block, "is_released": is_released,
               "vehicle_number": vehicle_number, "eseal_status": eseal_status,
               "pre_document_status": pre_document_status, "origin_stream": origin_stream,
               "lifecycle_status": lifecycle_status}
+        if vessel_name is not None:
+            norm = lambda v: " ".join(str(v or "").split()).upper()
+            rows = [r for r in rows if norm(r.get("vessel_name")) == norm(vessel_name)]
         for col, val in eq.items():
             if val is not None:
                 rows = [r for r in rows if r[col] == val]
@@ -182,7 +200,7 @@ class FakeCargoRepo:
         return dict(rec)
 
     async def list_notifications(self, *, container_number=None, notification_type=None,
-                                 severity=None, status=None, limit=100, offset=0) -> list[dict]:
+                                 severity=None, status=None, limit=100, offset=0, window=None, date_col=None) -> list[dict]:
         rows = list(self._notifications)
         eq = {"container_number": container_number, "notification_type": notification_type,
               "severity": severity, "status": status}
@@ -246,7 +264,7 @@ class FakeCargoRepo:
         self._rake_plans.append(rec)
         return dict(rec)
 
-    async def list_rake_plans(self, *, rake_id=None, limit=100, offset=0) -> list[dict]:
+    async def list_rake_plans(self, *, rake_id=None, limit=100, offset=0, window=None, date_col=None) -> list[dict]:
         rows = list(self._rake_plans)
         if rake_id is not None:
             rows = [r for r in rows if r["rake_id"] == rake_id]

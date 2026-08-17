@@ -26,7 +26,11 @@
     "parking": "पार्किंग",
     "zones": "ज़ोन",
     "map": "लाइव नक्शा",
-    "alerts": "अलर्ट"
+    "alerts": "अलर्ट",
+    "facilities": "सुविधाएँ",
+    "weighbridge": "तौल",
+    "documents": "दस्तावेज़",
+    "violation": "प्रवर्तन सूचना"
   },
   "home": {
     "welcome": "स्वागत है,",

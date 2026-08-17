@@ -33,6 +33,7 @@ from pydantic import BaseModel
 from services.shipping_lines import ShippingLinesService, ShippingLinesUploadService
 from gateway.upload_limits import MAX_UPLOAD_BYTES
 
+from ..datewindow import DateWindow, date_window
 from ..auth import CONTROL_ROOM, Role, auth_enabled
 from ..data_mode import data_mode
 
@@ -167,9 +168,15 @@ async def list_delivery_orders(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     svc: ShippingLinesService = Depends(get_service),
+    window: DateWindow = Depends(date_window),
 ) -> Page:
     filters = {"container": container.strip().upper() if container else None,
                "vehicle": vehicle.strip().upper() if vehicle else None}
+    # GAP-DATE-01: the window travels with the filters; the column is
+    # stated here, never inferred by the shared where-builder.
+    filters["_window"] = window
+    filters["_date_col"] = "d.do_date"
+
     items = await svc.list_delivery_orders(filters=filters, limit=limit, offset=offset)
     total = await svc.count_delivery_orders(filters=filters)
     return _page(items, total, limit, offset, response)
@@ -186,12 +193,18 @@ async def list_edo(
     offset: int = Query(0, ge=0),
     data_origin: Optional[str] = Depends(data_mode),
     svc: ShippingLinesService = Depends(get_service),
+    window: DateWindow = Depends(date_window),
 ) -> Page:
     """One row per delivery order. ``manifest_linked`` says whether any container on
     the DO also appears on a filed IGM — the one cross-document join that resolves
     in the current corpus."""
     filters = {"do_number": do_number, "igm_no": igm_no, "container_no": container_no,
                "data_origin": data_origin}
+    # GAP-DATE-01: the window travels with the filters; the column is
+    # stated here, never inferred by the shared where-builder.
+    filters["_window"] = window
+    filters["_date_col"] = "d.do_date"
+
     items = await svc.list_edo(filters=filters, limit=limit, offset=offset)
     total = await svc.count_edo(filters=filters)
     return _page(items, total, limit, offset, response)
@@ -225,6 +238,7 @@ async def list_gate_movements(
     offset: int = Query(0, ge=0),
     data_origin: Optional[str] = Depends(data_mode),
     svc: ShippingLinesService = Depends(get_service),
+    window: DateWindow = Depends(date_window),
 ) -> Page:
     """The container actually leaving the terminal on a truck. ``dwell_hours`` is
     derived server-side from arrival -> gate pass on the same CODECO message, and
@@ -233,6 +247,11 @@ async def list_gate_movements(
     filters = {"gate_no": gate_no, "terminal_code": terminal_code,
                "container_no": container_no, "vehicle_no": vehicle_no,
                "data_origin": data_origin}
+    # GAP-DATE-01: the window travels with the filters; the column is
+    # stated here, never inferred by the shared where-builder.
+    filters["_window"] = window
+    filters["_date_col"] = "cm.gate_pass_ts"
+
     items = await svc.list_gate_movements(filters=filters, limit=limit, offset=offset)
     total = await svc.count_gate_movements(filters=filters)
     return _page(items, total, limit, offset, response)
@@ -248,8 +267,14 @@ async def list_messages(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     svc: ShippingLinesService = Depends(get_service),
+    window: DateWindow = Depends(date_window),
 ) -> Page:
     filters = {"list_type": list_type, "terminal": terminal, "import_status": import_status}
+    # GAP-DATE-01: the window travels with the filters; the column is
+    # stated here, never inferred by the shared where-builder.
+    filters["_window"] = window
+    filters["_date_col"] = "created_at"
+
     items = await svc.list_files(filters=filters, limit=limit, offset=offset)
     total = await svc.count_files(filters=filters)
     return _page(items, total, limit, offset, response)
@@ -329,6 +354,7 @@ async def list_containers(
     offset: int = Query(0, ge=0),
     data_origin: Optional[str] = Depends(data_mode),
     svc: ShippingLinesService = Depends(get_service),
+    window: DateWindow = Depends(date_window),
 ) -> Page:
     filters = {
         "list_type": _norm_list_type(list_type),
@@ -341,6 +367,11 @@ async def list_containers(
         "q": q.strip() if q else None,
         "data_origin": data_origin,
     }
+    # GAP-DATE-01: the window travels with the filters; the column is
+    # stated here, never inferred by the shared where-builder.
+    filters["_window"] = window
+    filters["_date_col"] = "created_at"
+
     items = await svc.list_containers(filters=filters, limit=limit, offset=offset)
     total = await svc.count_containers(filters=filters)
     return _page(items, total, limit, offset, response)
@@ -409,10 +440,16 @@ async def upload_history(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     svc: ShippingLinesUploadService = Depends(get_upload_service),
+    window: DateWindow = Depends(date_window),
 ) -> Page:
     require_uploader(request)
     filters = {"list_type": (list_type.strip().upper() if list_type else None),
                "import_status": status_, "source": (source or None)}
+    # GAP-DATE-01: the window travels with the filters; the column is
+    # stated here, never inferred by the shared where-builder.
+    filters["_window"] = window
+    filters["_date_col"] = "created_at"
+
     res = await svc.list_uploads(filters, limit=limit, offset=offset)
     return _page(res["items"], res["total"], limit, offset, response)
 

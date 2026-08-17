@@ -28,6 +28,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path as PathParam, Query, Request
 
+from ..datewindow import DateWindow, date_window
 from ..logging import get_logger
 from ..metrics import REQUESTS
 
@@ -111,10 +112,12 @@ async def logistics_events(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     svc: LogisticsService = Depends(get_service),
+    window: DateWindow = Depends(date_window),
 ) -> Dict[str, Any]:
     try:
         items, total = await svc.events(ref_id=ref_id, event_type=event_type,
-                                        limit=limit, offset=offset)
+                                        limit=limit, offset=offset,
+        window=window, date_col="event_ts")
     except Exception as exc:  # noqa: BLE001 - DB down => empty page, not a 500
         log.warning("logistics_events_failed", error=str(exc))
         items, total = [], 0

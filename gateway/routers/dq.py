@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel
 
+from ..datewindow import DateWindow, date_window
 from ..metrics import REQUESTS
 from services.dq import DqService
 from services.dq.repository import VALID_SEVERITIES
@@ -81,8 +82,14 @@ async def list_issues(
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     svc: DqService = Depends(get_service),
+    window: DateWindow = Depends(date_window),
 ) -> IssuePage:
-    res = await svc.list_issues(_filters(source_table, issue_type, severity, file_id, q),
+    # GAP-DATE-01: the window rides with the filters into the shared
+    # where-builder; the column is stated here, never inferred there.
+    _f = _filters(source_table, issue_type, severity, file_id, q)
+    _f["_window"] = window
+    _f["_date_col"] = "detected_at"
+    res = await svc.list_issues(_f,
                                 sort=sort, direction=order, limit=limit, offset=offset)
     response.headers["X-Total-Count"] = str(res["total"])
     REQUESTS.labels("dq", "ok").inc()

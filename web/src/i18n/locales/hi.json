@@ -45,7 +45,11 @@
     "vehicleRegistry": "वाहन रजिस्ट्री",
     "corridorSim": "कॉरिडोर सिमुलेशन",
     "gateLaneBoard": "गेट और लेन बोर्ड",
-    "videoAnalytics": "वीडियो एनालिटिक्स"
+    "videoAnalytics": "वीडियो एनालिटिक्स",
+    "vesselThread": "साक्ष्य और ऑडिट एक्सप्लोरर",
+    "adhocQuery": "तदर्थ क्वेरी",
+    "facilities": "सुविधाएँ और उपयोगिताएँ",
+    "fleet": "बेड़ा"
   },
   "followBox": {
     "title": "फॉलो द बॉक्स",
@@ -126,7 +130,8 @@
     "fastag": "फास्टैग",
     "alert": "अलर्ट",
     "case": "केस आईडी",
-    "gateDoc": "फॉर्म 13 / EIR / ई-सील नं."
+    "gateDoc": "फॉर्म 13 / EIR / ई-सील नं.",
+    "vessel": "पोत कॉल / VCN / VIA"
   },
   "commandCenter": {
     "title": "कमांड सेंटर",

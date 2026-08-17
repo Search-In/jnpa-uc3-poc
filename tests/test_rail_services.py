@@ -38,13 +38,28 @@ from services.jnpa_sync.routing import JnpaRouter, RouteOutcome  # noqa: E402
 
 
 # --------------------------------------------------------------- real corpus
-DUMP = Path("/Users/aniketchopade/Downloads/Digital Twin - Updated/Data")
+# The corpus folder has been renamed at least once ("Digital Twin - Updated" ->
+# "Digital Twin Data Corpus - Updated"). A single hardcoded path meant that when
+# it moved, every corpus-backed case in this file quietly turned into a SKIP and
+# the suite still reported green — so the parsers went unexercised against the
+# real files for as long as the stale path survived. Resolve against the known
+# locations instead, newest name first, and allow JNPA_CORPUS_DIR to override.
+_CORPUS_CANDIDATES = (
+    os.environ.get("JNPA_CORPUS_DIR", ""),
+    "/Users/aniketchopade/Downloads/Digital Twin Data Corpus - Updated/Data",
+    "/Users/aniketchopade/Downloads/Digital Twin - Updated/Data",
+)
+DUMP = next(
+    (Path(c) for c in _CORPUS_CANDIDATES if c and Path(c).is_dir()),
+    Path(_CORPUS_CANDIDATES[1]),
+)
 FOIS_CSV = DUMP / "9-NLDS_FOIS/FOIS/JNPA Train Intimation 22072026_083001.csv"
 FOIS_EMPTY = DUMP / "9-NLDS_FOIS/FOIS/JNPA Train Intimation 23062026_083000.csv"
 CTO_A = DUMP / "10-Form 11_ICD Rail/CTO/R261076 HTPL.txt"      # dated-first layout
 CTO_B = DUMP / "10-Form 11_ICD Rail/CTO/R261628 JKTI.TXT"      # rake-first / empty wagons
 FORM11_BMCT = DUMP / "10-Form 11_ICD Rail/Form 11/BMCT FORM 11-1.xlsx"
 FORM11_NSICT = DUMP / "10-Form 11_ICD Rail/Form 11/BT NSICT GENERAL-1.xlsx"
+FORM11_NSIGT = DUMP / "10-Form 11_ICD Rail/Form 11/BT NSIGT GENERAL-1.xlsx"
 ICD_PDF = DUMP / "10-Form 11_ICD Rail/ICD_REPORTS/ICD_DAILY_REPORT_01-JUL-2026.pdf"
 
 
@@ -82,7 +97,7 @@ class FakeRailRepo:
     def __init__(self) -> None:
         self.files: Dict[str, Dict[str, Any]] = {}      # sha -> ledger envelope
         self.rows: Dict[str, List[Mapping[str, Any]]] = {
-            "FOIS": [], "FORM11": [], "CTO": []}
+            "FOIS": [], "FORM11": [], "CTO": [], "ICD_REPORT": []}
         self.rejections: List[Dict[str, Any]] = []
         self.row_errors: List[Any] = []
         self.partials: List[int] = []
@@ -200,6 +215,9 @@ def test_form11_parser_bmct_variant():
     r = res.rows[0]
     assert r["terminal"] == "BMCT"             # recovered from filename
     assert r["container_no"] == "MSMU2175621"
+    # This sheet names the vessel visit `VIA` and states the depot outright.
+    assert r["via"] == "S0651"
+    assert r["icd_location"] == "TKD"
 
 
 @_need(FORM11_NSICT)
@@ -212,12 +230,132 @@ def test_form11_parser_nsict_general_variant():
     assert r["container_no"] == "MSMU6853774"
     assert r["booking_number"] == "EBKG170482021006"
 
+    # GAP-RAIL-01. The DP-World layout names the vessel visit
+    # TERMINAL_VISIT_NUMBER, not VIA. Only VIA was aliased, so this row carried
+    # no vessel at all and the rail hop could not reach a call.
+    assert r["via"] == "AGMS0654"
 
-def test_pdf_parser_flags_unsupported_not_crash():
+    # And the ICD is PORT_OF_ORIGIN, not LOCATION. `LOCATION` is INNSA1 — JNPA
+    # itself, the port this pre-advice is lodged AGAINST — and a generic
+    # `location` alias was reading it as the inland origin, so every rail box
+    # appeared to start at the port it was travelling to.
+    assert r["icd_location"] == "INBLR"
+    assert r["icd_location"] != "INNSA1"
+    # the raw columns are still inspectable rather than discarded
+    assert r["extra"]["LOCATION"] == "INNSA1"
+    assert r["extra"]["SPNAME"] == "INNSA1NSI1"
+
+
+@_need(FORM11_NSIGT)
+def test_form11_rail_hop_reaches_its_vessel_call():
+    """The documented rail hop: GLDU9466140 -> SRES0711 -> MSC SARA ELENA.
+
+    `SRES0711` is the join key to core.berthing_report_vessel.via_no. Without it
+    the whole rail leg of the export story is unreachable, which is what
+    GAP-RAIL-01 was.
+    """
+    res = form11_icd.parse(FORM11_NSIGT.read_bytes(), FORM11_NSIGT.name)
+    r = next(x for x in res.rows if x["container_no"] == "GLDU9466140")
+    assert r["via"] == "SRES0711"
+    assert r["icd_location"] == "INTKD"        # Tughlakabad, not INNSA1
+    assert r["pod"] == "DEHAM"
+
+
+def test_form11_does_not_invent_an_icd_for_a_road_origin():
+    """PORT_OF_ORIGIN is only the ICD when the move actually came in by rail.
+
+    On a road-origin pre-advice the same column holds a port, so reading it as
+    an inland depot would fabricate a rail leg that never happened. An unstated
+    origin has to stay unstated.
+    """
+    road = {"portoforigin": "INNSA1", "origintype": "Road", "arrivalmode": "T"}
+    assert form11_icd._icd_location(road) is None
+
+    rail = {"portoforigin": "INTKD", "origintype": "ICD Rail", "arrivalmode": "R"}
+    assert form11_icd._icd_location(rail) == "INTKD"
+
+    # An explicit column always wins over the inference.
+    both = {"icdlocation": "TKD", "portoforigin": "INBLR", "origintype": "ICD Rail"}
+    assert form11_icd._icd_location(both) == "TKD"
+
+
+def test_unreadable_pdf_is_rejected_not_crashed():
+    """ICD PDFs ARE parsed now (GAP-ETL-04/07), but a PDF with no report in it
+    must still come back as a ledgered rejection rather than an exception."""
     res = form11_icd.parse(SYNTH_PDF, "ICD_DAILY_REPORT_01-JUL-2026.pdf")
-    assert res.feed == "UNSUPPORTED"
-    assert res.unsupported is True
-    assert res.reason == "UNSUPPORTED_FORMAT"
+    assert res.rejected is True
+    assert res.reason in ("unreadable_pdf", "no_parsable_blocks")
+    assert res.rows == []
+
+
+@_need(ICD_PDF)
+def test_icd_report_pdf_parses_the_pendency_table():
+    res = form11_icd.parse(ICD_PDF.read_bytes(), ICD_PDF.name)
+    assert res.feed == "ICD_REPORT"
+    assert not res.rejected
+    pend = [r for r in res.rows if r["kind"] == "PENDENCY"]
+    # 7 terminals x 3 carrier series x 30 destination columns.
+    assert len(pend) == 630
+    assert {r["terminal"] for r in pend} == {
+        "NSFT", "NSDT", "NSICT", "NSIGT", "GTICT", "BMCT", "JNPORT"}
+    assert {r["series"] for r in pend} == {"CONCOR", "OTHER_CARRIER", "TOTAL"}
+    assert all(r["report_date"] == "2026-07-01" for r in pend)
+
+
+@_need(ICD_PDF)
+def test_icd_report_columns_are_not_run_together():
+    """The regression this parser exists to avoid.
+
+    Every glyph in these PDFs is separately positioned, so a naive read returns
+    `1 3 7 2 5 ...` for a row that means 137, 2, 5 — and a gap-based split merges
+    wide neighbouring cells into one impossible number. NSFT's first destination
+    on 1 July is 137 TEU; a TEU count with more than five digits is proof the
+    columns have been run together.
+    """
+    res = form11_icd.parse(ICD_PDF.read_bytes(), ICD_PDF.name)
+    nsft = {r["fpd_code"]: r["teu"] for r in res.rows
+            if r["kind"] == "PENDENCY" and r["terminal"] == "NSFT"
+            and r["series"] == "CONCOR"}
+    assert nsft["TKD"] == 137
+    assert nsft["DER"] == 52
+    assert max(r["teu"] for r in res.rows if r["kind"] == "PENDENCY") < 100_000
+
+
+@_need(ICD_PDF)
+def test_icd_report_reconciles_against_its_own_arithmetic():
+    """CONCOR + other carriers must equal the printed Total.
+
+    This is the only independent check available on the column reconstruction —
+    there is no second copy of these figures. 20 cells across the 14 files do
+    NOT reconcile; every one is a defect in the source (the PDD column at
+    NSICT/GTICT), and each raises a warning rather than being silently adjusted.
+    """
+    res = form11_icd.parse(ICD_PDF.read_bytes(), ICD_PDF.name)
+    by = {}
+    for r in res.rows:
+        if r["kind"] == "PENDENCY":
+            by.setdefault((r["terminal"], r["series"]), {})[r["fpd_code"]] = r["teu"]
+    mismatches = []
+    for terminal in {t for t, _ in by}:
+        c, o, t = (by[(terminal, s)] for s in ("CONCOR", "OTHER_CARRIER", "TOTAL"))
+        mismatches += [(terminal, k) for k, v in t.items()
+                       if c.get(k, 0) + o.get(k, 0) != v]
+    # Only the known source defect, and it is reported rather than hidden.
+    assert all(fpd == "PDD" for _t, fpd in mismatches), mismatches
+    warned = [w for w in res.warnings
+              if w["error_code"] == "pendency_does_not_reconcile"]
+    assert len(warned) == len(mismatches)
+
+
+@_need(ICD_PDF)
+def test_icd_report_reads_rake_placements():
+    res = form11_icd.parse(ICD_PDF.read_bytes(), ICD_PDF.name)
+    rakes = [r for r in res.rows if r["kind"] == "RAKE"]
+    assert rakes, "no rake placement lines found"
+    assert all(r["rake_id"].startswith("R") for r in rakes)
+    assert all(r["track"] in ("T1", "T2") for r in rakes)
+    # Discharge composition is broken out by wagon class, not left as a blob.
+    assert any(r["discharge"] for r in rakes)
 
 
 # =============================================================== service tests
@@ -250,21 +388,30 @@ def test_form11_icd_import_pdf_rejected_not_crash():
     svc = Form11IcdService(repository=repo)
     out = asyncio.run(svc.import_file(
         SYNTH_PDF, "ICD_DAILY_REPORT_01-JUL-2026.pdf", "jnpa-api"))
+    # A PDF carrying no report is still a REJECTION with a stated reason — the
+    # parser now reads real ICD reports, but an unreadable file must never pass.
     assert out["status"] == "REJECTED"
-    assert out["reason"] == "UNSUPPORTED_FORMAT"
+    assert out["reason"] in ("unreadable_pdf", "no_parsable_blocks")
     assert out["imported"] == 0
     assert repo.rows["CTO"] == [] and repo.rows["FORM11"] == []
-    assert repo.rejections and repo.rejections[0]["reason"] == "UNSUPPORTED_FORMAT"
+    assert repo.rejections
 
 
 @_need(ICD_PDF)
-def test_form11_icd_import_real_pdf_rejected():
+def test_form11_icd_import_real_pdf_now_succeeds():
+    """Previously asserted REJECTED/UNSUPPORTED_FORMAT — that was the gap.
+
+    The composite ICD_REPORT feed lands both row families from one file under a
+    single ledger entry.
+    """
     repo = FakeRailRepo()
     svc = Form11IcdService(repository=repo)
     out = asyncio.run(svc.import_file(ICD_PDF.read_bytes(), ICD_PDF.name,
                                       "jnpa-api"))
-    assert out["status"] == "REJECTED"
-    assert out["reason"] == "UNSUPPORTED_FORMAT"
+    assert out["status"] == "SUCCESS"
+    assert out["feed"] == "ICD_REPORT"
+    assert out["imported"] == 630 + len(
+        [r for r in repo.rows["ICD_REPORT"] if r.get("kind") == "RAKE"])
 
 
 # =============================================================== routing tests

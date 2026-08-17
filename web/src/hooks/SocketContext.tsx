@@ -2,6 +2,8 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import { useGatewaySocket } from "./useGatewaySocket";
 import type { Alert, OperatorBanner, ScenarioStep, WsFrame } from "@/lib/types";
 import { severityRank } from "@/lib/palette";
+import { focusStore } from "@/lib/focusStore";
+import { api } from "@/lib/api";
 
 // App-wide socket context: one /api/ws connection, a rolling buffer of the most
 // recent alerts (so any screen can show "live alerts" without re-subscribing),
@@ -23,6 +25,37 @@ interface SocketCtx {
 
 const Ctx = createContext<SocketCtx | null>(null);
 const MAX_ALERTS = 100;
+
+/**
+ * Frames this provider deliberately does NOT act on (GAP-WS-02).
+ *
+ * Every one of these IS emitted by the gateway and was previously dropped by a
+ * silent fall-through, which made "not handled" and "not noticed" look
+ * identical. They stay unhandled here because each is already owned by the
+ * screen that cares: Accidents, Road Bottlenecks, Camera AI, Double Trip, ECY
+ * TRT and the TAS board each poll their own endpoint, and `reroute_ack` is
+ * addressed to a single driver device rather than to this console.
+ *
+ * Listing them means an unrecognised frame now warns instead of disappearing —
+ * if the gateway adds a type, this app says so rather than going quiet.
+ *
+ * `anpr` is absent on purpose: gateway/main.py builds `anpr_pump` with
+ * `broadcast=False`, so ANPR reads are persisted and never sent to a socket.
+ */
+const IGNORED_FRAME_TYPES: ReadonlySet<string> = new Set([
+  "hello",         // handshake, consumed by useGatewaySocket itself
+  "traffic",       // the live map subscribes to raw frames directly
+  "truck_position",// ditto
+  "decision",      // Driver Advisory reads /api/decisions
+  "violation_enforced", // Reports & Enforcement polls its own list
+  "accident",
+  "bottleneck",
+  "camera_ai",
+  "double_trip",
+  "reroute_ack",
+  "tas",
+  "trt",
+]);
 
 export function SocketProvider({ children }: { children: ReactNode }) {
   const { status, subscribe } = useGatewaySocket();
@@ -59,12 +92,57 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       } else if (frame.type === "operator_banner") {
         // Latest-wins: the gateway pushes the full banner state on each change.
         setOperatorBanner(frame.payload);
+      } else if (frame.type === "focus") {
+        // A vessel/container/truck was selected in another app. applyRemote()
+        // does NOT re-publish, so this cannot echo back and loop.
+        const p = frame.payload;
+        focusStore.applyRemote({
+          vcn: p.vcn ?? undefined,
+          viaNo: p.viaNo ?? undefined,
+          imoNo: p.imoNo ?? undefined,
+          vesselName: p.vesselName ?? undefined,
+          containerNo: p.containerNo ?? undefined,
+          vehicleNo: p.vehicleNo ?? undefined,
+          igmNo: p.igmNo ?? undefined,
+          fromDate: p.fromDate ?? undefined,
+          toDate: p.toDate ?? undefined,
+          asOf: p.asOf ?? undefined,
+          origin: p.origin,
+          nonce: p.nonce,
+        });
+      } else if (IGNORED_FRAME_TYPES.has(frame.type)) {
+        // Deliberately not handled here — see IGNORED_FRAME_TYPES.
+      } else {
+        // A frame type nobody has accounted for. Not an error (the gateway may
+        // ship a new one before this app learns it), but it must not vanish
+        // without trace: an unhandled frame that looks identical to a handled
+        // one is how "the live update stopped working" becomes unfindable.
+        if (import.meta.env.DEV) {
+          console.warn(
+            `[ws] unhandled frame type "${(frame as { type: string }).type}" — ` +
+              "add it to the WsFrame union in lib/types.ts and either handle it " +
+              "here or list it in IGNORED_FRAME_TYPES.",
+          );
+        }
       }
     });
     return () => {
       unsubscribe();
     };
   }, [subscribe]);
+
+  // Outbound half: carry a focus raised HERE to the other two dashboards. Fire
+  // and forget — if the gateway is unreachable the local focus and the URL
+  // grammar still work, which is the whole point of keeping those authoritative.
+  useEffect(
+    () =>
+      focusStore.onPublish((f) => {
+        void api.broadcastFocus(f).catch(() => {
+          /* offline demo: local focus + deep link remain the source of truth */
+        });
+      }),
+    [],
+  );
 
   return (
     <Ctx.Provider value={{ status, alerts, scenarioSteps, operatorBanner, subscribe }}>

@@ -124,6 +124,31 @@ def test_policy_map_scoping():
     assert roles_for_path("/api/identity/verify") == frozenset(
         {Role.CUSTOMS.value, Role.DTCCC_ADMIN.value}
     )
+    # The golden thread reads ACROSS the lifecycle — manifest lines, gate
+    # documents, driver names — so it must be scoped to the narrowest audience of
+    # anything it returns, not left to the "any authenticated role" default. A
+    # DRIVER or TRANSPORTER token reaching /api/thread would obtain exactly the
+    # gate-document payload /api/gate-docs withholds.
+    assert roles_for_path("/api/thread/container/DPWU9011100") == roles_for_path(
+        "/api/gate-docs/eir"
+    )
+    assert Role.DRIVER.value not in roles_for_path("/api/thread/container/DPWU9011100")
+    assert Role.TRANSPORTER.value not in roles_for_path("/api/thread/vehicle/MH46H6948")
+    assert Role.CUSTOMS.value in roles_for_path("/api/thread/vessel")
+
+    # T-09 Facilities is deliberately WIDER than the cargo modules: it carries
+    # places only — no container, document or personal data — and the driver PWA
+    # reads it for D-10/D-11. Scoping it to the control room would have broken
+    # the driver screens for no protective benefit.
+    assert roles_for_path("/api/facilities") == ALL_ROLES
+    assert Role.DRIVER.value in roles_for_path("/api/facilities/weighing")
+
+    # D-13 Fleet: TRANSPORTER is the audience, but a DRIVER is bound to one
+    # vehicle and must not be able to enumerate a fleet. WHICH company a caller
+    # sees is decided in the router, not here.
+    assert Role.TRANSPORTER.value in roles_for_path("/api/fleet")
+    assert Role.DRIVER.value not in roles_for_path("/api/fleet")
+
     # An unscoped operational path defaults to any authenticated role. Seven
     # since TRANSPORTER joined the six original stakeholder roles (migration
     # 0123 / multi-user auth): transport partners land on exactly this default

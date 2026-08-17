@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict
 
+from ..datewindow import DateWindow, date_window
 from ..data_mode import data_mode
 from ..metrics import REQUESTS
 from services.marine.bathymetry import BathymetryService
@@ -191,6 +192,7 @@ async def list_soundings(
     offset: int = Query(default=0, ge=0),
     mode: Optional[str] = Depends(data_mode),
     service: BathymetryService = Depends(get_service),
+    window: DateWindow = Depends(date_window),
 ) -> SoundingListResponse:
     if (min_depth is not None and max_depth is not None and min_depth > max_depth):
         REQUESTS.labels(_API, "error").inc()
@@ -200,6 +202,11 @@ async def list_soundings(
     filters = {"above_design": above_design, "min_depth": min_depth,
                "max_depth": max_depth, "georeferenced": georeferenced,
                "data_origin": mode}
+    # GAP-DATE-01: the window travels with the filters; the column is
+    # stated here, never inferred by the shared where-builder.
+    filters["_window"] = window
+    filters["_date_col"] = "created_at"
+
     res = await service.list_soundings(survey_id, filters, sort=sort, direction=direction,
                                        limit=limit, offset=offset)
     REQUESTS.labels(_API, "ok").inc()

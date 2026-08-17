@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 from typing import Any, Mapping, Optional, Sequence
+from gateway.datewindow import window_cond  # GAP-DATE-01 shared primitive
 
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -347,7 +348,9 @@ class EdiVesselRepository:
                          direction: Optional[str] = None,
                          vcn: Optional[str] = None,
                          q: Optional[str] = None,
-                         limit: int = 100, offset: int = 0
+                         limit: int = 100, offset: int = 0,
+                         window: Any = None,
+                         date_col: Optional[str] = None,
                          ) -> tuple[list[dict], int]:
         where, params = [], {}
         if data_origin:
@@ -366,17 +369,33 @@ class EdiVesselRepository:
             where.append("(container_no ILIKE :q OR vcn ILIKE :q "
                          "OR line_code ILIKE :q OR document_number ILIKE :q)")
             params["q"] = f"%{q.strip()}%"
+        # GAP-DATE-01. `date_col` is named by the CALLER — this method
+        # serves several tables, and a guessed column filters the wrong
+        # one, returning a plausible answer instead of an error.
+        _wcond = window_cond(window, date_col, params) if date_col else None
+        if _wcond:
+            where.append(_wcond)
+
         return await self._paged("core.edi_vessel_container", where, params,
                                  "COALESCE(shipping_ts, landing_ts, "
                                  "created_at) DESC, id DESC", limit, offset)
 
     async def list_uploads(self, *, feed: Optional[str] = None,
-                           limit: int = 50, offset: int = 0
+                           limit: int = 50, offset: int = 0,
+                           window: Any = None,
+                           date_col: Optional[str] = None,
                            ) -> tuple[list[dict], int]:
         where, params = [], {}
         if feed:
             where.append("feed = :feed")
             params["feed"] = feed.strip().upper()
+        # GAP-DATE-01. `date_col` is named by the CALLER — this method
+        # serves several tables, and a guessed column filters the wrong
+        # one, returning a plausible answer instead of an error.
+        _wcond = window_cond(window, date_col, params) if date_col else None
+        if _wcond:
+            where.append(_wcond)
+
         return await self._paged("core.edi_import_file", where, params,
                                  "id DESC", limit, offset)
 

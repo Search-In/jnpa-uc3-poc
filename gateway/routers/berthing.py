@@ -33,6 +33,7 @@ from pydantic import BaseModel, ConfigDict
 
 from ..auth import CONTROL_ROOM, Role, auth_enabled
 from ..data_mode import data_mode
+from ..datewindow import DateWindow, date_window
 from ..metrics import REQUESTS
 from services.berthing import BerthingService, BerthingUploadService
 from services.berthing import upload_parsers as P
@@ -215,6 +216,7 @@ async def list_reports(
     berthed_only: bool = Query(default=False),
     date_from: Optional[datetime] = Query(default=None, alias="from"),
     date_to: Optional[datetime] = Query(default=None, alias="to"),
+    window: DateWindow = Depends(date_window),
     sort: str = Query(default="updated_at"),
     direction: str = Query(default="desc"),
     limit: int = Query(default=50, ge=1, le=500),
@@ -222,6 +224,15 @@ async def list_reports(
     data_origin: Optional[str] = Depends(data_mode),
     service: BerthingService = Depends(get_service),
 ) -> ReportListResponse:
+    # This endpoint predates the shared window and takes `?from=`/`?to=` as full
+    # datetimes. Both spellings are now accepted so one focus can bound every
+    # board with the same two parameters; the original names still win where a
+    # caller supplies them, so existing clients are untouched.
+    date_from = date_from or window.start_ts()
+    # end_ts_inclusive, not end_ts: this repository compares `b.eta <= :eta_to`,
+    # so an exclusive bound would admit a call stamped exactly midnight on the
+    # day after the window.
+    date_to = date_to or window.end_ts_inclusive()
     filters = _filters(terminal, status_, vessel, voyage, berthed_only, date_from, date_to,
                        data_origin)
     res = await service.list_reports(filters, sort=sort, direction=direction,
@@ -235,9 +246,14 @@ async def stats(
     terminal: Optional[str] = Query(default=None),
     date_from: Optional[datetime] = Query(default=None, alias="from"),
     date_to: Optional[datetime] = Query(default=None, alias="to"),
+    window: DateWindow = Depends(date_window),
     data_origin: Optional[str] = Depends(data_mode),
     service: BerthingService = Depends(get_service),
 ) -> StatsOut:
+    # Same dual spelling as the list endpoint above, so a KPI card and the rows
+    # beneath it can never end up describing different windows.
+    date_from = date_from or window.start_ts()
+    date_to = date_to or window.end_ts_inclusive()
     filters = _filters(terminal, None, None, None, False, date_from, date_to, data_origin)
     res = await service.stats(filters)
     REQUESTS.labels("berthing", "ok").inc()
@@ -287,10 +303,16 @@ async def upload_history(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     svc: BerthingUploadService = Depends(get_upload_service),
+    window: DateWindow = Depends(date_window),
 ) -> Page:
     require_uploader(request)
     filters = {"terminal": (P.terminal_ok(terminal) if terminal else None),
                "status": status_, "source": (source or None)}
+    # GAP-DATE-01: the window travels with the filters; the column is
+    # stated here, never inferred by the shared where-builder.
+    filters["_window"] = window
+    filters["_date_col"] = "created_at"
+
     res = await svc.list_uploads(filters, limit=limit, offset=offset)
     return _page(res["items"], res["total"], limit, offset, response)
 

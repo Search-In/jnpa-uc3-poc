@@ -69,7 +69,9 @@ from services.cargo import (
     CargoCustomsBlocked,
     scope_filters_for_role,
 )
+from services.cargo.repository import CargoRepository
 
+from ..datewindow import DateWindow, date_window
 from ..logging import get_logger
 
 log = get_logger("gateway.cargo")
@@ -148,6 +150,23 @@ def _clean_vehicle(value: Optional[str]) -> Optional[str]:
         return None
     norm = str(value).strip().upper().replace(" ", "")
     return norm or None
+
+
+def _check_date_col(value: Optional[str]) -> str:
+    """Validate the column the date window applies to.
+
+    A 400 here rather than a silent fallback: if a caller asks to bound by
+    `created_at` and we quietly answer on `eta`, the figure looks right and is
+    not, which is exactly what the Notice's "state the method" clause exists to
+    prevent."""
+    col = (value or CargoRepository.DEFAULT_DATE_COL).strip()
+    if col not in CargoRepository.DATE_COLS:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_date_col", "date_col": col,
+                    "allowed": list(CargoRepository.DATE_COLS)},
+        )
+    return col
 
 
 def _clean_text(value: Optional[str]) -> Optional[str]:
@@ -836,9 +855,30 @@ async def list_cargo(
     eseal_status: Optional[ESealStatus] = Query(default=None),
     pre_document_status: Optional[PreDocumentStatus] = Query(default=None),
     origin_stream: Optional[str] = Query(default=None, description="Cargo source stream, e.g. 'UC-II'"),
+    vessel_name: Optional[str] = Query(
+        default=None,
+        description="Vessel that carried the box, e.g. 'XIN HANG ZHOU'. "
+                    "Matched case- and whitespace-insensitively. This is the "
+                    "vessel->container hop of the golden thread."),
+    imo_no: Optional[str] = Query(
+        default=None,
+        description="Vessel IMO, e.g. '9356294'. Resolved through the IGM the "
+                    "cargo row cites. Needed because the CHPOI03 manifest names "
+                    "no vessel — it carries only an IMO and a call sign — so "
+                    "7,808 manifested containers belong to ships the corpus "
+                    "never names and cannot be reached by ?vessel_name."),
+    call_sign: Optional[str] = Query(
+        default=None,
+        description="Vessel call sign as the IGM writes it, e.g. '9HA5230'. "
+                    "The other half of the identity an unnamed vessel does have."),
     status_filter: Optional[LifecycleStatus] = Query(
         default=None, alias="status",
         description="Filter by lifecycle status (UC-III handover uses ?status=RELEASED)"),
+    window: DateWindow = Depends(date_window),
+    date_col: str = Query(
+        default="eta",
+        description="Which timestamp the date window applies to: 'eta' (the "
+                    "operational date, the default), 'created_at' or 'updated_at'."),
     role: Optional[str] = Query(default=None,
                                 description="Scope results to a user role (e.g. 'operator', 'customs', 'driver')"),
     limit: int = Query(default=100, ge=1, le=1000),
@@ -857,6 +897,11 @@ async def list_cargo(
         pre_document_status=pre_document_status.value if pre_document_status else None,
         origin_stream=_clean_text(origin_stream),
         lifecycle_status=status_filter.value if status_filter else None,
+        vessel_name=_clean_text(vessel_name),
+        imo_no=_clean_text(imo_no),
+        call_sign=_clean_text(call_sign),
+        window=window,
+        date_col=_check_date_col(date_col),
     )
     # Role-based filtering: prefer the AUTHENTICATED principal's role (so a query
     # param can never widen a token's scope); fall back to the ?role= param for the
@@ -924,13 +969,15 @@ async def list_notifications(
     limit: int = Query(default=100, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
     service: CargoService = Depends(get_service),
+    window: DateWindow = Depends(date_window),
 ) -> list[NotificationOut]:
     cn = _require_container_no(container_number) if container_number else None
     ntype = notification_type.strip().upper().replace(" ", "_") if notification_type else None
     rows = await service.list_notifications(
         container_number=cn, notification_type=ntype,
         severity=severity.value if severity else None,
-        status=status_filter, limit=limit, offset=offset)
+        status=status_filter, limit=limit, offset=offset,
+        window=window, date_col="created_at")
     return [_to_notification_out(r) for r in rows]
 
 
@@ -980,9 +1027,11 @@ async def list_rake_planning(
     limit: int = Query(default=100, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
     service: CargoService = Depends(get_service),
+    window: DateWindow = Depends(date_window),
 ) -> list[RakePlanRecordOut]:
     rid = rake_id.strip().upper().replace(" ", "") if rake_id else None
-    rows = await service.list_rake_plans(rake_id=rid, limit=limit, offset=offset)
+    rows = await service.list_rake_plans(rake_id=rid, limit=limit, offset=offset,
+        window=window, date_col="created_at")
     return [_to_rake_record_out(r) for r in rows]
 
 

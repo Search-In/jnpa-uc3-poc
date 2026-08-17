@@ -34,6 +34,7 @@ from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query, Reque
                      Response, UploadFile, status)
 from pydantic import BaseModel, ConfigDict
 
+from ..datewindow import DateWindow, date_window
 from ..auth import CONTROL_ROOM, Role, auth_enabled
 from ..data_mode import data_mode
 from ..metrics import REQUESTS
@@ -314,10 +315,16 @@ async def list_chains(
     offset: int = Query(0, ge=0),
     data_origin: Optional[str] = Depends(data_mode),
     svc: EcyCfsChainService = Depends(get_chain_service),
+    window: DateWindow = Depends(date_window),
 ) -> Page:
     filters = {"container_number": container, "chain_status": chain_status,
                "anomaly_only": anomaly_only, "anomaly_code": anomaly_code,
                "data_origin": data_origin}
+    # GAP-DATE-01: the window travels with the filters; the column is
+    # stated here, never inferred by the shared where-builder.
+    filters["_window"] = window
+    filters["_date_col"] = "first_event_ts"
+
     res = await svc.list_chains(filters, limit=limit, offset=offset)
     REQUESTS.labels("cfs_ecy", "ok").inc()
     return _page(res["items"], res["total"], limit, offset, response)
@@ -389,10 +396,16 @@ async def upload_history(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     svc: CfsEcyUploadService = Depends(get_upload_service),
+    window: DateWindow = Depends(date_window),
 ) -> Page:
     require_uploader(request)
     filters = {"facility_type": (facility.strip().upper() if facility else None),
                "import_status": status_, "source": (source or None)}
+    # GAP-DATE-01: the window travels with the filters; the column is
+    # stated here, never inferred by the shared where-builder.
+    filters["_window"] = window
+    filters["_date_col"] = "created_at"
+
     res = await svc.list_uploads(filters, limit=limit, offset=offset)
     return _page(res["items"], res["total"], limit, offset, response)
 
@@ -514,6 +527,7 @@ async def empty_trt_chains(
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     svc: EmptyTrtService = Depends(get_trt_service),
+    window: DateWindow = Depends(date_window),
 ) -> Page:
     if chain_status and chain_status.strip().upper() not in ("COMPLETE", "PARTIAL", "ORPHAN"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
@@ -521,6 +535,11 @@ async def empty_trt_chains(
                                     "chain_status": chain_status})
     filters = {"container": container, "chain_status": chain_status,
                "anomaly_code": anomaly_code, "anomaly_only": anomaly_only}
+    # GAP-DATE-01: the window travels with the filters; the column is
+    # stated here, never inferred by the shared where-builder.
+    filters["_window"] = window
+    filters["_date_col"] = "first_event_ts"
+
     res = await svc.list_chains(filters, sort=sort, direction=order,
                                 limit=limit, offset=offset)
     REQUESTS.labels("cfs_ecy", "ok").inc()

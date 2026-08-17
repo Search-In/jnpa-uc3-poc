@@ -103,12 +103,19 @@ class EmailIngestRepository:
 
     # -------------------------------------------------------------------- read
     async def list_messages(self, *, status: Optional[str] = None,
-                            limit: int = 50, offset: int = 0) -> Dict[str, Any]:
+                            limit: int = 50, offset: int = 0,
+        window: Any = None,
+        date_col: Optional[str] = None,) -> Dict[str, Any]:
         if not self.enabled:
             return {"items": [], "total": 0}
         where, params = "", {}
         if status:
             where = " WHERE processing_status = :status"
+            # GAP-DATE-01: spliced into the clause built above.
+            _wc = window_cond(window, date_col, params) if date_col else None
+            if _wc:
+                where = (f"{where} AND {_wc}" if where.strip()
+                         else f" WHERE {_wc}")
             params["status"] = status
         async with get_engine(self._dsn).connect() as conn:
             total = (await conn.execute(text(

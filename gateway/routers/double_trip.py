@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
+from ..datewindow import DateWindow, date_window, window_cond
 from ..logging import get_logger
 from ..metrics import REQUESTS
 from ..state import GatewayState, get_state
@@ -190,7 +191,8 @@ async def complete_trip(trip_id: int, body: Dict[str, Any] = Body(default={}),
 @router.get("/cycles")
 async def list_cycles(vehicle_id: Optional[str] = Query(default=None),
                       limit: int = Query(default=50, ge=1, le=500),
-                      state: GatewayState = Depends(get_state)) -> dict:
+                      state: GatewayState = Depends(get_state),
+                      window: DateWindow = Depends(date_window),) -> dict:
     """Trips grouped by cycle_id (newest first)."""
     dsn = state.cfg.postgres_dsn
     if not dsn:
@@ -202,6 +204,12 @@ async def list_cycles(vehicle_id: Optional[str] = Query(default=None),
     if vehicle_id:
         where.append("vehicle_id = :vid")
         params["vid"] = vehicle_id
+    # GAP-DATE-01: appended BEFORE the clause is joined — appending
+    # after it is assembled is a silent no-op.
+    _wcond = window_cond(window, "started_at", params)
+    if _wcond:
+        where.append(_wcond)
+
     clause = ("WHERE " + " AND ".join(where)) if where else ""
     # Pull all trips for the most recent `limit` cycles, then group in Python.
     rows = await fetch_all(
@@ -255,7 +263,8 @@ async def list_cycles(vehicle_id: Optional[str] = Query(default=None),
 async def list_trips(vehicle_id: Optional[str] = Query(default=None),
                      status: Optional[str] = Query(default=None),
                      limit: int = Query(default=100, ge=1, le=1000),
-                     state: GatewayState = Depends(get_state)) -> dict:
+                     state: GatewayState = Depends(get_state),
+                     window: DateWindow = Depends(date_window),) -> dict:
     """Flat trip list."""
     dsn = state.cfg.postgres_dsn
     if not dsn:
@@ -270,6 +279,12 @@ async def list_trips(vehicle_id: Optional[str] = Query(default=None),
     if status:
         where.append("status = :status")
         params["status"] = status.upper()
+    # GAP-DATE-01: appended BEFORE the clause is joined — appending
+    # after it is assembled is a silent no-op.
+    _wcond = window_cond(window, "started_at", params)
+    if _wcond:
+        where.append(_wcond)
+
     clause = ("WHERE " + " AND ".join(where)) if where else ""
     rows = await fetch_all(
         f"SELECT * FROM core.tt_trip {clause} ORDER BY created_at DESC LIMIT :limit",

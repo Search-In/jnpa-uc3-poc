@@ -22,6 +22,10 @@ import Jobs from "./screens/Jobs";
 import Profile from "@/screens/Profile";
 import Enroll from "@/screens/Enroll";
 import Parking from "@/screens/Parking";
+import Facilities from "@/screens/Facilities";
+import Documents from "@/screens/Documents";
+import ViolationNotice from "@/screens/ViolationNotice";
+import Weighbridge from "@/screens/Weighbridge";
 import Zones from "@/screens/Zones";
 import MapView from "@/screens/MapView";
 import AlertCenter from "@/screens/AlertCenter";
@@ -84,6 +88,10 @@ function TopBar() {
       "/map": "screens.map",
       "/alerts": "screens.alerts",
       "/parking": "screens.parking",
+      "/facilities": "screens.facilities",
+      "/documents": "screens.documents",
+      "/violation": "screens.violation",
+      "/weighbridge": "screens.weighbridge",
       "/zones": "screens.zones",
       "/reroute": "screens.reroute",
       "/inbox": "screens.inbox",
@@ -139,6 +147,13 @@ function PairedApp({ deviceId, plate }: { deviceId: string; plate?: string | nul
                 <Route path="/home" element={<Home deviceId={deviceId} plate={plate} />} />
                 <Route path="/trip" element={<Trip deviceId={deviceId} />} />
                 <Route path="/parking" element={<Parking deviceId={deviceId} plate={plate} />} />
+                {/* D-11 / D-10 — the facilities directory and the weighing view.
+                    Reached from Home rather than the tab bar: six tabs is
+                    already the most a thumb can hit reliably. */}
+                <Route path="/facilities" element={<Facilities />} />
+                <Route path="/jobs/:jobId/documents" element={<Documents />} />
+                <Route path="/violation" element={<ViolationNotice />} />
+                <Route path="/weighbridge" element={<Weighbridge />} />
                 <Route path="/map" element={<MapView deviceId={deviceId} />} />
                 <Route path="/alerts" element={<AlertCenter />} />
                 <Route path="/zones" element={<Zones deviceId={deviceId} plate={plate} />} />

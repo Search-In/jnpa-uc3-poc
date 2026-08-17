@@ -14,12 +14,14 @@ import {
   IdCard,
   Container,
   Ship,
+  Anchor,
   CreditCard,
   BellRing,
   FileText,
 } from "lucide-react";
 import { useClickOutside } from "@/hooks/useClickOutside";
 import { searchStore, detectEntity, type SearchEntity } from "@/lib/searchStore";
+import { detectVesselKey, focusStore, focusQueryString } from "@/lib/focusStore";
 import { cn } from "@/lib/utils";
 
 interface Target {
@@ -31,6 +33,10 @@ interface Target {
 
 // Order = suggestion order (the detected entity is hoisted to the top at runtime).
 const TARGETS: Target[] = [
+  // A vessel call is where the golden thread starts: from one VCN/VIA the
+  // berthing board resolves the call, and the focus it raises carries the same
+  // vessel into every other subscribed panel and app.
+  { entity: "vessel", route: "/berthing", icon: Anchor, labelKey: "search.vessel" },
   { entity: "vehicle", route: "/intelligence", icon: Truck, labelKey: "search.vehicle" },
   { entity: "driver", route: "/intelligence", icon: IdCard, labelKey: "search.driver" },
   { entity: "container", route: "/gate-customs", icon: Container, labelKey: "search.container" },
@@ -65,10 +71,24 @@ export function GlobalSearch() {
   useEffect(() => setActive(0), [q]);
 
   function go(tgt: Target) {
-    searchStore.set(q.trim(), tgt.entity);
+    const query = q.trim();
+    searchStore.set(query, tgt.entity);
     setOpen(false);
     setQ("");
-    navigate(`${tgt.route}?q=${encodeURIComponent(q.trim())}`);
+    // A vessel search additionally raises the port-wide focus, so every
+    // subscribed panel — here and in UC-1/UC-2 over the gateway — follows the
+    // same call instead of the operator retyping the key on each screen. The
+    // focus is also written into the URL so the link survives a reload and can
+    // be shared.
+    if (tgt.entity === "vessel") {
+      const keys = detectVesselKey(query);
+      if (keys) {
+        focusStore.set(keys, "UC-3");
+        navigate(`${tgt.route}${focusQueryString(keys)}&q=${encodeURIComponent(query)}`);
+        return;
+      }
+    }
+    navigate(`${tgt.route}?q=${encodeURIComponent(query)}`);
   }
 
   function onKeyDown(e: React.KeyboardEvent) {

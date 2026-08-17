@@ -20,6 +20,7 @@ from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from ..datewindow import DateWindow, date_window
 from ..logging import get_logger
 from ..metrics import REQUESTS
 from ..state import GatewayState, get_state
@@ -78,6 +79,40 @@ KPI_VIEWS: Dict[str, str] = {
     "gate_txn_time": "mart.v_gate_txn_time",
     "tat_inside_port": "mart.v_tat_inside_port",
     "gate_trip_timeline": "mart.v_gate_trip_timeline",
+}
+
+# Unpinned twins + the timestamp a date window applies to.  GAP-API-04.
+#
+# The views above bake `WHERE ts > now() - interval '24 hours'` into their
+# bodies, which is right for a live control-room board and useless for a
+# historical trace: the corpus gate events are June and July 2026, so every
+# date-filtered read of them returned zero rows for data that is sitting in the
+# table. Migration 0140 adds `_all` twins with no cutoff; a request that carries
+# a date window is served from the twin, and a request without one keeps the
+# live 24-hour behaviour exactly as the other consumers expect.
+#
+# `gate_trip_timeline` windows on COALESCE rather than `arrival_ts` alone,
+# because the June corpus records only GATE_IN and GATE_OUT — there is no
+# GATE_ARRIVAL or GATE_TXN_START before July, so keying the window on arrival
+# would hide every June trip for the second time.
+_WINDOWED_VIEWS: Dict[str, tuple[str, str]] = {
+    "gate_trip_timeline": ("mart.v_gate_trip_timeline_all",
+                           "COALESCE(arrival_ts, txn_start_ts, gate_in_ts, gate_out_ts)"),
+    "gate_queue_wait": ("mart.v_gate_queue_wait_all", "bucket"),
+    "gate_txn_time": ("mart.v_gate_txn_time_all", "bucket"),
+    "tat_inside_port": ("mart.v_tat_inside_port_all", "bucket"),
+    "anpr_hourly": ("mart.v_anpr_hourly_all", "bucket"),
+}
+
+#: Views that carry no timestamp at all, so a date window cannot be applied.
+#: Listed explicitly so the endpoint can SAY the window was not applied rather
+#: than silently return an unfiltered result that looks filtered.
+_UNWINDOWABLE_VIEWS = {
+    "alerts_by_kind": "aggregated by kind/severity with no timestamp column",
+    "corridor_speed": "one latest row per segment; a window would empty it",
+    "provisional_open": "current open state, not a time series",
+    "throughput": "no timestamp exposed by the view",
+    "dwell": "no timestamp exposed by the view",
 }
 
 # Idempotent DDL for the gate-event capture table + KPI views, applied at gateway
@@ -154,11 +189,16 @@ async def ensure_kpi_gate_schema(dsn: str | None) -> None:
     log.info("kpi_gate_schema_ready")
 
 
-async def _read_view(state: GatewayState, view_sql: str, limit: int = 500) -> List[dict]:
+async def _read_view(state: GatewayState, view_sql: str, limit: int = 500,
+                     *, where: str = "", params: Dict[str, Any] | None = None) -> List[dict]:
     from jnpa_shared.db import fetch_all
     try:
-        rows = await fetch_all(f"SELECT * FROM {view_sql} LIMIT {int(limit)}",
-                               dsn=state.cfg.postgres_dsn)
+        # `view_sql` and `where` are built from the fixed maps above, never from
+        # client input; only the window bounds are bound parameters.
+        clause = f" WHERE {where}" if where else ""
+        rows = await fetch_all(
+            f"SELECT * FROM {view_sql}{clause} LIMIT {int(limit)}",
+            params or {}, dsn=state.cfg.postgres_dsn)
     except Exception as exc:  # view may not exist on an old volume
         log.debug("kpi_view_unavailable", view=view_sql, error=str(exc))
         return []
@@ -578,11 +618,42 @@ async def kpi_cameras(state: GatewayState = Depends(get_state)) -> dict:
 
 
 @router.get("/{view}")
-async def kpi_view(view: str, state: GatewayState = Depends(get_state)) -> dict:
+async def kpi_view(view: str, window: DateWindow = Depends(date_window),
+                   state: GatewayState = Depends(get_state)) -> dict:
+    """One KPI view, optionally bounded by `?from_date=&to_date=`.
+
+    Without a window this is unchanged: the live, 24-hour-pinned view, which is
+    what the control-room boards read. WITH a window it is served from the
+    unpinned `_all` twin (migration 0140), because the pinned view cannot return
+    a June or July figure at all — the cutoff is inside the view body.
+
+    The response always states which view answered and whether the window was
+    applied, so a caller can never mistake an unfiltered result for a filtered
+    one.
+    """
     if view not in KPI_VIEWS:
         raise HTTPException(status_code=404,
                             detail={"error": "unknown_view", "view": view,
                                     "known": list(KPI_VIEWS)})
-    rows = await _read_view(state, KPI_VIEWS[view])
+
+    source = KPI_VIEWS[view]
+    where, params = "", {}
+    window_applied = False
+    window_note = None
+
+    if not window.is_open:
+        twin = _WINDOWED_VIEWS.get(view)
+        if twin is not None:
+            source, ts_col = twin
+            frag, params = window.sql(ts_col)
+            # window.sql() prefixes with " AND " for splicing into a chain.
+            where = frag.removeprefix(" AND ").strip()
+            window_applied = True
+        else:
+            window_note = (
+                f"date window NOT applied: {_UNWINDOWABLE_VIEWS.get(view, 'this view has no timestamp column')}")
+
+    rows = await _read_view(state, source, where=where, params=params)
     REQUESTS.labels("kpi", "ok").inc()
-    return {"view": view, "rows": rows, "count": len(rows)}
+    return {"view": view, "source_view": source, "rows": rows, "count": len(rows),
+            "window_applied": window_applied, "window_note": window_note}

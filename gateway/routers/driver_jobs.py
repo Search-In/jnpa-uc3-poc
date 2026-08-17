@@ -27,9 +27,13 @@ from pydantic import BaseModel
 
 from ..auth import Role, auth_enabled
 from services.container_job import ContainerJobService, JobConflict, ValidationFailed
+from ..logging import get_logger
+from ..state import GatewayState, get_state
 from services.container_job.service import normalize_plate
 
 from .container_job import get_service
+
+log = get_logger("gateway.driver_jobs")
 
 router = APIRouter(prefix="/api/driver/jobs", tags=["driver-jobs"])
 
@@ -168,6 +172,80 @@ async def my_jobs(request: Request,
 async def my_job(job_id: int, request: Request,
                  svc: ContainerJobService = Depends(get_service)) -> Dict[str, Any]:
     return await _own_job(request, svc, job_id)
+
+
+# ------------------------------------------------------------- document wallet
+#: What a driver may see of a gate document.
+#:
+#: Deliberately NOT the full row. `core.gate_document` carries `driver_name` and
+#: `driver_licence`, and this endpoint is reachable with a DRIVER token; a wallet
+#: that returned the whole record would hand every driver the licence number of
+#: whoever previously moved that box. The driver needs to prove WHICH document
+#: authorises THIS move, not to read the person on it.
+_WALLET_FIELDS = (
+    "doc_id", "doc_category", "doc_variant", "doc_ref", "pin_no", "doc_ts",
+    "container_no", "iso_code", "load_status", "gross_weight_kg",
+    "seal1", "seal2", "vehicle_no", "bat_no", "gate_no", "yard_position",
+    "vessel_name", "voyage", "pol", "pod", "booking_no", "cfs",
+    "truck_in_ts", "truck_out_ts", "image_file", "source_file", "data_origin",
+)
+
+
+@router.get("/{job_id}/documents", summary="D-07 — the documents for one of my jobs")
+async def my_job_documents(job_id: int, request: Request,
+                           svc: ContainerJobService = Depends(get_service),
+                           state: GatewayState = Depends(get_state)) -> Dict[str, Any]:
+    """Every gate document naming this job's container or truck.  GAP-SCR-04.
+
+    Scoped through `_own_job`, so a driver reaches only their own job's papers
+    and a probe for someone else's job id gets the same 404 as a job that does
+    not exist.
+
+    Answers what a driver at a gate actually needs: which document authorises
+    this move, what it says the box is, and whether we hold the scan. Where the
+    corpus has no document for the job — which is the common case, since the
+    manifest set and the gate-document set share no containers — it says so
+    rather than returning an empty list that reads as a failed load.
+    """
+    from jnpa_shared.db import fetch_all
+
+    job = await _own_job(request, svc, job_id)
+    container = (job.get("container_number") or job.get("container_no") or "").strip().upper()
+    plate = normalize_plate(job.get("vehicle_no") or job.get("vehicle_id") or "")
+
+    cols = ", ".join(_WALLET_FIELDS)
+    sql = (f"SELECT {cols} FROM core.gate_document "
+           "WHERE (:container <> '' AND upper(btrim(container_no)) = :container) "
+           "   OR (:plate <> '' AND upper(regexp_replace(btrim(vehicle_no), '[^A-Za-z0-9]', '', 'g')) = :plate) "
+           "ORDER BY doc_ts DESC NULLS LAST LIMIT 50")
+    params = {"container": container, "plate": plate}
+    try:
+        rows = [dict(r) for r in await fetch_all(sql, params, dsn=state.cfg.postgres_dsn)]
+    except Exception as exc:  # noqa: BLE001 — a document read must not break the job screen
+        log.warning("driver_documents_failed", job_id=job_id, error=str(exc))
+        rows = []
+
+    for r in rows:
+        for k in ("doc_ts", "truck_in_ts", "truck_out_ts"):
+            if hasattr(r.get(k), "isoformat"):
+                r[k] = r[k].isoformat()
+
+    by_container = [r for r in rows if (r.get("container_no") or "").upper() == container]
+    by_plate = [r for r in rows if r not in by_container]
+
+    return {
+        "job_id": job_id,
+        "container_no": container or None,
+        "vehicle_no": job.get("vehicle_no"),
+        "documents": rows,
+        "count": len(rows),
+        "matched_by_container": len(by_container),
+        "matched_by_vehicle": len(by_plate),
+        "note": (None if rows else
+                 "No gate document in the supplied data names this container or "
+                 "truck. Most containers have none: JNPA's manifest files and "
+                 "gate-document files describe different boxes."),
+    }
 
 
 # ------------------------------------------------------------------ actions

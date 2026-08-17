@@ -179,6 +179,8 @@ class VideoAnalysisRepository:
     async def recent(self, *, limit: int = 50, offset: int = 0,
                      include_deleted: bool = False,
                      jnpa_camera_id: Optional[str] = None,
+        window: Any = None,
+        date_col: Optional[str] = None,
                      ) -> Optional[Tuple[List[Dict[str, Any]], int]]:
         """``(rows, total)`` newest-first, or None when the read failed.
 
@@ -196,6 +198,11 @@ class VideoAnalysisRepository:
         if jnpa_camera_id:
             conds.append("jnpa_camera_id = :cam")
             params["cam"] = jnpa_camera_id
+        # GAP-DATE-01: before the WHERE is assembled — after it is a no-op.
+        _wc = window_cond(window, date_col, params) if date_col else None
+        if _wc:
+            conds.append(_wc)
+
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
         try:
             async with get_engine(self._dsn).connect() as conn:

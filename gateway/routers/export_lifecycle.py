@@ -34,6 +34,7 @@ from pydantic import BaseModel, Field
 from services.export_lifecycle import (ExportBookingNotFound, ExportLifecycleService,
                                        ExportTransitionError, ExportValidationError)
 
+from ..datewindow import DateWindow, date_window
 from ..metrics import REQUESTS
 from ..state import GatewayState, get_state
 
@@ -153,11 +154,13 @@ async def list_bookings(
     limit: int = Query(default=100, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
     svc: ExportLifecycleService = Depends(get_service),
+    window: DateWindow = Depends(date_window),
 ) -> Page:
     items, total = await svc.list(
         status=status_filter,
         container_number=(container.strip().upper() if container else None),
-        via_no=via_no, limit=limit, offset=offset)
+        via_no=via_no, limit=limit, offset=offset,
+        window=window, date_col="created_at")
     REQUESTS.labels("export", "ok").inc()
     return Page(items=items, total=total, limit=limit, offset=offset)
 

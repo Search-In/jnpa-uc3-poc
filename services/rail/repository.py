@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 from typing import Any, Mapping, Optional, Sequence
+from gateway.datewindow import window_cond  # GAP-DATE-01 shared primitive
 
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -208,7 +209,17 @@ _TABLE = {
     "FOIS": "core.fois_train_intimation",
     "FORM11": "core.form11_entry",
     "CTO": "core.cto_manifest_entry",
+    # The ICD daily report yields TWO row families from one PDF (GAP-ETL-04 /
+    # GAP-ETL-07), so `ICD_REPORT` is a composite feed: one ledger row, rows
+    # split by `kind` across the two tables below. Both sub-feeds are addressable
+    # in their own right so the maps stay uniform.
+    "ICD_PENDENCY": "core.icd_fpd_pendency",
+    "ICD_RAKE": "core.icd_rake_movement",
 }
+
+#: Feeds whose parser emits several row kinds destined for different tables.
+_COMPOSITE_FEEDS = {"ICD_REPORT": (("PENDENCY", "ICD_PENDENCY"),
+                                   ("RAKE", "ICD_RAKE"))}
 
 _FOIS_COLS = ("rake_id", "rake_name", "units", "station_from", "station_to",
               "zone_from", "zone_to", "last_reporting_station",
@@ -223,19 +234,33 @@ _CTO_COLS = ("cto_code", "rake_no", "rake_id", "seq", "wagon_no",
              "weight", "pol", "pod", "from_station", "terminal", "booking_ref",
              "event_ts", "iso_valid", "source_file")
 
+_ICD_PENDENCY_COLS = ("report_date", "terminal", "series", "fpd_code", "teu",
+                      "source_file", "page_no")
+_ICD_RAKE_COLS = ("report_date", "rake_id", "track", "placed_raw", "discharge",
+                  "source_file", "page_no")
+
 _CONFLICT = {
+    "ICD_PENDENCY": "ON CONSTRAINT uq_icd_fpd_pendency",
+    "ICD_RAKE": "ON CONSTRAINT uq_icd_rake_movement",
     "FOIS": "(rake_id, COALESCE(eda, 'epoch'::timestamptz))",
     "FORM11": "(terminal, container_no, COALESCE(booking_number, ''))",
     "CTO": "(cto_code, wagon_no, COALESCE(container_no, ''))",
 }
-_COLS = {"FOIS": _FOIS_COLS, "FORM11": _FORM11_COLS, "CTO": _CTO_COLS}
+_COLS = {"FOIS": _FOIS_COLS, "FORM11": _FORM11_COLS, "CTO": _CTO_COLS,
+         "ICD_PENDENCY": _ICD_PENDENCY_COLS, "ICD_RAKE": _ICD_RAKE_COLS}
+
+#: Columns that are jsonb in the table and must be cast on the way in.
+_JSONB_COLS = {"discharge"}
 
 
 def _domain_insert(feed: str) -> str:
     cols = ("import_file_id", *_COLS[feed], "extra", "data_origin")
     placeholders = []
     for c in cols:
-        placeholders.append("CAST(:extra AS jsonb)" if c == "extra" else f":{c}")
+        # jsonb columns need an explicit cast: the driver binds a Python dict as
+        # text, and Postgres will not coerce text -> jsonb implicitly.
+        placeholders.append(f"CAST(:{c} AS jsonb)"
+                            if c == "extra" or c in _JSONB_COLS else f":{c}")
     return (f"INSERT INTO {_TABLE[feed]} ({', '.join(cols)}) "
             f"VALUES ({', '.join(placeholders)}) "
             f"ON CONFLICT {_CONFLICT[feed]} DO NOTHING")
@@ -243,6 +268,8 @@ def _domain_insert(feed: str) -> str:
 
 def _project(feed: str, record: Mapping[str, Any]) -> dict[str, Any]:
     row = {c: record.get(c) for c in _COLS[feed]}
+    for c in _JSONB_COLS & set(_COLS[feed]):
+        row[c] = json.dumps(row.get(c) or {}, default=str)
     row["extra"] = json.dumps(record.get("extra") or {}, default=str)
     return row
 
@@ -285,7 +312,7 @@ class RailRepository:
         identical bytes is a no-op (SKIPPED_DUPLICATE); domain rows that collide
         with an existing one are skipped (counted as duplicates), never
         overwritten. Returns the outcome envelope."""
-        if feed not in _TABLE:
+        if feed not in _TABLE and feed not in _COMPOSITE_FEEDS:
             raise KeyError(f"unknown rail feed {feed!r}")
         data_origin = _data_origin(uploaded_by)
         existing = await self.find_file_by_sha(source_sha256, data_origin)
@@ -297,20 +324,29 @@ class RailRepository:
                     "file_size_bytes": file_size, "record_count": len(records),
                     "uploaded_by": uploaded_by, "source": source,
                     "data_origin": data_origin}
-        insert_sql = _domain_insert(feed)
-        rows = [_project(feed, r) for r in records]
+        # A composite feed writes one ledger row and splits its records across
+        # several tables by `kind`; a simple feed is the one-table case of the
+        # same loop.
+        if feed in _COMPOSITE_FEEDS:
+            batches = [(sub, [_project(sub, r) for r in records
+                              if r.get("kind") == kind])
+                       for kind, sub in _COMPOSITE_FEEDS[feed]]
+        else:
+            batches = [(feed, [_project(feed, r) for r in records])]
         try:
             async with get_engine(self._dsn).begin() as conn:
                 fid = (await conn.execute(text(_FILE_INSERT),
                                           envelope)).mappings().first()["id"]
                 imported = 0
-                if rows:
+                for sub_feed, rows in batches:
+                    if not rows:
+                        continue
                     for r in rows:
                         r["import_file_id"] = fid
                         r["data_origin"] = data_origin
-                    await conn.execute(text(insert_sql), rows)
-                    imported = int((await conn.execute(text(
-                        f"SELECT count(*) FROM {_TABLE[feed]} "
+                    await conn.execute(text(_domain_insert(sub_feed)), rows)
+                    imported += int((await conn.execute(text(
+                        f"SELECT count(*) FROM {_TABLE[sub_feed]} "
                         "WHERE import_file_id = :id"),
                         {"id": fid})).scalar() or 0)
                 dup = len(records) - imported
@@ -449,7 +485,9 @@ class RailRepository:
     async def list_fois(self, *, data_origin: Optional[str] = None,
                         loaded_empty: Optional[str] = None,
                         q: Optional[str] = None,
-                        limit: int = 100, offset: int = 0
+                        limit: int = 100, offset: int = 0,
+                        window: Any = None,
+                        date_col: Optional[str] = None,
                         ) -> tuple[list[dict], int]:
         where, params = [], {}
         if data_origin:
@@ -462,13 +500,22 @@ class RailRepository:
             where.append("(rake_id ILIKE :q OR rake_name ILIKE :q "
                          "OR station_from ILIKE :q OR station_to ILIKE :q)")
             params["q"] = f"%{q.strip()}%"
+        # GAP-DATE-01. `date_col` is named by the CALLER — this method
+        # serves several tables, and a guessed column filters the wrong
+        # one, returning a plausible answer instead of an error.
+        _wcond = window_cond(window, date_col, params) if date_col else None
+        if _wcond:
+            where.append(_wcond)
+
         return await self._paged("core.fois_train_intimation", where, params,
                                  "eda DESC NULLS LAST, id DESC", limit, offset)
 
     async def list_form11(self, *, data_origin: Optional[str] = None,
                           terminal: Optional[str] = None,
                           q: Optional[str] = None,
-                          limit: int = 100, offset: int = 0
+                          limit: int = 100, offset: int = 0,
+                          window: Any = None,
+                          date_col: Optional[str] = None,
                           ) -> tuple[list[dict], int]:
         where, params = [], {}
         if data_origin:
@@ -481,13 +528,22 @@ class RailRepository:
             where.append("(container_no ILIKE :q OR booking_number ILIKE :q "
                          "OR icd_location ILIKE :q)")
             params["q"] = f"%{q.strip()}%"
+        # GAP-DATE-01. `date_col` is named by the CALLER — this method
+        # serves several tables, and a guessed column filters the wrong
+        # one, returning a plausible answer instead of an error.
+        _wcond = window_cond(window, date_col, params) if date_col else None
+        if _wcond:
+            where.append(_wcond)
+
         return await self._paged("core.form11_entry", where, params,
                                  "id DESC", limit, offset)
 
     async def list_cto(self, *, data_origin: Optional[str] = None,
                        cto_code: Optional[str] = None,
                        q: Optional[str] = None,
-                       limit: int = 100, offset: int = 0
+                       limit: int = 100, offset: int = 0,
+                       window: Any = None,
+                       date_col: Optional[str] = None,
                        ) -> tuple[list[dict], int]:
         where, params = [], {}
         if data_origin:
@@ -500,17 +556,33 @@ class RailRepository:
             where.append("(container_no ILIKE :q OR wagon_no ILIKE :q "
                          "OR rake_no ILIKE :q OR rake_id ILIKE :q)")
             params["q"] = f"%{q.strip()}%"
+        # GAP-DATE-01. `date_col` is named by the CALLER — this method
+        # serves several tables, and a guessed column filters the wrong
+        # one, returning a plausible answer instead of an error.
+        _wcond = window_cond(window, date_col, params) if date_col else None
+        if _wcond:
+            where.append(_wcond)
+
         return await self._paged("core.cto_manifest_entry", where, params,
                                  "event_ts DESC NULLS LAST, id DESC",
                                  limit, offset)
 
     async def list_uploads(self, *, feed: Optional[str] = None,
-                           limit: int = 50, offset: int = 0
+                           limit: int = 50, offset: int = 0,
+                           window: Any = None,
+                           date_col: Optional[str] = None,
                            ) -> tuple[list[dict], int]:
         where, params = [], {}
         if feed:
             where.append("feed = :feed")
             params["feed"] = feed.strip().upper()
+        # GAP-DATE-01. `date_col` is named by the CALLER — this method
+        # serves several tables, and a guessed column filters the wrong
+        # one, returning a plausible answer instead of an error.
+        _wcond = window_cond(window, date_col, params) if date_col else None
+        if _wcond:
+            where.append(_wcond)
+
         return await self._paged("core.rail_import_file", where, params,
                                  "id DESC", limit, offset)
 

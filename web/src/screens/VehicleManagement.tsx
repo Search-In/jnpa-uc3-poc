@@ -901,7 +901,13 @@ function RcLookupPanel() {
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2.5">
             <h3 className="text-sm font-semibold">Registration Certificate · {query.value}</h3>
             <div className="flex items-center gap-1.5">
-              <StatusChip label={active.api} tone="info" />
+              {/* Which API actually replied, when the gateway says so. The
+                  plate lookup is a ladder — VAHAN/01 answers where VAHAN/04
+                  missed — so the tab's own label is the request, not the
+                  answer, and badging it as the answer is wrong exactly when
+                  the retry saved the lookup. Falls back to the tab label on
+                  the rungs that are not ULIP (sim / cache / provisional). */}
+              <StatusChip label={(q.data as any)?.source_api ?? active.api} tone="info" />
               {(q.data as any)?.decision_path && (
                 <StatusChip label={String((q.data as any).decision_path)} tone="neutral" />
               )}

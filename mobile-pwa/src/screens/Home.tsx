@@ -6,7 +6,7 @@ import { useRealtime } from "@/hooks/RealtimeContext";
 import MiniMap from "@/components/MiniMap";
 import GpsStatus from "@/components/GpsStatus";
 import { SkeletonCard } from "@/components/Skeleton";
-import { IconTruck, IconNavigate, IconRoute, IconParking, IconBell } from "@/components/icons";
+import { IconTruck, IconNavigate, IconRoute, IconParking, IconBell, IconPin, IconScale } from "@/components/icons";
 import { enablePush } from "@/lib/pwa";
 import { notifyDriver } from "@/lib/notify";
 import { api } from "@/lib/api";
@@ -30,7 +30,7 @@ const TONE: Record<Tone, { bg: string; fg: string }> = {
 export default function Home({ deviceId, plate }: { deviceId: string; plate?: string | null }) {
   const { t } = useTranslation();
   const { session } = useDriverSession();
-  const { unread, status: conn } = useRealtime();
+  const { unread, status: conn, violation} = useRealtime();
   const navigate = useNavigate();
 
   const [truck, setTruck] = useState<TruckEnvelope | null>(null);
@@ -265,12 +265,26 @@ export default function Home({ deviceId, plate }: { deviceId: string; plate?: st
             <IconNavigate size={20} />{" "}
             {t("command.startNavigation", { defaultValue: "Start Navigation" })}
           </button>
+          {violation && (
+            <button className="btn btn-warn" onClick={() => navigate("/violation")}>
+              <IconBell size={18} />{" "}
+              {t("violation.pending", { defaultValue: "You have an enforcement notice" })}
+            </button>
+          )}
           <div className="sub-actions">
             <button className="sub-action" onClick={() => navigate("/trip")}>
               <IconRoute size={18} /> {t("command.viewRoute", { defaultValue: "View Route" })}
             </button>
             <button className="sub-action" onClick={() => navigate("/parking")}>
               <IconParking size={18} /> {t("tabs.parking", { defaultValue: "Parking" })}
+            </button>
+            <button className="sub-action" onClick={() => navigate("/facilities")}>
+              <IconPin size={18} />{" "}
+              {t("screens.facilities", { defaultValue: "Facilities" })}
+            </button>
+            <button className="sub-action" onClick={() => navigate("/weighbridge")}>
+              <IconScale size={18} />{" "}
+              {t("screens.weighbridge", { defaultValue: "Weighing" })}
             </button>
           </div>
         </div>

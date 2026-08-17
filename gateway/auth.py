@@ -119,6 +119,30 @@ _POLICY: tuple[tuple[str, frozenset[str]], ...] = (
     # UC-III gate documents (EIR / PIN ticket / Form-13) — same audience as
     # gate-data and the customs clearance layer they sit beside.
     ("/api/gate-docs", CONTROL_ROOM | {Role.CUSTOMS.value}),
+    # Golden thread / Evidence & Audit Explorer. It reads ACROSS the lifecycle —
+    # manifest lines, gate documents, driver names, transporter bridges — so it is
+    # scoped to the narrowest audience of anything it touches, not the widest.
+    # Without this rule it would fall through to "any authenticated role", which
+    # would hand a DRIVER or TRANSPORTER token the gate-document payload that
+    # /api/gate-docs above deliberately withholds.
+    ("/api/thread", CONTROL_ROOM | {Role.CUSTOMS.value}),
+    # Rail siding view (ICD placements + CTO composition) — same cargo/terminal
+    # audience as the other corpus data modules.
+    ("/api/rail", CONTROL_ROOM | {Role.CUSTOMS.value}),
+    # S-08 Ad-hoc Query. Reads across the whole canonical model, so it takes the
+    # narrowest audience of anything in its whitelist. The whitelist itself
+    # excludes every personal-data table; this rule is the second line, not the
+    # first.
+    ("/api/query", CONTROL_ROOM | {Role.CUSTOMS.value}),
+    # Facilities directory. Read by the control room AND by drivers/transporters
+    # on the PWA (D-10/D-11), so it is deliberately wider than the cargo modules:
+    # it carries no container, document or personal data — only places.
+    ("/api/facilities", ALL_ROLES),
+    # D-13 Fleet View. TRANSPORTER is the point of the screen, and the router
+    # itself resolves WHICH company the caller may see — this rule only decides
+    # who may ask. A DRIVER is excluded: a driver is bound to one vehicle and
+    # has no business enumerating a fleet.
+    ("/api/fleet", CONTROL_ROOM | {Role.CUSTOMS.value, Role.TRANSPORTER.value}),
     # Customs module (IGM/OOC/SMTP/RMS/LEO/Shipping Bill import + reads + workflow).
     # The customs clearance pipeline is customs + control-room only — the same
     # audience as gate-data; a DRIVER/police token can never touch it. Covers both

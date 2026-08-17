@@ -26,6 +26,7 @@ from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query, Reque
                      Response, UploadFile, status)
 from pydantic import BaseModel
 
+from ..datewindow import DateWindow, date_window
 from ..auth import CONTROL_ROOM, Role, auth_enabled
 from ..data_mode import data_mode
 from ..metrics import REQUESTS
@@ -181,12 +182,18 @@ async def upload_history(
     offset: int = Query(0, ge=0),
     mode: Optional[str] = Depends(data_mode),
     svc: MarineUploadService = Depends(get_upload_service),
+    window: DateWindow = Depends(date_window),
 ) -> Page:
     """Ledger filtered by ``X-Data-Mode`` (LIVE→API, DEMO→MANUAL) so the history
     panel matches Overview: DEMO shows Data Upload rows; LIVE shows API-sync rows.
     """
     require_uploader(request)
     filters = {"status": status_, "source": (source or None), "data_origin": mode}
+    # GAP-DATE-01: the window travels with the filters; the column is
+    # stated here, never inferred by the shared where-builder.
+    filters["_window"] = window
+    filters["_date_col"] = "created_at"
+
     res = await svc.list_uploads(filters, limit=limit, offset=offset)
     return _page(res["items"], res["total"], limit, offset, response)
 

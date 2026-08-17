@@ -58,6 +58,7 @@ from .routers import (
     empty_container,
     evidence,
     fastag,
+    focus,
     gate_data,
     geo,
     identity,
@@ -67,11 +68,18 @@ from .routers import (
     notifications as notifications_router,
     otp,
     parking,
+    adhoc_query,
+    berth_decisions,
+    facilities,
+    free_time,
+    fleet,
     push,
+    rail_siding,
     reports,
     scenario_ext,
     scenarios,
     traffic,
+    thread,
     trucks,
     ulip,
     users as users_router,
@@ -743,6 +751,25 @@ app.include_router(violations.router)
 # router: auth+validation at the gateway, then client -> mapper -> FastagService
 # (the single orchestration point). See gateway/routers/fastag.py.
 app.include_router(fastag.router)
+# Focus relay — the ONLY channel that carries a selected vessel/container/truck
+# between the three dashboards, which sit on three different origins and so
+# cannot use BroadcastChannel. Pure relay: reads nothing, writes nothing.
+app.include_router(focus.router)
+# Golden thread — vessel -> container -> truck across the 19 tables that record
+# a box, each hop labelled FOUND / NOT_IN_CORPUS / ERROR, with the SQL attached.
+app.include_router(thread.router)
+# Rail sidings — ICD placements joined to CTO composition (GAP-RAIL-02).
+app.include_router(rail_siding.router)
+# S-08 Ad-hoc Query — a whitelisted query BUILDER, never a SQL box.
+app.include_router(adhoc_query.router)
+# T-09 Facilities & Utilities Directory — composed, since no master table exists.
+app.include_router(facilities.router)
+# D-13 Fleet View — transporter-scoped, with link provenance.
+app.include_router(fleet.router)
+# F-15 berth allocation decision log (append-only).
+app.include_router(berth_decisions.router)
+# F-05 free-day clock (allowance vs elapsed; no charge — no tariff exists).
+app.include_router(free_time.router)
 # Cargo CRUD — the single shared cargo record on RDS. POC-3 is the common backend
 # for both the Traffic Twin (POC-3) and the Cargo Twin (POC-2); POC-2 consumes
 # /api/cargo directly and keeps no backend/DB. Thin router → services.cargo

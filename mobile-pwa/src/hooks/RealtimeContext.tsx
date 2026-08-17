@@ -38,6 +38,37 @@ interface RealtimeCtx {
   ackReroute: (state?: "ACK" | "DECLINE") => Promise<void>;
   markInboxRead: () => void;
   subscribe: (fn: (frame: WsFrame) => void) => () => void;
+  /** D-12 — the most recent enforcement notice addressed to THIS driver, or null.
+   *  Latest-wins: a driver needs the notice they just received, not a history. */
+  violation: ViolationNotice | null;
+  dismissViolation: () => void;
+}
+
+/** An enforcement notice as routers/violations.py emits it.
+ *
+ *  Every challan this system produces carries `badge: "SIMULATED"` and a
+ *  disclosure, attached at the system of record rather than per screen. The
+ *  notice MUST render them: a driver shown a fine with no indication it is a
+ *  workflow demonstration would reasonably believe they had been fined. */
+export interface ViolationNotice {
+  case_id: string | number;
+  plate?: string | null;
+  vehicle?: string | null;
+  driver?: string | null;
+  violations?: Array<{ code?: string; label?: string; count?: number; fine?: number }>;
+  fine?: number | null;
+  challan_no?: string | null;
+  issuance_mode?: string | null;
+  badge?: string | null;
+  is_legal_instrument?: boolean;
+  authority_note?: string | null;
+  disclosure?: string | null;
+  assumption_ref?: string | null;
+  status?: string | null;
+  evidence_url?: string | null;
+  ts?: string | null;
+  device_id?: string | null;
+  [k: string]: unknown;
 }
 
 const Ctx = createContext<RealtimeCtx | null>(null);
@@ -118,6 +149,7 @@ export function RealtimeProvider({
   const [advisories, setAdvisories] = useState<Advisory[]>([]);
   const [pendingReroute, setPendingReroute] = useState<RerouteAdvisory | null>(null);
   const [pushHint, setPushHint] = useState<string | null>(null);
+  const [violation, setViolation] = useState<ViolationNotice | null>(null);
   const [lastReadTs, setLastReadTs] = useState<number>(() =>
     Number(localStorage.getItem("jnpa.pwa.inboxReadTs") || 0),
   );
@@ -155,6 +187,25 @@ export function RealtimeProvider({
           const kind = a.kind || a.payload?.kind || "ALERT";
           const body = a.payload?.message || a.payload?.detail || a.detail;
           notifyDriver(alertToNotification(String(kind), body));
+        }
+      } else if (frame.type === "violation_enforced") {
+        // D-12. The gateway ADDRESSES this frame to the offending driver's
+        // device when it can resolve one, but an unaddressed frame still fans
+        // out to the control room — and would otherwise reach every connected
+        // PWA carrying another driver's plate, fine and challan number. So the
+        // same positive-match rule applies here as to alerts: absence of an
+        // address is never evidence that a notice is ours.
+        const v = frame.payload as unknown as ViolationNotice;
+        if (isForThisDriver(v as never, deviceId, plate)) {
+          setViolation(v);
+          notifyDriver(
+            alertToNotification(
+              "VIOLATION",
+              v.challan_no
+                ? `Enforcement notice ${v.challan_no}`
+                : `Enforcement notice for case ${v.case_id}`,
+            ),
+          );
         }
       }
     },
@@ -248,7 +299,11 @@ export function RealtimeProvider({
     [advisories, lastReadTs],
   );
 
+  const dismissViolation = useCallback(() => setViolation(null), []);
+
   const value: RealtimeCtx = {
+    violation,
+    dismissViolation,
     status,
     advisories,
     pendingReroute,

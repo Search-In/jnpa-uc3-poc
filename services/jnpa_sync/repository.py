@@ -297,14 +297,24 @@ class SyncRepository:
                  "d": json.dumps(detail or {}, default=str)})
 
     async def list_runs(self, *, limit: int = 50,
-                        group: Optional[str] = None) -> List[Dict[str, Any]]:
+                        group: Optional[str] = None,
+                        window: Any = None,
+                        date_col: Optional[str] = None,
+                        ) -> List[Dict[str, Any]]:
         clause = " WHERE group_slug = :g" if group else ""
+        # GAP-DATE-01: extends the clause this method builds by hand.
+        _p: dict = {}
+        _wc = window_cond(window, date_col, _p) if date_col else None
+        if _wc:
+            clause = f"{clause} AND {_wc}" if clause else f" WHERE {_wc}"
         engine = get_engine(self._dsn)
         async with engine.connect() as conn:
             rows = (await conn.execute(text(
                 "SELECT * FROM core.api_ingest_run" + clause +
                 " ORDER BY started_at DESC LIMIT :n"),
-                ({"g": group, "n": limit} if group else {"n": limit})
+                # `_p` carries the window binds; omitting it would leave
+                # :dw_from / :dw_to_excl unbound and the statement would fail.
+                ({"g": group, "n": limit, **_p} if group else {"n": limit, **_p})
             )).mappings().all()
         return [dict(r) for r in rows]
 

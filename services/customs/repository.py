@@ -19,6 +19,7 @@ Design guarantees for a customs import:
 from __future__ import annotations
 
 from typing import Any, Mapping, Optional, Sequence
+from gateway.datewindow import window_cond  # GAP-DATE-01 shared primitive
 
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -182,6 +183,16 @@ class CustomsRepository:
             prefix = f"{alias}." if alias else ""
             clauses.append(f"{prefix}data_origin = :data_origin")
             params["data_origin"] = data_origin
+        # GAP-DATE-01. The window travels inside `filters` so it reaches every
+        # caller of this builder without changing a single service signature.
+        # `date_col` is supplied BY THE CALLER and is never inferred here: this
+        # builder is shared across tables, and a guessed column is a filter that
+        # silently returns the wrong rows rather than an error.
+        _wcond = window_cond(filters.get("_window"), filters.get("_date_col") or "",
+                             params) if filters.get("_date_col") else None
+        if _wcond:
+            clauses.append(_wcond)
+
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         return where, params
 
@@ -398,6 +409,16 @@ class CustomsRepository:
         if filters.get("data_origin") is not None:
             clauses.append("rc.data_origin = :data_origin")
             params["data_origin"] = filters["data_origin"]
+
+        # GAP-DATE-01. The window travels inside `filters` so it reaches every
+        # caller of this builder without changing a single service signature.
+        # `date_col` is supplied BY THE CALLER and is never inferred here: this
+        # builder is shared across tables, and a guessed column is a filter that
+        # silently returns the wrong rows rather than an error.
+        _wcond = window_cond(filters.get("_window"), filters.get("_date_col") or "",
+                             params) if filters.get("_date_col") else None
+        if _wcond:
+            clauses.append(_wcond)
         return " WHERE " + " AND ".join(clauses), params
 
     _RMS_CONT_FROM = ("FROM core.rms_scan_container rc "

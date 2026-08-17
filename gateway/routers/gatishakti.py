@@ -10,8 +10,17 @@ FALLBACK (explicitly empty, clearly tagged; no fabricated road or plaza data):
     GET  /api/gatishakti/health       -> integration posture + row counts
     GET  /api/gatishakti/toll-plazas  -> NHAI toll plazas by state
     GET  /api/gatishakti/roads        -> road segments by state and/or NH no.
+    GET  /api/gatishakti/nh-numbers   -> the NH numbers /01 is seeded for
     GET  /api/gatishakti/road-points  -> named road points (lat/lon) by state
     POST /api/gatishakti/refresh      -> pull + persist the reference set
+
+What these four APIs actually return is NOT what their names suggest, and the
+UI labels them by content rather than by the endpoint that carries them:
+/01 highway attributes (no coordinates), /02 food-storage depots, /03
+industrial parks (with coordinates), /04 NHAI toll plazas. /01 and /02 share
+``core.gs_road_segment`` because both arrive through ``normalize_road_network``
+— ``source_api`` is what separates them, which is why the reads expose and
+filter on it.
 
 Reference data is slow-moving master data, so the reads serve from the DATABASE
 rung by design and ``refresh`` is what re-pulls from ULIP — no read-path fetch,
@@ -23,13 +32,14 @@ so this is visible to any authenticated stakeholder when AUTH_ENABLED=true.
 ``refresh`` mutates reference tables, so it is a POST and is rate-limited by
 its own cost rather than by policy.
 
-No frontend screen consumes these directly in this phase; the toll-plaza
-registry is consumed server-side by /api/fastag/toll-enroute.
+Consumed by the **GatiShakti** tab of the External Integrations screen
+(``/health?tab=integrations``); the toll-plaza registry is additionally
+consumed server-side by /api/fastag/toll-enroute.
 """
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Body, Depends, Query, Request
 
@@ -89,18 +99,37 @@ async def toll_plazas(
     return result
 
 
-@router.get("/roads", summary="Road segments by state and/or NH number "
-                              "(GATISHAKTI/02, /01)")
+@router.get("/roads", summary="Highway attributes (GATISHAKTI/01) or "
+                              "food-storage depots (GATISHAKTI/02)")
 async def roads(
     state_id: Optional[str] = Query(None, max_length=10),
     nh_no: Optional[str] = Query(None, max_length=10,
                                  description="e.g. NH-348 (the JNPA corridor)"),
+    source_api: Optional[str] = Query(
+        None, max_length=20,
+        description="GATISHAKTI/01 for highway attributes, GATISHAKTI/02 for "
+                    "food-storage depots. Both share this table; without a "
+                    "filter the two are interleaved."),
     limit: int = Query(500, ge=1, le=5000),
     svc: GatiShaktiService = Depends(get_service),
 ) -> Dict[str, Any]:
-    result = await svc.roads(state_id=state_id, nh_no=nh_no, limit=limit)
+    result = await svc.roads(state_id=state_id, nh_no=nh_no,
+                             source_api=source_api, limit=limit)
     REQUESTS.labels("gatishakti", "ok" if result["data_available"] else "error").inc()
     return result
+
+
+@router.get("/nh-numbers", summary="NH numbers GATISHAKTI/01 is seeded for")
+async def nh_numbers(
+    limit: int = Query(200, ge=1, le=5000),
+    svc: GatiShaktiService = Depends(get_service),
+) -> Dict[str, Any]:
+    """Which highways have attributes, with their row counts.
+
+    /01 is fetched per NH number, so only refreshed highways answer. Listing
+    what is really present stops the UI offering a choice that resolves empty.
+    """
+    return await svc.nh_numbers(limit=limit)
 
 
 @router.get("/road-points", summary="Named road points with lat/lon "
@@ -120,6 +149,7 @@ async def road_points(
 async def refresh(
     state_id: str = Body(STATE_MAHARASHTRA, embed=True),
     nh_no: Optional[str] = Body(None, embed=True),
+    nh_nos: Optional[List[str]] = Body(None, embed=True),
     svc: GatiShaktiService = Depends(get_service),
 ) -> Dict[str, Any]:
     """Re-pull toll plazas, road points and the road network for one state.
@@ -127,8 +157,11 @@ async def refresh(
     Per-API failures are reported rather than raised — a GatiShakti outage on
     one endpoint must not cost the others their refresh, and the caller needs
     to see exactly which of the four actually updated.
+
+    ``nh_nos`` seeds GATISHAKTI/01 for several highways in one pass; /01 is
+    keyed by NH number, so naming a state alone leaves it unrefreshed.
     """
-    return await svc.refresh(state_id=state_id, nh_no=nh_no)
+    return await svc.refresh(state_id=state_id, nh_no=nh_no, nh_nos=nh_nos)
 
 
 __all__ = ["router", "get_service"]

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 from typing import Any, Mapping, Optional
+from gateway.datewindow import window_cond  # GAP-DATE-01
 
 from sqlalchemy import text
 
@@ -58,7 +59,9 @@ class ExportRepository:
     async def list(self, *, status: Optional[str] = None,
                    container_number: Optional[str] = None,
                    via_no: Optional[str] = None,
-                   limit: int = 100, offset: int = 0) -> tuple[list[dict], int]:
+                   limit: int = 100, offset: int = 0,
+                           window: Any = None,
+                           date_col: Optional[str] = None,) -> tuple[list[dict], int]:
         where, params = [], {"lim": limit, "off": offset}
         if status:
             where.append("status = :st")
@@ -69,6 +72,12 @@ class ExportRepository:
         if via_no:
             where.append("via_no = :via")
             params["via"] = via_no
+        # GAP-DATE-01: appended before the WHERE is assembled — after it,
+        # this is a silent no-op. `date_col` is named by the caller.
+        _wc = window_cond(window, date_col, params) if date_col else None
+        if _wc:
+            where.append(_wc)
+
         clause = (" WHERE " + " AND ".join(where)) if where else ""
         items = await self._rows(
             f"SELECT * FROM core.export_booking{clause} ORDER BY id DESC "

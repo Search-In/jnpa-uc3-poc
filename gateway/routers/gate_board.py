@@ -33,6 +33,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 
+from ..datewindow import DateWindow, date_window
 from ..metrics import REQUESTS
 from services.gate_board import GateBoardService
 from services.gate_board.repository import LANE_TYPES
@@ -139,9 +140,11 @@ async def tasks(
     task_status: Optional[str] = Query(None, alias="status"),
     limit: int = Query(50, ge=1, le=500),
     svc: GateBoardService = Depends(get_service),
+    window: DateWindow = Depends(date_window),
 ) -> Dict[str, Any]:
     REQUESTS.labels("gate_board", "ok").inc()
-    return await svc.tasks(status=task_status, limit=limit)
+    return await svc.tasks(status=task_status, limit=limit,
+        window=window, date_col="created_at")
 
 
 @router.post("/api/gate-board/tasks/{task_id}/ack")

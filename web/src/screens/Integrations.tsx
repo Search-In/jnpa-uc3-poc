@@ -13,10 +13,12 @@ import {
   Car,
   Container,
   CalendarClock,
+  Factory,
   Search,
   Sprout,
   Ticket,
   Route,
+  Warehouse,
   type LucideIcon,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -31,8 +33,9 @@ import {
   type Tone,
 } from "@/components/ui/dtccc";
 import { fmtDateTimeIST } from "@/lib/utils";
+import type { GatiShaktiRow } from "@/lib/types";
 
-type TabKey = "pdp" | "ldb" | "rms";
+type TabKey = "pdp" | "ldb" | "rms" | "gatishakti";
 
 // --- Provenance badge --------------------------------------------------------
 // Maps every provenance token to the mandated colour: LIVE→green, MOCK→amber,
@@ -143,12 +146,14 @@ export default function Integrations() {
             { key: "pdp", label: "PDP", icon: Car },
             { key: "ldb", label: "LDB", icon: Container },
             { key: "rms", label: "RMS-TAS", icon: CalendarClock },
+            { key: "gatishakti", label: "GatiShakti", icon: Route },
           ]}
         />
 
         {tab === "pdp" && <PdpTab />}
         {tab === "ldb" && <LdbTab />}
         {tab === "rms" && <RmsTab />}
+        {tab === "gatishakti" && <GatiShaktiTab />}
       </div>
     </PageContainer>
   );
@@ -633,6 +638,271 @@ function RmsTab() {
           emptyLabel="No slots. Enter a gate ID and click “Seed slots” to generate a labelled mock day."
           pageSize={12}
         />
+      </Card>
+    </div>
+  );
+}
+
+// --- GatiShakti tab ----------------------------------------------------------
+// The four ULIP GATISHAKTI APIs, which are the last of the 13 granted APIs
+// without a screen. They are reference master data — refreshed on demand into
+// core.gs_*, not fetched per request — so the provenance badge here reads DB in
+// normal operation, and that is the honest answer rather than a degraded one.
+//
+// The endpoint names come from the ULIP documentation and are misleading; the
+// live payloads (verified against production) are:
+//   /01 highway attributes for one NH number — and NO coordinates at all
+//   /02 food-storage depots for one state
+//   /03 industrial parks for one state — the only set carrying lat/lon
+//   /04 NHAI toll plazas for one state — also feeds FASTag → Toll Enroute
+// So the sub-tabs are labelled by what the rows ARE, with the API path shown
+// beside each. /01 and /02 come from one endpoint separated by `source_api`.
+
+type GsView = "highways" | "depots" | "parks" | "plazas";
+
+const GS_VIEWS: { key: GsView; label: string; api: string; icon: LucideIcon }[] = [
+  { key: "highways", label: "Highways", api: "GATISHAKTI/01", icon: Route },
+  { key: "depots", label: "Storage Depots", api: "GATISHAKTI/02", icon: Warehouse },
+  { key: "parks", label: "Industrial Parks", api: "GATISHAKTI/03", icon: Factory },
+  { key: "plazas", label: "Toll Plazas", api: "GATISHAKTI/04", icon: Ticket },
+];
+
+/** LGD state codes. GatiShakti keys /02, /03 and /04 by code, never by name. */
+const GS_STATES: { id: string; name: string }[] = [
+  { id: "27", name: "Maharashtra" },
+  { id: "24", name: "Gujarat" },
+  { id: "29", name: "Karnataka" },
+  { id: "09", name: "Uttar Pradesh" },
+];
+
+/** A `detail` value rendered for a cell — the payloads are flat scalars. */
+function detailOf(row: GatiShaktiRow, ...keys: string[]): string | null {
+  const d = (row.detail ?? {}) as Record<string, unknown>;
+  for (const k of keys) {
+    const v = d[k];
+    if (v !== null && v !== undefined && String(v).trim() !== "") return String(v);
+  }
+  return null;
+}
+
+function coord(row: GatiShaktiRow): string | null {
+  if (row.latitude == null || row.longitude == null) return null;
+  return `${row.latitude.toFixed(4)}, ${row.longitude.toFixed(4)}`;
+}
+
+function GatiShaktiTab() {
+  const [view, setView] = useState<GsView>("highways");
+  const [stateId, setStateId] = useState("27");
+  const [nhNo, setNhNo] = useState("");
+
+  const healthQ = useQuery({
+    queryKey: ["gs-health"],
+    queryFn: () => api.gatishaktiHealth(),
+    retry: false,
+  });
+  // The picker lists only highways /01 has actually been refreshed for —
+  // offering every NH number in India would offer mostly empty answers.
+  const nhQ = useQuery({
+    queryKey: ["gs-nh-numbers"],
+    queryFn: () => api.gatishaktiNhNumbers(),
+    retry: false,
+  });
+  const available = nhQ.data?.rows ?? [];
+  const selectedNh = nhNo || available[0]?.nh_no || "";
+
+  const highwaysQ = useQuery({
+    queryKey: ["gs-highways", selectedNh],
+    queryFn: () => api.gatishaktiHighway(selectedNh),
+    enabled: view === "highways" && !!selectedNh,
+    retry: false,
+  });
+  const depotsQ = useQuery({
+    queryKey: ["gs-depots", stateId],
+    queryFn: () => api.gatishaktiStorageDepots(stateId),
+    enabled: view === "depots",
+    retry: false,
+  });
+  const parksQ = useQuery({
+    queryKey: ["gs-parks", stateId],
+    queryFn: () => api.gatishaktiRoadPoints(stateId),
+    enabled: view === "parks",
+    retry: false,
+  });
+  const plazasQ = useQuery({
+    queryKey: ["gs-plazas", stateId],
+    queryFn: () => api.gatishaktiTollPlazas(stateId),
+    enabled: view === "plazas",
+    retry: false,
+  });
+
+  const activeQ =
+    view === "highways" ? highwaysQ : view === "depots" ? depotsQ : view === "parks" ? parksQ : plazasQ;
+  const rows: GatiShaktiRow[] = activeQ.data?.rows ?? [];
+  const active = GS_VIEWS.find((v) => v.key === view)!;
+  const counts = (healthQ.data as any)?.rows ?? {};
+
+  const columns: Column<GatiShaktiRow>[] = useMemo(() => {
+    if (view === "highways")
+      return [
+        { key: "name", header: "Road", render: (r) => r.name ?? "—" },
+        { key: "type", header: "Type", render: (r) => detailOf(r, "road_type") ?? "—" },
+        { key: "lanes", header: "Lanes", render: (r) => detailOf(r, "lane_statu", "lane_status") ?? "—" },
+        {
+          key: "len",
+          header: "Length (km)",
+          align: "right",
+          className: "tabular-nums",
+          render: (r) => {
+            const v = detailOf(r, "gis_length", "length");
+            return v ? Number(v).toFixed(2) : "—";
+          },
+        },
+        { key: "state", header: "State", render: (r) => detailOf(r, "state_ut", "state_name") ?? "—" },
+      ];
+    if (view === "depots")
+      return [
+        { key: "name", header: "Depot", render: (r) => r.name ?? "—" },
+        { key: "type", header: "Type", render: (r) => detailOf(r, "type_infra") ?? "—" },
+        {
+          key: "cap",
+          header: "Capacity",
+          align: "right",
+          className: "tabular-nums",
+          render: (r) => detailOf(r, "storage_ca", "storage_capacity") ?? "—",
+        },
+        { key: "agency", header: "Agency / Address", render: (r) => detailOf(r, "infrastr_a", "agency") ?? "—" },
+      ];
+    if (view === "parks")
+      return [
+        { key: "name", header: "Park", render: (r) => r.name ?? "—" },
+        { key: "dist", header: "District", render: (r) => detailOf(r, "dist_name", "district") ?? "—" },
+        { key: "land", header: "Land category", render: (r) => detailOf(r, "land_cat") ?? "—" },
+        {
+          key: "geo",
+          header: "Coordinates",
+          align: "right",
+          className: "tabular-nums",
+          render: (r) => coord(r) ?? "—",
+        },
+      ];
+    return [
+      { key: "name", header: "Plaza", render: (r) => r.name ?? "—" },
+      { key: "nh", header: "NH", render: (r) => r.nh_no ?? "—" },
+      {
+        key: "geo",
+        header: "Coordinates",
+        align: "right",
+        className: "tabular-nums",
+        render: (r) => coord(r) ?? "—",
+      },
+    ];
+  }, [view]);
+
+  return (
+    <div className="space-y-3">
+      {/* What these APIs are. Said up front because the endpoint names promise
+          a road network and none of the four delivers one. */}
+      <Card className="p-3">
+        <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+          <Network className="h-4 w-4 text-muted-foreground" /> PM GatiShakti reference data
+        </div>
+        <p className="text-[12px] text-muted-foreground">
+          Four ULIP APIs of national infrastructure master data, refreshed into the port database
+          rather than fetched per request — so <StatusChip label="DB" tone="info" /> here is the
+          expected provenance, not a degraded one. None of the four publishes road geometry, so
+          none of this can be drawn as a corridor.
+        </p>
+        <div className="mt-2.5 grid grid-cols-2 gap-2 border-t border-border/60 pt-2 text-[11px] sm:grid-cols-4">
+          {GS_VIEWS.map((v) => {
+            const n =
+              v.key === "plazas"
+                ? counts.toll_plaza
+                : v.key === "parks"
+                  ? counts.road_point
+                  : counts.road_segment;
+            return (
+              <div key={v.key}>
+                <div className="font-medium text-foreground">{v.label}</div>
+                <div className="text-muted-foreground">{v.api}</div>
+                <div className="tabular-nums text-muted-foreground">
+                  {healthQ.isLoading ? "…" : n == null ? "—" : `${n} rows stored`}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+
+      <SegmentedTabs
+        value={view}
+        onChange={setView}
+        tabs={GS_VIEWS.map((v) => ({ key: v.key, label: v.label, icon: v.icon }))}
+      />
+
+      <Card className="overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2">
+          <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+            <active.icon className="h-4 w-4 text-muted-foreground" /> {active.label}
+            {activeQ.data?.count != null && (
+              <span className="rounded-full bg-muted px-1.5 text-[10px] font-bold tabular-nums text-muted-foreground">
+                {activeQ.data.count}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5">
+            {/* Highways are keyed by NH number; the other three by LGD state. */}
+            {view === "highways" ? (
+              <select
+                value={selectedNh}
+                onChange={(e) => setNhNo(e.target.value)}
+                disabled={!available.length}
+                className="h-8 rounded-md border border-border bg-background px-2 text-[12px] outline-none focus:border-primary disabled:opacity-40"
+              >
+                {available.map((n) => (
+                  <option key={String(n.nh_no)} value={String(n.nh_no)}>
+                    {n.nh_no} ({n.segments})
+                  </option>
+                ))}
+                {!available.length && <option value="">No highways seeded</option>}
+              </select>
+            ) : (
+              <select
+                value={stateId}
+                onChange={(e) => setStateId(e.target.value)}
+                className="h-8 rounded-md border border-border bg-background px-2 text-[12px] outline-none focus:border-primary"
+              >
+                {GS_STATES.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} ({s.id})
+                  </option>
+                ))}
+              </select>
+            )}
+            <StatusChip label={active.api} tone="info" />
+            <SourceBadge value={activeQ.data?.source === "ULIP_DB" ? "DB" : activeQ.data?.source} />
+          </div>
+        </div>
+        <DataTable
+          columns={columns}
+          rows={rows}
+          rowKey={(r) => `${r.source_api}:${r.state_id ?? r.nh_no}:${r.name}:${coord(r) ?? ""}`}
+          status={activeQ}
+          onRetry={() => activeQ.refetch()}
+          emptyLabel={
+            view === "highways" && !selectedNh
+              ? "No highway has been refreshed yet. GATISHAKTI/01 is keyed by NH number, so each highway must be pulled by name — see POST /api/gatishakti/refresh."
+              : `${active.api} has nothing stored for this ${view === "highways" ? "highway" : "state"} yet. Refresh the reference set to populate it.`
+          }
+          search
+          searchPlaceholder={`Filter ${active.label.toLowerCase()}…`}
+          pageSize={12}
+        />
+        {view === "highways" && (
+          <div className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
+            GATISHAKTI/01 publishes highway attributes only — no coordinates — so these rows cannot
+            be placed on a map. Industrial Parks and Toll Plazas are the two sets that carry lat/lon.
+          </div>
+        )}
       </Card>
     </div>
   );

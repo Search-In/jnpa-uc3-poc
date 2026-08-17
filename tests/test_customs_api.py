@@ -39,7 +39,12 @@ class FakeCustomsRepo:
 
     @staticmethod
     def _match(row: Mapping[str, Any], filters: Mapping[str, Any]) -> bool:
-        return all(v is None or str(row.get(k)) == str(v) for k, v in filters.items())
+        # Underscore-prefixed keys are CONTROL values (the date window and the
+        # column it applies to), not columns. The real repository reads only
+        # whitelisted keys so it never saw them; this double compared every key
+        # against the row, so it matched nothing the moment a window was passed.
+        return all(v is None or str(row.get(k)) == str(v)
+                   for k, v in filters.items() if not k.startswith("_"))
 
     def _page(self, rows, filters, limit, offset):
         sel = [r for r in rows if self._match(r, filters)]

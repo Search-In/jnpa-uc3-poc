@@ -153,6 +153,8 @@ class GateDocumentService:
                                     vehicle: Optional[str] = None,
                                     driver_licence: Optional[str] = None,
                                     terminal: Optional[str] = None,
+                                    vessel: Optional[str] = None,
+                                    via_no: Optional[str] = None,
                                     from_ts: Optional[Any] = None,
                                     to_ts: Optional[Any] = None,
                                     limit: int, offset: int) -> Dict[str, Any]:
@@ -166,6 +168,7 @@ class GateDocumentService:
         rows, total = await self._repo.list_source_documents(
             category=category, container=container, vehicle=vehicle,
             driver_licence=driver_licence, terminal=terminal,
+            vessel=vessel, via_no=via_no,
             from_ts=from_ts, to_ts=to_ts, limit=limit, offset=offset)
         terminals = sorted({r["terminal"] for r in rows if r.get("terminal")})
         stamps = sorted(r["doc_ts"] for r in rows if r.get("doc_ts"))

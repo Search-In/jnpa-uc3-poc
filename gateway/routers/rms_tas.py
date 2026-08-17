@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query
 
 from .. import integrations
+from ..datewindow import DateWindow, date_window, window_cond
 from ..logging import get_logger
 from ..metrics import REQUESTS
 from ..state import GatewayState, get_state
@@ -106,7 +107,8 @@ def _deferred_window_guard(slot_code: str) -> tuple[Optional[dict], Optional[dic
 async def list_slots(gate_id: Optional[str] = Query(default=None),
                      date: Optional[str] = Query(default=None),
                      limit: int = Query(default=100, ge=1, le=1000),
-                     state: GatewayState = Depends(get_state)) -> dict:
+                     state: GatewayState = Depends(get_state),
+                     window: DateWindow = Depends(date_window),) -> dict:
     """List appointment slots with availability (available = capacity - booked)."""
     dsn = state.cfg.postgres_dsn
     if not dsn:
@@ -128,6 +130,12 @@ async def list_slots(gate_id: Optional[str] = Query(default=None),
                 "error": "invalid_date", "date": date,
                 "expected": "YYYY-MM-DD"})
         where.append("window_start::date = CAST(:d AS date)")
+    # GAP-DATE-01: appended BEFORE the clause is joined — appending
+    # after it is assembled is a silent no-op.
+    _wcond = window_cond(window, "created_at", params)
+    if _wcond:
+        where.append(_wcond)
+
     clause = ("WHERE " + " AND ".join(where)) if where else ""
     rows = await fetch_all(
         f"""SELECT slot_code, gate_id, window_start, window_end,

@@ -717,7 +717,23 @@ export interface FaultControlResult {
   banner: OperatorBanner;
 }
 
-// WebSocket frame shapes (gateway/routers/ws.py + scenario_ext.py).
+/** Wire shape of the focus frame — mirrors gateway/routers/focus.py PortFocus. */
+export interface PortFocusFrame {
+  vcn?: string | null;
+  viaNo?: string | null;
+  imoNo?: string | null;
+  vesselName?: string | null;
+  containerNo?: string | null;
+  vehicleNo?: string | null;
+  igmNo?: string | null;
+  fromDate?: string | null;
+  toDate?: string | null;
+  asOf?: string | null;
+  origin: "UC-1" | "UC-2" | "UC-3" | "SUITE";
+  nonce: number;
+}
+
+// WebSocket frame shapes (gateway/routers/ws.py + scenario_ext.py + focus.py).
 export type WsFrame =
   | { type: "hello"; payload: { service: string; channels: string[] } }
   | { type: "alert"; payload: Alert }
@@ -729,7 +745,115 @@ export type WsFrame =
   | { type: "decision"; payload: Decision }
   | { type: "scenario_step"; payload: ScenarioStep }
   | { type: "operator_banner"; payload: OperatorBanner }
-  | { type: "violation_enforced"; payload: ViolationEnforcedEvent };
+  | { type: "violation_enforced"; payload: ViolationEnforcedEvent }
+  // The port-wide entity focus, relayed by POST /api/focus/broadcast. This is
+  // how a vessel selected in UC-1 or UC-2 reaches this app: the three
+  // dashboards are on different origins, so no browser-local channel can do it.
+  | { type: "focus"; payload: PortFocusFrame }
+  // --- frames the gateway emits that this app does not act on (GAP-WS-02) ---
+  //
+  // These were emitted and silently dropped: a `default:` branch discarded them
+  // and the union did not admit they existed, so nothing distinguished "we chose
+  // not to handle this" from "we forgot". Each screen below owns its own polled
+  // read of the same data, so no behaviour depends on the frame — but the frame
+  // IS sent, and a future handler should start from a type that already matches
+  // what the server puts on the wire rather than from a guess.
+  //
+  // Payload shapes are taken from the emit sites, not invented; every field is
+  // optional because each of these frames carries several distinct `type`
+  // discriminators inside one channel (e.g. "tas_booking" vs
+  // "deferred_arrival_applied") and modelling them as required would be a lie
+  // about which arrive together.
+  | { type: "accident"; payload: AccidentFrame }        // routers/accidents.py
+  | { type: "bottleneck"; payload: BottleneckFrame }    // routers/bottlenecks.py
+  | { type: "camera_ai"; payload: CameraAiFrame }       // routers/camera_ai.py
+  | { type: "double_trip"; payload: DoubleTripFrame }   // routers/double_trip.py
+  | { type: "reroute_ack"; payload: RerouteAckFrame }   // routers/trucks.py
+  | { type: "tas"; payload: TasFrame }                  // crosstwin.py, rms_tas.py
+  | { type: "trt"; payload: TrtFrame };                 // routers/trt.py
+//
+// NOTE: there is deliberately no `anpr` member. `anpr_pump` in gateway/main.py
+// is constructed with `broadcast=False` — ANPR reads are persisted to
+// core.anpr_read and never reach a socket. Adding it would model a frame that
+// cannot arrive.
+
+/** Accident raised or updated — routers/accidents.py:133,275. */
+export interface AccidentFrame {
+  type?: "accident_update" | string;
+  accident_id?: string | number;
+  plate?: string | null;
+  severity?: string | null;
+  location?: string | null;
+  status?: string | null;
+  [k: string]: unknown;
+}
+
+/** Ranked corridor bottleneck board — routers/bottlenecks.py:263. */
+export interface BottleneckFrame {
+  segment_id?: string;
+  name?: string | null;
+  rank?: number;
+  jam_factor?: number;
+  segments?: Array<Record<string, unknown>>;
+  [k: string]: unknown;
+}
+
+/** One camera-AI count row — routers/camera_ai.py:167. */
+export interface CameraAiFrame {
+  camera_id?: string;
+  gate_id?: string | null;
+  ts?: string;
+  [k: string]: unknown;
+}
+
+/** Double-trip cycle progress — routers/double_trip.py:179. */
+export interface DoubleTripFrame {
+  trip_id?: string;
+  cycle_id?: string;
+  completed_count?: number;
+  trip_count?: number;
+  is_double_trip?: boolean;
+  [k: string]: unknown;
+}
+
+/** Driver acknowledged a reroute — routers/trucks.py:595. Addressed to one
+ *  device_id, so a shared listener sees other drivers' acks too. */
+export interface RerouteAckFrame {
+  device_id?: string;
+  state?: string;
+  [k: string]: unknown;
+}
+
+/** TAS slot book changed — either a booking (rms_tas.py:252) or a UC-II
+ *  deferred-arrival window applied across the twins (crosstwin.py:109). */
+export interface TasFrame {
+  type?: "tas_booking" | "deferred_arrival_applied" | string;
+  booking_id?: string | number;
+  slot_code?: string;
+  vehicle_id?: string;
+  correlation_id?: string;
+  gate_id?: string;
+  window_start?: string;
+  window_end?: string;
+  slot_cap?: number;
+  applied_slots?: unknown[];
+  transport?: string;
+  [k: string]: unknown;
+}
+
+/** Terminal round-trip time completed — routers/trt.py:170. */
+export interface TrtFrame {
+  type?: "trt_completed" | string;
+  record_id?: string | number;
+  vehicle_id?: string;
+  plate?: string | null;
+  trip_id?: string | null;
+  trt_min?: number | null;
+  gate_to_park_min?: number | null;
+  park_to_load_min?: number | null;
+  load_to_out_min?: number | null;
+  [k: string]: unknown;
+}
 
 // --- FASTag (ULIP) — mirrors gateway/routers/fastag.py response models ---
 export interface FastagBalance {
@@ -780,6 +904,21 @@ export interface GatiShaktiRow {
   name?: string | null;
   latitude?: number | null;
   longitude?: number | null;
+  /** Which of GATISHAKTI/01..04 produced the row. GATISHAKTI/01 (highway
+   *  attributes) and /02 (food-storage depots) share one table and share no
+   *  fields, so this is what tells them apart. */
+  source_api?: string | null;
+  /** The upstream item, kept whole — the four APIs publish different field
+   *  names, so the columns above hold only what all of them have in common
+   *  and everything else (lane count, storage capacity, district…) is here. */
+  detail?: Record<string, unknown> | null;
+  fetched_at?: string | null;
+}
+
+/** One entry of /api/gatishakti/nh-numbers — a highway /01 is seeded for. */
+export interface GatiShaktiNhNumber {
+  nh_no?: string | null;
+  segments?: number | null;
   fetched_at?: string | null;
 }
 
@@ -2096,4 +2235,160 @@ export interface CorridorHeatmapResponse {
   };
   method: Record<string, string | number>;
   provenance: { mode: string; note: string; resolution_disclaimer: string };
+}
+
+
+// --- S-06 Evidence & Audit Explorer (GET /api/thread/*) ---
+export interface ThreadHop {
+  hop: string;
+  label: string;
+  stage: string;
+  verdict: string;
+  source_table: string;
+  source_files: string;
+  row_count: number;
+  provenance: string[];
+  synthetic: boolean;
+  rows: Array<Record<string, unknown>>;
+  vehicles: string[];
+  note: string | null;
+}
+
+/** A truck reached from a container, with WHY we believe the attribution.
+ *
+ *  `provenance` qualifies the transporter/driver bridge, NOT the plate: the plate
+ *  itself comes from a gate document or a CODECO message and is always real. So
+ *  `SYNTHETIC` here means "this plate resolves to that transporter only by the
+ *  stated assumption" — `11-Transport Data` carries no vehicle-registration
+ *  column, so no plate can be resolved from JNPA's own masters (defect B1). */
+export interface ThreadVehicle {
+  plate: string;
+  provenance: string | null;
+  assumption_ref: string | null;
+  source_ref: string | null;
+  transporter: string | null;
+  driver_name: string | null;
+  driver_licence: string | null;
+}
+
+export interface ThreadResponse {
+  subject: { type?: string; container_no?: string };
+  summary: {
+    hops_total: number;
+    hops_found: number;
+    hops_not_in_corpus: number;
+    hops_errored: number;
+    reaches_a_vehicle: boolean;
+    vehicle_count: number;
+    stages_found: string[];
+    has_synthetic_hops: boolean;
+    synthetic_hops: string[];
+  };
+  hops: ThreadHop[];
+  vehicles: ThreadVehicle[];
+  queries: Array<{ hop: string; sql: string; params: Record<string, unknown>; row_count: number; error?: string | null }>;
+}
+
+
+// --- S-08 Ad-hoc Query (GET /api/query/*) ---
+/** One queryable view of the canonical model, as the server declares it. */
+export interface QueryDataset {
+  key: string;
+  label: string;
+  table: string;
+  columns: string[];
+  /** Only these columns may be filtered on — the API rejects anything else. */
+  filters: string[];
+  date_column: string | null;
+  note: string;
+}
+
+export interface QueryResult {
+  dataset: string;
+  label?: string;
+  table: string;
+  rows: Array<Record<string, unknown>>;
+  count: number;
+  truncated?: boolean;
+  window_applied?: boolean;
+  note?: string;
+  error?: string;
+  /** Composed by the SERVER, returned so the working stays traceable. */
+  sql: string;
+  params: Record<string, unknown>;
+}
+
+
+// --- T-09 Facilities & Utilities Directory (GET /api/facilities) ---
+/** One place the corpus names, with the table and file family that name it.
+ *
+ *  Composed at read time from five sources — there is no facilities master
+ *  table — so `source_table` is not decoration: a CFS named in a monthly dwell
+ *  report and a terminal from the reference model are evidence of different
+ *  strength, and the reader must be able to tell them apart. */
+export interface FacilityRow {
+  facility_id: string;
+  type: string;
+  name: string;
+  operator: string | null;
+  site_code: string | null;
+  lat: number | null;
+  lon: number | null;
+  capacity: number | null;
+  berth_count: number | null;
+  dwell_hours: string | number | null;
+  source_table: string;
+  source_files: string;
+}
+
+/** A facility class the corpus does not name at all. Carried in the response so
+ *  a driver-side locator can say "not supplied" instead of drawing an empty map
+ *  that reads as a failed load. */
+export interface AbsentFacility {
+  type: string;
+  why: string;
+  would_need: string;
+}
+
+export interface FacilitiesResponse {
+  facilities: FacilityRow[];
+  count: number;
+  by_type: Record<string, number>;
+  absent: AbsentFacility[];
+  sources_unavailable: string[];
+  note: string;
+}
+
+
+// --- D-13 Fleet View (GET /api/fleet) ---
+/** One vehicle linked to a transporter.
+ *
+ *  `provenance` describes the LINK, not the truck: DOCUMENT_EVIDENCED means a
+ *  gate document names both the plate and the company; anything else means the
+ *  link was generated under `assumption_ref`, because `11-Transport Data`
+ *  carries no vehicle-registration column to resolve one (defect B1). */
+export interface TransporterFleetVehicle {
+  vehicle_no: string;
+  vehicle_no_norm: string;
+  provenance: string | null;
+  assumption_ref: string | null;
+  source_ref: string | null;
+  created_at: string | null;
+  company_name: string | null;
+  company_blacklist_entries: number;
+  jobs: number;
+  last_gate_document_ts: string | null;
+}
+
+export interface FleetResponse {
+  transporter_id: number | null;
+  company: string | null;
+  vehicles: TransporterFleetVehicle[];
+  count: number;
+  by_provenance: Record<string, number>;
+  /** Set when the caller may not see a fleet. A refusal is an answer — the UI
+   *  renders it rather than showing an empty table. */
+  reason?: string | null;
+  note?: string;
+  error?: string;
 }

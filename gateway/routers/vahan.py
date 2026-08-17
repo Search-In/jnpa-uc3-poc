@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -39,6 +39,21 @@ log = get_logger("gateway.vahan")
 # SARATHI/01's documented date-of-birth pattern, checked here so a bad value
 # never silently downgrades the request to SARATHI/02.
 _RE_DOB = re.compile(r"^\d{4}-(0[1-9]|1[012])-(0[1-9]|[12][0-9]|3[01])$")
+
+# Two of the four ULIP identity APIs are invisible retries: VAHAN/01 answers
+# only where VAHAN/04 missed, SARATHI/01 only when a date of birth was given.
+# Both map into the same record shape as their sibling, so without this the
+# response cannot say which of the pair actually replied — and a screen that
+# shows a hardcoded "VAHAN/04" badge is then simply wrong half the time.
+# The rung helpers stamp the answering path here; the route lifts it into the
+# envelope and pops it, so the cached and persisted record is untouched.
+SOURCE_API_KEY = "_source_api"
+
+
+def _lift_source_api(data: dict) -> Dict[str, Any]:
+    """Pop the out-of-band marker off a record -> ``_envelope`` kwargs."""
+    api = data.pop(SOURCE_API_KEY, None) if isinstance(data, dict) else None
+    return {"source_api": api} if api else {}
 
 router = APIRouter(prefix="/api/vahan", tags=["vahan"])
 
@@ -113,8 +128,11 @@ async def _ulip_rc(state: GatewayState, plate: str) -> Optional[dict]:
     """VAHAN/04 -> a VahanRecord payload, or None on any miss.
 
     VAHAN/01 is tried when /04 comes back empty: the two are fed by different
-    upstream calls, so one can answer where the other misses. Both are mapped
-    to the same record shape, so the rung below cannot tell which replied.
+    upstream calls, so one can answer where the other misses. Both map to the
+    same record shape, so which of the two replied is reported out of band
+    under ``SOURCE_API_KEY`` — the caller lifts it into the response envelope
+    and drops it before the record is cached or persisted, so the record shape
+    every downstream consumer sees is unchanged.
 
     Never raises: every ULIP failure is a miss that drops to the next rung,
     exactly like an unreachable upstream. A vehicle must not be refused at the
@@ -126,19 +144,25 @@ async def _ulip_rc(state: GatewayState, plate: str) -> Optional[dict]:
 
     client = _ulip(state.cfg)
     t0 = time.perf_counter()
+    answered = "VAHAN/04"
     try:
         envelope = await client.fetch_vehicle_by_rc(plate)
         fields = _matching_rc(normalize_rc(envelope), plate, "VAHAN/04")
         if not fields:
             envelope = await client.fetch_vehicle_by_rc_xml(plate)
             fields = _matching_rc(normalize_vahan_xml(envelope), plate, "VAHAN/01")
+            answered = "VAHAN/01"
     except UlipError as exc:
         log.warning("vahan_ulip_miss", plate=plate, error=type(exc).__name__)
         return None
     finally:
         UPSTREAM_LATENCY.labels("vahan", "ulip").observe(time.perf_counter() - t0)
     record = rc_to_record(fields or {})
-    return rc_payload(record) if record else None
+    if not record:
+        return None
+    payload = rc_payload(record)
+    payload[SOURCE_API_KEY] = answered
+    return payload
 
 
 def _matching_rc(fields: Optional[dict], plate: str,
@@ -191,6 +215,7 @@ async def _ulip_dl(state: GatewayState, dl: str,
         # spellings are attempted before concluding the licence is unknown.
         spellings = [dl] if " " not in dl else [dl, dl.replace(" ", "")]
         fields = None
+        answered = "SARATHI/02"
         if dob:
             for spelling in spellings:
                 try:
@@ -202,11 +227,13 @@ async def _ulip_dl(state: GatewayState, dl: str,
                     log.info("sarathi01_miss", error=type(exc).__name__)
                     continue
                 if fields:
+                    answered = "SARATHI/01"
                     break
         if not fields:
             for spelling in spellings:
                 fields = normalize_dl(await client.fetch_dl(spelling))
                 if fields:
+                    answered = "SARATHI/02"
                     break
     except UlipError as exc:
         log.warning("sarathi_ulip_miss", dl=dl, error=type(exc).__name__)
@@ -214,7 +241,15 @@ async def _ulip_dl(state: GatewayState, dl: str,
     finally:
         UPSTREAM_LATENCY.labels("vahan", "ulip").observe(time.perf_counter() - t0)
     record = dl_to_record(dl, fields or {})
-    return record.model_dump(mode="json") if record else None
+    if not record:
+        return None
+    payload = record.model_dump(mode="json")
+    # A DOB request that quietly fell through to /02 answers with a thinner
+    # record — no issue date, no issuing RTO — and looks identical to a /02
+    # request. Saying which one replied is the difference between "this licence
+    # has no issue date" and "we did not ask the API that carries it".
+    payload[SOURCE_API_KEY] = answered
+    return payload
 
 
 async def _orchestrate_rc(state: GatewayState, plate: str) -> dict:
@@ -239,13 +274,17 @@ async def _orchestrate_rc(state: GatewayState, plate: str) -> dict:
         t0 = time.perf_counter()
         data = await _ulip_rc(state, plate)
         if data is not None:
+            # Lift before caching: the marker is response metadata, not part of
+            # the record, and a cached hit is a CACHED answer whatever replied
+            # when it was first fetched.
+            answered = _lift_source_api(data)
             await cache.put("vahan", plate, data, ttl=cfg.cache_ttl_vahan_s)
             await state.record_decision(
                 api="vahan", key=plate, decision_path=VahanPath.LIVE_PRIMARY.value,
                 latency_ms=(time.perf_counter() - t0) * 1000, source="ulip",
                 source_state=SourceState.LIVE,
             )
-            return _envelope(data, VahanPath.LIVE_PRIMARY.value, plate)
+            return _envelope(data, VahanPath.LIVE_PRIMARY.value, plate, **answered)
 
     # --- Rung 2: LIVE_FALLBACK (vahan-sim) ---
     t0 = time.perf_counter()
@@ -421,6 +460,7 @@ async def sarathi_dl(
         t0 = time.perf_counter()
         data = await fetch()
         if data is not None:
+            answered = _lift_source_api(data)
             await cache.put("sarathi", cache_key, data, ttl=cfg.cache_ttl_vahan_s)
             await state.record_decision(
                 api="vahan", key=dl, decision_path=kind,
@@ -429,7 +469,7 @@ async def sarathi_dl(
             _persist_dl(state, dl, data, kind)
             REQUESTS.labels("vahan", "ok").inc()
             return {"dl": dl, "decision_path": kind, "record": data,
-                    "status": vehicle_intel.dl_status(data)}
+                    "status": vehicle_intel.dl_status(data), **answered}
 
     cached = await cache.get("sarathi", cache_key)
     if cached is not None:

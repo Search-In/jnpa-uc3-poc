@@ -199,10 +199,17 @@ class GateBoardRepository:
         return rows[0]
 
     async def reassignment_tasks(self, *, status: Optional[str] = None,
-                                 limit: int = 50) -> list[dict]:
+                                 limit: int = 50,
+                                         window: Any = None,
+                                         date_col: Optional[str] = None,) -> list[dict]:
         where, params = "", {"limit": limit}
         if status:
             where, params = " WHERE status = :st", {"limit": limit, "st": status}
+        # GAP-DATE-01: spliced into the WHERE string this method builds by hand.
+        _wc = window_cond(window, date_col, params) if date_col else None
+        if _wc:
+            where = f"{where} AND {_wc}" if where.strip() else f" WHERE {_wc}"
+
         return await self._rows(
             "SELECT task_id, gate_id, lane_id, from_lane_type, to_lane_type, reason, "
             "impact_preview, status, assigned_to, created_by, created_at, "

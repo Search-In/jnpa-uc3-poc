@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
+from ..datewindow import DateWindow, date_window, window_cond
 from ..logging import get_logger
 from ..metrics import REQUESTS
 from ..state import GatewayState, get_state
@@ -307,20 +308,28 @@ async def snapshot_bottlenecks(body: Dict[str, Any] = Body(default_factory=dict)
 
 @router.get("/history")
 async def bottlenecks_history(limit: int = Query(default=50, ge=1, le=1000),
-                              state: GatewayState = Depends(get_state)) -> dict:
+                              state: GatewayState = Depends(get_state),
+                              window: DateWindow = Depends(date_window),) -> dict:
     """Recent persisted bottleneck snapshot rows, newest first (flat list)."""
     dsn = state.cfg.postgres_dsn
     if not dsn:
         return {"count": 0, "snapshots": []}
     from jnpa_shared.db import fetch_all
     try:
+        # GAP-DATE-01. This statement had no WHERE at all, so one is
+        # injected before ORDER BY; `_where` is empty when no window is
+        # given, leaving the SQL byte-identical to before.
+        _p: dict = {}
+        _cond = window_cond(window, "ts", _p)
+        _where = f"WHERE {_cond}" if _cond else ""
+
         rows = await fetch_all(
-            """SELECT ts, rank, segment_id, name, jam_factor, speed_kmh,
+            f"""SELECT ts, rank, segment_id, name, jam_factor, speed_kmh,
                       free_flow_kmh, avg_delay_min, lat, lon, detail
                FROM core.bottleneck_snapshot
-               ORDER BY ts DESC, rank ASC
+               {_where} ORDER BY ts DESC, rank ASC
                LIMIT :limit""",
-            {"limit": limit}, dsn=dsn)
+            {**{"limit": limit}, **_p}, dsn=dsn)
     except Exception as exc:  # noqa: BLE001 - infra-timing dependent
         log.debug("bottleneck_history_failed", error=str(exc))
         rows = []

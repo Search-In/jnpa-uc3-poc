@@ -5,11 +5,16 @@
 
 import { useSyncExternalStore } from "react";
 import { useSearchParams } from "react-router-dom";
+import { detectVesselKey } from "./focusStore";
 
 export type SearchEntity =
   | "vehicle"
   | "driver"
   | "container"
+  // A vessel call — by VCN ("INNSA1NS0S0552") or VIA ("S0552", "NTPS0633").
+  // Without this the omnibox could not begin a vessel trace at all, which made
+  // the vessel->container->truck walk impossible to start from the header.
+  | "vessel"
   // UC3-024: a gate document is searchable by its e-seal id and by its Form 13
   // e-gate / EIR number. Both are printed on the same slip as the plate and the
   // container, so all four resolve to one visit — but the omnibox could not
@@ -55,6 +60,11 @@ export function useGlobalSearch(): GlobalSearchState {
 export function detectEntity(raw: string): SearchEntity {
   const q = raw.trim().toUpperCase();
   if (/^[A-Z]{4}\d{7}$/.test(q)) return "container"; // ISO 6346 container no
+  // Vessel call keys, tested BEFORE the plate rule: a bare VIA like "S0552" also
+  // satisfies the loose plate pattern below and would otherwise be swallowed.
+  // detectVesselKey is deliberately conservative — it never claims a bare
+  // 7-digit number, so the gate-document rule keeps EIR numbers like 4339869.
+  if (detectVesselKey(q)) return "vessel";
   if (/^[A-Z]{2}\d{2}\s?\d{11}$/.test(q.replace(/\s/g, " "))) return "driver"; // DL
   if (/CASE|CHLN|CHALLAN/.test(q)) return "case";
   if (/^ALERT|^AL-/.test(q)) return "alert";

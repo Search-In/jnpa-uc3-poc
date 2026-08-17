@@ -11,6 +11,7 @@
 // send 25 and get a 2500% reduction.
 
 import { useEffect, useMemo, useState } from "react";
+import { usePortFocus } from "@/lib/focusStore";
 import { Play, RotateCcw } from "lucide-react";
 import type { SimScenarioEntry } from "@/lib/api";
 import { Card } from "@/components/ui/card";
@@ -318,14 +319,45 @@ export function ScenarioInputPanel({
   onRun: (body: Record<string, unknown>) => void;
   running: boolean;
 }) {
-  const defaults = useMemo(() => fieldsFor(scenario), [scenario]);
+  const focus = usePortFocus();
+  const baseFields = useMemo(() => fieldsFor(scenario), [scenario]);
+
+  // GAP-UI-08. A vessel picked anywhere in the estate should already be in the
+  // box, rather than retyped from memory into a free-text field — retyping is
+  // where "XIN HANG ZHOU" becomes "XIN HANG ZHOU " and a scenario silently runs
+  // against the whole window instead of one call.
+  //
+  // Prefill only fills fields the scenario ALREADY declares, and only from a
+  // focus that carries a value. It never invents a parameter the scenario does
+  // not take, and it never overwrites a Notice default with a blank.
+  const defaults = useMemo(() => {
+    const fromFocus: Record<string, string | undefined> = {
+      vessel_name: focus.vesselName,
+      voyage_number: focus.viaNo,
+      // The berth application is keyed by VCN; the field takes the same value.
+      berthing_record_id: focus.vcn,
+      container_no: focus.containerNo,
+      from_date: focus.fromDate,
+      to_date: focus.toDate,
+    };
+    return baseFields.map((f) => {
+      const v = fromFocus[f.name];
+      return v && v.trim()
+        ? { ...f, value: v.trim(), hint: `From the current selection. ${f.hint ?? ""}`.trim() }
+        : f;
+    });
+    // `nonce` so a re-selection of the SAME vessel still re-applies.
+  }, [baseFields, focus.vesselName, focus.viaNo, focus.vcn, focus.containerNo,
+      focus.fromDate, focus.toDate, focus.nonce]);
+
   const [values, setValues] = useState<Record<string, string>>(() =>
     Object.fromEntries(defaults.map((f) => [f.name, f.value])),
   );
 
   // Switching scenario resets the form to that scenario's Notice defaults —
   // carrying a stale `delay_hours` into the modal-shift form would be worse than
-  // useless, it would look like the parameter had been considered.
+  // useless, it would look like the parameter had been considered. A new focus
+  // resets it the same way, for the same reason.
   useEffect(() => {
     setValues(Object.fromEntries(defaults.map((f) => [f.name, f.value])));
   }, [defaults]);

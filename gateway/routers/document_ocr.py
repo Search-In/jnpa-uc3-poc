@@ -36,6 +36,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import (APIRouter, Body, Depends, File, Form, HTTPException, Query,
                      Request, UploadFile)
 
+from ..datewindow import DateWindow, apply_window, date_window
 from ..logging import get_logger
 from ..metrics import REQUESTS
 from ..state import GatewayState, get_state
@@ -665,6 +666,7 @@ async def list_documents(
     doc_type: Optional[str] = Query(default=None),
     limit: int = Query(default=100, ge=1, le=1000),
     state: GatewayState = Depends(get_state),
+    window: DateWindow = Depends(date_window),
 ) -> dict:
     """Recent documents (no raw_text — id/ts/doc_type/source_ref/confidence/status/fields)."""
     dsn = state.cfg.postgres_dsn
@@ -677,6 +679,9 @@ async def list_documents(
     if doc_type:
         clause = "WHERE doc_type = :dtype"
         params["dtype"] = doc_type.strip().upper()
+    # GAP-DATE-01: bound the read to the requested dates.
+    where = apply_window(where, window, "ts", params)
+
     rows = await fetch_all(
         f"""SELECT id, ts, doc_type, source_ref, confidence, status, source, fields,
                    corrected_fields, verified_by, verified_at

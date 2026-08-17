@@ -60,7 +60,11 @@
     "truckVisit": "Truck Visit Detail",
     "vehicleRegistry": "Vehicle Registry",
     "corridorSim": "Corridor Simulation",
-    "gateLaneBoard": "Gate & Lane Board"
+    "gateLaneBoard": "Gate & Lane Board",
+    "vesselThread": "Evidence & Audit Explorer",
+    "adhocQuery": "Ad-hoc Query",
+    "facilities": "Facilities & Utilities",
+    "fleet": "Fleet"
   },
   "followBox": {
     "title": "Follow the Box",
@@ -142,7 +146,8 @@
     "fastag": "FASTag",
     "alert": "Alert",
     "case": "Case ID",
-    "gateDoc": "Form 13 / EIR / e-seal no"
+    "gateDoc": "Form 13 / EIR / e-seal no",
+    "vessel": "Vessel call / VCN / VIA"
   },
   "commandCenter": {
     "title": "Command Center",

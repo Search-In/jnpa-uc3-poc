@@ -33,6 +33,9 @@ from jnpa_shared.pii import mask_payload
 
 from ..auth import CONTROL_ROOM, Role, auth_enabled
 from ..data_mode import data_mode
+from ..datewindow import DateWindow, IST as _IST, date_window
+from ..datewindow import MAX_WINDOW_DAYS as _MAX_WINDOW_DAYS
+from ..datewindow import DateWindow, date_window, validate_window as _check_window
 from ..metrics import REQUESTS
 from ..pii import mask_for_request
 from services.gate_documents import GateDocumentService
@@ -46,28 +49,10 @@ router = APIRouter(prefix="/api/gate-docs", tags=["gate-documents"])
 # duplicated across five routers, which refused the corpus's 24 MB file.
 _MAX_UPLOAD_BYTES = MAX_UPLOAD_BYTES
 _UPLOADER_ROLES = CONTROL_ROOM | {Role.CUSTOMS.value}
-#: Longest date window a single query may span (audit finding G1). Bounds the
-#: hourly profile at ~2200 buckets so an unbounded range cannot be requested.
-_MAX_WINDOW_DAYS = 92
-
-
-def _check_window(from_date: Optional[date], to_date: Optional[date]) -> None:
-    """Validate an optional date window. 400 on an inverted or oversized range."""
-    if from_date and to_date:
-        if to_date < from_date:
-            raise HTTPException(status_code=400,
-                                detail={"error": "invalid_window",
-                                        "message": "to_date must not precede from_date"})
-        if (to_date - from_date).days > _MAX_WINDOW_DAYS:
-            raise HTTPException(status_code=400,
-                                detail={"error": "invalid_window",
-                                        "message": f"window must not exceed "
-                                                   f"{_MAX_WINDOW_DAYS} days"})
-
-#: Gate documents are stamped in IST by the importer (the slips print local
-#: wall-clock), so a caller's date filter has to be anchored in the same zone —
-#: otherwise a "06 June" search silently misses the 05:30 either side of it.
-_IST = timezone(timedelta(hours=5, minutes=30))
+# Window semantics — IST anchoring, an INCLUSIVE `to_date`, and the 92-day cap
+# that bounds the hourly profile at ~2200 buckets (audit finding G1) — now live
+# in gateway/datewindow.py so every router shares one definition. The aliases in
+# the import above keep the call sites in this file unchanged.
 
 
 def _as_ts(value: Optional[date], *, end: bool = False) -> Optional[datetime]:
@@ -203,6 +188,11 @@ async def list_eir(
     container: Optional[str] = None,
     truck: Optional[str] = None,
     terminal: Optional[str] = None,
+    vessel: Optional[str] = Query(
+        None, description="Vessel name, e.g. 'ONE RECOGNITION'. Case-insensitive."),
+    via_no: Optional[str] = Query(
+        None, description="Vessel call VIA, e.g. 'S0475'. Suffix match, so the "
+                          "prefixed terminal form 'APLS0595' also resolves."),
     from_date: Optional[date] = Query(
         None, description="Only EIRs whose truck_in_time falls on/after this date"),
     to_date: Optional[date] = Query(
@@ -221,6 +211,7 @@ async def list_eir(
     _check_window(from_date, to_date)
     filters = {"container_number": container,
                "truck_no": _norm_plate(truck) if truck else None, "terminal": terminal,
+               "vessel": vessel, "via_no": via_no,
                "from_date": from_date, "to_date": to_date,
                "data_origin": data_origin}
     return await _list(svc, "EIR", response, filters, limit, offset, request)
@@ -263,13 +254,18 @@ async def list_pin(
     container: Optional[str] = None,
     truck: Optional[str] = None,
     terminal: Optional[str] = None,
+    window: DateWindow = Depends(date_window),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     data_origin: Optional[str] = Depends(data_mode),
     svc: GateDocumentService = Depends(get_service),
 ) -> Page:
+    # The repository has always filtered PIN tickets on `issued_at`
+    # (TIME_COL["PIN"]); only the router failed to expose it, so a caller could
+    # not bound a query to a demo window.
     filters = {"pin_number": pin, "container_number": container,
                "truck_no": _norm_plate(truck) if truck else None, "terminal": terminal,
+               "from_date": window.from_date, "to_date": window.to_date,
                "data_origin": data_origin}
     return await _list(svc, "PIN", response, filters, limit, offset, request)
 
@@ -283,12 +279,20 @@ async def list_form13(
     vehicle: Optional[str] = None,
     terminal: Optional[str] = None,
     source: Optional[str] = Query(None, description="provenance filter: live | sim | all"),
+    window: DateWindow = Depends(date_window),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     svc: GateDocumentService = Depends(get_service),
 ) -> Page:
+    # Form 13 here lives in core.gate_capture, stamped `captured_at`
+    # (TIME_COL["FORM13"]). Deliberately NO vessel/via filter: verified against
+    # RDS, every FORM13 capture's payload holds only
+    # {container_no, seals, gross_wt_kg, form13_no} — no vessel, no voyage. The
+    # vessel-bearing Form 13s are the parsed corpus documents, served by
+    # GET /api/gate-docs/documents?vessel=&via_no=.
     filters = {"visit_id": visit_id, "container_number": container,
                "truck_no": _norm_plate(vehicle) if vehicle else None, "terminal": terminal,
+               "from_date": window.from_date, "to_date": window.to_date,
                "source": _check_source(source)}
     return await _list(svc, "FORM13", response, filters, limit, offset, request)
 
@@ -303,11 +307,19 @@ async def list_source_documents(
     vehicle: Optional[str] = Query(None, description="Truck number; punctuation-insensitive"),
     driver_licence: Optional[str] = Query(None, description="Driver licence number (exact)"),
     terminal: Optional[str] = Query(None, description="Terminal code (GTI, BMCT, ...) or name"),
+    vessel: Optional[str] = Query(
+        None, description="Vessel name, contains-match. This is the store that "
+                          "actually carries a vessel — /form13 reads core.gate_capture, "
+                          "whose payload has no vessel field."),
+    via_no: Optional[str] = Query(
+        None, description="Vessel call VIA, e.g. 'S0633'. Matches the bare form, "
+                          "the 'NTPS0633 (S0633)' form and the 'SAV/S0696' form."),
     from_date: Optional[date] = Query(None, description="Document date >= (inclusive)"),
     to_date: Optional[date] = Query(None, description="Document date <= (inclusive)"),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     svc: GateDocumentService = Depends(get_service),
+    window: DateWindow = Depends(date_window),
 ) -> SourceDocPage:
     """The customer's own gate documents, parsed verbatim from the shared corpus.
 
@@ -322,11 +334,12 @@ async def list_source_documents(
     """
     _check_window(from_date, to_date)
     res = await svc.list_source_documents(
-        category=category, container=container,
+        category=category, container=container, vessel=vessel, via_no=via_no,
         vehicle=_norm_plate(vehicle) if vehicle else None,
         driver_licence=driver_licence, terminal=terminal,
         from_ts=_as_ts(from_date), to_ts=_as_ts(to_date, end=True),
-        limit=limit, offset=offset)
+        limit=limit, offset=offset,
+        window=window, date_col="doc_ts")
     response.headers["X-Total-Count"] = str(res["total"])
     REQUESTS.labels("gate_docs", "ok").inc()
     # driver_licence is PII; mask it for principals not cleared to see it, the
@@ -415,10 +428,16 @@ async def upload_history(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     svc: GateDocumentService = Depends(get_service),
+    window: DateWindow = Depends(date_window),
 ) -> Page:
     require_uploader(request)
     filters = {"doc_type": (_check_doc_type(doc_type) if doc_type else None),
                "import_status": status_, "source": (source or None)}
+    # GAP-DATE-01: the window travels with the filters; the column is
+    # stated here, never inferred by the shared where-builder.
+    filters["_window"] = window
+    filters["_date_col"] = "created_at"
+
     res = await svc.list_uploads(filters, limit=limit, offset=offset)
     return _page(res["items"], res["total"], limit, offset, response)
 

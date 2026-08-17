@@ -193,9 +193,13 @@ class GateDocumentRepository:
                                     vehicle: Optional[str] = None,
                                     driver_licence: Optional[str] = None,
                                     terminal: Optional[str] = None,
+                                    vessel: Optional[str] = None,
+                                    via_no: Optional[str] = None,
                                     from_ts: Optional[Any] = None,
                                     to_ts: Optional[Any] = None,
-                                    limit: int = 100, offset: int = 0) -> tuple[list[dict], int]:
+                                    limit: int = 100, offset: int = 0,
+        window: Any = None,
+        date_col: Optional[str] = None,) -> tuple[list[dict], int]:
         """The PARSED SOURCE gate documents in ``core.gate_document``.
 
         Distinct from the Form-13 read above, which serves ``core.gate_capture``
@@ -229,12 +233,34 @@ class GateDocumentRepository:
             conds.append("(upper(t.code) = :term OR t.name ILIKE :term_like)")
             params["term"] = terminal.strip().upper()
             params["term_like"] = f"%{terminal.strip()}%"
+        # The vessel hop of the golden thread. THIS is the table that carries it:
+        # core.gate_capture (the Form-13 store served by list_docs above) is
+        # seeded and its payload has no vessel or voyage key at all, so the same
+        # filter there could never match. These are the customer's own parsed
+        # documents, and their vessel_name is written several ways — plain
+        # ("ONE RECOGNITION") and mashed with the VIA ("SAV/S0696") — so a
+        # contains match is what actually finds a call.
+        if vessel:
+            conds.append("d.vessel_name ILIKE :vessel_like")
+            params["vessel_like"] = f"%{vessel.strip()}%"
+        # voyage is written "NTPS0633 (S0633)" or bare "S0475"; suffix-match the
+        # short VIA against both spellings.
+        if via_no:
+            conds.append("(upper(btrim(d.voyage)) LIKE '%' || upper(btrim(:via)) "
+                         " OR upper(btrim(d.voyage)) LIKE '%' || upper(btrim(:via)) || ' (%' "
+                         " OR upper(btrim(d.vessel_name)) LIKE '%' || upper(btrim(:via)))")
+            params["via"] = via_no.strip()
         if from_ts is not None:
             conds.append("d.doc_ts >= :from_ts")
             params["from_ts"] = from_ts
         if to_ts is not None:
             conds.append("d.doc_ts < :to_ts")
             params["to_ts"] = to_ts
+        # GAP-DATE-01: before the WHERE is assembled — after it is a no-op.
+        _wc = window_cond(window, date_col, params) if date_col else None
+        if _wc:
+            conds.append(_wc)
+
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
         joined = ("FROM core.gate_document d "
                   "LEFT JOIN core.ref_terminal t ON t.terminal_id = d.terminal_id ")
@@ -475,6 +501,29 @@ class GateDocumentRepository:
             clauses.append(("payload->>'terminal' ILIKE :terminal") if form13
                            else "terminal ILIKE :terminal")
             p["terminal"] = f"%{f['terminal']}%"
+        # Vessel hop of the golden thread. core.eir carries `vessel` and `via_no`
+        # natively; Form 13 keeps the same two facts inside its gate_capture
+        # payload. PIN tickets carry NEITHER, so the routers deliberately do not
+        # offer these filters there rather than silently returning everything.
+        # Vessel names disagree on case and spacing between sources, so match
+        # case-insensitively.
+        # ONLY core.eir carries a vessel. core.pin_ticket has no such column, and
+        # core.gate_capture (the Form-13 store) turned out to carry no vessel or
+        # voyage in its payload either — verified against RDS, where every
+        # FORM13 capture holds just {container_no, seals, gross_wt_kg, form13_no}.
+        # A filter offered there would silently match nothing; the vessel-bearing
+        # Form 13s live in core.gate_document and are filtered by
+        # list_source_documents() instead.
+        vessel_capable = doc_type == "EIR"
+        if vessel_capable and f.get("vessel"):
+            clauses.append("upper(btrim(vessel)) = upper(btrim(:vessel))")
+            p["vessel"] = str(f["vessel"]).strip()
+        # VIA is written with a per-vessel prefix at some terminals (`NTPS0633`,
+        # `APLS0595`, `SAV/S0696` all denote the short VIA that follows), so a
+        # suffix match is what actually joins a call to its gate documents.
+        if vessel_capable and f.get("via_no"):
+            clauses.append("upper(btrim(via_no)) LIKE '%' || upper(btrim(:via))")
+            p["via"] = str(f["via_no"]).strip()
         if doc_type == "PIN" and f.get("pin_number"):
             clauses.append("pin_number = :pin")
             p["pin"] = str(f["pin_number"]).strip()

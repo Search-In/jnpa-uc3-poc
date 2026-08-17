@@ -228,6 +228,49 @@ export const api = {
     http<{ total_capacity?: number; total_available?: number; facilities?: number }>(
       "/api/parking/summary",
     ),
+  // D-11 Facilities & Utilities. Shares the control room's directory (T-09) —
+  // there is one composed facilities source, not a driver-specific copy that
+  // could drift from it.
+  // D-07 Document Wallet. Scoped through the job's ownership check server-side;
+  // there is no way to ask for another driver's documents from here.
+  jobDocuments: (jobId: string | number) =>
+    http<{
+      job_id: number; container_no?: string | null; vehicle_no?: string | null;
+      documents: Array<Record<string, unknown>>;
+      count: number; matched_by_container: number; matched_by_vehicle: number;
+      note?: string | null;
+    }>(`/api/driver/jobs/${encodeURIComponent(String(jobId))}/documents`),
+
+  facilities: () =>
+    http<{
+      facilities: Array<{
+        facility_id: string; type: string; name: string;
+        operator?: string | null; site_code?: string | null;
+        lat?: number | null; lon?: number | null;
+        capacity?: number | null; berth_count?: number | null;
+        dwell_hours?: string | number | null;
+        source_table: string; source_files?: string;
+      }>;
+      count: number;
+      by_type: Record<string, number>;
+      absent: Array<{ type: string; why: string; would_need: string }>;
+    }>("/api/facilities"),
+
+  // D-10 Weighbridge Locator. Returns where weighing is EVIDENCED, not where a
+  // weighbridge stands — the corpus names no weighbridge at all.
+  weighingPoints: () =>
+    http<{
+      weighing_points: Array<{
+        terminal: string; terminal_name?: string | null;
+        vgm_documents: number;
+        min_kg?: number | string | null; max_kg?: number | string | null;
+        latest_doc_ts?: string | null;
+      }>;
+      count: number;
+      weighbridges_in_corpus: number;
+      absent: Array<{ type: string; why: string; would_need: string }>;
+    }>("/api/facilities/weighing"),
+
   // Per-facility live availability (RDS-backed) — the driver "nearby parking" list.
   parkingAvailability: () =>
     http<{

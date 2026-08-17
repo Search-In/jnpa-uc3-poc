@@ -11,9 +11,12 @@ layer can map them to HTTP status codes without importing SQLAlchemy.
 """
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, TYPE_CHECKING
 
 from sqlalchemy import text
+
+if TYPE_CHECKING:  # import-cycle-free: the gateway imports services, not vice versa
+    from gateway.datewindow import DateWindow
 from sqlalchemy.exc import IntegrityError
 
 from jnpa_shared.db import get_engine
@@ -264,6 +267,40 @@ class CargoRepository:
         "lifecycle_status",
     )
 
+    # Filters compared case- and whitespace-insensitively. `vessel_name` reaches
+    # core.cargo from several sources (berthing PDFs, EDI headers, manual entry)
+    # which disagree on case and internal spacing for the same hull, so an exact
+    # equality match would routinely miss rows that are plainly the same call.
+    # The column name is still a fixed identifier from this tuple and the value is
+    # still a bound parameter, so the clause stays injection-safe by construction.
+    _CI_FILTER_COLS = ("vessel_name",)
+
+    #: Vessel identity filters that do NOT live on core.cargo at all.
+    #
+    #: A name is the only vessel key core.cargo carries, and 7,808 of the 11,957
+    #: manifested containers belong to ships the corpus never names — the CHPOI03
+    #: IGM identifies a vessel by `<IMOCodeofVessel>` and `<VesselCode>` (call
+    #: sign) and carries no name element, and none of those 10 IMOs appears in
+    #: any other supplied file (GAP-VESSEL-01). Filtering on name alone therefore
+    #: made two thirds of the manifest unreachable.
+    #
+    #: These resolve through the IGM the cargo row already cites, so the boxes
+    #: become addressable under the identity JNPA did supply, without a
+    #: placeholder name ever being written into the data.
+    _IGM_VESSEL_FILTERS = {
+        "imo_no": "i.imo_no",
+        "call_sign": "i.vessel_code",
+    }
+    _IGM_JOIN = ("EXISTS (SELECT 1 FROM core.igm i "
+                 "WHERE i.igm_no::text = core.cargo.source_igm_no::text AND {cond})")
+
+    #: Columns a caller may bound a date window on. `eta` is the operational
+    #: date an evaluator means by "cargo on 6 June"; `created_at` is when the
+    #: record reached us. They differ, so the caller chooses rather than the
+    #: repository guessing.
+    DATE_COLS = ("eta", "created_at", "updated_at")
+    DEFAULT_DATE_COL = "eta"
+
     def _where(self, filters: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
         """Build a parameterised ``WHERE`` clause from the whitelisted filters that
         are actually provided (non-None). Shared by list() and count()."""
@@ -274,6 +311,42 @@ class CargoRepository:
             if val is not None:
                 conds.append(f"{col} = :{col}")
                 params[col] = val
+        for col in self._CI_FILTER_COLS:
+            val = filters.get(col)
+            if val is not None:
+                # Collapse INTERNAL runs of whitespace as well as trimming the
+                # ends. btrim alone left "XIN  HANG ZHOU" (two spaces, as some
+                # sources write it) failing to match "XIN HANG ZHOU" — which is
+                # precisely the inconsistency this comparison exists to absorb.
+                norm = f"upper(regexp_replace(btrim({{}}), '\\s+', ' ', 'g'))"
+                conds.append(f"{norm.format(col)} = {norm.format(':' + col)}")
+                params[col] = val
+        # Vessel identity that core.cargo cannot express, resolved through the
+        # IGM the row cites. Both the column and the SQL shape come from the
+        # fixed mapping above; only the value is bound.
+        for key, column in self._IGM_VESSEL_FILTERS.items():
+            val = filters.get(key)
+            if val is not None:
+                conds.append(self._IGM_JOIN.format(
+                    cond=f"upper(btrim({column})) = upper(btrim(:{key}))"))
+                params[key] = val
+        # Date window. `date_col` is validated against DATE_COLS, never
+        # interpolated from raw client input, and the bounds are bound params.
+        # Accept either key. `window`/`date_col` is this repository's own,
+        # older convention, pinned by tests/test_cargo_vessel_filter.py; the
+        # underscore-prefixed pair is the estate-wide one introduced by
+        # GAP-DATE-01 (see gateway.datewindow.WINDOW_KEY). Reading both means
+        # neither caller has to know which repository it is talking to.
+        window = filters.get("_window") or filters.get("window")
+        if window is not None and not window.is_open:
+            col = (filters.get("_date_col") or filters.get("date_col")
+                   or self.DEFAULT_DATE_COL)
+            if col not in self.DATE_COLS:
+                raise ValueError(f"unsupported date_col {col!r}; allowed: {self.DATE_COLS}")
+            frag, wparams = window.sql(col)
+            # window.sql() prefixes with " AND "; this list is joined with AND.
+            conds.append(frag.removeprefix(" AND "))
+            params.update(wparams)
         clause = ("WHERE " + " AND ".join(conds)) if conds else ""
         return clause, params
 
@@ -289,12 +362,21 @@ class CargoRepository:
         pre_document_status: Optional[str] = None,
         origin_stream: Optional[str] = None,
         lifecycle_status: Optional[str] = None,
+        vessel_name: Optional[str] = None,
+        # Resolved through the cargo row's IGM, not off core.cargo — see
+        # _IGM_VESSEL_FILTERS. The only vessel keys the corpus supplies for the
+        # 10 ships it never names.
+        imo_no: Optional[str] = None,
+        call_sign: Optional[str] = None,
+        window: Optional["DateWindow"] = None,
+        date_col: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict]:
         """List cargo, newest ETA first. Every filter is an optional equality
         match, applied only when provided — so the no-arg call is unchanged
-        (backward compatible)."""
+        (backward compatible). ``vessel_name`` matches case- and
+        whitespace-insensitively; see :attr:`_CI_FILTER_COLS`."""
         clause, params = self._where(locals())
         params.update({"limit": limit, "offset": offset})
         sql = (
@@ -318,6 +400,14 @@ class CargoRepository:
         pre_document_status: Optional[str] = None,
         origin_stream: Optional[str] = None,
         lifecycle_status: Optional[str] = None,
+        vessel_name: Optional[str] = None,
+        # Resolved through the cargo row's IGM, not off core.cargo — see
+        # _IGM_VESSEL_FILTERS. The only vessel keys the corpus supplies for the
+        # 10 ships it never names.
+        imo_no: Optional[str] = None,
+        call_sign: Optional[str] = None,
+        window: Optional["DateWindow"] = None,
+        date_col: Optional[str] = None,
     ) -> int:
         """Total rows matching the same filters as list() (ignores limit/offset).
         Powers the X-Total-Count header so a paginated UI knows the full size."""
@@ -441,6 +531,8 @@ class CargoRepository:
         status: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
+        window: Any = None,
+        date_col: Optional[str] = None,
     ) -> list[dict]:
         """List notifications newest-first with optional equality filters."""
         filters = locals()
@@ -451,6 +543,11 @@ class CargoRepository:
             if val is not None:
                 conds.append(f"{col} = :{col}")
                 params[col] = val
+        # GAP-DATE-01: before the WHERE is assembled — after it is a no-op.
+        _wc = window_cond(window, date_col, params) if date_col else None
+        if _wc:
+            conds.append(_wc)
+
         clause = ("WHERE " + " AND ".join(conds)) if conds else ""
         params.update({"limit": limit, "offset": offset})
         sql = (
@@ -741,12 +838,19 @@ class CargoRepository:
         return dict(row) if row else dict(params)
 
     async def list_rake_plans(self, *, rake_id: Optional[str] = None,
-                              limit: int = 100, offset: int = 0) -> list[dict]:
+                              limit: int = 100, offset: int = 0,
+        window: Any = None,
+        date_col: Optional[str] = None,) -> list[dict]:
         conds: list[str] = []
         params: dict[str, Any] = {}
         if rake_id is not None:
             conds.append("rake_id = :rake_id")
             params["rake_id"] = rake_id
+        # GAP-DATE-01: before the WHERE is assembled — after it is a no-op.
+        _wc = window_cond(window, date_col, params) if date_col else None
+        if _wc:
+            conds.append(_wc)
+
         clause = ("WHERE " + " AND ".join(conds)) if conds else ""
         params.update({"limit": limit, "offset": offset})
         sql = (

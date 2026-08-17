@@ -64,12 +64,20 @@ DEFAULT_DSN = os.environ.get("POSTGRES_DSN", "")
 def collect(data_dir: str) -> List[Dict[str, Any]]:
     """One entry per PDF: {folder, terminal, kind, path, filename, content, records}.
 
-    Supports both corpus layouts:
+    Supports both corpus layouts, and — since 17-Aug-2026 — BOTH AT ONCE:
       * Classic — ``APM Terminals/``, ``BMCT_PSA/``, … (TERMINALS map)
       * Week    — ``2026-07-20_Mon/APMT_2026-07-20.pdf`` (filename prefix)
+
+    These used to be either/or: the classic branch returned early, so whenever a
+    corpus contained both — which the shipped one does — the dated week tree was
+    never walked. The effect was silent: the import reported success having read
+    25 of 59 files, and the 20–26 July week (the only week with a complete set of
+    daily reports across all five terminals) was simply absent from the database.
+    Both are now collected, de-duplicated by resolved path.
     """
     root = Path(data_dir)
     out: List[Dict[str, Any]] = []
+    seen: set = set()
     classic = any((root / folder).is_dir() for folder in PP.TERMINALS)
 
     if classic:
@@ -88,13 +96,17 @@ def collect(data_dir: str) -> List[Dict[str, Any]]:
                 except ValueError as exc:
                     print(f"  WARN: could not parse {fn}: {exc}")
                     records = []
+                seen.add(path.resolve())
                 out.append({"folder": folder, "terminal": terminal, "kind": kind,
                             "path": str(path), "filename": fn, "content": content,
                             "records": records})
-        return out
+        # NO early return — fall through so a corpus carrying BOTH layouts has
+        # its dated week tree collected too.
 
     # Week layout (date folders with APMT_/NSICT_/… filenames)
     for path in sorted(root.rglob("*.pdf")):
+        if path.resolve() in seen:
+            continue
         fn = path.name
         content = path.read_bytes()
         det = PP.terminal_from_filename(fn)
@@ -108,6 +120,7 @@ def collect(data_dir: str) -> List[Dict[str, Any]]:
         except ValueError as exc:
             print(f"  WARN: skip {path.relative_to(root)}: {exc}")
             continue
+        seen.add(path.resolve())
         out.append({"folder": path.parent.name, "terminal": terminal, "kind": kind,
                     "path": str(path), "filename": fn, "content": content,
                     "records": records})

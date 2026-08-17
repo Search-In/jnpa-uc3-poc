@@ -20,6 +20,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, Body, Depends, HTTPException
 
 from .. import audit
+from ..datewindow import DateWindow, apply_window, date_window
 from ..logging import get_logger
 from ..metrics import REQUESTS
 from ..state import GatewayState, get_state
@@ -176,6 +177,7 @@ async def list_ai_events(
     event_type: str | None = None,
     limit: int = 100,
     state: GatewayState = Depends(get_state),
+    window: DateWindow = Depends(date_window),
 ) -> dict:
     """Recent AI events from core.digital_twin_event (RDS)."""
     from jnpa_shared.db import fetch_all
@@ -185,6 +187,9 @@ async def list_ai_events(
     if event_type:
         where = "WHERE event_type = :et"
         params["et"] = event_type.upper()
+    # GAP-DATE-01: bound the read to the requested dates.
+    where = apply_window(where, window, "created_at", params)
+
     try:
         rows = await fetch_all(
             f"""

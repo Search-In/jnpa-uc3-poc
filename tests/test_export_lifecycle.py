@@ -55,7 +55,7 @@ class FakeExportRepo:
                      and r["status"] not in ("LOADED", "CANCELLED")), None)
 
     async def list(self, *, status=None, container_number=None, via_no=None,
-                   limit=100, offset=0):
+                   limit=100, offset=0, window=None, date_col=None):
         items = list(self.rows.values())
         if status:
             items = [r for r in items if r["status"] == status]

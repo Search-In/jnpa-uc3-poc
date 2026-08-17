@@ -26,7 +26,11 @@
     "parking": "Parking",
     "zones": "Zones",
     "map": "Live Map",
-    "alerts": "Alerts"
+    "alerts": "Alerts",
+    "facilities": "Facilities",
+    "weighbridge": "Weighing",
+    "documents": "Documents",
+    "violation": "Enforcement notice"
   },
   "home": {
     "welcome": "Welcome,",

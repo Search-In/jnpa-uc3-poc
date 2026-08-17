@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from datetime import date
 from typing import Any, Mapping, Optional
+from gateway.datewindow import window_cond  # GAP-DATE-01
 
 from sqlalchemy import text
 
@@ -268,6 +269,12 @@ class PerformanceRepository:
             conds.append("terminal_code = :terminal"); params["terminal"] = filters["terminal"]
         if filters.get("data_origin"):
             conds.append("data_origin = :data_origin"); params["data_origin"] = filters["data_origin"]
+        # GAP-DATE-01. `filters` is positional here, so the window rides in it
+        # under the reserved keys rather than changing every caller's signature.
+        _wc = (window_cond(filters.get("_window"), filters.get("_date_col"), params)
+               if filters.get("_date_col") else None)
+        if _wc:
+            conds.append(_wc)
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
         async with get_engine(self._dsn).connect() as conn:
             total = (await conn.execute(text(
@@ -288,6 +295,12 @@ class PerformanceRepository:
             conds.append("terminal_code = :terminal"); params["terminal"] = filters["terminal"]
         if filters.get("data_origin"):
             conds.append("data_origin = :data_origin"); params["data_origin"] = filters["data_origin"]
+        # GAP-DATE-01. `filters` is positional here, so the window rides in it
+        # under the reserved keys rather than changing every caller's signature.
+        _wc = (window_cond(filters.get("_window"), filters.get("_date_col"), params)
+               if filters.get("_date_col") else None)
+        if _wc:
+            conds.append(_wc)
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
         async with get_engine(self._dsn).connect() as conn:
             total = (await conn.execute(text(
@@ -432,6 +445,12 @@ class PerformanceRepository:
                 conds.append(f"{col} = :{col}"); params[col] = filters[col]
         if filters.get("data_origin"):
             conds.append("data_origin = :data_origin"); params["data_origin"] = filters["data_origin"]
+        # GAP-DATE-01. `filters` is positional here, so the window rides in it
+        # under the reserved keys rather than changing every caller's signature.
+        _wc = (window_cond(filters.get("_window"), filters.get("_date_col"), params)
+               if filters.get("_date_col") else None)
+        if _wc:
+            conds.append(_wc)
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
         async with get_engine(self._dsn).connect() as conn:
             total = (await conn.execute(text(

@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+from gateway.datewindow import window_cond  # GAP-DATE-01
 
 from jnpa_shared.db import execute_returning, fetch_all, fetch_one
 from jnpa_shared.logging import get_logger
@@ -102,6 +103,8 @@ class LogisticsRepository:
         event_type: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
+                          window: Any = None,
+                          date_col: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Event history, newest first (optionally scoped by reference/type)."""
         clauses, params = [], {"limit": limit, "offset": offset}
@@ -121,6 +124,13 @@ class LogisticsRepository:
             params,
             dsn=self._dsn,
         )
+        # GAP-DATE-01. `date_col` is named by the CALLER — this method
+        # serves several tables, and a guessed column filters the wrong
+        # one, returning a plausible answer rather than an error.
+        _wcond = window_cond(window, date_col, params) if date_col else None
+        if _wcond:
+            clauses.append(_wcond)
+
         return [_decode_row(dict(r), "detail") for r in rows]
 
     async def count_events(

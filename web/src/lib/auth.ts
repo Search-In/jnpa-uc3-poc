@@ -83,6 +83,18 @@ export const SCREEN_ROLES: Record<string, Role[]> = {
   // recompute) are control-room-only, enforced in gateway/auth.py.
   "/gate-lane-board": [...CONTROL_ROOM, "CUSTOMS"],
   "/vehicle-registry": [...CONTROL_ROOM, "CUSTOMS"],
+  // S-06 Evidence & Audit Explorer — renders gate documents, manifest lines and
+  // driver names, i.e. exactly the payload behind /truck-visit, so it carries the
+  // same audience. Mirrors the gateway policy for /api/thread.
+  "/vessel-thread": [...CONTROL_ROOM, "CUSTOMS"],
+  // S-08 Ad-hoc Query reads across the canonical model; mirrors /api/query.
+  "/adhoc-query": [...CONTROL_ROOM, "CUSTOMS"],
+  // T-09 Facilities carries places only — no container, document or personal
+  // data — so it is readable by every authenticated role, matching /api/facilities.
+  "/facilities": ALL_ROLES,
+  // D-13 Fleet — TRANSPORTER is the audience; the router resolves WHICH company
+  // they may see. DRIVER is excluded: bound to one vehicle, no fleet to browse.
+  "/fleet": [...CONTROL_ROOM, "CUSTOMS", "TRANSPORTER"],
   "/corridor-simulation": [...CONTROL_ROOM, "CUSTOMS"],
   // Shipping Lines (IAL/EAL/EDO) — mirrors gateway/auth.py /api/shipping-lines policy.
   "/shipping-lines": [...CONTROL_ROOM, "CUSTOMS"],

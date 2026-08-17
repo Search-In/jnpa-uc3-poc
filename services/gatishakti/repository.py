@@ -37,11 +37,16 @@ INSERT INTO core.gs_road_segment
 VALUES
     (:state_id, :nh_no, :name, :latitude, :longitude, :source_api,
      CAST(:detail AS jsonb), now())
-ON CONFLICT (COALESCE(state_id, ''), COALESCE(nh_no, ''), COALESCE(name, ''))
+-- Keyed on the row's CONTENT as well as its name: GATISHAKTI/01 names every
+-- fragment of a highway after the highway, so a (state, nh, name) key folded
+-- all 186 rows of NH-48 into one. `detail_key` is a generated md5 of `detail`
+-- (migration 0144), so byte-identical repeats still dedupe — /01 repeats
+-- fragments up to 14 times — while genuinely different fragments survive.
+ON CONFLICT (COALESCE(state_id, ''), COALESCE(nh_no, ''), COALESCE(name, ''),
+             detail_key)
 DO UPDATE SET
     latitude = EXCLUDED.latitude,
     longitude = EXCLUDED.longitude,
-    detail = EXCLUDED.detail,
     fetched_at = now()
 """
 
@@ -120,7 +125,8 @@ class GatiShaktiRepository:
                                limit: int = 500) -> List[Dict[str, Any]]:
         return await self._select(
             """
-            SELECT state_id, name, nh_no, latitude, longitude, fetched_at
+            SELECT state_id, name, nh_no, latitude, longitude, source_api,
+                   detail, fetched_at
             FROM core.gs_toll_plaza
             WHERE (CAST(:state_id AS text) IS NULL OR state_id = CAST(:state_id AS text))
             ORDER BY name
@@ -131,30 +137,66 @@ class GatiShaktiRepository:
 
     async def list_road_segments(self, *, state_id: Optional[str] = None,
                                  nh_no: Optional[str] = None,
+                                 source_api: Optional[str] = None,
                                  limit: int = 500) -> List[Dict[str, Any]]:
+        """Segments, optionally narrowed to the API that produced them.
+
+        ``core.gs_road_segment`` holds two different things: GATISHAKTI/01
+        rows are highway attributes keyed by NH number, GATISHAKTI/02 rows are
+        food-storage depots keyed by state. They landed in one table because
+        both arrive through ``normalize_road_network``, but they share no
+        fields worth putting in one list, so a caller that wants one of them
+        must be able to say which.
+        """
         return await self._select(
             """
-            SELECT state_id, nh_no, name, latitude, longitude, fetched_at
+            SELECT state_id, nh_no, name, latitude, longitude, source_api,
+                   detail, fetched_at
             FROM core.gs_road_segment
             WHERE (CAST(:state_id AS text) IS NULL OR state_id = CAST(:state_id AS text))
               AND (CAST(:nh_no AS text) IS NULL OR nh_no = CAST(:nh_no AS text))
+              AND (CAST(:source_api AS text) IS NULL
+                   OR source_api = CAST(:source_api AS text))
             ORDER BY name
             LIMIT :limit
             """,
-            {"state_id": state_id, "nh_no": nh_no, "limit": _cap(limit)},
+            {"state_id": state_id, "nh_no": nh_no, "source_api": source_api,
+             "limit": _cap(limit)},
         )
 
     async def list_road_points(self, *, state_id: Optional[str] = None,
                                limit: int = 1000) -> List[Dict[str, Any]]:
         return await self._select(
             """
-            SELECT state_id, name, latitude, longitude, fetched_at
+            SELECT state_id, name, latitude, longitude, source_api, detail,
+                   fetched_at
             FROM core.gs_road_point
             WHERE (CAST(:state_id AS text) IS NULL OR state_id = CAST(:state_id AS text))
             ORDER BY name
             LIMIT :limit
             """,
             {"state_id": state_id, "limit": _cap(limit)},
+        )
+
+    async def list_nh_numbers(self, *, limit: int = 200) -> List[Dict[str, Any]]:
+        """The NH numbers GATISHAKTI/01 has actually been pulled for.
+
+        The Highways surface needs a picker, and offering every NH number in
+        India would offer mostly empty answers — /01 is fetched per NH number
+        on refresh, so only the ones refreshed have attributes. This lists what
+        is really there, with its row count, so the UI never presents a choice
+        that resolves to nothing.
+        """
+        return await self._select(
+            """
+            SELECT nh_no, count(*) AS segments, max(fetched_at) AS fetched_at
+            FROM core.gs_road_segment
+            WHERE nh_no IS NOT NULL
+            GROUP BY nh_no
+            ORDER BY nh_no
+            LIMIT :limit
+            """,
+            {"limit": _cap(limit)},
         )
 
     async def counts(self) -> Dict[str, int]:
@@ -186,6 +228,17 @@ class GatiShaktiRepository:
             fetched = record.get("fetched_at")
             if fetched is not None and hasattr(fetched, "isoformat"):
                 record["fetched_at"] = fetched.isoformat()
+            # `detail` is jsonb. SQLAlchemy's asyncpg dialect registers a json
+            # codec so it normally arrives decoded, but that is a driver detail
+            # and the surfaces above render `detail` field by field — a raw
+            # string would reach the browser as one unreadable blob. Decode
+            # defensively rather than depend on the codec being installed.
+            detail = record.get("detail")
+            if isinstance(detail, str):
+                try:
+                    record["detail"] = json.loads(detail)
+                except ValueError:
+                    record["detail"] = {}
             out.append(record)
         return out
 

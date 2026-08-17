@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field
 
+from ..datewindow import DateWindow, date_window
 from ..metrics import REQUESTS
 from services.container_job import ContainerJobService, JobConflict, ValidationFailed
 
@@ -187,9 +188,15 @@ async def list_jobs(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     svc: ContainerJobService = Depends(get_service),
+    window: DateWindow = Depends(date_window),
 ) -> Page:
     filters = {"container_number": container, "vehicle_id": vehicle_id,
                "driver_id": driver_id, "status": status_, "open_only": open_only}
+    # GAP-DATE-01: the window travels with the filters; the column is
+    # stated here, never inferred by the shared where-builder.
+    filters["_window"] = window
+    filters["_date_col"] = "assigned_at"
+
     res = await svc.list_jobs(filters=filters, limit=limit, offset=offset,
                               include_pending=include_pending)
     response.headers["X-Total-Count"] = str(res["total"])
@@ -301,11 +308,13 @@ async def list_gate_events(
     job_id: Optional[int] = None,
     limit: int = Query(100, ge=1, le=1000),
     svc: ContainerJobService = Depends(get_service),
+    window: DateWindow = Depends(date_window),
 ) -> Dict[str, Any]:
     from services.container_job.service import normalize_plate
     items = await svc.gate_events(plate=(normalize_plate(plate) if plate else None),
                                   container_number=(container.strip().upper() if container else None),
-                                  job_id=job_id, limit=limit)
+                                  job_id=job_id, limit=limit,
+        window=window, date_col="ts")
     return {"items": items, "count": len(items)}
 
 
@@ -336,9 +345,11 @@ async def list_movements(
     job_id: Optional[int] = None,
     limit: int = Query(100, ge=1, le=1000),
     svc: ContainerJobService = Depends(get_service),
+    window: DateWindow = Depends(date_window),
 ) -> Dict[str, Any]:
     items = await svc.movements(container_number=(container.strip().upper() if container else None),
-                                job_id=job_id, limit=limit)
+                                job_id=job_id, limit=limit,
+        window=window, date_col="occurred_at")
     return {"items": items, "count": len(items)}
 
 
@@ -379,7 +390,9 @@ async def list_scans(
     result: Optional[str] = None,
     limit: int = Query(100, ge=1, le=1000),
     svc: ContainerJobService = Depends(get_service),
+    window: DateWindow = Depends(date_window),
 ) -> Dict[str, Any]:
     items = await svc.scans(container_number=(container.strip().upper() if container else None),
-                            result=result, limit=limit)
+                            result=result, limit=limit,
+        window=window, date_col="scanned_at")
     return {"items": items, "count": len(items)}

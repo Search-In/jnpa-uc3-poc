@@ -37,6 +37,7 @@ import {
 import { Card } from "@/components/ui/card";
 import { LoadingState, ErrorState } from "@/components/ui/misc";
 import { api } from "@/lib/api";
+import { focusStore, usePortFocus } from "@/lib/focusStore";
 import { authEnabled, getRole } from "@/lib/auth";
 import BerthingReportUpload from "@/screens/berthing/ReportUpload";
 import BerthingReportDetails from "@/screens/berthing/ReportDetails";
@@ -86,27 +87,49 @@ export default function Berthing() {
   const [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState<number | null>(null);
 
+  // Follow the port-wide focus: a call selected in UC-1/UC-2, arriving over the
+  // gateway, or a `?via=`/`?vessel=` deep link, filters this board without the
+  // operator retyping the key. VIA is the sharper filter (a hull can call many
+  // times), so it wins when both are present.
+  const focus = usePortFocus();
+  // One window for the whole estate: the corpus's groups do not overlap in time,
+  // so a board showing all history beside one showing a week invites a
+  // comparison that is not valid.
+  const fromDateParam = focus.fromDate || undefined;
+  const toDateParam = focus.toDate || undefined;
+  const voyageParam = focus.viaNo || undefined;
+  const focusVesselParam = focus.viaNo ? undefined : focus.vesselName || undefined;
+
   const terminalParam = terminal || undefined;
   const statusParam = statusF || undefined;
-  const vesselParam = search.trim() || undefined;
+  const vesselParam = search.trim() || focusVesselParam;
 
   useEffect(() => {
     setOffset(0);
-  }, [terminal, statusF, search]);
+  }, [terminal, statusF, search, voyageParam, focusVesselParam, fromDateParam, toDateParam]);
 
   const statsQ = useQuery({
-    queryKey: ["berthing-stats", terminalParam],
-    queryFn: () => api.berthingStats({ terminal: terminalParam }),
+    queryKey: ["berthing-stats", terminalParam, fromDateParam, toDateParam],
+    queryFn: () =>
+      api.berthingStats({
+        terminal: terminalParam,
+        from_date: fromDateParam,
+        to_date: toDateParam,
+      }),
     placeholderData: keepPreviousData,
   });
 
   const listQ = useQuery({
-    queryKey: ["berthing-list", terminalParam, statusParam, vesselParam, offset],
+    queryKey: ["berthing-list", terminalParam, statusParam, vesselParam, voyageParam,
+               fromDateParam, toDateParam, offset],
     queryFn: () =>
       api.berthingReports({
         terminal: terminalParam,
         status: statusParam,
         vessel: vesselParam,
+        voyage: voyageParam,
+        from_date: fromDateParam,
+        to_date: toDateParam,
         sort: "updated_at",
         direction: "desc",
         limit: PAGE_SIZE,
@@ -337,7 +360,22 @@ export default function Berthing() {
                       {rows.map((r) => (
                         <tr
                           key={r.id}
-                          onClick={() => setSelected(r.id)}
+                          onClick={() => {
+                            setSelected(r.id);
+                            // Publish the call port-wide. This board is the
+                            // natural producer of a vessel focus: it is the one
+                            // screen holding a resolved call with its VIA, IMO
+                            // and name together. Every subscribed panel here,
+                            // and in UC-1/UC-2 over the gateway, follows it.
+                            focusStore.set(
+                              {
+                                viaNo: r.voyage_number ?? undefined,
+                                imoNo: r.imo_number ?? undefined,
+                                vesselName: r.vessel_name ?? undefined,
+                              },
+                              "UC-3",
+                            );
+                          }}
                           className="cursor-pointer hover:bg-muted/40"
                         >
                           <td className="px-3 py-2 font-semibold text-foreground">

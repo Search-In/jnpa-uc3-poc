@@ -325,6 +325,14 @@ class CargoService:
         pre_document_status: Optional[str] = None,
         origin_stream: Optional[str] = None,
         lifecycle_status: Optional[str] = None,
+        vessel_name: Optional[str] = None,
+        # Vessel identity for the ships the corpus never names — resolved
+        # through the cargo row's IGM rather than off core.cargo. See
+        # CargoRepository._IGM_VESSEL_FILTERS.
+        imo_no: Optional[str] = None,
+        call_sign: Optional[str] = None,
+        window: Optional[Any] = None,
+        date_col: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict]:
@@ -334,7 +342,9 @@ class CargoService:
             yard_block=yard_block, is_released=is_released,
             vehicle_number=vehicle_number, eseal_status=eseal_status,
             pre_document_status=pre_document_status, origin_stream=origin_stream,
-            lifecycle_status=lifecycle_status,
+            lifecycle_status=lifecycle_status, vessel_name=vessel_name,
+            imo_no=imo_no, call_sign=call_sign,
+            window=window, date_col=date_col,
             limit=limit, offset=offset,
         )
         self._observe("list", "success", t0)
@@ -352,13 +362,23 @@ class CargoService:
         pre_document_status: Optional[str] = None,
         origin_stream: Optional[str] = None,
         lifecycle_status: Optional[str] = None,
+        vessel_name: Optional[str] = None,
+        # Vessel identity for the ships the corpus never names — resolved
+        # through the cargo row's IGM rather than off core.cargo. See
+        # CargoRepository._IGM_VESSEL_FILTERS.
+        imo_no: Optional[str] = None,
+        call_sign: Optional[str] = None,
+        window: Optional[Any] = None,
+        date_col: Optional[str] = None,
     ) -> int:
         return await self._repo.count(
             container_number=container_number, customs_status=customs_status,
             yard_block=yard_block, is_released=is_released,
             vehicle_number=vehicle_number, eseal_status=eseal_status,
             pre_document_status=pre_document_status, origin_stream=origin_stream,
-            lifecycle_status=lifecycle_status,
+            lifecycle_status=lifecycle_status, vessel_name=vessel_name,
+            imo_no=imo_no, call_sign=call_sign,
+            window=window, date_col=date_col,
         )
 
     # ------------------------------------------------------------------ update

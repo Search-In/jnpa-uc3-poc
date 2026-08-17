@@ -8,6 +8,7 @@ in :mod:`services.cfs_ecy.repository`.
 from __future__ import annotations
 
 from typing import Any, Mapping, Optional
+from gateway.datewindow import window_cond  # GAP-DATE-01 shared primitive
 
 from sqlalchemy import text
 
@@ -59,6 +60,16 @@ class DqRepository:
             # Free-text across the description and the record reference.
             conds.append("(d.description ILIKE :q OR d.record_ref ILIKE :q)")
             p["q"] = f"%{str(f['q']).strip()}%"
+
+        # GAP-DATE-01. The window travels inside `filters` so it reaches every
+        # caller of this builder without changing a single service signature.
+        # `date_col` is supplied BY THE CALLER and is never inferred here: this
+        # builder is shared across tables, and a guessed column is a filter that
+        # silently returns the wrong rows rather than an error.
+        _wcond = window_cond(f.get("_window"), f.get("_date_col") or "",
+                             params) if f.get("_date_col") else None
+        if _wcond:
+            conds.append(_wcond)
         return ((" WHERE " + " AND ".join(conds)) if conds else ""), p
 
     async def list_issues(self, filters: Mapping[str, Any], *, sort: str,

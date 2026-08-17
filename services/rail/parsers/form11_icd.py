@@ -42,11 +42,30 @@ FORM11_ALIASES: dict[str, tuple[str, ...]] = {
     "gross_weight": ("vgmwt", "grossweight", "vgm", "weight"),
     "pod": ("pod", "portofdischarge"),
     "line_code": ("linecode", "boxoperatorcode", "line"),
-    "icd_location": ("icdlocation", "location"),
-    "via": ("via",),
+    # NOT `location`: in the DP-World layout `LOCATION` holds INNSA1 — the JNPA
+    # port the pre-advice is lodged AGAINST, i.e. the destination. Reading it as
+    # the ICD reported every rail box as originating at JNPA itself. The real
+    # inland origin is PORT_OF_ORIGIN (INBLR / INTKD), handled by
+    # `_icd_location` below, which is alias-driven only for the BMCT sheet's
+    # explicit `ICD Location` column. LOCATION/SPNAME survive in `extra`.
+    "icd_location": ("icdlocation",),
+    # The DP-World workbook names the vessel visit TERMINAL_VISIT_NUMBER
+    # (AGMS0654 / SRES0711); the BMCT sheet calls the same thing VIA (S0651).
+    # Only the latter was aliased, so two of the three rows carried no vessel at
+    # all and the rail hop could not join to a call.
+    "via": ("via", "terminalvisitnumber"),
     "status": ("status", "origintype"),
+    # Read for `_icd_location` only — never written to a column of their own.
+    "port_of_origin": ("portoforigin",),
+    "arrival_mode": ("arrivalmode",),
 }
-_FORM11_KNOWN = {a for aliases in FORM11_ALIASES.values() for a in aliases}
+# Fields consulted to DERIVE another column rather than stored under their own
+# name. They stay outside _FORM11_KNOWN so they still reach `extra` — a column
+# that informs a decision must remain inspectable, and PORT_OF_ORIGIN is
+# meaningful on a road-origin row even where it is not the ICD.
+_FORM11_DERIVED_ONLY = ("port_of_origin", "arrival_mode")
+_FORM11_KNOWN = {a for key, aliases in FORM11_ALIASES.items()
+                 if key not in _FORM11_DERIVED_ONLY for a in aliases}
 
 # Terminal tokens the Form 11 filenames encode (BMCT FORM 11 / BT NSICT ...).
 _TERMINALS = ("BMCT", "NSICT", "NSIGT", "NSFT", "GTIL", "NSDT")
@@ -115,6 +134,31 @@ def _pick(row_norm: dict[str, Any], canonical: str):
     return None
 
 
+def _icd_location(row_norm: dict[str, Any]) -> Optional[str]:
+    """The INLAND depot the box came from, or None.
+
+    The BMCT sheet states it outright (`ICD Location` = TKD). The DP-World sheet
+    does not have that column at all; what it has is `PORT_OF_ORIGIN` (INBLR,
+    INTKD), which is the ICD only when the move actually originated inland —
+    `ORIGIN_TYPE` = "ICD Rail" or `ARRIVAL_MODE` = "R". For a road-origin
+    pre-advice the same column would be a port, so it is not read there.
+
+    Returning None is deliberate where neither holds: an unstated origin must
+    stay unstated rather than inherit whatever code sat in a nearby column.
+    """
+    explicit = _pick(row_norm, "icd_location")
+    if explicit:
+        return explicit
+    origin = _pick(row_norm, "port_of_origin")
+    if not origin:
+        return None
+    status = (_pick(row_norm, "status") or "").upper()
+    mode = (_pick(row_norm, "arrival_mode") or "").upper()
+    if "ICD" in status or "RAIL" in status or mode == "R":
+        return origin
+    return None
+
+
 def _parse_form11(content: bytes, filename: str) -> ParseResult:
     res = ParseResult(feed="FORM11")
     terminal = _terminal_from_filename(filename)
@@ -160,7 +204,7 @@ def _parse_form11(content: bytes, filename: str) -> ParseResult:
             "gross_weight": to_float(_pick(row_norm, "gross_weight")),
             "pod": upper_or_none(_pick(row_norm, "pod")),
             "line_code": upper_or_none(_pick(row_norm, "line_code")),
-            "icd_location": clean(_pick(row_norm, "icd_location")),
+            "icd_location": _icd_location(row_norm),
             "via": clean(_pick(row_norm, "via")),
             "status": clean(_pick(row_norm, "status")),
             "iso_valid": iso_valid,
@@ -279,13 +323,12 @@ def parse(content: bytes, filename: str) -> ParseResult:
     name = (filename or "").lower()
 
     if name.endswith(".pdf"):
-        res = ParseResult(feed="UNSUPPORTED")
-        res.unsupported = True
-        res.rejected = True
-        res.reason = "UNSUPPORTED_FORMAT"
-        res.err(None, None, "unsupported_format",
-                "ICD daily-report PDF is not parsed (out of scope).")
-        return res
+        # ICD daily reports ARE parsed now (GAP-ETL-04 / GAP-ETL-07). A PDF that
+        # this parser cannot make sense of still comes back rejected with a
+        # reason, so an unreadable file remains a ledgered rejection rather than
+        # a silent absence.
+        from . import icd_report_pdf
+        return icd_report_pdf.parse(content, filename)
 
     if name.endswith((".xlsx", ".xlsm", ".xls")):
         return _parse_form11(content, filename)

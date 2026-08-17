@@ -36,6 +36,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict
 
+from ..datewindow import DateWindow, date_window
 from ..data_mode import data_mode
 from ..metrics import REQUESTS
 from services.performance import PerformanceService
@@ -152,9 +153,13 @@ async def daily_status(
     offset: int = Query(default=0, ge=0),
     mode: Optional[str] = Depends(data_mode),
     service: PerformanceService = Depends(get_service),
+    window: DateWindow = Depends(date_window),
 ) -> ListResponse:
     res = await service.list_status(
-        {"date": date_, "terminal": _terminal(terminal), "data_origin": mode},
+        {"date": date_, "terminal": _terminal(terminal), "data_origin": mode,
+         # GAP-DATE-01. `?date=` is one exact day; the window is a range.
+         # They compose rather than replace each other.
+         "_window": window, "_date_col": "report_date"},
         limit=limit, offset=offset)
     REQUESTS.labels("performance", "ok").inc()
     return ListResponse(**res)
@@ -168,9 +173,13 @@ async def daily_vessels(
     offset: int = Query(default=0, ge=0),
     mode: Optional[str] = Depends(data_mode),
     service: PerformanceService = Depends(get_service),
+    window: DateWindow = Depends(date_window),
 ) -> ListResponse:
     res = await service.list_vessels(
-        {"date": date_, "terminal": _terminal(terminal), "data_origin": mode},
+        {"date": date_, "terminal": _terminal(terminal), "data_origin": mode,
+         # GAP-DATE-01. `?date=` is one exact day; the window is a range.
+         # They compose rather than replace each other.
+         "_window": window, "_date_col": "report_date"},
         limit=limit, offset=offset)
     REQUESTS.labels("performance", "ok").inc()
     return ListResponse(**res)
@@ -257,10 +266,16 @@ async def cfs_icd(
     offset: int = Query(default=0, ge=0),
     mode: Optional[str] = Depends(data_mode),
     service: PerformanceService = Depends(get_service),
+    window: DateWindow = Depends(date_window),
 ) -> ListResponse:
     filters = {"report_month": report_month,
                "facility_type": _upper_in(facility_type, ("CFS", "ICD"), "facility_type"),
                "data_origin": mode}
+    # GAP-DATE-01: the window travels with the filters; the column is
+    # stated here, never inferred by the shared where-builder.
+    filters["_window"] = window
+    filters["_date_col"] = "report_month"
+
     res = await service.ldb_facility(filters, limit=limit, offset=offset)
     REQUESTS.labels("performance", "ok").inc()
     return ListResponse(**res)

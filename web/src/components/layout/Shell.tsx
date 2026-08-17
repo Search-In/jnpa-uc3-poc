@@ -30,6 +30,7 @@ import { UserMenu } from "@/components/layout/UserMenu";
 import { DataSourceToggle } from "@/components/layout/DataSourceToggle";
 import { GlobalSearch } from "@/components/layout/GlobalSearch";
 import { canSeeScreen } from "@/lib/auth";
+import { useFocusUrlSync } from "@/hooks/useFocusUrlSync";
 import { DATA_MODE } from "@/data";
 import { cn } from "@/lib/utils";
 import {
@@ -52,6 +53,9 @@ export function Shell({ children, onResetBaseline, resetDisabled }: ShellProps) 
   const { t } = useTranslation();
   const navigate = useNavigate();
   const currentLang = (i18n.resolvedLanguage ?? "en") as LangCode;
+  // Seed the port-wide focus from `?vcn=…&container=…` on load, and keep the URL
+  // in step afterwards, so a deep link and a shared link both land focused.
+  useFocusUrlSync();
 
   return (
     <div className="calcite-mode-light flex h-full flex-col overflow-hidden bg-background text-foreground">

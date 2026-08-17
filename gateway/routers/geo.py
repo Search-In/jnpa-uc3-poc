@@ -27,6 +27,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request
 
 from jnpa_shared import corridor
 
+from ..datewindow import DateWindow, apply_window, date_window
 from ..logging import get_logger
 from ..metrics import REQUESTS
 from ..state import GatewayState, get_state
@@ -300,6 +301,7 @@ async def list_geofence_events(
     limit: int = 100,
     event_type: str | None = None,
     state: GatewayState = Depends(get_state),
+    window: DateWindow = Depends(date_window),
 ) -> dict:
     """Recent geo-fence events (audit/analytics read path), RDS-backed."""
     from jnpa_shared.db import fetch_all
@@ -309,6 +311,9 @@ async def list_geofence_events(
     if event_type:
         where = "WHERE event_type = :et"
         params["et"] = event_type
+    # GAP-DATE-01: bound the read to the requested dates.
+    where = apply_window(where, window, "COALESCE(entry_time, created_at)", params)
+
     try:
         rows = await fetch_all(
             f"""
@@ -348,9 +353,15 @@ async def list_geofence_events(
 async def list_geofence_violations(
     limit: int = 100,
     state: GatewayState = Depends(get_state),
+    window: DateWindow = Depends(date_window),
 ) -> dict:
     """Geo-fence violations only (NO_PARKING_VIOLATION / RESTRICTED_ENTRY / DWELL)."""
     from jnpa_shared.db import fetch_all
+
+    # GAP-DATE-01: bound the read to the requested dates.
+
+    where = apply_window(where, window, "COALESCE(entry_time, created_at)", params)
+
 
     try:
         rows = await fetch_all(

@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel
 
+from ..datewindow import DateWindow, date_window
 from ..data_mode import data_mode
 from services.edi_vessel.repository import EdiVesselRepository
 
@@ -72,10 +73,12 @@ async def edi_vessel_moves(
     offset: int = Query(0, ge=0),
     repo: EdiVesselRepository = Depends(get_repo),
     origin: Optional[str] = Depends(data_mode),
+    window: DateWindow = Depends(date_window),
 ) -> Page:
     items, total = await repo.list_moves(
         data_origin=origin, doc_type=doc_type, direction=direction,
-        vcn=vcn, q=q, limit=limit, offset=offset)
+        vcn=vcn, q=q, limit=limit, offset=offset,
+        window=window, date_col="shipping_ts")
     return _page(items, total, limit, offset, response)
 
 
@@ -97,7 +100,9 @@ async def edi_uploads(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     repo: EdiVesselRepository = Depends(get_repo),
+    window: DateWindow = Depends(date_window),
 ) -> Page:
     items, total = await repo.list_uploads(feed=feed, limit=limit,
-                                           offset=offset)
+                                           offset=offset,
+        window=window, date_col="created_at")
     return _page(items, total, limit, offset, response)

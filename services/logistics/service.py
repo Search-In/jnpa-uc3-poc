@@ -333,10 +333,12 @@ class LogisticsService:
     # ------------------------------------------------------------------ events
     async def events(self, *, ref_id: Optional[str] = None,
                      event_type: Optional[str] = None,
-                     limit: int = 100, offset: int = 0) -> Tuple[list, int]:
+                     limit: int = 100, offset: int = 0,
+                     window: Any = None,
+                     date_col: Optional[str] = None,) -> Tuple[list, int]:
         """Persisted event history (newest first) + total count."""
         items = await self._repo.list_events(ref_id=ref_id, event_type=event_type,
-                                             limit=limit, offset=offset)
+                                             limit=limit, offset=offset, window=window, date_col=date_col)
         total = await self._repo.count_events(ref_id=ref_id, event_type=event_type)
         return [_public_event(e) for e in items], total
 

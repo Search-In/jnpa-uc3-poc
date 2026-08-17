@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
+from ..datewindow import DateWindow, date_window, window_cond
 from ..logging import get_logger
 from ..metrics import REQUESTS
 from ..notifications import dispatch_alert
@@ -175,7 +176,8 @@ async def list_accidents(status: Optional[str] = Query(default=None),
                          accident_type: Optional[str] = Query(default=None),
                          vehicle_id: Optional[str] = Query(default=None),
                          limit: int = Query(default=100, ge=1, le=1000),
-                         state: GatewayState = Depends(get_state)) -> dict:
+                         state: GatewayState = Depends(get_state),
+                         window: DateWindow = Depends(date_window),) -> dict:
     dsn = state.cfg.postgres_dsn
     if not dsn:
         return {"count": 0, "accidents": []}
@@ -192,6 +194,12 @@ async def list_accidents(status: Optional[str] = Query(default=None),
     if vehicle_id:
         where.append("vehicle_id = :vid")
         params["vid"] = vehicle_id
+    # GAP-DATE-01: appended BEFORE the clause is joined — appending
+    # after it is assembled is a silent no-op.
+    _wcond = window_cond(window, "occurred_at", params)
+    if _wcond:
+        where.append(_wcond)
+
     clause = ("WHERE " + " AND ".join(where)) if where else ""
     rows = await fetch_all(
         f"SELECT * FROM core.accident {clause} ORDER BY occurred_at DESC LIMIT :limit",

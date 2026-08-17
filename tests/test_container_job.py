@@ -283,7 +283,7 @@ class FakeRepo:
         self.gate_events.append(row)
         return row
 
-    async def gate_events_for(self, *, plate=None, container_number=None, job_id=None, limit=100):
+    async def gate_events_for(self, *, plate=None, container_number=None, job_id=None, limit=100, window=None, date_col=None):
         rows = self.gate_events
         if plate:
             rows = [r for r in rows if r["plate"] == plate]
@@ -298,7 +298,7 @@ class FakeRepo:
         self.movements.append(row)
         return row
 
-    async def movements_for(self, *, container_number=None, job_id=None, limit=100):
+    async def movements_for(self, *, container_number=None, job_id=None, limit=100, window=None, date_col=None):
         rows = self.movements
         if container_number:
             rows = [r for r in rows if r.get("container_number") == container_number]
@@ -323,7 +323,7 @@ class FakeRepo:
         rows = [s for s in self.scans if s["container_number"] == cn]
         return rows[-1] if rows else None
 
-    async def scans_for(self, *, container_number=None, result=None, limit=100):
+    async def scans_for(self, *, container_number=None, result=None, limit=100, window=None, date_col=None):
         rows = self.scans
         if container_number:
             rows = [r for r in rows if r["container_number"] == container_number]

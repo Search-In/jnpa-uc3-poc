@@ -77,11 +77,19 @@ class BerthingRepository:
         if filters.get("berthed_only"):
             conds.append("b.status = ANY(:berthed)")
             params["berthed"] = list(_BERTHED)
+        # A call's date is whichever of these the source report actually printed.
+        # Filtering on `eta` alone hid a third of the 20-26 July week: the APMT
+        # and BMCT reports are on-berth/sailed boards that carry no ETA column at
+        # all, so 34 of those 105 rows have eta IS NULL and silently vanished
+        # from every date-bounded query while plainly existing in the table.
+        # COALESCE in the declared order — planned, then alongside, then sailed —
+        # so a row is dated by the best fact it has.
+        _CALL_TS = "COALESCE(b.eta, b.berthing_time, b.ata, b.departure_time)"
         if filters.get("eta_from") is not None:
-            conds.append("b.eta >= :eta_from")
+            conds.append(f"{_CALL_TS} >= :eta_from")
             params["eta_from"] = filters["eta_from"]
         if filters.get("eta_to") is not None:
-            conds.append("b.eta <= :eta_to")
+            conds.append(f"{_CALL_TS} <= :eta_to")
             params["eta_to"] = filters["eta_to"]
         # LIVE / DEMO data-source filter (X-Data-Mode → 'API' | 'MANUAL'). None ⇒
         # no clause ⇒ SQL byte-identical to the pre-provenance query.

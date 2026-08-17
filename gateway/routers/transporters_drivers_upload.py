@@ -29,6 +29,7 @@ from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query, Reque
                      Response, UploadFile, status)
 from pydantic import BaseModel
 
+from ..datewindow import DateWindow, date_window
 from ..auth import CONTROL_ROOM, Role, auth_enabled
 from ..metrics import REQUESTS
 from services.transporters_drivers import TransportersDriversUploadService
@@ -150,10 +151,16 @@ async def upload_history(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     svc: TransportersDriversUploadService = Depends(get_upload_service),
+    window: DateWindow = Depends(date_window),
 ) -> Page:
     require_uploader(request)
     filters = {"entity_type": (entity.strip().upper() if entity else None),
                "import_status": status_, "source": (source or None)}
+    # GAP-DATE-01: the window travels with the filters; the column is
+    # stated here, never inferred by the shared where-builder.
+    filters["_window"] = window
+    filters["_date_col"] = "created_at"
+
     res = await svc.list_uploads(filters, limit=limit, offset=offset)
     return _page(res["items"], res["total"], limit, offset, response)
 

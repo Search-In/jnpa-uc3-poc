@@ -383,10 +383,23 @@ export const api = {
 
   // --- WebPush subscription ---
   vapidKey: () => http<{ key: string | null; configured: boolean }>("/api/push/vapid-public-key"),
-  pushSubscribe: (deviceId: string, subscription: PushSubscriptionJSON) =>
+  // `opts` carries the driver binding the gateway stores alongside the
+  // subscription (core.push_subscription.driver_id / .vehicle_id). Optional and
+  // omitted when unknown, so existing callers are unaffected; the gateway has
+  // always accepted both fields (routers/push.py::subscribe).
+  pushSubscribe: (
+    deviceId: string,
+    subscription: PushSubscriptionJSON,
+    opts?: { driverId?: string | null; vehicleId?: string | null },
+  ) =>
     http<{ subscribed: boolean; total: number }>("/api/push/subscribe", {
       method: "POST",
-      body: JSON.stringify({ device_id: deviceId, subscription }),
+      body: JSON.stringify({
+        device_id: deviceId,
+        subscription,
+        driver_id: opts?.driverId ?? undefined,
+        vehicle_id: opts?.vehicleId ?? undefined,
+      }),
     }),
   pushTest: (deviceId: string) =>
     http<{ delivered?: boolean; webpush?: boolean; fcm?: boolean }>(

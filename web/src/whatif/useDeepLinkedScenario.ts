@@ -52,7 +52,9 @@ export function useDeepLinkedScenario(): void {
     void (async () => {
       let handleId: string | null = null;
       try {
-        const res = await getAdapter().runScenario(entry.runner, entry.params);
+        // runParams (when present) is the body the backend actually accepts;
+        // params is the operator-facing chip summary. Same rule as the console button.
+        const res = await getAdapter().runScenario(entry.runner, entry.runParams ?? entry.params);
         handleId = res.handle_id;
       } catch {
         // Gateway unreachable or the runner refused: narrate anyway, with no handle, so

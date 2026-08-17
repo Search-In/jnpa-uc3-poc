@@ -39,6 +39,18 @@ export interface TruckListEnvelope {
   cache_age_s?: number | null;
   /** Operator-facing hint the gateway attaches to an unanswerable query. */
   hint?: string | null;
+  /**
+   * Devices a real driver is currently signed in on (core.push_subscription).
+   *
+   * A SEPARATE list, never folded into `devices`: these are real but their
+   * TruckState was not measured, so they carry no state, ETA, remaining
+   * distance or gate. Keeping them out of `devices` is what preserves the
+   * meaning of `count`, the per-gate depth cards and the empty/unavailable
+   * classification below — all of which describe the AT_GATE_QUEUE measurement
+   * and nothing else.
+   */
+  registered_devices?: TruckDevice[];
+  registered_count?: number;
 }
 
 export type QueueStatus =

@@ -89,6 +89,7 @@ from .routers import (
     violations,
     workflows,
     ws,
+    yard,
 )
 # UC-III Final-Completion routers (additive; see gateway/uc3_ext.py + migration 0024).
 from .routers import (
@@ -802,6 +803,7 @@ app.include_router(drivers_master.router)    # Driver Master & Intelligence (rea
 app.include_router(vehicle_identity.router)
 app.include_router(vehicles.router)
 app.include_router(parking.router)
+app.include_router(yard.router)             # UC-3 peak-yard truck-arrival management (additive)
 app.include_router(debug.router)
 app.include_router(control.router)
 app.include_router(ai_events.router)

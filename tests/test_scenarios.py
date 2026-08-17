@@ -34,16 +34,20 @@ def test_uc2_bridge_matches_spec():
 def test_registry_has_expected_scenarios():
     from scenarios import get_scenario, scenario_names
 
-    assert set(scenario_names()) == {"tfc1", "tfc2", "tfc3", "monsoon_friday"}
+    assert set(scenario_names()) == {"tfc1", "tfc2", "tfc3", "tfc4", "monsoon_friday"}
     # The master scenario exposes the run/reset contract like the others.
     mf = get_scenario("monsoon_friday")
     assert mf is not None and callable(mf.run) and callable(mf.reset)
+    # TFC-4 (UC-3 peak yard / truck arrival management) is registered on the same
+    # contract — the What-If Console runs it through the identical run/reset path.
+    t4 = get_scenario("tfc4")
+    assert t4 is not None and callable(t4.run) and callable(t4.reset)
 
 
 def test_stub_cleanup_tags_match_run_tags():
     """Post-restart stub resets must mint the SAME tags run() uses — the old
     generic ``{NAME.upper()}:{id}`` stub silently removed zero trucks."""
-    from scenarios import tfc1, tfc2, tfc3, monsoon_friday
+    from scenarios import tfc1, tfc2, tfc3, tfc4, monsoon_friday
 
     hid = "sc_test123"
     assert tfc1.stub_cleanup(hid)["truck_tag"] == f"TFC-1:{hid}"
@@ -52,6 +56,7 @@ def test_stub_cleanup_tags_match_run_tags():
     assert m["demand_tag"] == f"MONSOON:demand:{hid}"
     assert m["queue_tag"] == f"MONSOON:queue:{hid}"
     assert tfc2.stub_cleanup(hid)["device_id"] == f"SYN-TFC2-{hid}"
+    assert tfc4.stub_cleanup(hid)["truck_tag"] == f"TFC-4:{hid}"
 
 
 def _kafka_up() -> bool:

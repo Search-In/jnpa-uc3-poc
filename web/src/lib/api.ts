@@ -1355,6 +1355,59 @@ export const api = {
     );
   },
 
+  // --- UC-3 peak yard utilisation + truck arrival management --------------
+  // Reads are open to the console; the three writes are control-room only
+  // (gateway/auth.py pins the fixed /api/yard/capacity prefix).
+  yardCapacityBoard: (params?: { yard_id?: string; events?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<import("./types").YardCapacityBoard>(
+      `/api/yard/capacity/board${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+  yardCapacityEvents: (yardId: string, limit = 25) =>
+    http<{ yard_id: string; events: import("./types").YardCapacityEvent[]; count: number }>(
+      `/api/yard/capacity/${encodeURIComponent(yardId)}/events?limit=${limit}`,
+    ),
+  yardCapacityAdjust: (
+    yardId: string,
+    body: {
+      target_utilization_pct?: number;
+      delta_slots?: number;
+      set_occupied?: number;
+      event_type?: "INCREASE" | "RELEASE" | "SET";
+      reason?: string;
+    },
+  ) =>
+    http<{ yard: import("./types").YardCapacity; event: import("./types").YardCapacityEvent }>(
+      `/api/yard/capacity/${encodeURIComponent(yardId)}/adjust`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  yardArrivalEvaluate: (yardId: string, body?: { dry_run?: boolean; notify?: boolean }) =>
+    http<import("./types").YardEvaluation>(
+      `/api/yard/capacity/${encodeURIComponent(yardId)}/evaluate`,
+      { method: "POST", body: JSON.stringify(body || {}) },
+    ),
+  yardArrivalRelease: (
+    yardId: string,
+    body?: { free_slots?: number; device_ids?: string[]; force?: boolean; reason?: string },
+  ) =>
+    http<import("./types").YardRelease>(
+      `/api/yard/capacity/${encodeURIComponent(yardId)}/release`,
+      { method: "POST", body: JSON.stringify(body || {}) },
+    ),
+  yardArrivalHolds: (params?: { yard_id?: string; history?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(
+      ([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)),
+    );
+    return http<import("./types").YardArrivalBoard>(
+      `/api/yard/arrivals/holds${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
+
   scanMachines: () => http<{ items: ScannerMachine[]; count: number }>("/api/scan/machines"),
   scanStatus: (containerNo: string) =>
     http<ScanStatus>(`/api/scan/status/${encodeURIComponent(containerNo)}`),

@@ -76,8 +76,12 @@ LIVE_BODY = {"count": 2, "devices": [{"device_id": "TRK-000001"}, {"device_id": 
 @pytest.fixture(autouse=True)
 def _clean_cache():
     T._LIST_CACHE.clear()
+    # The registered-driver-device rung memoises too; clear it so a result from
+    # one test can never be served to the next.
+    T._REGISTERED_CACHE.clear()
     yield
     T._LIST_CACHE.clear()
+    T._REGISTERED_CACHE.clear()
 
 
 def _list(gw, state="AT_GATE_QUEUE", limit=500) -> Dict[str, Any]:

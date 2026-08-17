@@ -11,6 +11,7 @@ const SCENARIO_COLOUR: Record<ScenarioId, string> = {
   "TFC-1": "#E69F00",
   "TFC-2": "#D55E00",
   "TFC-3": "#56B4E9",
+  "TFC-4": "#CC79A7",
   "MONSOON-FRIDAY": "#0072B2",
 };
 

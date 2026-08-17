@@ -60,12 +60,32 @@ export interface TruckDevice {
    * does not make. Every consumer must handle null.
    */
   state: string | null;
-  position: { lat: number; lon: number };
-  speed_kmh: number;
-  heading: number;
-  remaining_km: number;
+  /** Null for a device that has never reported a position (see `source`). */
+  position: { lat: number; lon: number } | null;
+  speed_kmh: number | null;
+  heading: number | null;
+  /**
+   * Distance still to run to the gate, or null when it was never measured.
+   *
+   * Nullable because a `pwa-registered` device is a registration, not a
+   * position fix: the gateway sends null rather than 0, and the UI must render
+   * "—". Typing this `number` is what would let a `.toFixed()` print "0.0 km"
+   * for a distance nobody measured.
+   */
+  remaining_km: number | null;
   eta_s: number | null;
   segment_id?: string | null;
+  /**
+   * Provenance. `truck-sim` = a synthetic simulator truck; `pwa-registered` = a
+   * device a real driver is signed in on (core.push_subscription). The console
+   * must never present one as the other.
+   */
+  source?: string | null;
+  /** Present on `pwa-registered` devices with an ACTIVE assigned driver. */
+  driver_id?: string | null;
+  driver_name?: string | null;
+  /** ISO timestamp of the last real telemetry fix, when there is one. */
+  last_seen?: string | null;
 }
 
 export interface SourceHealth {
@@ -2391,4 +2411,148 @@ export interface FleetResponse {
   reason?: string | null;
   note?: string;
   error?: string;
+}
+
+// --- UC-3 peak yard utilisation + truck arrival management ------------------
+// Mirrors gateway/routers/yard.py + services/yard_capacity. `capacity_declared`
+// is deliberately part of the contract: the console must be able to mark a
+// declared denominator as declared rather than presenting it as measured.
+export interface YardCapacity {
+  yard_id: string;
+  terminal_code: string;
+  name: string;
+  capacity_slots: number;
+  occupied_slots: number;
+  available_slots: number;
+  /** Slots the yard plans up to (capacity x critical threshold). */
+  operating_ceiling_slots: number;
+  /** Bookable slots below that ceiling — what admission decisions use. */
+  headroom_slots: number;
+  utilization_pct: number;
+  capacity_status: "NORMAL" | "ELEVATED" | "HIGH" | "CRITICAL";
+  constrained: boolean;
+  admissible_trucks: number;
+  capacity_source: string;
+  capacity_declared: boolean;
+  occupancy_source: string | null;
+  source_note: string | null;
+  thresholds: {
+    high_utilization_pct: number;
+    critical_utilization_pct: number;
+    slots_per_truck: number;
+    release_rate_slots_per_hour: number | null;
+    preferred_parking_facility_id: string | null;
+  };
+  updated_at: string | null;
+}
+
+export interface YardCapacityEvent {
+  id?: number;
+  yard_id?: string;
+  event_type: "SEED" | "INCREASE" | "RELEASE" | "SET" | "SYNC";
+  delta_slots: number;
+  occupied_before: number;
+  occupied_after: number;
+  capacity_slots?: number;
+  utilization_pct: number;
+  status: string;
+  reason: string | null;
+  actor: string | null;
+  created_at?: string | null;
+}
+
+export interface YardCapacityBoard {
+  yard: YardCapacity | null;
+  yards: YardCapacity[];
+  recent_events: YardCapacityEvent[];
+  active_holds: number;
+  degraded?: boolean;
+  detail?: string;
+  ts?: string;
+}
+
+export interface TruckArrivalHold {
+  id: number;
+  device_id: string;
+  plate: string | null;
+  driver_id: string | null;
+  driver_name: string | null;
+  /** "truck-sim" | "pwa-registered" — the same provenance the fleet list stamps. */
+  source: string;
+  gate_id: string | null;
+  eta_s: number | null;
+  yard_id: string;
+  yard_utilization_pct: number | null;
+  status: "HOLD_AT_PARKING" | "RELEASED" | "CANCELLED";
+  reason: string;
+  recommended_facility_id: string | null;
+  recommended_facility_name: string | null;
+  facility_available: number | null;
+  facility_lat: number | null;
+  facility_lon: number | null;
+  estimated_wait_min: number | null;
+  alert_id: string | null;
+  notified: boolean;
+  release_notified: boolean;
+  held_at: string | null;
+  released_at: string | null;
+}
+
+export interface YardParkingRecommendation {
+  recommended: boolean;
+  facility_id: string | null;
+  name: string | null;
+  lat?: number | null;
+  lon?: number | null;
+  capacity?: number | null;
+  available?: number | null;
+  status?: string | null;
+  is_preferred?: boolean;
+  reason: string;
+  estimated_wait_min: number | null;
+  facilities_considered: number;
+  preferred_facility_id: string | null;
+  source?: string;
+}
+
+export interface YardEvaluation {
+  yard: YardCapacity;
+  arrivals: {
+    total: number;
+    simulator: number;
+    enrolled_pwa: number;
+    already_held: number;
+    queue_source?: string | null;
+    queue_degraded?: boolean;
+  };
+  congestion_pressure: number;
+  constrained: boolean;
+  reason: string | null;
+  alerts: Array<Record<string, unknown>>;
+  held: TruckArrivalHold[];
+  proceeding: string[];
+  parking: YardParkingRecommendation | null;
+  dry_run: boolean;
+  would_hold?: string[];
+  detail?: string;
+  ts?: string;
+}
+
+export interface YardRelease {
+  yard: YardCapacity;
+  released: TruckArrivalHold[];
+  released_count: number;
+  still_held: number;
+  reason: string;
+  ts?: string;
+}
+
+export interface YardArrivalBoard {
+  yard: YardCapacity | null;
+  holds: TruckArrivalHold[];
+  active_count: number;
+  released_recent: TruckArrivalHold[];
+  by_source?: Record<string, number>;
+  degraded?: boolean;
+  ts?: string;
 }

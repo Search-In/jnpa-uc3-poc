@@ -51,6 +51,7 @@ import {
 import { getScript } from "@/whatif/scenarioScripts";
 import { SCENARIOS } from "@/whatif/scenarioRunners";
 import { ReactiveGuidePanel } from "@/components/panels/ReactiveGuidePanel";
+import { Uc3ExecutionPanel } from "@/components/whatif/Uc3ExecutionPanel";
 
 // Display-only theme labels that make the requested scenario themes
 // discoverable in the UI. These NEVER change the backend `runner` name or the
@@ -95,7 +96,8 @@ export default function WhatIfConsole() {
   const activeRunner = runState.runner;
 
   const run = useMutation({
-    mutationFn: (s: (typeof SCENARIOS)[number]) => getAdapter().runScenario(s.runner, s.params),
+    mutationFn: (s: (typeof SCENARIOS)[number]) =>
+      getAdapter().runScenario(s.runner, s.runParams ?? s.params),
   });
   const resetScenarioRun = useMutation({
     mutationFn: () => getAdapter().resetScenario(activeRunner!, activeHandle ?? undefined),
@@ -150,6 +152,19 @@ export default function WhatIfConsole() {
       setRunState(resetRun());
       resetBanner();
     }
+  }
+
+  // TFC-4 is the only scenario with a UC-3 execution panel. Keyed on the RUNNER
+  // (not the label) so a previewed recorded run lights it up too.
+  const isUc3Run = activeRunner === "tfc4" && !!activeHandle;
+
+  // "Reset TFC-4" resets ONLY this run: it calls the same scenario reset the
+  // console's global button does, which for tfc4 force-releases the remaining
+  // holds through /api/yard/capacity/{yard}/release (so drivers still get the
+  // proceed advisory), restores the yard's opening occupancy and removes the
+  // trucks this run injected. It touches no other scenario's state.
+  async function onResetTfc4() {
+    await onReset();
   }
 
   const handlesQ = useQuery({
@@ -228,9 +243,9 @@ export default function WhatIfConsole() {
       <Section
         title="Live Scenarios"
         icon={Radio}
-        hint="Trigger a reactive what-if chain (TFC-1/2/3)"
+        hint="Trigger a reactive what-if chain (TFC-1/2/3/4)"
       >
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
           {SCENARIOS.map((s) => {
             const active = runState.scenarioId === s.id && !!activeHandle;
             return (
@@ -378,6 +393,30 @@ export default function WhatIfConsole() {
             ))}
           </div>
         </Section>
+      )}
+
+      {/* UC-3 Execution — TFC-4 only. Reads the SAME timeline steps the run
+          recorded, so every figure is a value the UC-3 API returned. Shown for a
+          live run and for a previewed recorded run alike. */}
+      {isUc3Run && (
+        <div className="px-4 pt-3" data-testid="uc3-execution-section">
+          <div className="mb-2 flex items-center gap-2">
+            <h2 className="text-sm font-semibold">{SCENARIO_LABELS["TFC-4"]}</h2>
+            <button
+              onClick={() => void onResetTfc4()}
+              disabled={resetScenarioRun.isPending || !activeRunner}
+              className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-muted disabled:opacity-40"
+              data-testid="reset-tfc4"
+            >
+              {resetScenarioRun.isPending ? <Spinner /> : <RotateCcw className="h-3.5 w-3.5" />}{" "}
+              Reset TFC-4
+            </button>
+          </div>
+          <Uc3ExecutionPanel
+            steps={steps}
+            running={isBusy(runState) || runState.status === "running"}
+          />
+        </div>
       )}
 
       {/* Reactive timeline */}

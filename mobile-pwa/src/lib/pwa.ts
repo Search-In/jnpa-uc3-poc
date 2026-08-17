@@ -10,7 +10,6 @@ import { registerSW } from "virtual:pwa-register";
 import { api } from "./api";
 import { getFcmToken, isFcmConfigured, onForegroundMessage } from "./firebase";
 import { notifyDriver, alertToNotification, type NotifyCategory } from "./notify";
-import { getPairing } from "./device";
 
 export function registerServiceWorker(): void {
   if (!("serviceWorker" in navigator)) return;
@@ -40,10 +39,44 @@ async function wireFcmForeground(): Promise<void> {
   });
 }
 
+// The driver binding stored alongside a push registration.
+//
+// `vehicleId` is the CANONICAL Vehicle ID (TRK-######) — identical to the
+// device_id, the JWT's device_id and core.vehicle.vehicle_id. It is deliberately
+// NOT the registration plate: `core.push_subscription.vehicle_id` means the same
+// thing as every other `vehicle_id` column in the schema, and writing a plate
+// into it made the row unjoinable to core.vehicle (which is exactly what the
+// control-room device list joins on).
+export interface DriverBinding {
+  driverId?: string | null;
+  vehicleId?: string | null;
+}
+
+// Resolve the signed-in driver for this device so the push registration can be
+// stored against a real driver_id instead of NULL. Best-effort by design: a
+// device that has not yet been assigned an ACTIVE driver profile 404s here, and
+// push registration must still proceed — the device_id alone is what delivery
+// targets. The vehicle id falls back to the device id, which is the same value.
+async function resolveBinding(deviceId: string): Promise<DriverBinding> {
+  try {
+    const prof = await api.driverProfile(deviceId);
+    return {
+      driverId: prof?.driver?.id ?? null,
+      vehicleId: prof?.vehicle?.vehicle_id ?? deviceId,
+    };
+  } catch {
+    return { driverId: null, vehicleId: deviceId };
+  }
+}
+
 // Best-effort: mint an FCM token for this device and register it with the
 // gateway. Independent of WebPush — runs whenever Firebase is configured and the
 // user has granted notification permission. Returns true if a token registered.
-export async function enableFcm(deviceId: string): Promise<boolean> {
+//
+// `binding` is resolved once by enablePush and passed in so both transports
+// register the SAME driver/vehicle pair; when called directly it is resolved
+// here instead.
+export async function enableFcm(deviceId: string, binding?: DriverBinding): Promise<boolean> {
   console.log("[fcm] enableFcm entered", { deviceId });
   if (!isFcmConfigured() || !("serviceWorker" in navigator)) {
     console.warn("[fcm] aborting: not configured or no SW support", {
@@ -83,9 +116,21 @@ export async function enableFcm(deviceId: string): Promise<boolean> {
     }
     console.log("[fcm] getToken success:", `${token.slice(0, 12)}…(${token.length} chars)`);
 
-    const plate = getPairing()?.plate ?? undefined;
-    console.log("[fcm] register-device request", { deviceId, platform: "web", vehicleId: plate });
-    const res = await api.registerDevice(deviceId, token, { platform: "web", vehicleId: plate });
+    // The driver binding — NOT the plate. `vehicleId` here is the canonical
+    // Vehicle ID (== deviceId); the plate lives in core.vehicle.vehicle_no and
+    // is looked up from there when the control room needs to display it.
+    const bind = binding ?? (await resolveBinding(deviceId));
+    console.log("[fcm] register-device request", {
+      deviceId,
+      platform: "web",
+      driverId: bind.driverId,
+      vehicleId: bind.vehicleId,
+    });
+    const res = await api.registerDevice(deviceId, token, {
+      platform: "web",
+      driverId: bind.driverId ?? undefined,
+      vehicleId: bind.vehicleId ?? deviceId,
+    });
     console.log("[fcm] register-device response:", res);
 
     await wireFcmForeground();
@@ -121,6 +166,11 @@ export async function enablePush(deviceId: string): Promise<PushState> {
   if (permission === "default") permission = await Notification.requestPermission();
   if (permission !== "granted") return "denied";
 
+  // Resolve the driver binding ONCE, before either transport registers, so
+  // WebPush and FCM write the same driver_id/vehicle_id against the same
+  // canonical device_id. Never throws (see resolveBinding).
+  const binding = await resolveBinding(deviceId);
+
   // ---- WebPush/VAPID leg — the PRIMARY transport. Runs FIRST and is fully
   // independent of Firebase: when VAPID is configured we subscribe and store the
   // subscription regardless of whether FCM is configured or succeeds. This is the
@@ -142,7 +192,10 @@ export async function enablePush(deviceId: string): Promise<PushState> {
           userVisibleOnly: true,
           applicationServerKey: urlBase64ToUint8Array(vapid.key),
         }));
-      await api.pushSubscribe(deviceId, sub.toJSON() as PushSubscriptionJSON);
+      await api.pushSubscribe(deviceId, sub.toJSON() as PushSubscriptionJSON, {
+        driverId: binding.driverId,
+        vehicleId: binding.vehicleId ?? deviceId,
+      });
       webpushOk = true;
     } catch (err) {
       console.warn("push subscribe failed", err);
@@ -154,7 +207,7 @@ export async function enablePush(deviceId: string): Promise<PushState> {
   // NEVER abort or roll back the WebPush registration above.
   let fcmOk = false;
   try {
-    fcmOk = await enableFcm(deviceId);
+    fcmOk = await enableFcm(deviceId, binding);
   } catch (err) {
     console.warn("[fcm] enable threw (ignored, WebPush unaffected)", err);
   }
